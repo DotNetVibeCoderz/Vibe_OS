@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://buitenzorg-os.dev/schemas/app.manifest.json",
+  "title": "Buitenzorg app.manifest",
+  "description": "Unified app manifest for all four app variants and all supported languages (requirements.md §11).",
+  "type": "object",
+  "required": ["id", "name", "type", "language", "version"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)+$",
+      "description": "Reverse-DNS app id, e.g. com.example.myapp"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "type": { "enum": ["console", "desktop", "web", "widget"] },
+    "language": { "enum": ["csharp", "js", "ts", "python"] },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+(\\.\\d+)?(\\.\\d+)?$"
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "filesystem.read", "filesystem.write", "network",
+          "ai.llm", "ai.vision", "ai.genai",
+          "camera", "microphone", "gallery"
+        ]
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "theme": { "type": "string", "default": "system" }
+  },
+  "additionalProperties": false
+}

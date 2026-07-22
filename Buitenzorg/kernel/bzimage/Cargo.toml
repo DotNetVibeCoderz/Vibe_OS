@@ -1,0 +1,14 @@
+[package]
+name = "bzimage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Builds bootable Buitenzorg OS disk images (UEFI + BIOS) and runs them in QEMU"
+
+[dependencies]
+ovmf-prebuilt = "0.2"
+
+[build-dependencies]
+bootloader = "0.11"
+bzkernel = { path = "../bzkernel", artifact = "bin", target = "x86_64-unknown-none" }

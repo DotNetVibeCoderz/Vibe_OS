@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/runtime/">
+    <Project Path="runtime/Buitenzorg.Runtime.Tests/Buitenzorg.Runtime.Tests.csproj" />
+    <Project Path="runtime/Buitenzorg.Runtime/Buitenzorg.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/runtime/samples/">
+    <Project Path="runtime/samples/HelloBuitenzorg/HelloBuitenzorg.csproj" />
+  </Folder>
+  <Folder Name="/sdk/">
+    <Project Path="sdk/bz/bz.csproj" />
+  </Folder>
+</Solution>

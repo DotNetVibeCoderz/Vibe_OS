@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  kernel:
+    name: Kernel (Rust) — build, test, boot smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86
+
+      - name: Install Rust toolchain (pinned by kernel/rust-toolchain.toml)
+        working-directory: kernel
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kernel
+
+      - name: ABI contract tests
+        working-directory: kernel
+        run: cargo test -p bz-abi
+
+      - name: Build kernel + boot images
+        working-directory: kernel
+        run: cargo build --release
+
+      - name: Boot smoke test (QEMU, BIOS)
+        run: bash scripts/smoke-test.sh
+
+  managed:
+    name: Runtime + SDK (.NET) — build, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build
+        run: dotnet build Buitenzorg.slnx -c Release
+
+      - name: Test
+        run: dotnet test Buitenzorg.slnx -c Release --no-build
+
+      - name: bz CLI self-check
+        run: |
+          dotnet run --project sdk/bz -c Release -- version
+          dotnet run --project sdk/bz -c Release -- manifest validate sdk/templates/console-csharp/app.manifest

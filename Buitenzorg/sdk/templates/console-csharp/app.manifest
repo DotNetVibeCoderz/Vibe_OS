@@ -1,0 +1,9 @@
+{
+  "id": "com.example.consoleapp",
+  "name": "Console System App",
+  "type": "console",
+  "language": "csharp",
+  "version": "0.1.0",
+  "permissions": [],
+  "theme": "system"
+}

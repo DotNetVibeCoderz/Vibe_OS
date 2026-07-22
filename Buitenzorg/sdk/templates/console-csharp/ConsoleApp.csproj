@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Path assumes the app lives inside the Buitenzorg monorepo; when the
+         SDK ships as a NuGet package this becomes a PackageReference. -->
+    <ProjectReference Include="..\..\..\runtime\Buitenzorg.Runtime\Buitenzorg.Runtime.csproj" />
+  </ItemGroup>
+
+</Project>

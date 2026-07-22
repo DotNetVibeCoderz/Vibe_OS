@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["abi", "bzkernel", "bzimage"]
+# bzkernel is not a default member: it only builds for x86_64-unknown-none and
+# is pulled in by bzimage as an artifact dependency with the correct target.
+# (Building it for the host would even ICE: x86-interrupt ABI on MSVC.)
+default-members = ["abi", "bzimage"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Buitenzorg OS Project"]
+license = "MIT"
+
+[profile.release]
+panic = "abort"
+lto = true
+
+[profile.dev]
+panic = "abort"

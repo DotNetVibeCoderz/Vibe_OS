@@ -1,0 +1,41 @@
+{
+  "name": "buitenzorg-sdk",
+  "displayName": "Buitenzorg SDK",
+  "description": "Build, run, and debug Buitenzorg OS apps from VS Code (requirements.md §13).",
+  "version": "0.8.0",
+  "publisher": "buitenzorg",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Programming Languages", "Debuggers", "Other"],
+  "activationEvents": ["onLanguage:csharp", "workspaceContains:app.manifest"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "buitenzorg.newProject", "title": "Buitenzorg: New Project" },
+      { "command": "buitenzorg.buildRun", "title": "Buitenzorg: Build & Run in QEMU" },
+      { "command": "buitenzorg.validateManifest", "title": "Buitenzorg: Validate app.manifest" }
+    ],
+    "debuggers": [
+      {
+        "type": "buitenzorg",
+        "label": "Buitenzorg App",
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": { "type": "string", "description": "Path to the app source (.cs)." },
+              "manifest": { "type": "string", "description": "Path to app.manifest." },
+              "media": { "type": "string", "enum": ["ide", "ahci", "nvme", "usb"], "default": "ide" }
+            }
+          }
+        }
+      }
+    ],
+    "languages": [
+      { "id": "buitenzorg-manifest", "extensions": [".manifest"], "aliases": ["Buitenzorg Manifest"] }
+    ],
+    "jsonValidation": [
+      { "fileMatch": "app.manifest", "url": "../manifest.schema.json" }
+    ]
+  },
+  "scripts": { "compile": "tsc -p ./" },
+  "devDependencies": { "typescript": "^5.4.0", "@types/vscode": "^1.90.0" }
+}

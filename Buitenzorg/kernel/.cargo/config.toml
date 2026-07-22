@@ -1,0 +1,5 @@
+# Artifact dependencies are required so that `bzimage` can depend on the
+# compiled `bzkernel` binary (built for x86_64-unknown-none) while itself
+# running on the host. Stable cargo does not support this yet.
+[unstable]
+bindeps = true

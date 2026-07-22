@@ -1,0 +1,30 @@
+# Rust
+kernel/target/
+**/*.rs.bk
+
+# .NET
+**/bin/
+**/obj/
+*.user
+
+# Build output
+dist/
+*.img
+*.qcow2
+*.vhdx
+*.vmdk
+*.vdi
+
+# Userland build artifacts (hello.elf is rebuilt by scripts/build-hello-csharp)
+userland/**/*.o
+userland/**/*.elf
+
+# Third-party toolchains fetched locally (bflat is ~90 MB)
+tools/
+
+# Editors / OS
+.vs/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

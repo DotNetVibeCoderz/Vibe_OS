@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Buitenzorg.Runtime</RootNamespace>
+    <Description>Buitenzorg OS managed runtime library: syscall ABI mirror, app manifest model, and host simulation backend.</Description>
+    <!-- Services ship NativeAOT-compatible from day one (requirements.md §5.1). -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- CA1418: "buitenzorg" is intentionally not a known .NET platform (yet). -->
+    <NoWarn>$(NoWarn);CA1418</NoWarn>
+  </PropertyGroup>
+
+</Project>

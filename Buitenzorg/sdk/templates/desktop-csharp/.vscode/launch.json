@@ -1,0 +1,15 @@
+{
+  // Buitenzorg SDK for VS Code — build the app and run it in QEMU.
+  // Requires the "Buitenzorg SDK" extension (sdk/vscode-extension).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Buitenzorg: Build & Run in QEMU",
+      "type": "buitenzorg",
+      "request": "launch",
+      "program": "${workspaceFolder}/app.cs",
+      "manifest": "${workspaceFolder}/app.manifest",
+      "media": "ide"
+    }
+  ]
+}
