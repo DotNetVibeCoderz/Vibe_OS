@@ -9,7 +9,7 @@ Spesifikasi lengkap: [requirements.md](requirements.md) · Baru mulai? **[docs/t
 
 **Status saat ini: v0.1–v0.16 milestone ✓** ("Benih" → "Panen"), **jalur v1.0 "Buitenzorg" (stabilisasi) sedang berjalan**. Kernel boot dari BIOS & UEFI di QEMU pada **empat media (IDE/AHCI/NVMe/USB)**: memori, syscall ABI, scheduler, IPC, PCI, driver IDE + FAT, mouse, C# di ring 3, VFS + FAT write, service/init manager, async I/O, networking, desktop environment, app framework, 4 varian app, `Buitenzorg.Drawing`, Task Manager, theme engine + 8 tema, package manager, compute API, screensaver, personalization, kontrol window, **AI (LLM lokal + CV + GenAI + Model Manager)** + power (v0.12), **virtualisasi (VMM software + guest OS mini + snapshot)** (v0.13), **runtime polyglot (JS/TS/Python)** (v0.14), **managed runtime C# (heap + Buitenzorg.Bcl: koleksi/LINQ + System.IO/Text/Regex/Net/Tasks/…)** (v0.15 "Matang"), dan **v0.16 "Panen": subsistem audio AC'97, `Buitenzorg.UI` (toolkit retained), suite 8 app bawaan (Kalkulator/Editor/2048/Jam/File Manager/Piano/Image Viewer/App Store), desktop shell (Start menu + ikon + jam tray), decoder JPEG**. Jalur **v1.0**: security hardening (validasi pointer syscall), pembekuan ABI, debugger GDB + profiler zona, benchmark CI, boot USB hardware.
 
-![Desktop Buitenzorg v0.12 Nalar — galeri model AI + power CLI di terminal](docs/img/desktop-nalar.png)
+![Desktop Buitenzorg v1.0 Shell — galeri model AI + power CLI di terminal](docs/img/desktop-shell.png)
 
 ![Screensaver Mystify gaya Windows 3.1/98](docs/img/screensaver-mystify.png)
 
