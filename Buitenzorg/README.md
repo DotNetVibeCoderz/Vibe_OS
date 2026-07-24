@@ -5,7 +5,9 @@
 >
 > **Dibuat oleh [Gravicode Studios](#credits) — dipimpin oleh Kang Fadhil.**
 
-Spesifikasi lengkap: [requirements.md](requirements.md) · Status saat ini: **v0.1–v0.12 milestone ✓** ("Benih" → "Nalar") — kernel boot dari BIOS & UEFI di QEMU pada **empat media (IDE/AHCI/NVMe/USB)**: memori, syscall ABI, scheduler, IPC, PCI, driver IDE + FAT, mouse, C# di ring 3, VFS + FAT write, service/init manager, async I/O, networking, desktop environment, app framework, 4 varian app, `Buitenzorg.Drawing`, Task Manager, theme engine + 8 tema, package manager, compute API, screensaver, personalization, kontrol window, dan v0.12: **subsistem AI (LLM lokal + computer vision + GenAI + Model Manager gaya Hugging Face) dan power management (Shutdown/Restart/Sleep)**.
+Spesifikasi lengkap: [requirements.md](requirements.md) · Baru mulai? **[docs/tutorial.md](docs/tutorial.md)** · Riwayat rilis: **[CHANGELOG.md](CHANGELOG.md)**
+
+**Status saat ini: v0.1–v0.16 milestone ✓** ("Benih" → "Panen"), **jalur v1.0 "Buitenzorg" (stabilisasi) sedang berjalan**. Kernel boot dari BIOS & UEFI di QEMU pada **empat media (IDE/AHCI/NVMe/USB)**: memori, syscall ABI, scheduler, IPC, PCI, driver IDE + FAT, mouse, C# di ring 3, VFS + FAT write, service/init manager, async I/O, networking, desktop environment, app framework, 4 varian app, `Buitenzorg.Drawing`, Task Manager, theme engine + 8 tema, package manager, compute API, screensaver, personalization, kontrol window, **AI (LLM lokal + CV + GenAI + Model Manager)** + power (v0.12), **virtualisasi (VMM software + guest OS mini + snapshot)** (v0.13), **runtime polyglot (JS/TS/Python)** (v0.14), **managed runtime C# (heap + Buitenzorg.Bcl: koleksi/LINQ + System.IO/Text/Regex/Net/Tasks/…)** (v0.15 "Matang"), dan **v0.16 "Panen": subsistem audio AC'97, `Buitenzorg.UI` (toolkit retained), suite 8 app bawaan (Kalkulator/Editor/2048/Jam/File Manager/Piano/Image Viewer/App Store), desktop shell (Start menu + ikon + jam tray), decoder JPEG**. Jalur **v1.0**: security hardening (validasi pointer syscall), pembekuan ABI, debugger GDB + profiler zona, benchmark CI, boot USB hardware.
 
 ![Desktop Buitenzorg v0.12 Nalar — galeri model AI + power CLI di terminal](docs/img/desktop-nalar.png)
 
@@ -63,7 +65,13 @@ Spesifikasi lengkap: [requirements.md](requirements.md) · Status saat ini: **v0
 [kernel] MILESTONE: AI OK (LLM lokal + CV + GenAI + Model Manager)
 [power] acpi=true pm1a_cnt=0x604 ... MILESTONE: POWER OK
 [kernel] MILESTONE: NALAR OK (AI subsystem + power management)
-[kernel] BUITENZORG READY -- terminal ('ask ...', 'bz model list', 'bz power').
+[kernel] MILESTONE: LAPIS OK (virtualization: software VMM + guest OS)
+[kernel] MILESTONE: BABEL OK (polyglot runtime: JS/TS/Python)
+[kernel] MILESTONE: BCL OK (Buitenzorg.Bcl) / BCL2 OK (System.IO/Text/Regex/Net/...)
+[kernel] MILESTONE: AUDIO OK (AC'97 mixer + PCM) / UI OK / DRAW OK / JPEG OK
+[kernel] MILESTONE: SUITE OK (8 preloaded apps) / DESKTOP SHELL OK
+[kernel] MILESTONE: SECURITY OK (syscall pointer validation) / PROFILER OK
+[kernel] BUITENZORG READY -- terminal ('run calc', 'prof self', 'ask ...', 'vm start nanovm').
 ```
 
 ## Prasyarat
@@ -75,6 +83,20 @@ Spesifikasi lengkap: [requirements.md](requirements.md) · Status saat ini: **v0
 | QEMU | qemu-system-x86_64 | emulasi utama (§18) |
 
 ## Quickstart
+
+**Cara tercepat (nol dependensi):** skrip berikut memasang semua yang
+dibutuhkan (Rust, .NET, QEMU, bflat), build, lalu boot di QEMU:
+
+```powershell
+.\scripts\quickstart.ps1     # Linux/macOS: ./scripts/quickstart.sh
+```
+
+Panduan lengkap ramah-pemula: **[docs/getting-started.md](docs/getting-started.md)** ·
+Bikin app pertama: **[docs/first-app.md](docs/first-app.md)** ·
+Jalankan di VMware/VirtualBox: **[docs/run-in-vm.md](docs/run-in-vm.md)** ·
+Boot USB di hardware: **[docs/install-hardware.md](docs/install-hardware.md)**.
+
+**Alur harian (dependensi sudah terpasang):**
 
 ```powershell
 # Build semuanya (kernel + image boot + .NET) → dist/
@@ -114,7 +136,7 @@ userland/          # program yang jalan di atas kernel (ring 3)
 sdk/               # bz CLI + template app (console/desktop) + VS Code extension
 tools/             # toolchain pihak ketiga (bflat) — di-gitignore
 ai/                # Layer 6 AI subsystem (mulai v0.12 "Nalar")
-apps/              # preloaded suite (mulai v0.15 "Panen")
+apps/              # preloaded suite (mulai v0.16 "Panen")
 docs/              # arsitektur, ABI, panduan
 scripts/           # build, run-qemu, smoke-test
 dist/              # output image boot (di-gitignore)
@@ -138,8 +160,16 @@ Kedua sisi dijaga test kontrak yang identik — ubah satu sisi tanpa sisi lain =
 
 ## Dokumentasi
 
-- [docs/getting-started.md](docs/getting-started.md) — setup & alur pengembangan
+Indeks lengkap: **[docs/README.md](docs/README.md)**. Sorotan:
+
+- **[docs/tutorial.md](docs/tutorial.md)** — tutorial berurutan nol→app (mulai di sini)
+- [docs/getting-started.md](docs/getting-started.md) — setup ramah-pemula + quickstart & troubleshooting
+- [docs/first-app.md](docs/first-app.md) — bikin app pertama + katalog contoh pakai library built-in
+- [docs/run-in-vm.md](docs/run-in-vm.md) — jalankan image di VMware Player & VirtualBox
+- [docs/install-hardware.md](docs/install-hardware.md) — tulis image ke USB & boot di komputer fisik (BIOS/UEFI)
+- [docs/debugging.md](docs/debugging.md) — debug kernel dgn GDB + profiler zona (TSC)
 - [docs/abi.md](docs/abi.md) — tabel syscall ABI v1 & aturan evolusinya
+- [CHANGELOG.md](CHANGELOG.md) — riwayat rilis per codename versi
 - [CONTRIBUTING.md](CONTRIBUTING.md) — standar koding & alur kontribusi
 
 ## Credits
@@ -148,3 +178,8 @@ Kedua sisi dijaga test kontrak yang identik — ubah satu sisi tanpa sisi lain =
 
 Atribusi ini juga tampil di dalam OS: pada boot logo, window **Welcome** di
 desktop, serta perintah shell `ver` dan `about`.
+
+## Lisensi
+
+Dirilis di bawah **Lisensi MIT** — lihat [LICENSE](LICENSE).
+© 2026 Gravicode Studios (dipimpin oleh Kang Fadhil).

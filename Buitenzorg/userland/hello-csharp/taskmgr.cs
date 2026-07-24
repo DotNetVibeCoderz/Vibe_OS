@@ -2,56 +2,37 @@
 // Lists processes (kernel tasks + running app), shows CPU/memory/uptime, and
 // can kill a task. Draws its UI with Buitenzorg.Drawing over the proc syscalls.
 //
-// Freestanding (no GC): all text is built into stackalloc char buffers and
-// drawn with DrawChars — no managed strings, no heap allocation.
+// Process and machine data come from Buitenzorg.Bcl — `BzProcess`
+// (System.Diagnostics) and `BzSystemInfo` (System.Management) — rather than a
+// private copy of the ABI structs, which used to be a second place that had to
+// be updated by hand whenever ProcInfo/SysStat changed. Number and byte-size
+// formatting comes from `BzCulture` (System.Globalization).
 
 using System;
-using System.Runtime.InteropServices;
+using Buitenzorg;
 using Buitenzorg.Drawing;
 
 unsafe class TaskMgr
 {
-    struct ProcInfo   // mirror bz_abi::ProcInfo (64 bytes)
-    {
-        public ulong Pid, State, CpuTicks, Kind;
-        public fixed byte Name[32];
-    }
-
-    struct SysStat    // mirror bz_abi::SysStat (48 bytes)
-    {
-        public ulong UptimeTicks, TickHz, HeapUsed, HeapTotal, TaskCount, MemTotalMiB;
-    }
-
-    [DllImport("*")] static extern unsafe ulong bz_proc_list(ProcInfo* buf, ulong max);
-    [DllImport("*")] static extern ulong bz_proc_kill(ulong pid);
-    [DllImport("*")] static extern unsafe ulong bz_sys_stat(SysStat* outp);
 
     static void Main()
     {
         Console.WriteLine("[taskmgr] starting (process + resource monitor)");
         var g = Graphics.CreateWindow("Task Manager", 560, 380);
 
-        for (int frame = 0; frame < 4; frame++) { Render(g); Sys.Sleep(9); }
+        for (int frame = 0; frame < 2; frame++) { Render(g); Sys.Sleep(3); }
 
-        // Demonstrate PROC_KILL: terminate the idle-demo task if present.
-        // Use a fixed byte buffer (4096 = 64 * sizeof(ProcInfo)) and reinterpret;
-        // stackalloc of a struct array would emit a checked multiply that
-        // zerolib's ThrowHelpers can't satisfy.
-        byte* raw = stackalloc byte[4096];
-        ProcInfo* procs = (ProcInfo*)raw;
-        int n = (int)bz_proc_list(procs, 64);
-        for (int i = 0; i < n; i++)
+        // Demonstrate PROC_KILL through System.Diagnostics.
+        BzProcessInfo procs = BzProcess.GetProcesses(64);
+        BzProcessInfo idle = BzProcess.FindByName(procs, "idle-demo");
+        if (idle != null)
         {
-            if (NameEquals(procs[i].Name, "idle-demo"))
-            {
-                ulong rc = bz_proc_kill(procs[i].Pid);
-                Console.WriteLine(rc == 0 ? "[taskmgr] killed idle-demo (PID freed)" : "[taskmgr] kill refused");
-                break;
-            }
+            bool killed = BzProcess.Kill(idle.Pid);
+            Console.WriteLine(killed ? "[taskmgr] killed idle-demo (PID freed)" : "[taskmgr] kill refused");
         }
         Render(g);
         Console.WriteLine("[taskmgr] done");
-        Sys.Sleep(18);
+        Sys.Sleep(4);
     }
 
     static void Render(Graphics g)
@@ -60,18 +41,18 @@ unsafe class TaskMgr
         g.FillRectangle(new Brush(Color.Green), 0, 0, 560, 28);
         g.DrawString("Task Manager - Buitenzorg", Color.Soil, 10, 6);
 
-        SysStat st; bz_sys_stat(&st);
-        int memPct = st.HeapTotal > 0 ? (int)(st.HeapUsed * 100 / st.HeapTotal) : 0;
-        ulong secs = st.TickHz > 0 ? st.UptimeTicks / st.TickHz : 0;
+        BzSystemInfo st = BzSystemInfo.Query();
+        int memPct = st.HeapPercent;
 
         char* line = stackalloc char[80];
         int n;
-        n = 0; n = Str(line, n, "Uptime: "); n = Num(line, n, secs); n = Str(line, n, "s");
+        n = 0; n = Str(line, n, "Uptime: "); n = Num(line, n, st.UptimeSeconds); n = Str(line, n, "s");
         g.DrawChars(line, n, Color.Text, 10, 38);
-        n = 0; n = Str(line, n, "Heap: "); n = Num(line, n, st.HeapUsed / 1024);
-        n = Str(line, n, "/"); n = Num(line, n, st.HeapTotal / 1024); n = Str(line, n, " KiB");
+        // Heap as human-readable sizes (System.Globalization).
+        n = 0; n = Str(line, n, "Heap: "); n = Size(line, n, st.HeapUsed);
+        n = Str(line, n, "/"); n = Size(line, n, st.HeapTotal);
         g.DrawChars(line, n, Color.Text, 190, 38);
-        n = 0; n = Str(line, n, "RAM: "); n = Num(line, n, st.MemTotalMiB); n = Str(line, n, " MiB");
+        n = 0; n = Str(line, n, "RAM: "); n = Num(line, n, st.MemTotalMib); n = Str(line, n, " MiB");
         g.DrawChars(line, n, Color.Text, 430, 38);
 
         // Heap usage bar.
@@ -85,17 +66,16 @@ unsafe class TaskMgr
         g.DrawString("Kind", Color.Text, 320, 87);
         g.DrawString("CPU(ticks)", Color.Text, 430, 87);
 
-        byte* raw = stackalloc byte[4096];
-        ProcInfo* procs = (ProcInfo*)raw;
-        int count = (int)bz_proc_list(procs, 64);
+        BzProcessInfo procs = BzProcess.GetProcesses(64);
+        int count = BzProcess.Count(procs);
         int y = 108;
-        for (int i = 0; i < count && y < 356; i++)
+        for (BzProcessInfo p = procs; p != null && y < 356; p = p.Next)
         {
-            n = 0; n = Num(line, n, procs[i].Pid);
+            n = 0; n = Num(line, n, p.Pid);
             g.DrawChars(line, n, Color.Text, 16, y);
-            DrawName(g, procs[i].Name, 90, y);
-            g.DrawString(procs[i].Kind == 1 ? "app" : "kernel", Color.Text, 320, y);
-            n = 0; n = Num(line, n, procs[i].CpuTicks);
+            DrawName(g, p.Name, p.NameLen, 90, y);
+            g.DrawString(p.Kind == 1 ? "app" : "kernel", Color.Text, 320, y);
+            n = 0; n = Num(line, n, p.CpuTicks);
             g.DrawChars(line, n, Color.Text, 430, y);
             y += 20;
         }
@@ -113,28 +93,29 @@ unsafe class TaskMgr
         return n;
     }
 
+    // Numbers and byte sizes are formatted by System.Globalization; these two
+    // just copy the result into the stack buffer the old Drawing API takes.
     static int Num(char* buf, int n, ulong v)
     {
-        char* tmp = stackalloc char[24];
-        int t = 0;
-        if (v == 0) tmp[t++] = '0';
-        while (v > 0) { tmp[t++] = (char)('0' + (int)(v % 10)); v /= 10; }
-        for (int i = t - 1; i >= 0; i--) buf[n++] = tmp[i];
+        char[] tmp = new char[24];
+        int t = BzCulture.FormatInt((long)v, tmp);
+        for (int i = 0; i < t; i++) buf[n++] = tmp[i];
         return n;
     }
 
-    static void DrawName(Graphics g, byte* name, int x, int y)
+    static int Size(char* buf, int n, ulong bytes)
+    {
+        char[] tmp = new char[24];
+        int t = BzCulture.FormatBytes(bytes, tmp);
+        for (int i = 0; i < t; i++) buf[n++] = tmp[i];
+        return n;
+    }
+
+    static void DrawName(Graphics g, char[] name, int len, int x, int y)
     {
         char* buf = stackalloc char[32];
         int n = 0;
-        for (int i = 0; i < 31 && name[i] != 0; i++) buf[n++] = (char)name[i];
+        for (int i = 0; i < len && i < 31; i++) buf[n++] = name[i];
         g.DrawChars(buf, n, Color.Leaf, x, y);
-    }
-
-    static bool NameEquals(byte* name, string s)
-    {
-        for (int i = 0; i < s.Length; i++)
-            if (name[i] != (byte)s[i]) return false;
-        return name[s.Length] == 0;
     }
 }

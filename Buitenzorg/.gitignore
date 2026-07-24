@@ -20,7 +20,12 @@ userland/**/*.o
 userland/**/*.elf
 
 # Third-party toolchains fetched locally (bflat is ~90 MB)
-tools/
+# (use tools/* not tools/ — git cannot re-include inside an excluded directory)
+tools/*
+# ...but MagicAppGen is our own source (sans build output).
+!tools/MagicAppGen/
+tools/MagicAppGen/bin/
+tools/MagicAppGen/obj/
 
 # Editors / OS
 .vs/

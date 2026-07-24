@@ -28,7 +28,7 @@ unsafe class WebView
         var g = Graphics.CreateWindow("WebView - web app", 420, 320);
         Render(g);
         Console.WriteLine("[webview] rendered HTML document");
-        Sys.Sleep(27);
+        Sys.Sleep(5);
     }
 
     static void Render(Graphics g)

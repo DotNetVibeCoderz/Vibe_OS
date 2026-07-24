@@ -2,7 +2,7 @@
   "name": "buitenzorg-sdk",
   "displayName": "Buitenzorg SDK",
   "description": "Build, run, and debug Buitenzorg OS apps from VS Code (requirements.md §13).",
-  "version": "0.8.0",
+  "version": "0.16.0",
   "publisher": "buitenzorg",
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Programming Languages", "Debuggers", "Other"],
@@ -10,8 +10,10 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "buitenzorg.newProject", "title": "Buitenzorg: New Project" },
+      { "command": "buitenzorg.newProject", "title": "Buitenzorg: New Project (pick template)" },
       { "command": "buitenzorg.buildRun", "title": "Buitenzorg: Build & Run in QEMU" },
+      { "command": "buitenzorg.deploy", "title": "Buitenzorg: Deploy (build image + smoke test)" },
+      { "command": "buitenzorg.debug", "title": "Buitenzorg: Debug Kernel (QEMU + GDB server)" },
       { "command": "buitenzorg.validateManifest", "title": "Buitenzorg: Validate app.manifest" }
     ],
     "debuggers": [
@@ -37,5 +39,5 @@
     ]
   },
   "scripts": { "compile": "tsc -p ./" },
-  "devDependencies": { "typescript": "^5.4.0", "@types/vscode": "^1.90.0" }
+  "devDependencies": { "typescript": "^5.4.0", "@types/vscode": "^1.90.0", "@types/node": "^20.0.0" }
 }

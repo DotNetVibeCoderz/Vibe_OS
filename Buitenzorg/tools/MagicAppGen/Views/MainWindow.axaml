@@ -1,0 +1,131 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ae="using:AvaloniaEdit"
+        x:Class="MagicAppGen.Views.MainWindow"
+        Width="1200" Height="700" MinWidth="820" MinHeight="480"
+        WindowStartupLocation="CenterScreen"
+        Title="Magic App Generator — Jack, The Code Bender"
+        Background="#1E1F26">
+
+  <DockPanel>
+    <!-- Menu bar -->
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="New Project (Blank)" Click="OnNewBlank" />
+        <MenuItem Header="New Project (From Template)…" Click="OnNewTemplate" />
+        <Separator />
+        <MenuItem Header="Open Project…" Click="OnOpenProject" />
+        <MenuItem Header="Open File…" Click="OnOpenFile" />
+        <MenuItem Header="Save" Click="OnSave" />
+        <MenuItem Header="Close Project" Click="OnCloseProject" />
+        <Separator />
+        <MenuItem Header="Exit" Click="OnExit" />
+      </MenuItem>
+      <MenuItem Header="_Edit">
+        <MenuItem Header="Go To Line…" Click="OnGoToLine" />
+      </MenuItem>
+      <MenuItem Header="_Build">
+        <MenuItem Header="Build" Click="OnBuild" />
+        <MenuItem Header="Run" Click="OnRun" />
+        <MenuItem Header="Deploy" Click="OnDeploy" />
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="Toggle Line Numbers" Click="OnToggleLineNumbers" />
+        <MenuItem Header="Toggle Chat Panel" Click="OnToggleChat" />
+        <MenuItem Header="Toggle Logs" Click="OnToggleLogs" />
+      </MenuItem>
+      <MenuItem Header="_Tools">
+        <MenuItem Header="Settings…" Click="OnSettings" />
+      </MenuItem>
+    </Menu>
+
+    <!-- Toolbar -->
+    <Border DockPanel.Dock="Top" Background="#25262E" Padding="6,4">
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <Button Content="New" Click="OnNewBlank" />
+        <Button Content="Open" Click="OnOpenFile" />
+        <Button Content="Save" Click="OnSave" />
+        <Border Width="1" Background="#3A3B45" Margin="4,0" />
+        <Button Content="Build" Click="OnBuild" />
+        <Button Content="Run" Click="OnRun" />
+        <Button Content="Deploy" Click="OnDeploy" />
+        <Border Width="1" Background="#3A3B45" Margin="4,0" />
+        <TextBlock Text="Language:" VerticalAlignment="Center" />
+        <ComboBox x:Name="LanguageBox" Width="130" SelectionChanged="OnLanguageChanged">
+          <ComboBoxItem>C#</ComboBoxItem>
+          <ComboBoxItem>JavaScript</ComboBoxItem>
+          <ComboBoxItem>TypeScript</ComboBoxItem>
+          <ComboBoxItem>Python</ComboBoxItem>
+        </ComboBox>
+        <CheckBox x:Name="LineNumbersToggle" Content="Line #" IsChecked="True" Click="OnToggleLineNumbers" />
+      </StackPanel>
+    </Border>
+
+    <!-- Status bar -->
+    <Border DockPanel.Dock="Bottom" Background="#0E639C" Height="24">
+      <DockPanel LastChildFill="False">
+        <TextBlock x:Name="StatusText" DockPanel.Dock="Left" Margin="8,0" VerticalAlignment="Center"
+                   Foreground="White" Text="Ready" />
+        <TextBlock x:Name="ProviderStatus" DockPanel.Dock="Right" Margin="8,0" VerticalAlignment="Center"
+                   Foreground="White" Text="" />
+      </DockPanel>
+    </Border>
+
+    <!-- Editor | splitter | chat -->
+    <Grid ColumnDefinitions="*,4,340">
+      <!-- Editor over a logs panel -->
+      <Grid Grid.Column="0" RowDefinitions="*,4,150">
+        <ae:TextEditor x:Name="Editor" Grid.Row="0"
+                       ShowLineNumbers="True"
+                       FontFamily="Cascadia Code,Consolas,Menlo,monospace"
+                       FontSize="14" Background="#1B1C22" Foreground="#E6E6E6" />
+        <GridSplitter Grid.Row="1" Background="#3A3B45" ResizeDirection="Rows" />
+        <DockPanel Grid.Row="2" Background="#15161B">
+          <TextBlock DockPanel.Dock="Top" Text="Logs" Foreground="#9AA0AA" Margin="8,4,0,0" />
+          <TextBox x:Name="LogBox" IsReadOnly="True" AcceptsReturn="True"
+                   TextWrapping="NoWrap" FontFamily="Cascadia Code,Consolas,monospace"
+                   FontSize="12" Background="#15161B" Foreground="#B7C0CC"
+                   VerticalContentAlignment="Top" />
+        </DockPanel>
+      </Grid>
+
+      <GridSplitter Grid.Column="1" Background="#3A3B45" ResizeDirection="Columns" />
+
+      <!-- Chat panel -->
+      <Grid Grid.Column="2" x:Name="ChatPanel" Background="#232430" RowDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Row="0" Margin="8" Spacing="4">
+          <TextBlock Text="Jack — The Code Bender" FontWeight="Bold" Foreground="#7CC0FF" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <ComboBox x:Name="ProviderBox" Width="120" SelectionChanged="OnProviderChanged">
+              <ComboBoxItem>OpenAI</ComboBoxItem>
+              <ComboBoxItem>Claude</ComboBoxItem>
+              <ComboBoxItem>Gemini</ComboBoxItem>
+              <ComboBoxItem>Ollama</ComboBoxItem>
+            </ComboBox>
+            <TextBlock x:Name="ModelText" VerticalAlignment="Center" Foreground="#9AA0AA" />
+            <Button Content="Clear" Click="OnClearChat" HorizontalAlignment="Right" />
+          </StackPanel>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" x:Name="ChatScroll" Padding="8">
+          <StackPanel x:Name="ChatList" Spacing="8" />
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" Margin="8" RowDefinitions="Auto,Auto">
+          <TextBlock x:Name="AttachInfo" Grid.Row="0" Foreground="#8AD68A" FontSize="12" />
+          <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+            <TextBox x:Name="InputBox" Grid.Column="0" AcceptsReturn="True" TextWrapping="Wrap"
+                     Watermark="Describe the app… (Ctrl+Enter to send)" MinHeight="60" MaxHeight="140"
+                     KeyDown="OnInputKeyDown" />
+            <StackPanel Grid.Column="1" Margin="6,0,0,0" Spacing="4">
+              <!-- Plain text, not an emoji: the bundled Inter font has no glyph
+                   for U+1F4CE and it renders as a tofu box. -->
+              <Button Content="Img" ToolTip.Tip="Attach image" Click="OnAttach" />
+              <Button x:Name="SendButton" Content="Send" Click="OnSend" />
+            </StackPanel>
+          </Grid>
+        </Grid>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

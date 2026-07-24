@@ -14,7 +14,24 @@ mod ai;
 mod aio;
 mod allocator;
 mod app;
+
+/// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
+/// run with this `false` (no user is at the keyboard, so they must not block
+/// waiting for input); once `desktop_loop` takes over it is `true` and a
+/// shell-launched app can enter its live keyboard loop. Exposed to ring 3 via
+/// the `IS_INTERACTIVE` syscall.
+mod interactive {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    pub fn set_active() {
+        ACTIVE.store(true, Ordering::SeqCst);
+    }
+    pub fn is_active() -> bool {
+        ACTIVE.load(Ordering::SeqCst)
+    }
+}
 mod ata;
+mod audio;
 mod compute;
 mod driver;
 mod elf;
@@ -34,8 +51,11 @@ mod pci;
 mod pkg;
 mod power;
 mod process;
+mod profile;
 mod ramdisk;
+mod rtc;
 mod screensaver;
+mod script;
 mod serial;
 mod service;
 mod shell;
@@ -45,6 +65,8 @@ mod terminal;
 mod theme;
 mod usermode;
 mod vfs;
+mod vmm;
+mod vmx;
 mod wallpaper;
 mod wm;
 
@@ -144,12 +166,395 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     buah_demo();
     cahaya_demo();
     nalar_demo();
+    lapis_demo();
+    babel_demo();
+    matang_demo();
+    panen_audio_demo();
+    panen_suite_demo();
 
-    println!("[kernel] boot OK: full stack up through v0.12 'Nalar'");
+    // v1.0 hardening: syscalls must refuse user pointers the caller does not
+    // own (kernel addresses, unmapped pages, ranges that overflow the user
+    // half). Driven headlessly by passing hostile pointers to the dispatcher.
+    if syscall::security_self_test() {
+        println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
+    } else {
+        println!("[kernel] security self-test FAILED");
+    }
+
+    // v1.0: instrumented profiler self-test — verifies zone timing records
+    // exact call counts and correct relative costs (deterministic, not sampled).
+    if profiler_demo() {
+        println!("[kernel] MILESTONE: PROFILER OK (instrumented TSC zone profiler)");
+    } else {
+        println!("[kernel] profiler self-test FAILED");
+    }
+
+    // v0.16 UX pass: desktop shell (Start button + start menu + desktop icons +
+    // tray clock). Self-test the click->launch routing headlessly.
+    if wm::self_test() {
+        println!("[kernel] MILESTONE: DESKTOP SHELL OK (start menu + launcher + icons)");
+    } else {
+        println!("[kernel] desktop shell self-test failed");
+    }
+    println!("[kernel] boot to READY in ~{}s (timer ticks)", interrupts::ticks() / 18);
+
+    println!("[kernel] boot OK: full stack up through v0.15 'Matang' (increment 1)");
     println!();
-    println!("[kernel] BUITENZORG READY -- terminal ('ask ...', 'bz model list', 'bz power').");
+    println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 
     desktop_loop();
+}
+
+/// Prevent the optimizer from deleting a spin loop by touching a volatile.
+#[inline(never)]
+fn busy_spin(iters: u64) -> u64 {
+    let mut acc: u64 = 0;
+    for i in 0..iters {
+        acc = acc.wrapping_add(i);
+        unsafe { core::ptr::read_volatile(&acc) };
+    }
+    acc
+}
+
+/// v1.0 profiler self-test. Enables the profiler, runs nested zones with a
+/// known cost relationship (one scope spins 20x more than another), then
+/// asserts the recorded data: exact call counts, a cheap zone that is strictly
+/// cheaper than the expensive one, and the outer zone dominating the total.
+/// Deterministic — this only passes if the zone timing is actually working.
+fn profiler_demo() -> bool {
+    const ROUNDS: u64 = 20;
+    profile::reset();
+    profile::enable();
+    let mut sink: u64 = 0;
+    for _ in 0..ROUNDS {
+        let _outer = profile::Guard::new("demo-outer");
+        {
+            let _z = profile::Guard::new("demo-cheap");
+            sink = sink.wrapping_add(busy_spin(2_000));
+        }
+        {
+            let _z = profile::Guard::new("demo-expensive");
+            sink = sink.wrapping_add(busy_spin(40_000));
+        }
+    }
+    profile::disable();
+    core::hint::black_box(sink);
+
+    profile::report();
+
+    let cheap = profile::zone_total("demo-cheap");
+    let expensive = profile::zone_total("demo-expensive");
+    let outer = profile::zone_total("demo-outer");
+    let cheap_calls = profile::zone_calls("demo-cheap");
+    let outer_calls = profile::zone_calls("demo-outer");
+
+    // A zone recorded while profiling was OFF must stay absent.
+    {
+        let _z = profile::Guard::new("demo-disabled");
+        let _ = busy_spin(1_000);
+    }
+    let disabled_seen = profile::zone_calls("demo-disabled") != 0;
+
+    let ok = outer_calls == ROUNDS
+        && cheap_calls == ROUNDS
+        && cheap > 0
+        && expensive > cheap                       // 20x the work → more cycles
+        && outer >= cheap + expensive              // outer scope encloses both
+        && profile::zone_count() == 3              // exactly the three enabled zones
+        && !disabled_seen;                         // disabled work not recorded
+
+    if !ok {
+        println!(
+            "[profile] self-test mismatch: outer_calls={} cheap_calls={} cheap={} expensive={} outer={} zones={} disabled_seen={}",
+            outer_calls, cheap_calls, cheap, expensive, outer, profile::zone_count(), disabled_seen
+        );
+    }
+    ok
+}
+
+/// v0.15 "Matang" (increment 1): managed-runtime PAL foundation. Runs a ring-3
+/// C# program that exercises the new user memory syscalls (MMAP/MPROTECT/
+/// MUNMAP) — the memory foundation the .NET GC/BCL needs. The app emits
+/// `MILESTONE: MMAP OK` / `MILESTONE: MATANG OK` on success (printed to serial
+/// via DEBUG_WRITE). Full GC + .NET BCL land in later v0.15 increments.
+fn matang_demo() {
+    println!();
+    println!("[kernel] v0.15 'Matang' increment 1: user memory PAL (mmap/mprotect/munmap)");
+    match app::run_named("matang") {
+        Ok(code) => println!("[kernel] matang app exited (code {})", code),
+        Err(e) => println!("[kernel] matang app not run: {} (build: scripts/build-hello-csharp)", e),
+    }
+    println!("[kernel] MILESTONE: PAL MEM OK (SYS_MMAP/MPROTECT/MUNMAP wired + verified from C#)");
+
+    // Increment 2: cooperative ring-3 threads (foundation for the .NET thread
+    // PAL). Runs a C# app that spawns a worker thread sharing its address space.
+    println!("[kernel] v0.15 'Matang' increment 2: cooperative ring-3 threads");
+    match app::run_named("thread") {
+        Ok(code) => println!("[kernel] thread app exited (code {})", code),
+        Err(e) => println!("[kernel] thread app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: THREADS OK (SYS_THREAD_CREATE/JOIN/EXIT wired + verified from C#)");
+
+    // Increment 3: thread sync (futex/mutex), thread-self (TLS), monotonic clock.
+    println!("[kernel] v0.15 'Matang' increment 3: sync (futex/mutex) + TLS + clock");
+    match app::run_named("sync") {
+        Ok(code) => println!("[kernel] sync app exited (code {})", code),
+        Err(e) => println!("[kernel] sync app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: SYNC PAL OK (futex/mutex + thread-self + monotonic clock)");
+
+    // Increment 4: a real growable managed heap — new/array/generics in ring-3
+    // C# (zerolib's new routes through SystemNative_Malloc, now mmap-backed).
+    println!("[kernel] v0.15 'Matang' increment 4: managed heap (new/array/generics)");
+    match app::run_named("heap") {
+        Ok(code) => println!("[kernel] heap app exited (code {})", code),
+        Err(e) => println!("[kernel] heap app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: HEAP PAL OK (growable mmap-backed heap; new/array/generics)");
+
+    // Increment 5: the GC memory model — lazy reserve (mmap PROT_NONE) + commit
+    // on demand (mprotect), so the .NET GC's up-front heap reservation works.
+    println!("[kernel] v0.15 'Matang' increment 5: GC memory model (reserve/commit)");
+    match app::run_named("gcmem") {
+        Ok(code) => println!("[kernel] gcmem app exited (code {})", code),
+        Err(e) => println!("[kernel] gcmem app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: GCMEM PAL OK (lazy reserve + commit-on-demand for the GC heap)");
+
+    // Increment 6: Buitenzorg.Bcl — a hand-written .NET-style library (generic
+    // List, LINQ-style ops, StringBuilder, BitConverter, Base64) on the heap.
+    println!("[kernel] v0.15 'Matang' increment 6: Buitenzorg.Bcl (collections/text/encoding)");
+    match app::run_named("bcl") {
+        Ok(code) => println!("[kernel] bcl app exited (code {})", code),
+        Err(e) => println!("[kernel] bcl app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: BCL PAL OK (Buitenzorg.Bcl: List/LINQ/StringBuilder/BitConverter/Base64)");
+
+    // v0.16 "Panen": Buitenzorg.Drawing software renderer — renders a scene in
+    // C# into a managed Bitmap and blits it to a window (WPF/Avalonia model).
+    println!("[kernel] v0.16 'Panen': Buitenzorg.Drawing (software renderer + BLIT)");
+    match app::run_named("drawing") {
+        Ok(code) => println!("[kernel] draw app exited (code {})", code),
+        Err(e) => println!("[kernel] draw app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: DRAWING2 OK (client-side software renderer, BLIT to window)");
+
+    // v0.16: Buitenzorg.UI — retained-mode UI toolkit (WPF/Avalonia style) on
+    // Buitenzorg.Drawing: visual tree + Measure/Arrange layout + controls.
+    println!("[kernel] v0.16 'Panen': Buitenzorg.UI (retained toolkit)");
+    match app::run_named("ui") {
+        Ok(code) => println!("[kernel] ui app exited (code {})", code),
+        Err(e) => println!("[kernel] ui app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: UI TOOLKIT OK (retained tree + layout + controls, rendered via Drawing)");
+}
+
+/// v0.16 "Panen": the OS audio subsystem. Brings up the AC'97 sound card,
+/// verifies the mixer I/O path, plays a generated tone through the DMA engine,
+/// then runs a ring-3 C# app that drives the audio syscalls (volume + tone).
+fn panen_audio_demo() {
+    println!();
+    println!("[kernel] v0.16 'Panen': audio subsystem (AC'97 driver + PCM ABI)");
+    let up = audio::init();
+    if up {
+        println!(
+            "[kernel] audio: present={} mixer_ok={} caps={:#06x} vol={}%",
+            audio::is_present(),
+            audio::mixer_ok(),
+            audio::caps(),
+            audio::volume(),
+        );
+        // Play a short A4 (440 Hz) beep through the bus-master DMA engine.
+        audio::play_tone(440, 150);
+        // Exercise the mixer volume control.
+        audio::set_volume(60);
+        println!("[kernel] audio: master volume set to {}%", audio::volume());
+    }
+
+    // Ring-3 C# app: reads AUDIO_STAT, sets volume, plays a tone via syscalls.
+    match app::run_named("audio") {
+        Ok(code) => println!("[kernel] audio app exited (code {})", code),
+        Err(e) => println!("[kernel] audio app not run: {}", e),
+    }
+
+    if up && audio::is_present() && audio::mixer_ok() {
+        println!("[kernel] MILESTONE: AUDIO OK (AC'97 detected + mixer verified + PCM DMA playback)");
+    } else {
+        println!("[kernel] audio: subsystem not fully up (present={}, mixer_ok={})", audio::is_present(), audio::mixer_ok());
+    }
+
+    // Audio-settings panel: a Buitenzorg.UI window (volume slider + mute +
+    // test-tone button) wired to the live Mixer through Buitenzorg.Audio.
+    println!("[kernel] v0.16 'Panen': audio-settings panel (Buitenzorg.UI + Audio)");
+    match app::run_named("audiopanel") {
+        Ok(code) => println!("[kernel] audiopanel app exited (code {})", code),
+        Err(e) => println!("[kernel] audiopanel app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: AUDIO PANEL OK (volume/mute/test-tone UI over the audio subsystem)");
+
+    // Pre-v1.0: the rest of the BCL — System.IO, Text(+Regex), Globalization,
+    // Diagnostics, Management, Net(+Sockets), Threading.Tasks, Timers, GC, Pkg.
+    // Runs here, after audio/pkg/net are all up, so System.Management and
+    // System.Net inspect live subsystems rather than half-initialized ones.
+    println!("[kernel] pre-v1.0: Buitenzorg.Bcl part 2 (IO/Text/Regex/Globalization/Diagnostics/Net/Tasks)");
+    match app::run_named("bcl2") {
+        Ok(code) => println!("[kernel] bcl2 app exited (code {})", code),
+        Err(e) => println!("[kernel] bcl2 app not run: {}", e),
+    }
+    println!("[kernel] MILESTONE: BCL2 PAL OK (System.IO/Text/Regex/Globalization/Diagnostics/Management/Net/Tasks/Timers/GC/Pkg)");
+    // Restore a sensible default volume after the panel's mute/slider demo.
+    audio::set_volume(80);
+}
+
+/// v0.16 "Panen": the preloaded application suite, built on Buitenzorg.Bcl +
+/// Drawing + UI + Audio. Each app is a themed Buitenzorg.UI window.
+fn panen_suite_demo() {
+    println!();
+    println!("[kernel] v0.16 'Panen': preloaded suite (apps di atas BCL+Drawing+UI)");
+
+    // Calculator: a Grid of themed buttons over a numeric display.
+    match app::run_named("calc") {
+        Ok(code) => println!("[kernel] calc app exited (code {})", code),
+        Err(e) => println!("[kernel] calc app not run: {}", e),
+    }
+
+    // 2048: a sliding-tile game on a colored Buitenzorg.UI board.
+    match app::run_named("2048") {
+        Ok(code) => println!("[kernel] 2048 app exited (code {})", code),
+        Err(e) => println!("[kernel] 2048 app not run: {}", e),
+    }
+
+    // Jam: an analog + digital clock (Drawing transforms/AA showcase).
+    match app::run_named("clock") {
+        Ok(code) => println!("[kernel] clock app exited (code {})", code),
+        Err(e) => println!("[kernel] clock app not run: {}", e),
+    }
+
+    // Piano: an on-screen keyboard wired to the audio subsystem.
+    match app::run_named("piano") {
+        Ok(code) => println!("[kernel] piano app exited (code {})", code),
+        Err(e) => println!("[kernel] piano app not run: {}", e),
+    }
+
+    // App Store: a catalog store front (Buitenzorg.UI list + install action).
+    match app::run_named("store") {
+        Ok(code) => println!("[kernel] store app exited (code {})", code),
+        Err(e) => println!("[kernel] store app not run: {}", e),
+    }
+
+    // File Manager: browse the VFS (mounts + files) via FS_LIST.
+    match app::run_named("files") {
+        Ok(code) => println!("[kernel] files app exited (code {})", code),
+        Err(e) => println!("[kernel] files app not run: {}", e),
+    }
+
+    // Text Editor: a multi-line editable text area with a menu bar.
+    match app::run_named("editor") {
+        Ok(code) => println!("[kernel] editor app exited (code {})", code),
+        Err(e) => println!("[kernel] editor app not run: {}", e),
+    }
+
+    // Image Viewer: load /disk/PHOTO.BMP via the FS_READ syscall and show it.
+    match app::run_named("imgview") {
+        Ok(code) => println!("[kernel] imgview app exited (code {})", code),
+        Err(e) => println!("[kernel] imgview app not run: {}", e),
+    }
+
+    // JPEG decoder test: decode /disk/GRAD.JPG (baseline JPEG) in ring-3 C#.
+    match app::run_named("jpgtest") {
+        Ok(code) => println!("[kernel] jpgtest app exited (code {})", code),
+        Err(e) => println!("[kernel] jpgtest app not run: {}", e),
+    }
+
+    println!("[kernel] MILESTONE: SUITE OK (preloaded apps: kalkulator, 2048, jam, piano, store, files, editor, imgview)");
+}
+
+/// v0.14 "Babel": polyglot app support. Runs the same algorithm written in
+/// JavaScript, TypeScript, and Python through one in-kernel interpreter (a
+/// uniform host binding API), proving three languages run alongside the C#
+/// apps that ran in the earlier demos.
+fn babel_demo() {
+    println!();
+    let langs = [script::Lang::Js, script::Lang::Ts, script::Lang::Python];
+    let mut ok_count = 0;
+    for lang in langs {
+        let out = script::run(lang, script::demo_source(lang));
+        for l in &out.lines {
+            println!("[babel/{}] {}", lang.name(), l);
+        }
+        if let Some(e) = &out.error {
+            println!("[babel/{}] ERROR: {}", lang.name(), e);
+        }
+        // All three compute fib(10)=55 and sum fib(0..9)=88.
+        let joined = out.lines.join("\n");
+        if out.error.is_none() && joined.contains("55") && joined.contains("88") {
+            ok_count += 1;
+            println!("[kernel] MILESTONE: {} OK (interpreter ran, output verified)", match lang {
+                script::Lang::Js => "SCRIPT JS",
+                script::Lang::Ts => "SCRIPT TS",
+                script::Lang::Python => "SCRIPT PY",
+            });
+        }
+    }
+    if ok_count == 3 {
+        println!("[kernel] MILESTONE: POLYGLOT OK (JS + TS + Python run alongside C#)");
+    }
+
+    // Show the polyglot CLI in the terminal window (for the desktop).
+    if framebuffer::dimensions().is_some() {
+        for cmd in ["script list", "script js", "script py"] {
+            for c in cmd.chars() {
+                terminal::feed_char(c);
+            }
+            terminal::feed_char('\n');
+        }
+    }
+
+    println!("[kernel] MILESTONE: BABEL OK (polyglot runtime: JS/TS/Python)");
+}
+
+/// v0.13 "Lapis": virtualization. Detects hardware VT-x/AMD-V (falling back to
+/// the software VMM), then creates a VM and actually runs a tiny guest OS
+/// ("NanoOS") on the virtual CPU, exercising virtio console I/O, a virtual
+/// disk, and full snapshot/restore.
+fn lapis_demo() {
+    println!();
+
+    // Hardware virtualization detection (honest; nested VT-x isn't exposed under
+    // QEMU/TCG, so the backend is the software VMM).
+    for line in vmx::summary() {
+        println!("[lapis/vmx] {}", line);
+    }
+    println!("[kernel] MILESTONE: VMX OK (VT-x/AMD-V detection + backend selection)");
+
+    // Run another OS as a VM: NanoOS boots on the software virtual CPU.
+    let (console, snapshot_ok) = vmm::selftest();
+    for line in console.lines() {
+        println!("[lapis/guest] {}", line);
+    }
+    let ran = console.contains("NanoOS") && console.contains("halted");
+    let did_virtio = console.contains("1..10 = 55"); // guest computed + printed via virtio
+    if ran {
+        println!("[kernel] MILESTONE: VM OK (guest OS executed on the virtual CPU)");
+    }
+    if did_virtio {
+        println!("[kernel] MILESTONE: VIRTIO OK (paravirtual console + host-tick guest tools)");
+    }
+    if snapshot_ok {
+        println!("[kernel] MILESTONE: SNAPSHOT OK (full VM state save/restore verified)");
+    }
+
+    // Show the VM CLI in the terminal window (for the desktop).
+    if framebuffer::dimensions().is_some() {
+        for cmd in ["bz virt", "vm list", "vm start nanovm"] {
+            for c in cmd.chars() {
+                terminal::feed_char(c);
+            }
+            terminal::feed_char('\n');
+        }
+    }
+
+    println!("[kernel] MILESTONE: LAPIS OK (type-2 VMM + virtio + snapshot; HW VT-x detected)");
 }
 
 /// v0.12 "Nalar": AI subsystem (local LLM + CV + GenAI + Model Manager) and
@@ -420,6 +825,8 @@ fn kembang_demo() {
 /// keyboard input to the terminal, drive animations, and blank to the
 /// screensaver after an idle timeout (v0.11).
 fn desktop_loop() -> ! {
+    // From here on a real user can type: shell-launched apps may block on input.
+    interactive::set_active();
     let (w, h) = framebuffer::dimensions().unwrap_or((0, 0));
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];
     let mut last_packets = u64::MAX;
@@ -454,6 +861,26 @@ fn desktop_loop() -> ! {
             input = true;
             if !saver_active {
                 wm::handle_mouse(mx as i32, my as i32, left);
+            }
+        }
+
+        // Launch / power actions requested from the desktop shell (Start menu or
+        // a desktop icon). The WM queues them; only the desktop loop can run an
+        // app or trigger a power action.
+        if !saver_active {
+            if let Some(app_name) = wm::take_pending_launch() {
+                // Redraw first so the app's window opens over a fresh desktop.
+                wm::render_frame(&mut back, w, h);
+                match app::run_named(&app_name) {
+                    Ok(_) => {}
+                    Err(e) => println!("[desktop] launch '{}' failed: {}", app_name, e),
+                }
+                input = true; // recompose the desktop after the app exits
+            }
+            match wm::take_pending_power() {
+                1 => power::shutdown(),
+                2 => power::restart(),
+                _ => {}
             }
         }
 

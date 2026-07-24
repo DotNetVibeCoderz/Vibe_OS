@@ -1,0 +1,81 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MagicAppGen.Views.SettingsWindow"
+        Width="640" Height="620"
+        WindowStartupLocation="CenterOwner"
+        Title="Settings" Background="#1E1F26">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal"
+                HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
+      <Button Content="Cancel" Click="OnCancel" />
+      <Button Content="Save" Click="OnSave" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="General" FontWeight="Bold" Foreground="#7CC0FF" />
+        <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto">
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="Active provider" VerticalAlignment="Center" />
+          <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ProviderBox" Width="180" HorizontalAlignment="Left">
+            <ComboBoxItem>OpenAI</ComboBoxItem>
+            <ComboBoxItem>Claude</ComboBoxItem>
+            <ComboBoxItem>Gemini</ComboBoxItem>
+            <ComboBoxItem>Ollama</ComboBoxItem>
+          </ComboBox>
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="Temperature" VerticalAlignment="Center" Margin="0,6,0,0" />
+          <TextBox Grid.Row="1" Grid.Column="1" x:Name="TempBox" Width="180" HorizontalAlignment="Left" Margin="0,6,0,0" />
+
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Language" VerticalAlignment="Center" Margin="0,6,0,0" />
+          <TextBox Grid.Row="2" Grid.Column="1" x:Name="LangBox" Width="180" HorizontalAlignment="Left" Margin="0,6,0,0" />
+
+          <TextBlock Grid.Row="3" Grid.Column="0" Text="Buitenzorg repo root" VerticalAlignment="Center" Margin="0,6,0,0" />
+          <TextBox Grid.Row="3" Grid.Column="1" x:Name="RootBox" Margin="0,6,0,0"
+                   Watermark="C:\path\to\Buitenzorg" />
+        </Grid>
+
+        <TextBlock Text="System prompt (Jack - The Code Bender)" FontWeight="Bold" Foreground="#7CC0FF" Margin="0,8,0,0" />
+        <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="110"
+                 Watermark="Leave empty to use the built-in Buitenzorg system prompt." />
+
+        <TextBlock Text="Providers" FontWeight="Bold" Foreground="#7CC0FF" Margin="0,8,0,0" />
+        <Grid ColumnDefinitions="90,*,*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+          <Grid.Styles>
+            <Style Selector="Grid > TextBox">
+              <Setter Property="Margin" Value="3" />
+            </Style>
+          </Grid.Styles>
+          <TextBlock Grid.Row="0" Grid.Column="1" Text="Model" Foreground="#9AA0AA" />
+          <TextBlock Grid.Row="0" Grid.Column="2" Text="API key" Foreground="#9AA0AA" />
+          <TextBlock Grid.Row="0" Grid.Column="3" Text="Endpoint" Foreground="#9AA0AA" />
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="OpenAI" VerticalAlignment="Center" />
+          <TextBox Grid.Row="1" Grid.Column="1" x:Name="OpenAiModel" />
+          <TextBox Grid.Row="1" Grid.Column="2" x:Name="OpenAiKey" PasswordChar="*" />
+          <TextBox Grid.Row="1" Grid.Column="3" x:Name="OpenAiEndpoint" />
+
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Claude" VerticalAlignment="Center" />
+          <TextBox Grid.Row="2" Grid.Column="1" x:Name="ClaudeModel" />
+          <TextBox Grid.Row="2" Grid.Column="2" x:Name="ClaudeKey" PasswordChar="*" />
+          <TextBox Grid.Row="2" Grid.Column="3" x:Name="ClaudeEndpoint" />
+
+          <TextBlock Grid.Row="3" Grid.Column="0" Text="Gemini" VerticalAlignment="Center" />
+          <TextBox Grid.Row="3" Grid.Column="1" x:Name="GeminiModel" />
+          <TextBox Grid.Row="3" Grid.Column="2" x:Name="GeminiKey" PasswordChar="*" />
+          <TextBox Grid.Row="3" Grid.Column="3" x:Name="GeminiEndpoint" />
+
+          <TextBlock Grid.Row="4" Grid.Column="0" Text="Ollama" VerticalAlignment="Center" />
+          <TextBox Grid.Row="4" Grid.Column="1" x:Name="OllamaModel" />
+          <TextBox Grid.Row="4" Grid.Column="2" x:Name="OllamaKey" PasswordChar="*" />
+          <TextBox Grid.Row="4" Grid.Column="3" x:Name="OllamaEndpoint" />
+        </Grid>
+
+        <TextBlock Text="Tools" FontWeight="Bold" Foreground="#7CC0FF" Margin="0,8,0,0" />
+        <Grid ColumnDefinitions="150,*">
+          <TextBlock Grid.Column="0" Text="Tavily API key" VerticalAlignment="Center" />
+          <TextBox Grid.Column="1" x:Name="TavilyBox" PasswordChar="*" />
+        </Grid>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

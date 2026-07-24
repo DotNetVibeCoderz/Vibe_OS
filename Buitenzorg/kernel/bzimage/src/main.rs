@@ -113,6 +113,9 @@ fn run_qemu(uefi: bool, smoke: bool, media: &str) {
         }
     }
     cmd.args(["-m", "512M"]);
+    // v0.16 "Panen": an Intel AC'97 sound card (null host backend so it is
+    // always present headless; the kernel driver still drives its registers/DMA).
+    cmd.args(["-audiodev", "none,id=snd0", "-device", "AC97,audiodev=snd0"]);
     if smoke {
         cmd.args(["-display", "none", "-serial", "stdio", "-no-reboot"]);
     } else {

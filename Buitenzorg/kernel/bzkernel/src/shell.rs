@@ -8,7 +8,7 @@
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use spin::Mutex;
 
-use crate::{ai, app, model, pkg, power, screensaver, theme, vfs, wallpaper, wm};
+use crate::{ai, app, model, pkg, power, screensaver, script, theme, vfs, vmm, vmx, wallpaper, wm};
 
 pub struct ShellState {
     pub cwd: String,
@@ -63,6 +63,9 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "anim" => anim_cmd(args.first().copied()),
         "settings" | "personalize" => (settings_show(), Effect::None),
         "ask" | "ai" => (ai_ask(&args), Effect::Redraw),
+        "vm" => vm_cmd(&args),
+        "script" | "js" | "ts" | "py" => script_cmd(cmd, &args),
+        "prof" | "profile" => prof_cmd(args.first().copied()),
         "shutdown" | "poweroff" => power::shutdown(),
         "restart" | "reboot" => power::restart(),
         "sleep" | "suspend" => {
@@ -75,7 +78,7 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
 }
 
 fn version() -> String {
-    String::from("Buitenzorg OS v0.12 'Nalar' -- Gravicode Studios (Kang Fadhil)")
+    String::from("Buitenzorg OS v0.14 'Babel' -- Gravicode Studios (Kang Fadhil)")
 }
 
 fn about() -> Vec<String> {
@@ -85,7 +88,7 @@ fn about() -> Vec<String> {
      "",
      "  Dibuat oleh : Gravicode Studios",
      "  Dipimpin oleh: Kang Fadhil",
-     "  Versi       : v0.12 'Nalar'"]
+     "  Versi       : v0.14 'Babel'"]
         .iter()
         .map(|s| String::from(*s))
         .collect()
@@ -108,8 +111,11 @@ fn help() -> Vec<String> {
      "  ws [1-4]          pindah virtual desktop",
      "  run <app>         jalankan app (xox, paint, taskmgr)",
      "  ask <prompt>      AI: lengkapi teks (LLM lokal)",
+     "  vm <sub>          virtualisasi (list/create/start/snapshot/restore)",
+     "  script <lang> [f] polyglot: js|ts|py (jalankan demo/file)",
+     "  prof [self|on|off|reset|report]  profiler zona (TSC)",
      "  shutdown|restart|sleep      power management",
-     "  bz <sub>          CLI (install/remove/list, model, power)",
+     "  bz <sub>          CLI (install/remove/list, model, power, vm, virt, script)",
      "  clear|cls         bersihkan layar",
      "  ver|uname         versi OS",
      "  about|credits     tentang & pembuat"]
@@ -398,17 +404,228 @@ fn power_cmd(args: &[&str]) -> (Vec<String>, Effect) {
     }
 }
 
+fn vm_cmd(args: &[&str]) -> (Vec<String>, Effect) {
+    match args.first().copied() {
+        None | Some("list") | Some("ls") => {
+            let vms = vmm::list();
+            if vms.is_empty() {
+                return (vec![String::from("belum ada VM (buat: 'vm create <nama>')")], Effect::None);
+            }
+            let mut out = vec![String::from("virtual machines:")];
+            for v in vms {
+                out.push(format!(
+                    "  #{} {:<10} {:>4}KiB {}vcpu disk={}KiB {:<8} steps={}{}",
+                    v.id, v.name, v.mem_kib, v.vcpus, v.disk_kib, v.state.name(), v.steps,
+                    if v.has_snapshot { " [snap]" } else { "" }
+                ));
+            }
+            (out, Effect::None)
+        }
+        Some("create") | Some("new") => {
+            let name = args.get(1).copied().unwrap_or("nanovm");
+            let id = vmm::create(name, 64, 1);
+            (vec![format!("VM dibuat: #{} '{}' (guest: NanoOS, 64KiB, 1 vcpu)", id, name)], Effect::None)
+        }
+        Some("start") | Some("run") | Some("boot") => {
+            let Some(sel) = args.get(1).copied() else {
+                return (vec![String::from("vm start <nama|id>")], Effect::None);
+            };
+            match vmm::start(sel) {
+                Ok(r) => {
+                    let mut out = vec![format!("== VM '{}' -> {} ({} instruksi ==", r.name, r.state.name(), r.steps)];
+                    for l in r.console.lines() {
+                        out.push(format!("  | {}", l));
+                    }
+                    (out, Effect::Redraw)
+                }
+                Err(e) => (vec![format!("vm start: {}", e)], Effect::None),
+            }
+        }
+        Some("snapshot") | Some("snap") => {
+            let Some(sel) = args.get(1).copied() else {
+                return (vec![String::from("vm snapshot <nama|id>")], Effect::None);
+            };
+            match vmm::snapshot(sel) {
+                Ok(()) => (vec![format!("snapshot dibuat untuk '{}'", sel)], Effect::None),
+                Err(e) => (vec![format!("vm snapshot: {}", e)], Effect::None),
+            }
+        }
+        Some("restore") => {
+            let Some(sel) = args.get(1).copied() else {
+                return (vec![String::from("vm restore <nama|id>")], Effect::None);
+            };
+            match vmm::restore(sel) {
+                Ok(()) => (vec![format!("'{}' dipulihkan dari snapshot", sel)], Effect::None),
+                Err(e) => (vec![format!("vm restore: {}", e)], Effect::None),
+            }
+        }
+        Some("remove") | Some("rm") | Some("delete") => {
+            let Some(sel) = args.get(1).copied() else {
+                return (vec![String::from("vm remove <nama|id>")], Effect::None);
+            };
+            match vmm::remove(sel) {
+                Ok(()) => (vec![format!("VM '{}' dihapus", sel)], Effect::None),
+                Err(e) => (vec![format!("vm remove: {}", e)], Effect::None),
+            }
+        }
+        Some(sub) => (
+            vec![format!("vm {}: list|create|start|snapshot|restore|remove", sub)],
+            Effect::None,
+        ),
+    }
+}
+
+fn lang_of(s: &str) -> Option<script::Lang> {
+    match s {
+        "js" | "javascript" => Some(script::Lang::Js),
+        "ts" | "typescript" => Some(script::Lang::Ts),
+        "py" | "python" => Some(script::Lang::Python),
+        _ => None,
+    }
+}
+
+fn run_script(lang: script::Lang, src: &str) -> Vec<String> {
+    let out = script::run(lang, src);
+    let mut lines = vec![format!("[{}] ({} langkah)", lang.name(), out.steps)];
+    for l in &out.lines {
+        lines.push(format!("  {}", l));
+    }
+    if let Some(e) = out.error {
+        lines.push(format!("  error: {}", e));
+    }
+    lines
+}
+
+/// `prof [on|off|reset|report|self]` — drive the instrumented profiler.
+/// With no argument, run a quick self-profile (compose a desktop frame under
+/// profiling) and show where the cycles went. Profiling is off by default so it
+/// never perturbs normal timing.
+fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
+    match arg {
+        Some("on") => {
+            crate::profile::enable();
+            (vec![String::from("profiler: on")], Effect::None)
+        }
+        Some("off") => {
+            crate::profile::disable();
+            (vec![String::from("profiler: off")], Effect::None)
+        }
+        Some("reset") => {
+            crate::profile::reset();
+            (vec![String::from("profiler: cleared")], Effect::None)
+        }
+        Some("report") => {
+            crate::profile::report();
+            (
+                vec![format!(
+                    "profiler: {} zone(s) — full report on the serial log",
+                    crate::profile::zone_count()
+                )],
+                Effect::None,
+            )
+        }
+        None | Some("self") => {
+            // Profile a real, representative workload: recompose the desktop a
+            // few times (the WIN_PRESENT hot path) and report.
+            let was = crate::profile::is_enabled();
+            crate::profile::reset();
+            crate::profile::enable();
+            for _ in 0..8 {
+                let _z = crate::profile::Guard::new("shell:present");
+                crate::wm::present_now();
+            }
+            if !was {
+                crate::profile::disable();
+            }
+            crate::profile::report();
+            (
+                vec![
+                    format!("profiler: sampled {} zone(s)", crate::profile::zone_count()),
+                    String::from("full report on the serial log; `prof on|off|reset|report`"),
+                ],
+                Effect::None,
+            )
+        }
+        Some(other) => (
+            vec![format!("prof: unknown option '{}' (on|off|reset|report|self)", other)],
+            Effect::None,
+        ),
+    }
+}
+
+fn script_cmd(cmd: &str, args: &[&str]) -> (Vec<String>, Effect) {
+    // Direct form: `js|ts|py [path]`
+    if let Some(lang) = lang_of(cmd) {
+        return match args.first().copied() {
+            None => (run_script(lang, script::demo_source(lang)), Effect::Redraw),
+            Some(path) => match vfs::read(&resolve(Some(path))) {
+                Ok(bytes) => match core::str::from_utf8(&bytes) {
+                    Ok(text) => (run_script(lang, text), Effect::Redraw),
+                    Err(_) => (vec![format!("script: {}: bukan teks UTF-8", path)], Effect::None),
+                },
+                Err(e) => (vec![format!("script: {}: {}", path, e)], Effect::None),
+            },
+        };
+    }
+    // `script <sub>`
+    match args.first().copied() {
+        None | Some("list") | Some("help") => (
+            vec![
+                String::from("runtime polyglot (v0.14 'Babel') -- interpreter bersama:"),
+                String::from("  js | javascript   JavaScript"),
+                String::from("  ts | typescript   TypeScript (transpile: strip tipe -> JS)"),
+                String::from("  py | python       Python (subset, indentasi)"),
+                String::from("pakai: script <lang> [file]   |   js|ts|py [file]"),
+                String::from("  tanpa file -> jalankan demo bawaan (fib) untuk bahasa itu"),
+            ],
+            Effect::None,
+        ),
+        Some(l) if lang_of(l).is_some() => {
+            let lang = lang_of(l).unwrap();
+            match args.get(1).copied() {
+                None => (run_script(lang, script::demo_source(lang)), Effect::Redraw),
+                Some(path) => match vfs::read(&resolve(Some(path))) {
+                    Ok(bytes) => match core::str::from_utf8(&bytes) {
+                        Ok(text) => (run_script(lang, text), Effect::Redraw),
+                        Err(_) => (vec![format!("script: {}: bukan teks UTF-8", path)], Effect::None),
+                    },
+                    Err(e) => (vec![format!("script: {}: {}", path, e)], Effect::None),
+                },
+            }
+        }
+        Some("run") => {
+            let Some(l) = args.get(1).copied().and_then(lang_of) else {
+                return (vec![String::from("script run <js|ts|py> <file>")], Effect::None);
+            };
+            let Some(path) = args.get(2).copied() else {
+                return (vec![String::from("script run <js|ts|py> <file>")], Effect::None);
+            };
+            match vfs::read(&resolve(Some(path))) {
+                Ok(bytes) => match core::str::from_utf8(&bytes) {
+                    Ok(text) => (run_script(l, text), Effect::Redraw),
+                    Err(_) => (vec![format!("script: {}: bukan teks UTF-8", path)], Effect::None),
+                },
+                Err(e) => (vec![format!("script: {}: {}", path, e)], Effect::None),
+            }
+        }
+        Some(sub) => (vec![format!("script {}: list|js|ts|py|run", sub)], Effect::None),
+    }
+}
+
 fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
     match args.first().copied() {
         Some("theme") => theme_cmd(args.get(1).copied()),
         Some("ws") => ws_cmd(args.get(1).copied()),
-        Some("version") | None => (vec![String::from("bz 0.12.0 'Nalar' - Buitenzorg CLI")], Effect::None),
+        Some("version") | None => (vec![String::from("bz 0.14.0 'Babel' - Buitenzorg CLI")], Effect::None),
         Some("list") | Some("search") => (pkg_list(args.get(1).copied()), Effect::None),
         Some("install") | Some("add") => (pkg_install(args.get(1).copied()), Effect::None),
         Some("remove") | Some("uninstall") => (pkg_remove(args.get(1).copied()), Effect::None),
         Some("run") => run_cmd(args.get(1).copied()),
         Some("model") => model_cmd(&args[1..]),
         Some("power") => power_cmd(&args[1..]),
+        Some("vm") => vm_cmd(&args[1..]),
+        Some("virt") => (vmx::summary(), Effect::None),
+        Some("script") => script_cmd("script", &args[1..]),
         Some(sub) => (
             vec![format!("bz {}: belum tersedia (lihat roadmap requirements.md §16)", sub)],
             Effect::None,

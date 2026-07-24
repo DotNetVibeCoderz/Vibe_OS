@@ -15,9 +15,41 @@ const BORDER: i32 = 2;
 const RESIZE_GRIP: i32 = 14;
 const MIN_W: i32 = 120;
 const MIN_H: i32 = 60;
-const TASKBAR_H: i32 = 28;
+const TASKBAR_H: i32 = 34;
 const BTN_W: i32 = 20; // title-bar button width
 pub const WORKSPACES: u8 = 4;
+
+// Desktop shell (v0.16 "Panen" UX pass): a Start button + start menu + desktop
+// icons + a tray clock, blending macOS (centered, rounded, a top-corner clock),
+// Ubuntu/GNOME (a launcher of apps) and Windows XP (a green Start button + a
+// two-part start menu). Geometry:
+const START_W: i32 = 76; // Start button width on the taskbar
+const SM_W: i32 = 244; // start-menu width
+const SM_ROW: i32 = 26; // start-menu / icon row height
+const ICON_W: i32 = 72; // desktop icon cell width
+const ICON_H: i32 = 62; // desktop icon cell height
+
+/// Apps that appear on the desktop / start menu, as (launch-name, label). The
+/// launch-name must match `app::app_file`. The first `DESKTOP_ICONS` are also
+/// placed as desktop icons.
+const LAUNCH: &[(&str, &str)] = &[
+    ("files", "Files"),
+    ("editor", "Editor"),
+    ("calc", "Kalkulator"),
+    ("store", "App Store"),
+    ("imgview", "Gambar"),
+    ("clock", "Jam"),
+    ("piano", "Piano"),
+    ("2048", "2048"),
+    ("taskmgr", "Task Manager"),
+    ("paint", "Paint"),
+];
+const DESKTOP_ICONS: usize = 4;
+
+/// Read wall-clock (hour, minute) from the CMOS RTC (see `rtc.rs`).
+fn read_clock() -> (u8, u8) {
+    crate::rtc::read_hm()
+}
 
 /// Pixel canvas owned by an app window (v0.8): the client area apps draw
 /// into through the WIN_CMD syscall.
@@ -83,6 +115,15 @@ struct Wm {
     animations: bool,
     rounded: bool,
     cursor_scale: i32,
+    /// Desktop shell state (v0.16 UX pass).
+    start_open: bool,
+    /// A launch requested by a start-menu / desktop-icon click, drained by the
+    /// desktop loop (the WM cannot run a ring-3 app itself).
+    pending: Option<String>,
+    /// A power action requested from the start menu: 1 = shutdown, 2 = restart.
+    pending_power: u8,
+    /// (desktop-icon index, frame) of the last icon click, for double-click.
+    last_icon: (usize, u64),
 }
 
 static WM: Mutex<Option<Wm>> = Mutex::new(None);
@@ -103,7 +144,57 @@ pub fn init(width: usize, height: usize) {
         animations: true,
         rounded: true,
         cursor_scale: 1,
+        start_open: false,
+        pending: None,
+        pending_power: 0,
+        last_icon: (usize::MAX, 0),
     });
+}
+
+/// Drain a pending app-launch requested from the desktop shell (start menu /
+/// desktop icon). The desktop loop calls this and runs the app.
+pub fn take_pending_launch() -> Option<String> {
+    WM.lock().as_mut().and_then(|wm| wm.pending.take())
+}
+
+/// Drain a pending power action from the start menu (1 = shutdown, 2 = restart).
+pub fn take_pending_power() -> u8 {
+    WM.lock().as_mut().map(|wm| core::mem::take(&mut wm.pending_power)).unwrap_or(0)
+}
+
+/// Is the start menu open? (The desktop loop re-renders while it is.)
+pub fn start_menu_open() -> bool {
+    WM.lock().as_ref().map(|wm| wm.start_open).unwrap_or(false)
+}
+
+/// Self-test the desktop-shell click routing (Start button -> open menu ->
+/// click an app row -> a launch is queued). Drives `handle_mouse` the same way
+/// the mouse IRQ would. Returns true if clicking the "files" row queued it.
+/// Leaves the shell closed and the launch queue empty.
+pub fn self_test() -> bool {
+    let height = { WM.lock().as_ref().map(|w| w.height).unwrap_or(0) };
+    if height == 0 {
+        return false;
+    }
+    // Click the Start button (bottom-left corner of the taskbar).
+    handle_mouse(40, height - 4, true);
+    handle_mouse(40, height - 4, false);
+    let opened = start_menu_open();
+    // Click the first app row ("files"): mirror draw_start_menu's geometry.
+    let rows = LAUNCH.len() as i32;
+    let menu_h = 40 + rows * SM_ROW + 34;
+    let y = height - TASKBAR_H - menu_h - 4;
+    let row0 = y + 40 + SM_ROW / 2;
+    handle_mouse(30, row0, true);
+    handle_mouse(30, row0, false);
+    let launched = matches!(take_pending_launch().as_deref(), Some("files"));
+    // Reset shell state so the real desktop starts clean.
+    if let Some(wm) = WM.lock().as_mut() {
+        wm.start_open = false;
+        wm.pending = None;
+        wm.last_icon = (usize::MAX, 0);
+    }
+    opened && launched
 }
 
 /// Set cursor size (1 = normal, 2 = large) — Personalization.
@@ -257,11 +348,65 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
     Ok(())
 }
 
+/// Blit a client ARGB pixel buffer into a window's canvas at (x, y), with
+/// clipping (v0.16 "Panen" BLIT op — client-side software rendering). The
+/// canvas stores 0x00RRGGBB, so alpha is dropped (the client composites first).
+///
+/// `src_ptr` is a user-space pointer to `bw*bh` ARGB `u32` pixels; it is read
+/// per-pixel with `read_volatile` (not turned into a `&[u32]` slice — a slice
+/// over user memory would let the optimizer assume the whole region is
+/// dereferenceable/immutable, which corrupted the boot).
+pub fn blit_on_window(
+    id: u32,
+    x: i32,
+    y: i32,
+    bw: i32,
+    bh: i32,
+    src_ptr: u64,
+) -> Result<(), &'static str> {
+    let mut guard = WM.lock();
+    let wm = guard.as_mut().ok_or("wm not initialized")?;
+    let win = wm.windows.iter_mut().find(|w| w.id == id).ok_or("no such window")?;
+    let canvas = win.canvas.as_mut().ok_or("window has no canvas")?;
+    let (cw, ch) = (canvas.w as i32, canvas.h as i32);
+    let base = src_ptr as *const u32;
+    for row in 0..bh {
+        let dy = y + row;
+        if dy < 0 || dy >= ch {
+            continue;
+        }
+        for col in 0..bw {
+            let dx = x + col;
+            if dx < 0 || dx >= cw {
+                continue;
+            }
+            let s = unsafe { core::ptr::read_volatile(base.add((row * bw + col) as usize)) };
+            canvas.pixels[(dy * cw + dx) as usize] = s & 0x00FF_FFFF;
+        }
+    }
+    Ok(())
+}
+
+/// Reusable compose buffer for [`present_now`] — allocated once and kept, so a
+/// present from a shell-launched app never needs a fresh multi-MiB allocation
+/// on a full/fragmented heap (that failed and panicked the kernel once).
+static PRESENT_BUF: spin::Mutex<alloc::vec::Vec<u32>> = spin::Mutex::new(alloc::vec::Vec::new());
+
 /// Compose + present immediately (v0.8 WIN_PRESENT syscall).
 pub fn present_now() {
     if let Some((w, h)) = crate::framebuffer::dimensions() {
-        let mut back = vec![0u32; w * h];
-        compose_into(&mut back, w, h);
+        let mut back = PRESENT_BUF.lock();
+        if back.len() != w * h {
+            back.resize(w * h, 0);
+        }
+        {
+            // Profiler zone: the compositor is the deepest thing a WIN_PRESENT
+            // syscall runs, so it is the natural thing to measure. Inert unless
+            // profiling is enabled (`prof on` / the boot self-test).
+            let _z = crate::profile::Guard::new("wm::compose");
+            compose_into(&mut back, w, h);
+        }
+        let _z = crate::profile::Guard::new("fb::present");
         crate::framebuffer::present(&back);
     }
 }
@@ -354,7 +499,9 @@ pub fn handle_mouse(x: i32, y: i32, left: bool) {
     if pressed {
         let frame = wm.frame;
         wm.ripple = Some((cx, cy, frame)); // click ripple
-        if cy >= wm.height - TASKBAR_H {
+        if wm.shell_click(cx, cy) {
+            // Consumed by the Start button, start menu, or a desktop icon.
+        } else if cy >= wm.height - TASKBAR_H {
             wm.taskbar_click(cx);
         } else if let Some((id, btn)) = wm.title_button_at(cx, cy) {
             wm.press_button(id, btn);
@@ -425,6 +572,58 @@ impl Wm {
             (right - 2 * BTN_W, TitleButton::Maximize),
             (right - BTN_W, TitleButton::Close),
         ]
+    }
+
+    /// Handle a click on the desktop shell (Start button, open start menu, or a
+    /// desktop icon). Returns true if the click was consumed. Launch/power
+    /// requests are queued in `pending`/`pending_power` for the desktop loop.
+    fn shell_click(&mut self, cx: i32, cy: i32) -> bool {
+        // Start menu open: route the click into it, or close on an outside click.
+        if self.start_open {
+            let rows = LAUNCH.len() as i32;
+            let h = 40 + rows * SM_ROW + 34;
+            let x = 6;
+            let y = self.height - TASKBAR_H - h - 4;
+            if cx >= x && cx < x + SM_W && cy >= y && cy < y + h {
+                let mut ry = y + 40;
+                for (name, _) in LAUNCH {
+                    if cy >= ry && cy < ry + SM_ROW {
+                        self.pending = Some(String::from(*name));
+                        self.start_open = false;
+                        return true;
+                    }
+                    ry += SM_ROW;
+                }
+                let py = y + h - 30;
+                if cy >= py && cy < py + 24 {
+                    self.pending_power = if cx < x + SM_W / 2 { 1 } else { 2 };
+                    self.start_open = false;
+                }
+                return true;
+            }
+            self.start_open = false;
+            return true; // outside click closes the menu (and is consumed)
+        }
+        // Start button on the taskbar.
+        if cy >= self.height - TASKBAR_H && cx >= 6 && cx < 6 + START_W {
+            self.start_open = true;
+            return true;
+        }
+        // Desktop icons: double-click launches (two clicks within ~0.6 s).
+        for i in 0..DESKTOP_ICONS.min(LAUNCH.len()) {
+            let (ix, iy) = icon_rect(i);
+            if cx >= ix && cx < ix + ICON_W && cy >= iy && cy < iy + ICON_H {
+                let now = crate::interrupts::ticks();
+                if self.last_icon.0 == i && now.saturating_sub(self.last_icon.1) < 11 {
+                    self.pending = Some(String::from(LAUNCH[i].0));
+                    self.last_icon = (usize::MAX, 0);
+                } else {
+                    self.last_icon = (i, now);
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// Which title button (if any) is under (x, y), on the top-most window there.
@@ -506,8 +705,9 @@ impl Wm {
 
     /// Handle a click on the taskbar's window buttons (restore/focus).
     fn taskbar_click(&mut self, x: i32) {
-        // Mirror the layout in draw_taskbar: workspace switcher then buttons.
-        let mut bx = 118 + WORKSPACES as i32 * 22 + 12;
+        // Mirror the running-window button strip in draw_taskbar (after the
+        // Start button). Restores/focuses the clicked window.
+        let mut bx = 6 + START_W + 8;
         let ids: Vec<u32> = self
             .windows
             .iter()
@@ -515,17 +715,24 @@ impl Wm {
             .map(|w| w.id)
             .collect();
         for id in ids {
-            if x >= bx && x < bx + 120 {
+            if x >= bx && x < bx + 110 {
+                // Un-minimize on taskbar click, then focus.
+                if let Some(win) = self.windows.iter_mut().find(|w| w.id == id) {
+                    if win.state == WinState::Minimized {
+                        win.state = WinState::Normal;
+                    }
+                }
                 self.focus(id);
                 return;
             }
-            bx += 128;
+            bx += 116;
         }
     }
 
     fn compose(&self, canvas: &mut Canvas) {
         let th = theme::current();
         crate::wallpaper::paint(canvas, &th, self.workspace);
+        self.draw_desktop_icons(canvas, &th);
 
         let visible: Vec<&Window> = self
             .windows
@@ -623,6 +830,7 @@ impl Wm {
         }
 
         self.draw_taskbar(canvas, &th);
+        self.draw_start_menu(canvas, &th);
         self.draw_ripple(canvas, &th);
         self.draw_cursor(canvas, &th);
     }
@@ -672,48 +880,136 @@ impl Wm {
 
     fn draw_taskbar(&self, canvas: &mut Canvas, th: &theme::Theme) {
         let y = self.height - TASKBAR_H;
-        canvas.fill_rect(0, y, self.width, TASKBAR_H, th.taskbar_bg);
+        // Subtle vertical gradient bar with an accent hairline on top.
+        gradient_v(canvas, 0, y, self.width, TASKBAR_H, shift(th.taskbar_bg, 14), th.taskbar_bg);
         canvas.fill_rect(0, y, self.width, 1, th.accent);
-        canvas.draw_text(8, y + 6, "Buitenzorg", th.accent, 130);
 
-        // Workspace indicator: [1][2][3][4], current highlighted.
-        let mut wx = 118;
+        // --- Start button (Windows XP-style green pill + a small logo mark) ---
+        let sb_hi = self.start_open;
+        let base = if sb_hi { shift(th.win_title_active, 30) } else { th.win_title_active };
+        fill_rounded_gradient(canvas, 6, y + 4, START_W, TASKBAR_H - 8, 8, shift(base, 40), base);
+        // 2x2 logo tile.
+        canvas.fill_rect(14, y + 11, 5, 5, th.title_text);
+        canvas.fill_rect(20, y + 11, 5, 5, shift(th.title_text, 0));
+        canvas.fill_rect(14, y + 17, 5, 5, shift(th.accent, 60));
+        canvas.fill_rect(20, y + 17, 5, 5, th.title_text);
+        canvas.draw_text(32, y + 9, "Start", th.title_text, 6 + START_W - 4);
+
+        // --- right tray: theme name, clock, workspace pips ---
+        let mut rx = self.width - 6;
+        // Workspace pips [1..4].
+        rx -= (WORKSPACES as i32) * 16 + 8;
+        let mut wx = rx + 8;
         for ws in 0..WORKSPACES {
             let sel = ws == self.workspace;
-            let bg = if sel { th.win_title_active } else { th.win_title_inactive };
-            canvas.fill_rect(wx, y + 5, 18, TASKBAR_H - 10, bg);
-            let mut buf = [0u8; 1];
-            buf[0] = b'1' + ws;
-            let s = core::str::from_utf8(&buf).unwrap();
-            let tc = if sel { th.title_text } else { th.text };
-            canvas.draw_text(wx + 5, y + 6, s, tc, wx + 18);
-            wx += 22;
+            let c = if sel { th.accent } else { th.win_title_inactive };
+            fill_rounded(canvas, wx, y + 13, 10, TASKBAR_H - 26, 2, c);
+            wx += 16;
         }
+        // Clock HH:MM.
+        let (hh, mm) = read_clock();
+        let mut cbuf = [0u8; 5];
+        cbuf[0] = b'0' + (hh / 10) % 10; cbuf[1] = b'0' + hh % 10; cbuf[2] = b':';
+        cbuf[3] = b'0' + (mm / 10) % 10; cbuf[4] = b'0' + mm % 10;
+        let cs = core::str::from_utf8(&cbuf).unwrap();
+        let cw = 5 * gfx::glyph_width() as i32 + 4;
+        rx -= cw + 12;
+        canvas.draw_text(rx + 2, y + 9, cs, th.accent, rx + cw);
+        // Theme name.
+        let tn_w = th.name.len() as i32 * gfx::glyph_width() as i32 + 6;
+        rx -= tn_w + 4;
+        canvas.draw_text(rx, y + 9, th.name, th.text, rx + tn_w);
 
-        // Window buttons for the current workspace (minimized = dimmed).
+        // --- running window buttons (rounded, gradient when active) ---
         let top_id = self
             .windows
             .iter()
             .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
             .next_back()
             .map(|w| w.id);
-        let mut bx = wx + 12;
+        let start_x = 6 + START_W + 8;
+        let mut bx = start_x;
         for win in self.windows.iter().filter(|w| w.workspace == self.workspace) {
-            let bg = if win.state == WinState::Minimized {
-                th.taskbar_bg
-            } else if Some(win.id) == top_id {
-                th.win_title_active
+            if bx + 116 > rx - 4 {
+                break; // no room before the tray
+            }
+            let active = Some(win.id) == top_id;
+            if active {
+                fill_rounded_gradient(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.win_title_active, 26), th.win_title_active);
+            } else if win.state == WinState::Minimized {
+                fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.taskbar_bg, 22));
             } else {
-                th.win_title_inactive
-            };
-            canvas.fill_rect(bx, y + 4, 120, TASKBAR_H - 8, bg);
-            let tc = if Some(win.id) == top_id { th.title_text } else { th.text };
-            canvas.draw_text(bx + 6, y + 6, &win.title, tc, bx + 118);
-            bx += 128;
+                fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, th.win_title_inactive);
+            }
+            let tc = if active { th.title_text } else { th.text };
+            canvas.draw_text(bx + 8, y + 9, &win.title, tc, bx + 108);
+            bx += 116;
         }
+    }
 
-        // Theme label on the right.
-        canvas.draw_text(self.width - 150, y + 6, th.name, th.accent, self.width - 6);
+    /// Draw the start menu (macOS/XP-blended launcher) above the Start button.
+    fn draw_start_menu(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        if !self.start_open {
+            return;
+        }
+        let rows = LAUNCH.len() as i32;
+        let h = 40 + rows * SM_ROW + 34;
+        let x = 6;
+        let y = self.height - TASKBAR_H - h - 4;
+        // Shadow + panel.
+        fill_rounded(canvas, x + 3, y + 4, SM_W, h, 10, th.shadow);
+        fill_rounded(canvas, x, y, SM_W, h, 10, shift(th.win_body, 6));
+        canvas.rect_outline(x, y, SM_W, h, 1, th.win_border);
+        // Header band.
+        fill_rounded_gradient(canvas, x + 1, y + 1, SM_W - 2, 34, 9, th.win_title_active, darken(th.win_title_active, 20));
+        canvas.draw_text(x + 12, y + 7, "Buitenzorg OS", th.title_text, x + SM_W - 8);
+        canvas.draw_text(x + 12, y + 20, "Gravicode Studios", darken(th.title_text, 30), x + SM_W - 8);
+
+        // App rows.
+        let (mx, my) = self.cursor;
+        let mut ry = y + 40;
+        for (_, label) in LAUNCH {
+            let hot = mx >= x + 4 && mx < x + SM_W - 4 && my >= ry && my < ry + SM_ROW;
+            if hot {
+                fill_rounded(canvas, x + 4, ry, SM_W - 8, SM_ROW - 2, 4, darken(th.win_title_active, 10));
+            }
+            // Little app glyph.
+            canvas.fill_rect(x + 12, ry + 6, 12, 12, th.accent);
+            canvas.fill_rect(x + 14, ry + 8, 8, 8, shift(th.win_body, 10));
+            let tc = if hot { th.title_text } else { th.text };
+            canvas.draw_text(x + 32, ry + 6, label, tc, x + SM_W - 8);
+            ry += SM_ROW;
+        }
+        // Power row (shutdown / restart).
+        let py = y + h - 30;
+        canvas.fill_rect(x + 8, py - 4, SM_W - 16, 1, th.win_border);
+        let sd_hot = mx >= x + 8 && mx < x + SM_W / 2 && my >= py && my < py + 24;
+        let rs_hot = mx >= x + SM_W / 2 && mx < x + SM_W - 8 && my >= py && my < py + 24;
+        if sd_hot { fill_rounded(canvas, x + 8, py, SM_W / 2 - 10, 24, 4, gfx::rgb(0xC0, 0x39, 0x2B)); }
+        if rs_hot { fill_rounded(canvas, x + SM_W / 2, py, SM_W / 2 - 10, 24, 4, darken(th.win_title_active, 10)); }
+        canvas.draw_text(x + 18, py + 6, "Matikan", if sd_hot { gfx::rgb(0xFF, 0xFF, 0xFF) } else { th.text }, x + SM_W / 2);
+        canvas.draw_text(x + SM_W / 2 + 10, py + 6, "Restart", if rs_hot { th.title_text } else { th.text }, x + SM_W - 8);
+    }
+
+    /// Draw the desktop launcher icons down the top-left (macOS/GNOME feel).
+    fn draw_desktop_icons(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        let (mx, my) = self.cursor;
+        for i in 0..DESKTOP_ICONS.min(LAUNCH.len()) {
+            let (ix, iy) = icon_rect(i);
+            let hot = mx >= ix && mx < ix + ICON_W && my >= iy && my < iy + ICON_H;
+            if hot {
+                fill_rounded(canvas, ix, iy, ICON_W, ICON_H, 6, shift(th.desktop_top, 30));
+            }
+            // Rounded gradient tile with a glyph mark.
+            let tx = ix + (ICON_W - 40) / 2;
+            fill_rounded_gradient(canvas, tx, iy + 6, 40, 34, 7, shift(th.win_title_active, 30), th.win_title_active);
+            canvas.fill_rect(tx + 10, iy + 15, 20, 4, th.title_text);
+            canvas.fill_rect(tx + 10, iy + 22, 14, 4, darken(th.title_text, 30));
+            // Label centered-ish under the tile.
+            let label = LAUNCH[i].1;
+            let lw = label.len() as i32 * gfx::glyph_width() as i32;
+            canvas.draw_text(ix + (ICON_W - lw) / 2, iy + 46, label, th.title_text, ix + ICON_W);
+        }
     }
 
     fn draw_cursor(&self, canvas: &mut Canvas, th: &theme::Theme) {
@@ -734,6 +1030,12 @@ impl Wm {
 /// Lighten/shift a color by `amount` per channel (per-workspace wallpaper).
 pub fn shift(color: Color, amount: u32) -> Color {
     let ch = |sh: u32| -> u32 { (((color >> sh) & 0xFF) + amount).min(0xFF) };
+    (ch(16) << 16) | (ch(8) << 8) | ch(0)
+}
+
+/// Darken a color by `amount` per channel (saturating at 0).
+pub fn darken(color: Color, amount: u32) -> Color {
+    let ch = |sh: u32| -> u32 { ((color >> sh) & 0xFF).saturating_sub(amount) };
     (ch(16) << 16) | (ch(8) << 8) | ch(0)
 }
 
@@ -780,6 +1082,45 @@ fn fill_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32
         };
         canvas.fill_rect(x + inset, y + row, w - 2 * inset, 1, color);
     }
+}
+
+/// Linearly interpolate each channel of `a`..`b` at row t/total.
+fn lerp(a: Color, b: Color, t: i32, total: i32) -> Color {
+    if total <= 0 {
+        return a;
+    }
+    let ch = |sh: u32| -> u32 {
+        let ca = ((a >> sh) & 0xFF) as i32;
+        let cb = ((b >> sh) & 0xFF) as i32;
+        (ca + (cb - ca) * t / total).clamp(0, 255) as u32
+    };
+    (ch(16) << 16) | (ch(8) << 8) | ch(0)
+}
+
+/// Fill a plain rectangle with a top→bottom vertical gradient.
+fn gradient_v(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, top: Color, bottom: Color) {
+    for row in 0..h {
+        canvas.fill_rect(x, y + row, w, 1, lerp(top, bottom, row, h - 1));
+    }
+}
+
+/// Fill a rounded rectangle with a top→bottom vertical gradient.
+fn fill_rounded_gradient(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32, top: Color, bottom: Color) {
+    for row in 0..h {
+        let inset = if row < radius {
+            corner_inset(row, radius)
+        } else if row >= h - radius {
+            corner_inset(h - 1 - row, radius)
+        } else {
+            0
+        };
+        canvas.fill_rect(x + inset, y + row, w - 2 * inset, 1, lerp(top, bottom, row, h - 1));
+    }
+}
+
+/// Top-left screen rect of desktop icon `i` (a vertical column).
+fn icon_rect(i: usize) -> (i32, i32) {
+    (14, 14 + i as i32 * (ICON_H + 8))
 }
 
 /// Outline a rounded rectangle with `thickness`-px border.

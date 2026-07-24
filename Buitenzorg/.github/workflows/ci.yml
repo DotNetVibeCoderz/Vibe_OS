@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The repository's default branch is `master`; `main` is listed too so the
+    # workflow keeps firing if it is ever renamed. Without `master` here CI
+    # never ran on a push at all.
+    branches: [master, main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   kernel:
@@ -33,6 +37,12 @@ jobs:
 
       - name: Boot smoke test (QEMU, BIOS)
         run: bash scripts/smoke-test.sh
+
+      # Performance regression gate (requirements.md: "benchmark regression
+      # checks in CI"). Budgets are loose on purpose — this catches a real
+      # regression, not runner-to-runner jitter.
+      - name: Performance benchmark
+        run: bash scripts/bench.sh
 
   managed:
     name: Runtime + SDK (.NET) — build, test

@@ -15,6 +15,7 @@ const USER_STACK_PAGES: u64 = 32; // 128 KiB (apps use more stack than hello)
 
 /// Load and run an app image already in memory. Returns its exit code.
 pub fn run_image(image: &[u8]) -> Result<u64, &'static str> {
+    memory::reset_user_mmap(); // fresh managed-heap arena per process
     let (entry, prog_pages, stack_top, stack_pages) = memory::with_ctx(|ctx| {
         let program = elf::load(image, &mut ctx.mapper, &mut ctx.frames)?;
         let (stack_top, stack_pages) = memory::map_user_region(
@@ -28,6 +29,9 @@ pub fn run_image(image: &[u8]) -> Result<u64, &'static str> {
 
     let code = usermode::enter_user(entry, stack_top);
 
+    // Tear down any user threads the app spawned and restore the main thread's
+    // default (TSS) syscall stack before the next app runs.
+    crate::task::terminate_user_threads();
     memory::with_ctx(|ctx| {
         memory::unmap_user_pages(&prog_pages, &mut ctx.mapper);
         memory::unmap_user_pages(&stack_pages, &mut ctx.mapper);
@@ -57,6 +61,26 @@ fn app_file(name: &str) -> Option<&'static str> {
         "paint" | "draw" => Some("PAINT.ELF"),
         "widget" => Some("WIDGET.ELF"),
         "web" | "webview" => Some("WEBVIEW.ELF"),
+        "matang" => Some("MATANG.ELF"),
+        "thread" => Some("THREAD.ELF"),
+        "sync" => Some("SYNC.ELF"),
+        "heap" => Some("HEAP.ELF"),
+        "gcmem" => Some("GCMEM.ELF"),
+        "bcl" => Some("BCL.ELF"),
+        "bcl2" => Some("BCL2.ELF"),
+        "drawing" | "gfx" => Some("DRAW.ELF"),
+        "ui" => Some("UI.ELF"),
+        "audio" | "sound" => Some("AUDIO.ELF"),
+        "audiopanel" | "sound-settings" => Some("AUDIOSET.ELF"),
+        "calc" | "calculator" => Some("CALC.ELF"),
+        "2048" | "game2048" | "game" => Some("G2048.ELF"),
+        "clock" | "jam" => Some("CLOCK.ELF"),
+        "piano" | "music" => Some("PIANO.ELF"),
+        "store" | "appstore" => Some("STORE.ELF"),
+        "files" | "filemanager" | "fm" => Some("FILES.ELF"),
+        "editor" | "notepad" | "edit" => Some("EDITOR.ELF"),
+        "imgview" | "image" | "viewer" | "photo" => Some("IMGVIEW.ELF"),
+        "jpgtest" | "jpg" | "jpeg" => Some("JPGTEST.ELF"),
         _ => None,
     }
 }

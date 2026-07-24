@@ -1,0 +1,10 @@
+{
+  "id": "com.example.jsapp",
+  "name": "JavaScript App",
+  "type": "console",
+  "language": "javascript",
+  "version": "0.1.0",
+  "entry": "main.js",
+  "permissions": [],
+  "theme": "system"
+}

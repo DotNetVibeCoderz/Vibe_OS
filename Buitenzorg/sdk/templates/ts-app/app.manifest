@@ -1,0 +1,10 @@
+{
+  "id": "com.example.tsapp",
+  "name": "TypeScript App",
+  "type": "console",
+  "language": "typescript",
+  "version": "0.1.0",
+  "entry": "main.ts",
+  "permissions": [],
+  "theme": "system"
+}

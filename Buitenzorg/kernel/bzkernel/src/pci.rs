@@ -54,6 +54,37 @@ fn read_config_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     }
 }
 
+fn write_config_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
+    let address: u32 = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((slot as u32) << 11)
+        | ((function as u32) << 8)
+        | (offset as u32 & 0xFC);
+    let _guard = CONFIG_PORTS.lock();
+    unsafe {
+        Port::<u32>::new(CONFIG_ADDRESS).write(address);
+        Port::<u32>::new(CONFIG_DATA).write(value);
+    }
+}
+
+impl PciDevice {
+    /// Read a base address register (0..=5) as its raw 32-bit value.
+    pub fn bar(&self, index: u8) -> u32 {
+        read_config_u32(self.bus, self.slot, self.function, 0x10 + index * 4)
+    }
+
+    /// Base of an I/O-space BAR (bit 0 set): the port range start.
+    pub fn io_bar(&self, index: u8) -> u16 {
+        (self.bar(index) & 0xFFFC) as u16
+    }
+
+    /// Enable I/O-space decoding and bus-master DMA in the command register.
+    pub fn enable_io_and_bus_master(&self) {
+        let cmd = read_config_u32(self.bus, self.slot, self.function, 0x04);
+        write_config_u32(self.bus, self.slot, self.function, 0x04, cmd | 0x0005);
+    }
+}
+
 fn probe(bus: u8, slot: u8, function: u8) -> Option<PciDevice> {
     let id = read_config_u32(bus, slot, function, 0x00);
     let vendor_id = (id & 0xFFFF) as u16;

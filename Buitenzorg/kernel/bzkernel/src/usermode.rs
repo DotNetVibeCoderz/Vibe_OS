@@ -30,6 +30,43 @@ pub fn user_active() -> bool {
     USER_ACTIVE.load(Ordering::SeqCst)
 }
 
+// --- Per-thread context accessors (v0.15 "Matang" increment 2) ---------------
+//
+// The SYSCALL entry, longjmp context, and user-rsp scratch are single globals
+// (single core, one running thread). Cooperative user threads make them
+// per-thread: the scheduler saves the outgoing thread's KCTX/USER_RSP and loads
+// the incoming thread's KSTACK/KCTX/USER_RSP around each context switch, so two
+// ring-3 threads never share a syscall kernel stack.
+
+pub fn get_kctx() -> u64 {
+    KCTX_RSP.load(Ordering::SeqCst)
+}
+pub fn set_kctx(v: u64) {
+    KCTX_RSP.store(v, Ordering::SeqCst);
+}
+pub fn get_user_rsp() -> u64 {
+    USER_RSP.load(Ordering::SeqCst)
+}
+pub fn set_user_rsp(v: u64) {
+    USER_RSP.store(v, Ordering::SeqCst);
+}
+pub fn set_syscall_kstack(v: u64) {
+    SYSCALL_KSTACK_TOP.store(v, Ordering::SeqCst);
+}
+
+/// Enter ring 3 at a thread entry with `arg` in rdi (System V first argument),
+/// on the given user stack. Returns the code passed to THREAD_EXIT/EXIT. Used
+/// by cooperative user threads; the caller must have set this thread's syscall
+/// kernel stack via [`set_syscall_kstack`] first.
+pub fn enter_user_thread(entry: u64, user_stack_top: u64, arg: u64) -> u64 {
+    USER_ACTIVE.store(true, Ordering::SeqCst);
+    let code = unsafe { enter_user_thread_asm(entry, user_stack_top, arg) };
+    // Note: unlike enter_user, we do NOT force-enable interrupts here — the
+    // thread runs inside the scheduler, which manages IF; the main thread's
+    // enter_user still re-enables on the boot path.
+    code
+}
+
 /// Program the SYSCALL/SYSRET MSRs. Call once, after [`gdt::init`].
 pub fn init() {
     let sel = gdt::selectors();
@@ -68,7 +105,10 @@ pub fn exit_user(code: u64) -> ! {
 /// C entry called from the assembly SYSCALL trampoline.
 #[no_mangle]
 extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
-    crate::syscall::dispatch(nr, a0, a1, a2)
+    // Everything arriving here came from ring 3, so its pointer arguments are
+    // untrusted and must be validated (v1.0 hardening). Kernel-internal callers
+    // of `dispatch` pass their own addresses and are trusted.
+    crate::syscall::dispatch_from_user(nr, a0, a1, a2)
 }
 
 core::arch::global_asm!(
@@ -122,6 +162,29 @@ core::arch::global_asm!(
 
 extern "C" {
     fn enter_user_asm(entry: u64, user_stack_top: u64) -> u64;
+}
+
+core::arch::global_asm!(
+    ".global enter_user_thread_asm",
+    "enter_user_thread_asm:",
+    // rdi = entry, rsi = user stack top, rdx = arg.
+    "push rbx",
+    "push rbp",
+    "push r12",
+    "push r13",
+    "push r14",
+    "push r15",
+    "mov [rip + {kctx}], rsp",   // save this thread's kernel rsp for the longjmp
+    "mov rcx, rdi",              // SYSRET loads rip from rcx
+    "mov r11, 0x202",            // user rflags: IF set
+    "mov rsp, rsi",              // user stack
+    "mov rdi, rdx",              // arg -> first System V argument
+    "sysretq",                   // -> ring 3 at entry(arg)
+    kctx = sym KCTX_RSP,
+);
+
+extern "C" {
+    fn enter_user_thread_asm(entry: u64, user_stack_top: u64, arg: u64) -> u64;
 }
 
 core::arch::global_asm!(

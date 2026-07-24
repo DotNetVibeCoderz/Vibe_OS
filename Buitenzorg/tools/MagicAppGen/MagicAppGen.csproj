@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Magic App Generator (MagicAppGen) — an Avalonia UI code editor with an AI
+    assistant ("Jack - The Code Bender") that generates Buitenzorg OS apps from a
+    prompt via Microsoft Semantic Kernel. Multi-provider LLM (OpenAI, Claude,
+    Gemini, Ollama); all settings live in app.config and are editable in the UI.
+
+    This is a host-side developer tool (not a ring-3 Buitenzorg app). It targets
+    the desktop .NET runtime, not bflat/zerolib.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Semantic Kernel connectors for Gemini/Ollama/Anthropic are preview. -->
+    <NoWarn>$(NoWarn);SKEXP0001;SKEXP0010;SKEXP0070</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.1" />
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.2.1" />
+    <PackageReference Include="AvaloniaEdit.TextMate" Version="11.1.0" />
+    <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.1.0" />
+
+    <!-- Semantic Kernel + multi-provider chat completion connectors. Claude is
+         not a first-party SK connector, so it is wrapped as a custom
+         IChatCompletionService over Anthropic.SDK (see Services/AnthropicChat). -->
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.61.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.61.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Google" Version="1.61.0-alpha" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.61.0-alpha" />
+    <PackageReference Include="Anthropic.SDK" Version="5.4.3" />
+
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

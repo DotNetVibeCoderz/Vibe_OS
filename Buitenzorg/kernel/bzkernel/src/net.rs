@@ -15,6 +15,12 @@ pub type Ipv4Addr = [u8; 4];
 const ETHERTYPE_ARP: u16 = 0x0806;
 const ETHERTYPE_IPV4: u16 = 0x0800;
 const IPPROTO_ICMP: u8 = 1;
+const IPPROTO_UDP: u8 = 17;
+
+/// Largest UDP payload a socket will accept or deliver.
+pub const UDP_MAX_PAYLOAD: usize = 1024;
+/// Datagrams a socket queues before dropping the oldest.
+const UDP_BACKLOG: usize = 16;
 
 /// A link-layer device the stack can transmit through. Received frames are
 /// delivered back to the stack by the poller.
@@ -51,12 +57,25 @@ impl NetDevice for Loopback {
     }
 }
 
+/// A bound UDP socket: a local port plus a small receive backlog.
+struct UdpSocket {
+    handle: u64,
+    port: u16,
+    bound: bool,
+    /// (peer ip, peer port, payload)
+    rx: VecDeque<(Ipv4Addr, u16, Vec<u8>)>,
+}
+
 struct Stack {
     device: Loopback,
     ip: Ipv4Addr,
     arp: Vec<(Ipv4Addr, MacAddr)>,
     icmp_replies: u64,
     arp_replies: u64,
+    sockets: Vec<UdpSocket>,
+    next_handle: u64,
+    udp_tx: u64,
+    udp_rx: u64,
 }
 
 static STACK: Mutex<Option<Stack>> = Mutex::new(None);
@@ -71,7 +90,165 @@ pub fn init(ip: Ipv4Addr) {
         arp: vec![(ip, mac)], // self entry
         icmp_replies: 0,
         arp_replies: 0,
+        sockets: Vec::new(),
+        next_handle: 1,
+        udp_tx: 0,
+        udp_rx: 0,
     });
+}
+
+/// The interface address, or `None` if the stack is down.
+pub fn local_ip() -> Option<Ipv4Addr> {
+    STACK.lock().as_ref().map(|s| s.ip)
+}
+
+/// (udp datagrams sent, udp datagrams delivered).
+pub fn udp_counters() -> (u64, u64) {
+    STACK
+        .lock()
+        .as_ref()
+        .map(|s| (s.udp_tx, s.udp_rx))
+        .unwrap_or((0, 0))
+}
+
+// ---- UDP sockets --------------------------------------------------------
+
+/// Allocate a socket handle. Returns 0 if the stack is down.
+pub fn udp_socket() -> u64 {
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return 0 };
+    let handle = stack.next_handle;
+    stack.next_handle += 1;
+    stack.sockets.push(UdpSocket {
+        handle,
+        port: 0,
+        bound: false,
+        rx: VecDeque::new(),
+    });
+    handle
+}
+
+/// Bind a socket to a local port. Fails if the port is already taken.
+pub fn udp_bind(handle: u64, port: u16) -> Result<(), &'static str> {
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return Err("net down") };
+    if stack.sockets.iter().any(|s| s.bound && s.port == port) {
+        return Err("port in use");
+    }
+    let Some(sock) = stack.sockets.iter_mut().find(|s| s.handle == handle) else {
+        return Err("bad handle");
+    };
+    sock.port = port;
+    sock.bound = true;
+    Ok(())
+}
+
+/// Release a socket and drop its backlog.
+pub fn udp_close(handle: u64) -> Result<(), &'static str> {
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return Err("net down") };
+    let before = stack.sockets.len();
+    stack.sockets.retain(|s| s.handle != handle);
+    if stack.sockets.len() == before {
+        return Err("bad handle");
+    }
+    Ok(())
+}
+
+/// Send a UDP datagram. The source port is the socket's bound port (0 if it was
+/// never bound). Returns the payload length queued for transmission.
+pub fn udp_send(handle: u64, dest: Ipv4Addr, dest_port: u16, payload: &[u8]) -> Result<usize, &'static str> {
+    if payload.len() > UDP_MAX_PAYLOAD {
+        return Err("payload too large");
+    }
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return Err("net down") };
+    let Some(sock) = stack.sockets.iter().find(|s| s.handle == handle) else {
+        return Err("bad handle");
+    };
+    let src_port = sock.port;
+    let src_ip = stack.ip;
+    let src_mac = stack.device.mac();
+    let dst_mac = stack
+        .arp
+        .iter()
+        .find(|(ip, _)| *ip == dest)
+        .map(|(_, m)| *m)
+        .unwrap_or([0xFF; ETH_ALEN]);
+
+    let udp = build_udp(src_ip, dest, src_port, dest_port, payload);
+    let frame = build_ipv4_frame(src_mac, dst_mac, src_ip, dest, IPPROTO_UDP, &udp);
+    stack.device.transmit(&frame);
+    stack.udp_tx += 1;
+    Ok(payload.len())
+}
+
+/// Take the next queued datagram for a socket, if any. Callers should
+/// [`poll`] first so freshly looped-back frames are processed.
+pub fn udp_recv(handle: u64) -> Option<(Ipv4Addr, u16, Vec<u8>)> {
+    let mut guard = STACK.lock();
+    let stack = guard.as_mut()?;
+    let sock = stack.sockets.iter_mut().find(|s| s.handle == handle)?;
+    sock.rx.pop_front()
+}
+
+/// Build a UDP header + payload with a correct checksum over the IPv4
+/// pseudo-header (a zero checksum means "not computed", which we avoid).
+fn build_udp(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+    let len = 8 + payload.len();
+    let mut udp = Vec::with_capacity(len);
+    udp.extend_from_slice(&src_port.to_be_bytes());
+    udp.extend_from_slice(&dst_port.to_be_bytes());
+    udp.extend_from_slice(&(len as u16).to_be_bytes());
+    udp.extend_from_slice(&[0, 0]); // checksum placeholder
+    udp.extend_from_slice(payload);
+
+    // Pseudo-header: src ip, dst ip, zero, protocol, UDP length.
+    let mut pseudo = Vec::with_capacity(12 + len);
+    pseudo.extend_from_slice(&src_ip);
+    pseudo.extend_from_slice(&dst_ip);
+    pseudo.extend_from_slice(&[0, IPPROTO_UDP]);
+    pseudo.extend_from_slice(&(len as u16).to_be_bytes());
+    pseudo.extend_from_slice(&udp);
+    let mut csum = checksum16(&pseudo);
+    if csum == 0 {
+        csum = 0xFFFF; // 0 is reserved for "no checksum"
+    }
+    udp[6] = (csum >> 8) as u8;
+    udp[7] = csum as u8;
+    udp
+}
+
+/// Deliver a received UDP datagram to the socket bound to its destination port.
+fn handle_udp(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, udp: &[u8]) {
+    if udp.len() < 8 {
+        return;
+    }
+    let src_port = be16(udp, 0);
+    let dst_port = be16(udp, 2);
+    let ulen = be16(udp, 4) as usize;
+    if ulen < 8 || ulen > udp.len() {
+        return;
+    }
+    let payload = &udp[8..ulen];
+
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return };
+    if dst_ip != stack.ip {
+        return;
+    }
+    let Some(sock) = stack
+        .sockets
+        .iter_mut()
+        .find(|s| s.bound && s.port == dst_port)
+    else {
+        return; // nothing listening: drop (no ICMP port-unreachable yet)
+    };
+    if sock.rx.len() >= UDP_BACKLOG {
+        sock.rx.pop_front();
+    }
+    sock.rx.push_back((src_ip, src_port, payload.to_vec()));
+    stack.udp_rx += 1;
 }
 
 /// (icmp_replies, arp_replies) — for diagnostics/tests.
@@ -227,6 +404,10 @@ fn handle_ipv4(frame: &[u8], ip: &[u8]) {
     let proto = ip[9];
     let src_ip: Ipv4Addr = [ip[12], ip[13], ip[14], ip[15]];
     let dst_ip: Ipv4Addr = [ip[16], ip[17], ip[18], ip[19]];
+    if proto == IPPROTO_UDP {
+        handle_udp(src_ip, dst_ip, &ip[ihl..]);
+        return;
+    }
     if proto != IPPROTO_ICMP {
         return;
     }

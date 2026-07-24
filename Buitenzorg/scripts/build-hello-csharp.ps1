@@ -27,9 +27,29 @@ try {
         @{src=@("svc.cs");               elf="svc.elf"},
         @{src=@("xox.cs");               elf="xox.elf"},
         @{src=@("paint.cs", "bzdraw.cs");   elf="paint.elf"},
-        @{src=@("taskmgr.cs", "bzdraw.cs"); elf="taskmgr.elf"},
-        @{src=@("widget.cs", "bzdraw.cs");  elf="widget.elf"},
-        @{src=@("webview.cs", "bzdraw.cs"); elf="webview.elf"}
+        @{src=@("taskmgr.cs", "bzdraw.cs", "bzbcl.cs", "bzbcl2.cs"); elf="taskmgr.elf"},
+        @{src=@("widget.cs", "bzdraw.cs", "bzbcl.cs", "bzbcl2.cs"); elf="widget.elf"},
+        @{src=@("webview.cs", "bzdraw.cs"); elf="webview.elf"},
+        @{src=@("matang.cs");            elf="matang.elf"},
+        @{src=@("thread.cs");            elf="thread.elf"},
+        @{src=@("sync.cs");              elf="sync.elf"},
+        @{src=@("heap.cs");              elf="heap.elf"},
+        @{src=@("gcmem.cs");             elf="gcmem.elf"},
+        @{src=@("bcl.cs", "bzbcl.cs");   elf="bcl.elf"},
+        @{src=@("bcl2.cs", "bzbcl.cs", "bzbcl2.cs"); elf="bcl2.elf"},
+        @{src=@("draw.cs", "bzgfx.cs");  elf="draw.elf"},
+        @{src=@("ui.cs", "bzui.cs", "bzgfx.cs"); elf="ui.elf"},
+        @{src=@("audio.cs", "bzaudio.cs"); elf="audio.elf"},
+        @{src=@("audiopanel.cs", "bzui.cs", "bzgfx.cs", "bzaudio.cs"); elf="audioset.elf"},
+        @{src=@("calc.cs", "bzui.cs", "bzgfx.cs"); elf="calc.elf"},
+        @{src=@("game2048.cs", "bzui.cs", "bzgfx.cs"); elf="g2048.elf"},
+        @{src=@("clock.cs", "bzui.cs", "bzgfx.cs", "bzbcl.cs", "bzbcl2.cs"); elf="clock.elf"},
+        @{src=@("piano.cs", "bzui.cs", "bzgfx.cs", "bzaudio.cs"); elf="piano.elf"},
+        @{src=@("store.cs", "bzui.cs", "bzgfx.cs", "bzbcl.cs", "bzbcl2.cs"); elf="store.elf"},
+        @{src=@("filemgr.cs", "bzui.cs", "bzgfx.cs", "bzbcl.cs", "bzbcl2.cs"); elf="files.elf"},
+        @{src=@("editor.cs", "bzui.cs", "bzgfx.cs", "bzbcl.cs", "bzbcl2.cs"); elf="editor.elf"},
+        @{src=@("imgview.cs", "bzui.cs", "bzgfx.cs", "bzbcl.cs", "bzbcl2.cs"); elf="imgview.elf"},
+        @{src=@("jpgtest.cs", "bzgfx.cs"); elf="jpgtest.elf"}
     )
     foreach ($prog in $programs) {
         $obj = [IO.Path]::ChangeExtension($prog.elf, ".o")

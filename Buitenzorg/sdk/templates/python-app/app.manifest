@@ -1,0 +1,10 @@
+{
+  "id": "com.example.pyapp",
+  "name": "Python App",
+  "type": "console",
+  "language": "python",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "permissions": [],
+  "theme": "system"
+}

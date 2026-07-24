@@ -98,6 +98,26 @@ fn main() {
         ("taskmgr.elf", "taskmgr.elf"),
         ("widget.elf", "widget.elf"),
         ("webview.elf", "webview.elf"),
+        ("matang.elf", "matang.elf"),
+        ("thread.elf", "thread.elf"),
+        ("sync.elf", "sync.elf"),
+        ("heap.elf", "heap.elf"),
+        ("gcmem.elf", "gcmem.elf"),
+        ("bcl.elf", "bcl.elf"),
+        ("bcl2.elf", "bcl2.elf"),
+        ("draw.elf", "draw.elf"),
+        ("ui.elf", "ui.elf"),
+        ("audio.elf", "audio.elf"),
+        ("audioset.elf", "audioset.elf"),
+        ("calc.elf", "calc.elf"),
+        ("g2048.elf", "g2048.elf"),
+        ("clock.elf", "clock.elf"),
+        ("piano.elf", "piano.elf"),
+        ("store.elf", "store.elf"),
+        ("files.elf", "files.elf"),
+        ("editor.elf", "editor.elf"),
+        ("imgview.elf", "imgview.elf"),
+        ("jpgtest.elf", "jpgtest.elf"),
     ] {
         let path = userland.join(src);
         println!("cargo:rerun-if-changed={}", path.display());
@@ -109,6 +129,16 @@ fn main() {
     // v0.11: a generated 24-bit BMP so the kernel can demo loading a user
     // image as the desktop wallpaper.
     builder.set_file_contents("photo.bmp".into(), generate_bmp(320, 200));
+
+    // v0.16: a baseline JPEG (64x64 red->blue gradient, committed) to exercise
+    // the Buitenzorg.Drawing JPEG decoder from ring-3 C# (see jpgtest.cs).
+    {
+        let jpg = userland.join("grad.jpg");
+        println!("cargo:rerun-if-changed={}", jpg.display());
+        if let Ok(bytes) = std::fs::read(&jpg) {
+            builder.set_file_contents("grad.jpg".into(), bytes);
+        }
+    }
 
     builder.create_uefi_image(&uefi_path).unwrap();
     builder.create_bios_image(&bios_path).unwrap();

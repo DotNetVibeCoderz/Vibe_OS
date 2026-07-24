@@ -36,3 +36,8 @@ optimasi sebagai kebijakan.
 
 Item selesai ditandai `[x]` di [requirements.md §17](requirements.md) pada PR
 yang sama dengan implementasinya — checklist itu adalah papan status proyek.
+
+## Lisensi kontribusi
+
+Proyek berlisensi **MIT** ([LICENSE](LICENSE)). Dengan mengirim kontribusi,
+Anda setuju kontribusi itu dilisensikan di bawah MIT juga.

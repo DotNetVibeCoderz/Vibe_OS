@@ -38,6 +38,6 @@ unsafe class Paint
         g.Present();
 
         Console.WriteLine("[paint] drawn; exiting");
-        Sys.Sleep(27);
+        Sys.Sleep(5);
     }
 }

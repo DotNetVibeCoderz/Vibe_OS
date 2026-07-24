@@ -9,7 +9,7 @@ return args switch
     [] or ["help"] or ["--help"] or ["-h"] => Help(),
     ["version"] or ["--version"] => Version(),
     ["new", var template, var name] => NewProject(template, name),
-    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp)"),
+    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, js-app, ts-app, python-app)"),
     ["manifest", "validate", var path] => ValidateManifest(path),
     ["manifest", ..] => Fail("usage: bz manifest validate <path-to-app.manifest>"),
     ["app", ..] => Stub("app", "v0.10 'Buah' (package manager + registry)"),

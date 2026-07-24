@@ -98,13 +98,13 @@ unsafe class Xox
         {
             board[moves[i]] = turn;
             DrawBoard(win, board, turn == 'X' ? "X jalan" : "O jalan");
-            Bz.Sleep(9); // ~0.5s per move
+            Bz.Sleep(2); // brief pause per move (boot-demo pacing)
             turn = turn == 'X' ? 'O' : 'X';
         }
 
         DrawBoard(win, board, "X menang! (diagonal)");
         Console.WriteLine("[xox] game over: X wins");
-        Bz.Sleep(18);
+        Bz.Sleep(4);
     }
 
     static void DrawBoard(uint win, char* board, string status)

@@ -16,12 +16,37 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
+use crate::{gdt, usermode};
+
 const STACK_SIZE: usize = 32 * 1024;
+/// Per-thread SYSCALL kernel stack for cooperative ring-3 user threads. Kept
+/// separate from the TSS interrupt stack so a timer taken during one thread's
+/// ring-3 never lands on another thread's suspended syscall frame.
+const SYS_STACK_SIZE: usize = 16 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
     Runnable,
+    /// Blocked on a futex address ([`Task::wait_key`]); skipped by the scheduler
+    /// until [`futex_wake`] makes it runnable again.
+    Blocked,
     Finished,
+}
+
+/// Ring-3 user-thread context (v0.15 "Matang" increment 2). Present only for
+/// tasks that back a user thread; `None` for kernel tasks and the boot task
+/// while it runs a single-threaded app (so those paths are unchanged).
+struct UserThread {
+    /// This thread's private SYSCALL kernel stack top (loaded into the global
+    /// on switch-in).
+    sys_kstack_top: u64,
+    /// Saved longjmp context + user-rsp scratch while switched out.
+    kctx: u64,
+    user_rsp: u64,
+    /// Ring-3 entry to run on first schedule: (rip, arg, user_stack_top).
+    params: Option<(u64, u64, u64)>,
+    /// Owned SYSCALL kernel stack.
+    _sys_stack: Option<Box<[u8]>>,
 }
 
 struct Task {
@@ -35,6 +60,10 @@ struct Task {
     stack: Option<Box<[u8]>>,
     /// Accumulated CPU time in timer ticks.
     cpu_ticks: u64,
+    /// Ring-3 user-thread context, if this task backs a user thread.
+    user: Option<UserThread>,
+    /// Futex address this task is blocked on (valid only in `Blocked` state).
+    wait_key: u64,
 }
 
 struct Scheduler {
@@ -146,6 +175,8 @@ pub fn init() {
                 entry: || {},
                 stack: None,
                 cpu_ticks: 0,
+                user: None,
+                wait_key: 0,
             }],
             current: 0,
             next_id: 1,
@@ -169,6 +200,7 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
         for t in sched.tasks.iter_mut() {
             if t.state == State::Finished {
                 t.stack = None;
+                t.user = None;
             }
         }
         let rsp = prepare_stack(&stack);
@@ -182,8 +214,175 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
             entry,
             stack: Some(stack),
             cpu_ticks: 0,
+            user: None,
+            wait_key: 0,
         });
     });
+}
+
+// --- Cooperative ring-3 user threads (v0.15 "Matang" increment 2) -------------
+
+/// Body of a user-thread kernel task: read the ring-3 entry params this thread
+/// was created with, then run in ring 3 until it exits (THREAD_EXIT / EXIT).
+fn user_thread_body() {
+    let params = interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let sched = guard.as_mut().expect("scheduler not initialized");
+        let cur = sched.current;
+        sched.tasks[cur].user.as_mut().and_then(|u| u.params.take())
+    });
+    let Some((rip, arg, user_stack_top)) = params else {
+        return;
+    };
+    // The switch-in hook already loaded our private SYSCALL stack; enter ring 3
+    // at rip(arg) on our user stack. Returns after the thread exits.
+    let _code = usermode::enter_user_thread(rip, user_stack_top, arg);
+}
+
+/// Promote the current task (the app's main thread) to a user thread with its
+/// own private SYSCALL kernel stack, snapshotting the live context. Idempotent.
+/// Called by THREAD_CREATE before spawning the first worker so the main thread
+/// stops sharing the TSS interrupt stack for its syscalls.
+pub fn ensure_main_user_thread() {
+    let stack = alloc::vec![0u8; SYS_STACK_SIZE].into_boxed_slice();
+    let top = (stack.as_ptr() as u64 + stack.len() as u64) & !0xF;
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let sched = guard.as_mut().expect("scheduler not initialized");
+        let cur = sched.current;
+        if sched.tasks[cur].user.is_none() {
+            sched.tasks[cur].user = Some(UserThread {
+                sys_kstack_top: top,
+                kctx: usermode::get_kctx(),
+                user_rsp: usermode::get_user_rsp(),
+                params: None,
+                _sys_stack: Some(stack),
+            });
+            // Effective on the main thread's NEXT syscall (this one is still on
+            // the TSS stack and returns normally).
+            usermode::set_syscall_kstack(top);
+        }
+    });
+}
+
+/// Spawn a cooperative ring-3 user thread that enters `rip(arg)` on
+/// `user_stack_top`. Returns its thread id.
+pub fn spawn_user_thread(rip: u64, arg: u64, user_stack_top: u64) -> u64 {
+    let kstack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
+    let sys_stack = alloc::vec![0u8; SYS_STACK_SIZE].into_boxed_slice();
+    let sys_top = (sys_stack.as_ptr() as u64 + sys_stack.len() as u64) & !0xF;
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let sched = guard.as_mut().expect("scheduler not initialized");
+        for t in sched.tasks.iter_mut() {
+            if t.state == State::Finished {
+                t.stack = None;
+                t.user = None;
+            }
+        }
+        let rsp = prepare_stack(&kstack);
+        let id = sched.next_id;
+        sched.next_id += 1;
+        sched.tasks.push(Task {
+            id,
+            name: "uthread",
+            state: State::Runnable,
+            rsp,
+            entry: user_thread_body,
+            stack: Some(kstack),
+            cpu_ticks: 0,
+            user: Some(UserThread {
+                sys_kstack_top: sys_top,
+                kctx: 0,
+                user_rsp: 0,
+                params: Some((rip, arg, user_stack_top)),
+                _sys_stack: Some(sys_stack),
+            }),
+            wait_key: 0,
+        });
+        id
+    })
+}
+
+/// Current thread's id (backs THREAD_SELF; a TLS/pthread_self foundation).
+pub fn current_id() -> u64 {
+    interrupts::without_interrupts(|| {
+        let guard = SCHEDULER.lock();
+        guard.as_ref().map(|s| s.tasks[s.current].id).unwrap_or(0)
+    })
+}
+
+/// Futex wait: block the current thread on `key` (if another task is runnable
+/// to switch to), then yield. Returns after being woken or after a plain yield.
+pub fn futex_wait_block(key: u64) {
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        if let Some(s) = guard.as_mut() {
+            let cur = s.current;
+            let has_other = s
+                .tasks
+                .iter()
+                .enumerate()
+                .any(|(i, t)| i != cur && t.state == State::Runnable);
+            if has_other {
+                s.tasks[cur].state = State::Blocked;
+                s.tasks[cur].wait_key = key;
+            }
+        }
+    });
+    yield_now();
+}
+
+/// Futex wake: make up to `count` threads blocked on `key` runnable. Returns
+/// the number woken.
+pub fn futex_wake(key: u64, count: u64) -> u64 {
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let Some(s) = guard.as_mut() else { return 0 };
+        let mut n = 0u64;
+        for t in s.tasks.iter_mut() {
+            if n >= count {
+                break;
+            }
+            if t.state == State::Blocked && t.wait_key == key {
+                t.state = State::Runnable;
+                t.wait_key = 0;
+                n += 1;
+            }
+        }
+        n
+    })
+}
+
+/// True if the thread with `id` has finished (or no longer exists).
+pub fn is_finished(id: u64) -> bool {
+    interrupts::without_interrupts(|| {
+        let guard = SCHEDULER.lock();
+        guard
+            .as_ref()
+            .and_then(|s| s.tasks.iter().find(|t| t.id == id))
+            .map(|t| t.state == State::Finished)
+            .unwrap_or(true)
+    })
+}
+
+/// Tear down any lingering user threads and restore the main thread to using
+/// the TSS interrupt stack for syscalls. Called when an app finishes so the
+/// next (possibly single-threaded) app starts from the clean default.
+pub fn terminate_user_threads() {
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        if let Some(sched) = guard.as_mut() {
+            let cur = sched.current;
+            for (i, t) in sched.tasks.iter_mut().enumerate() {
+                if i != cur && t.user.is_some() {
+                    t.state = State::Finished;
+                }
+            }
+            sched.tasks[cur].user = None;
+        }
+    });
+    usermode::set_syscall_kstack(gdt::privilege_stack_top().as_u64());
 }
 
 /// Build the initial stack frame consumed by [`context_switch`]'s restore
@@ -259,8 +458,21 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) {
             return; // nothing else runnable (or still just the boot task)
         }
         let cur = sched.current;
+        // Save the outgoing user thread's live longjmp/user-rsp context. (No-op
+        // for kernel tasks, so single-threaded/kernel paths are unaffected.)
+        if let Some(u) = sched.tasks[cur].user.as_mut() {
+            u.kctx = usermode::get_kctx();
+            u.user_rsp = usermode::get_user_rsp();
+        }
         let prev: *mut u64 = &mut sched.tasks[cur].rsp;
         sched.current = next;
+        // Load the incoming user thread's private SYSCALL stack + context, so
+        // two ring-3 threads never share a syscall kernel stack.
+        if let Some(u) = sched.tasks[next].user.as_ref() {
+            usermode::set_syscall_kstack(u.sys_kstack_top);
+            usermode::set_kctx(u.kctx);
+            usermode::set_user_rsp(u.user_rsp);
+        }
         (prev, sched.tasks[next].rsp)
         // Lock is dropped here; no allocation happens before the switch, so
         // `prev` stays valid (single core, interrupts off).

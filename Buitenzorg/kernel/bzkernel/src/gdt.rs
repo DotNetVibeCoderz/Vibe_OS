@@ -11,9 +11,17 @@ use x86_64::VirtAddr;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const STACK_SIZE: usize = 4096 * 5;
+// The privilege stack doubles as the SYSCALL kernel stack for a non-threaded
+// app's main thread (usermode.rs sets SYSCALL_KSTACK_TOP to its top). The
+// deepest thing that runs on it is a WIN_PRESENT syscall -> wm::present_now ->
+// compose_into, which composites every open window (title bars, Noto text,
+// canvas blits) — so it needs real headroom, not the 20 KiB the fault stack
+// gets. Undersizing it overflowed into adjacent statics intermittently
+// (layout-dependent), smashing return addresses (breakpoint/#PF/#DF cascade).
+const PRIV_STACK_SIZE: usize = 64 * 1024;
 
 static mut DOUBLE_FAULT_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-static mut PRIVILEGE_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+static mut PRIVILEGE_STACK: [u8; PRIV_STACK_SIZE] = [0; PRIV_STACK_SIZE];
 static TSS: Once<TaskStateSegment> = Once::new();
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
 
@@ -31,7 +39,7 @@ static SELECTORS: Once<Selectors> = Once::new();
 /// Top of the ring-0 stack the CPU switches to when an interrupt is taken
 /// from ring 3 (also reused as the SYSCALL kernel stack; see usermode.rs).
 pub fn privilege_stack_top() -> VirtAddr {
-    VirtAddr::from_ptr(core::ptr::addr_of!(PRIVILEGE_STACK)) + STACK_SIZE as u64
+    VirtAddr::from_ptr(core::ptr::addr_of!(PRIVILEGE_STACK)) + PRIV_STACK_SIZE as u64
 }
 
 pub fn selectors() -> Selectors {

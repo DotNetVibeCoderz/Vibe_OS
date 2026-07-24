@@ -8,8 +8,11 @@ use x86_64::structures::paging::{
 use x86_64::VirtAddr;
 
 pub const HEAP_START: u64 = 0x_4444_4444_0000;
-pub const HEAP_SIZE: u64 = 16 * 1024 * 1024; // 16 MiB kernel heap
-                                             // (RAM disks + user ELF buffers live here)
+// 32 MiB kernel heap. 16 MiB was exhausted once the desktop is up: the RAM
+// disks, ~20 open app-window canvases from the boot demos, the desktop back
+// buffer and the persistent full-screen compose buffer (wm::PRESENT_BUF) all
+// live here and together crossed 16 MiB.
+pub const HEAP_SIZE: u64 = 32 * 1024 * 1024;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();

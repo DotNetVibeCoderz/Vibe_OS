@@ -24,10 +24,27 @@ dari terminal Buitenzorg:
 run app          # atau daftarkan nama di kernel app::app_file()
 ```
 
-## Catatan (tanpa GC)
+## Catatan (zerolib: heap jalan, GC belum)
 
-Runtime freestanding belum punya GC — **hindari `new T[]`** dan alokasi heap.
-Simpan state di stack (`stackalloc`). GC penuh + CoreCLR/JIT menyusul (v0.8+).
+Sejak v0.15 "Matang" **`new`, array, objek heap, dan generic BEKERJA** (heap
+bump yang tumbuh lewat `mmap`). Yang masih belum:
+
+- **Tidak ada static reference field** — GC statics tak diinisialisasi, jadi
+  `static readonly char[] X = ...` membaca sampah. Simpan state di **lokal**
+  atau **field instance**.
+- **Tidak ada konversi method-group -> delegate** (delegate-nya di-cache di GC
+  static). Pakai **function pointer**: `delegate*<int,bool>` + `&Method`.
+- **Tidak boleh menyimpan referensi ke elemen `object[]`** (`stelem.ref`).
+  Pakai **linked list** atau field objek.
+- **Tidak ada `new string()` / `ToString()` / concat / `string ==`.** Bangun
+  teks di `char[]` lalu gambar dengan `Graphics.DrawChars`.
+- **Belum ada GC yang mereklamasi** — memori baru bebas saat app keluar.
+
+Library yang tersedia: `Buitenzorg.Drawing` (`bzgfx.cs`), `Buitenzorg.UI`
+(`bzui.cs`), `Buitenzorg.Audio` (`bzaudio.cs`), dan `Buitenzorg.Bcl`
+(`bzbcl.cs` + `bzbcl2.cs` — koleksi/LINQ + System.IO/Text/Regex/Globalization/
+Diagnostics/Management/Net.Sockets/Tasks/Timers/GC/Pkg). Lihat
+`docs/first-app.md` untuk katalog API-nya.
 
 ## Contoh lengkap
 

@@ -21,11 +21,12 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     usb)  drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
                  -usb -device usb-storage,drive=bzdisk) ;;
   esac
-  timeout --foreground 130 "$qemu" "${drive[@]}" \
-    -m 512M -display none -serial "file:$log" -no-reboot &
+  timeout --foreground 150 "$qemu" "${drive[@]}" \
+    -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
+    -display none -serial "file:$log" -no-reboot &
   local pid=$!
   # Give the kernel time to reach READY, then stop QEMU ourselves.
-  for _ in $(seq 110); do
+  for _ in $(seq 130); do
     sleep 1
     grep -qF "BUITENZORG READY" "$log" 2>/dev/null && break
   done
@@ -43,7 +44,7 @@ require() { # require <log> <marker>...
   done
 }
 
-basic=("MILESTONE: HELLO KERNEL OK" "MILESTONE: SCHEDULER OK" "MILESTONE: IPC OK" "MILESTONE: WINDOWS OK" "MILESTONE: THEMES OK" "MILESTONE: BUAH OK" "MILESTONE: COMPUTE OK" "MILESTONE: WINDOWCTL OK" "MILESTONE: SAVER OK" "MILESTONE: CAHAYA OK" "MILESTONE: AI OK" "MILESTONE: POWER OK" "MILESTONE: NALAR OK" "BUITENZORG READY")
+basic=("MILESTONE: HELLO KERNEL OK" "MILESTONE: SCHEDULER OK" "MILESTONE: IPC OK" "MILESTONE: WINDOWS OK" "MILESTONE: THEMES OK" "MILESTONE: BUAH OK" "MILESTONE: COMPUTE OK" "MILESTONE: WINDOWCTL OK" "MILESTONE: SAVER OK" "MILESTONE: CAHAYA OK" "MILESTONE: AI OK" "MILESTONE: POWER OK" "MILESTONE: NALAR OK" "MILESTONE: VMX OK" "MILESTONE: VM OK" "MILESTONE: VIRTIO OK" "MILESTONE: SNAPSHOT OK" "MILESTONE: LAPIS OK" "MILESTONE: SCRIPT JS OK" "MILESTONE: SCRIPT TS OK" "MILESTONE: SCRIPT PY OK" "MILESTONE: POLYGLOT OK" "MILESTONE: BABEL OK" "MILESTONE: PAL MEM OK" "MILESTONE: THREADS OK" "MILESTONE: SYNC PAL OK" "MILESTONE: HEAP PAL OK" "MILESTONE: GCMEM PAL OK" "MILESTONE: BCL PAL OK" "MILESTONE: BCL2 PAL OK" "MILESTONE: DRAWING2 OK" "MILESTONE: UI TOOLKIT OK" "MILESTONE: AUDIO OK" "MILESTONE: AUDIO PANEL OK" "MILESTONE: SUITE OK" "MILESTONE: DESKTOP SHELL OK" "MILESTONE: SECURITY OK" "MILESTONE: PROFILER OK" "BUITENZORG READY")
 
 # Full run on IDE: storage milestones must pass (file read via own driver).
 boot ide "$root/dist/boot-ide.log"
@@ -58,7 +59,10 @@ if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
   require "$root/dist/boot-ide.log" "MILESTONE: TUNAS OK" "MILESTONE: DAHAN OK" \
     "MILESTONE: KEMBANG OK" "MILESTONE: DRAWING OK" "MILESTONE: TASKMGR OK" \
     "MILESTONE: APPVARIANTS OK" "MILESTONE: SERBUK OK" "MILESTONE: PACKAGE OK" \
-    "MILESTONE: PERSONALIZE OK"
+    "MILESTONE: PERSONALIZE OK" "MILESTONE: MMAP OK" "MILESTONE: MATANG OK" \
+    "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: HEAP OK" \
+    "MILESTONE: GCMEM OK" "MILESTONE: BCL OK" "MILESTONE: BCL2 OK" "MILESTONE: DRAW OK" \
+    "MILESTONE: UI OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: CLOCK OK" "MILESTONE: PIANO OK" "MILESTONE: STORE OK" "MILESTONE: FILES OK" "MILESTONE: EDITOR OK" "MILESTONE: IMGVIEW OK" "MILESTONE: JPEG OK"
 fi
 echo "smoke [ide]: all milestones present"
 

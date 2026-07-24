@@ -43,4 +43,9 @@ public static class DrawOp
     public const ulong FillRect = 0;
     public const ulong DrawText = 1;
     public const ulong Clear = 2;
+    public const ulong Line = 3;
+    public const ulong Ellipse = 4;
+    public const ulong FillEllipse = 5;
+    public const ulong Rect = 6;
+    public const ulong Blit = 7;
 }

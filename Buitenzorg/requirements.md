@@ -467,20 +467,36 @@ Compute API (backend CPU, interface siap GPU) · **screensaver** (6 saver gaya W
 LLM engine lokal (model bigram nyata) · computer vision (edge detect) · GenAI (text-to-image) · **Model Manager + galeri Hugging Face-style** · AI System API · **Power (Shutdown/Restart/Sleep, ACPI + fallback)**.
 **Milestone:** LLM lokal jalan & "unduh" model dari galeri; app memakai AI API; sistem bisa Shutdown/Restart/Sleep. *(Tercapai — LLM skala produksi GGUF/GPU, inference scheduler, ACPI S3 menyusul.)*
 
-### 📦 v0.13 — "Lapis" · Virtualization
-Hypervisor tipe-2 (VT-x/AMD-V) · virtualization manager · virtio drivers · snapshot & virtual disk · guest tools.
-**Milestone:** menjalankan OS lain sebagai VM di dalam Buitenzorg.
+### 📦 v0.13 — "Lapis" · Virtualization ✅
+Deteksi hardware VT-x/AMD-V (CPUID/MSR) · VMM tipe-2 software (virtual CPU BZVM) · virtualization manager · port I/O virtio · virtual disk RAM + snapshot/restore · guest tools (host-tick).
+**Milestone:** menjalankan OS lain sebagai VM di dalam Buitenzorg. *(Tercapai — guest "NanoOS" boot & jalan di virtual CPU; driver native VMX/SVM (VMXON/EPT/VMCB) & nested HW menyusul.)*
 
-### 🗣️ v0.14 — "Babel" · Polyglot App Support
-JS/TS engine + transpile · Python (CPython/IronPython) · binding API seragam · template app JS/TS/Python.
-**Milestone:** app JS, TypeScript, dan Python berjalan berdampingan dengan C#.
+### 🗣️ v0.14 — "Babel" · Polyglot App Support ✅
+Runtime polyglot di dalam OS (`script.rs`): satu interpreter tree-walking (AST/evaluator/binding seragam) · front-end JavaScript · TypeScript (transpile: strip tipe → JS) · Python (subset, indentasi) · shell `script <lang>`/`js`/`ts`/`py` · template app `sdk/templates/{js,ts,python}-app`.
+**Milestone:** app JS, TypeScript, dan Python berjalan berdampingan dengan C#. *(Tercapai — fib sama di tiga bahasa jalan berdampingan app C#; engine V8/CPython penuh & runtime polyglot ring-3 native menyusul CoreCLR/GC.)*
 
-### 🌾 v0.15 — "Panen" · Preloaded Suite & Optimization Pass
-Utilities, multimedia, AI apps, games, themes, productivity, store bawaan · **optimization pass**: fast boot, fast I/O, startup app, footprint, SIMD hot-path · benchmark regression di CI.
+### 🧩 v0.15 — "Matang" · Managed Runtime C# Lengkap (GC + .NET BCL)
+Menaikkan app C# dari zerolib (tanpa GC) ke .NET managed penuh — prasyarat suite v0.16. Jalur: **NativeAOT + BCL penuh dulu** (`bflat --stdlib:dotnet`/ILC), **CoreCLR/JIT menyusul**.
+- GC + managed heap ring-3 (GC bawaan NativeAOT; init GC statics; syscall alokasi/commit/free halaman mmap-style).
+- PAL runtime .NET: memori, thread, sinkronisasi (mutex/condvar/futex), TLS, waktu presisi, environment, **exception unwinding** (EH funclets/DWARF).
+- Thread ring-3 sungguhan + primitif sync + **thread pool** (sekarang app kooperatif satu-satu).
+- BCL penuh: **Generics, Tuple, Collections, LINQ, Regex, StringBuilder, ToString/format, Encoding (UTF8/Base64/BitConverter), DateTime/Guid, Streams/System.IO** (di atas VFS).
+- **System.Threading** (Thread/ThreadPool/**Timer**/lock/Interlocked) + **Tasks & async/await (TPL)** + SynchronizationContext.
+- (Menyusul) CoreCLR/JIT + **reflection penuh** + Reflection.Emit (di luar batas NativeAOT/trimming).
+- **Milestone:** app C# ber-GC memakai LINQ/Regex/StringBuilder/Base64/Collections/Tasks-async/Streams **jalan & terverifikasi di QEMU**.
+
+### 🌾 v0.16 — "Panen" · Preloaded Suite & Optimization Pass
+Dibangun di atas BCL v0.15. **Prasyarat framework** (rincian di PLAN.md/Progress.md §v0.16):
+- **`Buitenzorg.Drawing` selengkap `System.Drawing`** (Graphics/Pen/Brush/Bitmap/Font/GraphicsPath/Matrix/Color, gradient, antialias, load/save PNG/BMP).
+- **`Buitenzorg.UI`** — toolkit gaya WPF/Avalonia: model retained + layout + komponen lengkap (Button/TextBox/ListBox/TreeView/Menu/DataGrid/…) + data-binding/MVVM + styles/templates + rendering halus & animasi (60 FPS) + **akselerasi GPU** (fallback CPU), ringan & performa tinggi. **[increment 1–3 ✓ `bzui.cs`: UIElement tree (anak linked-list) + Measure/Arrange (StackPanel/Grid/Canvas) + hit-test (virtual) + **event mouse** (UIHost.Mouse: hover/press/click/drag) + set kontrol lengkap-dasar (TextBlock/Button/CheckBox/ProgressBar/Border/Slider/RadioButton+RadioGroup/ListBox/TextBox/Menu/**ComboBox**/**TabControl**/**TreeView**/**ScrollViewer**/**DataGrid**) + UIHost compositor → MILESTONE UI OK; menyusul: Dialog/popup, MVVM/data-binding, animasi 60fps, GPU]**
+- **Subsistem audio OS**: driver kernel HDA/AC'97 (speaker + mic), ABI audio PCM, layanan `Buitenzorg.Audio` + **kontrol volume/mute/perangkat**, UI pengaturan audio. **[✓ dasar `audio.rs`+`bzaudio.cs`: driver AC'97 (PCI enum + cold-reset + mixer + playback DMA 48 kHz stereo), ABI `AUDIO_STAT/SET_VOLUME/TONE/PLAY` (23–26) + mirror C# + kontrak, `Buitenzorg.Audio` (Mixer/Tone) + kontrol volume master → MILESTONE AUDIO OK; **UI pengaturan audio** `audiopanel.cs` (panel Buitenzorg.UI slider/mute/tes-nada terhubung ke Mixer) → MILESTONE AUDIO PANEL OK (4-media); menyusul: mic capture, IRQ, Intel HDA, mixer per-app, pilih perangkat, widget volume]**
+
+Lalu: Utilities, multimedia, AI apps, games, themes, productivity, store bawaan · **optimization pass**: fast boot, fast I/O, startup app, footprint, SIMD hot-path · benchmark regression di CI. **[Suite mulai ✓: Kalkulator (`calc.cs`→CALC.ELF, Buitenzorg.UI Grid tombol ter-tema + display, `12+3=`→15 → CALC OK) + 2048 (`game2048.cs`→G2048.ELF, papan 4×4 ubin berwarna + slide/merge → GAME OK) + Jam (`clock.cs`→CLOCK.ELF, jam analog rotasi jarum + digital → CLOCK OK) + Piano (`piano.cs`→PIANO.ELF, keyboard 1 oktaf → Buitenzorg.Audio Beep → PIANO OK) + App Store (`store.cs`→STORE.ELF, TERHUBUNG pkg.rs via syscall PKG_LIST/PKG_SET, katalog registry + install nyata → STORE OK) + File Manager (`filemgr.cs`→FILES.ELF, jelajah VFS via syscall FS_LIST → FILES OK) + Text Editor (`editor.cs`→EDITOR.ELF, TextArea multi-baris + caret + Menu → EDITOR OK) + Image Viewer (`imgview.cs`→IMGVIEW.ELF, muat PHOTO.BMP via syscall baru FS_READ=30 + dekode Bmp.Load + fit-to-box → IMGVIEW OK); suite 8 app semua kategori; fix ABI userland: rdi/rsi/rdx wajib clobbered di inline-asm syscall (kernel hanya restore rcx/r11/rsp) — heap growth kedua tadinya page fault; Editor+FileMgr INTERAKTIF via `run` (KEY_READ busy-poll + syscall IS_INTERACTIVE=31, boot-demo skip); fix Heisenbug ke-3: PRIVILEGE_STACK 20→64 KiB (overflow di compose_into via WIN_PRESENT → smash return addr) + PRESENT_BUF reuse + heap 32 MiB; JPEG baseline decoder (Jpeg.Load, IDCT integer) + Image Viewer format-aware → JPEG OK; desktop shell (Start button+menu+ikon+jam RTC di wm.rs, macOS+Ubuntu+WinXP, launch via desktop_loop) → DESKTOP SHELL OK; optimization pass mulai (boot 69.8s→58.5s); SUITE OK 4-media; screenshot desktop-calc/2048.png. Fix: Heisenbug `from_raw_parts` atas memori user di-harden dgn `copy_user_bytes` read_volatile di syscall string. App `/disk` hanya di media IDE.]**
 **Milestone:** OS terasa ringan & cepat, siap pakai out-of-the-box.
 
-### 🏛️ v1.0 — "Buitenzorg" · Stable Release (x86-64)
+### 🏛️ v1.0 — "Buitenzorg" · Stable Release (x86-64) — *sedang berjalan (2026-07-24)*
 Stabilkan API & ABI (versioning) · security hardening (sandbox, permission broker) · dokumentasi lengkap + tutorial SDK · debugger & profiler · **instalasi ke hardware nyata** · **image resmi untuk VMware/QEMU/Hyper-V/VirtualBox**.
+**Sudah:** pembekuan ABI v1, hardening validasi pointer syscall, debugger GDB + profiler zona, benchmark regresi CI, dokumentasi+tutorial rilis, image VMware/VirtualBox/Hyper-V, lisensi **MIT**. **Sisa:** validasi boot di hardware/hypervisor fisik nyata + tag rilis (perkakas siap; butuh mesin fisik). Sandbox/permission-broker penuh menyusul pasca-1.0.
 **Milestone:** rilis stabil; developer bisa self-host workflow dasar.
 
 ### 🌍 v1.x — "Rimba" · Multi-Arch
@@ -505,7 +521,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] Repo + struktur monorepo (kernel/rust, runtime/csharp, ai, sdk, apps, docs)
 - [x] Toolchain build (cargo + .NET SDK + linker script)
 - [x] Pipeline boot QEMU otomatis (`bzimage` + `scripts/`)
-- [ ] CI (build + test + boot smoke test + **benchmark performa**) — *build+test+smoke sudah di `.github/workflows/ci.yml`; benchmark belum*
+- [x] **CI (build + test + boot smoke test + benchmark performa) ✓** — semua di `.github/workflows/ci.yml`: `cargo test -p bz-abi`, build kernel, smoke test QEMU, `dotnet test`, dan **`scripts/bench.sh`** (benchmark regresi boot+I/O). *(Bug diperbaiki 2026-07-24: trigger `[main]` padahal branch `master` → CI tak pernah jalan saat push; kini `[master, main]` + `workflow_dispatch`.)*
 - [x] Coding standard & contribution guide (CONTRIBUTING.md)
 
 ### 🔩 Bootloader & Boot Media (v0.1, v0.3)
@@ -529,7 +545,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [ ] IPC (message passing) — *channel antar-task kernel-space (send/recv, teruji di boot); IPC antar-proses user-space belum*
 - [ ] HAL (abstraksi arsitektur)
 - [ ] SMP multi-core
-- [ ] Ekstensi virtualization (VT-x/AMD-V)
+- [~] Ekstensi virtualization (VT-x/AMD-V) — dideteksi (CPUID/MSR, `vmx.rs`); driver native belum, VMM software dipakai
 
 ### 🔌 Drivers (v0.3, v0.11)
 - [ ] Driver framework (kernel-space & user-space terisolasi) — *registry block-device kernel-space + enumerasi PCI jalan; isolasi user-space belum*
@@ -538,9 +554,9 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [ ] Storage: NVMe / SATA / IDE / USB — *IDE/PATA PIO LBA28 jalan (baca file FAT dari disk); NVMe/AHCI/USB driver belum*
 - [ ] Network (Ethernet)
 - [ ] WiFi
-- [ ] Audio (in/out)
+- [~] Audio (in/out) — *AC'97 out ✓ (`audio.rs`: PCI enum + cold-reset + mixer + playback DMA 48 kHz stereo, ABI `AUDIO_*` + `Buitenzorg.Audio`); mic in / IRQ / Intel HDA belum*
 - [ ] **GPU driver** (framebuffer → 2D → 3D → compute)
-- [ ] virtio drivers
+- [~] virtio drivers — port I/O virtio (console char/num, disk-write, host-tick) di VMM software (`vmm.rs`); virtio-pci host/guest nyata belum
 - [ ] SDK driver C# (user-space)
 
 ### 🌉 Managed Runtime (v0.4, v0.8)
@@ -618,11 +634,11 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [ ] Template Console / Desktop / Web / Widget — *console-csharp & desktop-csharp jalan; web/widget belum (v0.9)*
 - [~] WebView engine + web app runtime — *mini WebView (subset HTML) jalan; engine HTML/CSS/JS penuh belum*
 - [x] Widget host & board — *widget board (dock kanan) + widget monitor sistem*
-- [x] Library grafik `Buitenzorg.Drawing` (mirip System.Drawing) — *v0.9: Graphics/Pen/Brush, shapes, text*
+- [~] Library grafik `Buitenzorg.Drawing` (mirip System.Drawing) — *v0.9: Graphics/Pen/Brush syscall-per-primitif; **v0.16: renderer software client-side (`bzgfx.cs`) — Bitmap/Color/Graphics (fill/outline, line tebal, circle/ellipse, FillPolygon, gradient, DrawImage/DrawImageScaled, alpha-blend, transform 2D Matrix Translate/Scale/Rotate, GraphicsPath+FillPath/DrawPath, SetClip, FillHatch 6 pola, DrawString+Font 8×8+MeasureString, BMP 24-bit load/save) + kernel BLIT op (draw_op 7); ~usable-complete. Menyusul: Region non-rect, PNG, texture brush, Pen dash, antialias.***
 - [x] Task Manager / Monitor Sistem — *v0.9: proses list + CPU/memori + kill; ABI PROC_LIST/PROC_KILL/SYS_STAT*
-- [ ] **JS/TS engine** + transpile TS
-- [ ] **Python runtime** (CPython/IronPython)
-- [ ] Binding API seragam lintas-bahasa
+- [~] **JS/TS engine** + transpile TS — *v0.14: interpreter JS + transpile TS (strip tipe) di `script.rs`; engine V8-kelas belum*
+- [~] **Python runtime** (CPython/IronPython) — *v0.14: interpreter Python subset (indentasi) di `script.rs`; CPython/IronPython penuh belum*
+- [x] Binding API seragam lintas-bahasa — *v0.14: `print`/`console.log` → host `emit` yang sama; `script <lang>`/`bz script`*
 - [ ] **VS Code extension** (scaffolding, build & run, manifest editor, preview, IntelliSense/snippets) — *skeleton di `sdk/vscode-extension` (new project, build&run, validate manifest); preview/IntelliSense belum*
 - [ ] **Debugging dari VS Code** (DAP: breakpoint, step, watch, call stack)
 - [ ] **Debug bridge** (deploy/log/profile ke VM/perangkat, remote attach)
@@ -651,12 +667,30 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] Tema: **BeOS**
 
 ### 📦 Virtualization (v0.13)
-- [ ] Hypervisor tipe-2 (VT-x/AMD-V)
-- [ ] Virtualization manager (buat/kelola/jalankan VM)
-- [ ] Virtual disk + snapshot
-- [ ] Guest tools (clipboard, resize, shared folder)
+- [~] Hypervisor tipe-2 (VT-x/AMD-V) — deteksi HW (CPUID/MSR) + VMM software (virtual CPU BZVM) jalan; driver native VMXON/EPT/VMCB backlog (nested HW tak diekspos QEMU/TCG)
+- [x] Virtualization manager (buat/kelola/jalankan VM) — `vmm.rs` + shell `vm`/`bz vm`
+- [x] Virtual disk + snapshot — virtual disk RAM + snapshot/restore state penuh (terverifikasi)
+- [~] Guest tools — integrasi host-tick lewat port virtio; clipboard/resize/shared-folder backlog
 
-### 🌾 Preloaded Suite & Optimasi (v0.15)
+### 🧩 v0.15 "Matang" — Managed Runtime C# Lengkap (GC + .NET BCL) — *sedang berjalan*
+Prasyarat suite v0.16. NativeAOT+BCL penuh dulu (`bflat --stdlib:dotnet`/ILC) → CoreCLR/JIT menyusul. (Sekarang app = zerolib tanpa GC/heap/BCL.)
+- [~] GC + managed heap ring-3 — **inc 1 ✓:** syscall halaman `MMAP/MPROTECT/MUNMAP`; **inc 4 ✓:** heap tumbuh via mmap → `new`/array/objek/generic jalan (`heap.cs`) + libc malloc/free/calloc/realloc; **inc 5 ✓:** model memori GC (mmap `PROT_NONE`=reserve lazy + mprotect=commit-on-demand, `gcmem.cs`); GC sungguhan + init GC statics (NativeAOT `--stdlib:dotnet`) menyusul
+- [~] BCL (Generics/Collections/LINQ/StringBuilder/Base64/BitConverter) — **inc 6 ✓:** **Buitenzorg.Bcl** tulisan-sendiri di C# di atas heap (`bzbcl.cs`: `BzList<T>`, LINQ Where/Select/Sum via fn-pointer, StringBuilder, Base64, BitConverter; `bcl.cs` → MILESTONE BCL OK). Bukan CoreLib resmi (LINQ/Regex/Tasks penuh perlu link `--stdlib:dotnet`, ditunda: link statik-freestanding + glue bflat = multi-sesi)
+- [~] PAL runtime .NET — **memori ✓** (mmap/mprotect/munmap) · **thread ✓** (`THREAD_CREATE/JOIN/EXIT`, ABI 16–18) · **sync ✓** (`FUTEX_WAIT/WAKE`→mutex, ABI 19–20) · **TLS-dasar ✓** (`THREAD_SELF` 21) · **clock ✓** (`CLOCK_MONO`/TSC 22); condvar/TLS-penuh/waktu/environment + exception unwinding (EH/DWARF) menyusul
+- [~] Thread ring-3 sungguhan — **increment 2 ✓:** thread kooperatif (kernel task + SYSCALL stack per-thread, `task.rs`/`usermode.rs`), worker C# berbagi address space + join terverifikasi (`thread.cs`); primitif sync + thread pool preemptif menyusul
+- [x] Generics · Collections (List/Dictionary/HashSet/Queue/Stack) — `bzbcl.cs`; Tuple menyusul
+- [x] LINQ (fn-pointer) · **Regex ✓ (pra-v1.0, `BzRegex` di `bzbcl2.cs`)** — backreference/lazy/`{n,m}`/lookaround/capture menyusul
+- [x] StringBuilder + format angka/tanggal (`BzStringBuilder`, `BzCulture`, `BzDateTime`) — string interpolation & `ToString()` sejati butuh CoreLib
+- [x] **Encoding UTF8/ASCII ✓ (`BzEncoding`, pra-v1.0)** · Base64 (`BzBase64`) · BitConverter (`BzBitConverter`) · **DateTime ✓ (`BzDateTime` + syscall `CLOCK_RTC`)**; TimeSpan/Guid menyusul
+- [x] System.Threading (thread + futex-mutex + **Timer ✓ `BzTimer` polled**, pra-v1.0); ThreadPool & Interlocked menyusul
+- [~] Tasks — **`BzTask` Run/Wait/WhenAll ✓ (pra-v1.0)** di atas thread kooperatif (function-pointer body); `async`/`await` + SynchronizationContext butuh CoreCLR
+- [x] **Streams/System.IO ✓ (pra-v1.0)** — `BzPath`/`BzFile` (baca + **tulis** lewat syscall `FS_WRITE` baru)/`BzDir`/`BzMemoryStream` di atas VFS
+- [x] **System.Diagnostics / System.Management / Pkg / GC ✓ (pra-v1.0)** — `BzStopwatch`/`BzProcess`/`BzDebug`, `BzSystemInfo`, `BzPkg`, `BzGC` (statistik nyata; `Collect()` = `false`, heap masih bump-only)
+- [~] **System.Net + Sockets ✓ UDP NYATA (pra-v1.0)** — `net.rs` dapat UDP (socket/bind/send/recv + checksum pseudo-header) + syscall `NET_*` 34–39; `BzIPAddress`/`BzSocket`/`BzNetInfo`. **TCP belum** → `System.Net.Http` (`BzHttp`) baru lapisan pesan, dan perangkat masih loopback (driver e1000 menyusul)
+- [x] Uji kontrak + sample C# terverifikasi di QEMU — `bcl.cs` → `MILESTONE: BCL OK`; **`bcl2.cs` → `MILESTONE: BCL2 OK`** (IO/Text/Regex/Globalization/Diagnostics/Management/Net/Tasks/Timers/GC/Pkg), smoke 4-media LOLOS
+- [ ] (Menyusul) CoreCLR/JIT + reflection penuh + Reflection.Emit + GC sungguhan (kolektor) + TCP
+
+### 🌾 v0.16 "Panen" — Preloaded Suite & Optimasi (di atas BCL v0.15)
 - [ ] Utilities (file manager, terminal, settings, monitor, editor, dll)
 - [ ] Multimedia (music/video/image, camera, recorder)
 - [ ] AI apps (asisten, model gallery, generator, OCR)
@@ -668,16 +702,17 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [ ] Startup app cepat (AOT/warm-start)
 - [ ] Footprint memori kecil + shared libs
 - [ ] SIMD/vektorisasi hot-path
-- [ ] Benchmark regression di CI
+- [x] **Benchmark regression di CI ✓ (2026-07-24)** — `scripts/bench.sh` boot headless lalu ambil dua angka yang dicetak kernel (boot-to-READY dalam tick, throughput async-I/O ops/s) dan gagal bila lewat budget longgar (`BOOT_BUDGET_S`=90, `AIO_MIN_OPS`=10000 — tangkap regresi nyata, bukan jitter runner); job baru di `ci.yml`
 
-### 🚀 Stabilisasi & Rilis (v1.0)
-- [ ] Stabilkan API & ABI (versioning)
-- [ ] Security hardening
-- [ ] Debugger + profiler
-- [ ] Dokumentasi lengkap + tutorial
-- [ ] Boot di hardware nyata
-- [ ] **Image resmi VMware / QEMU / Hyper-V / VirtualBox**
-- [ ] Rilis v1.0
+### 🚀 Stabilisasi & Rilis (v1.0) — *sedang berjalan*
+- [x] **Stabilkan API & ABI (versioning) ✓ (2026-07-24)** — tabel ABI v1 **dibekukan**: `abi_v1_is_frozen` (Rust, 6 test) + `AbiV1IsFrozen` (C#, 12 test) memaku `ABI_VERSION`, `COUNT`=40, ukuran+alignment 10 struct lintas-batas, dan kode error; renumber/ubah-layout gagal di test sebelum masuk image. Kebijakan di `docs/abi.md` (§Pembekuan ABI v1): tambah = append+bump COUNT+update kedua mirror; ubah yang ada = versi mayor baru
+- [~] **Security hardening — validasi pointer syscall ✓ (2026-07-24); sandbox/permission-broker menyusul** — validasi pointer user di **semua** syscall berpointer (`memory::validate_user_range`/`validate_user_cstr`, hanya jalur ring-3 `dispatch_from_user`): tutup celah nyata bocor memori kernel (`DEBUG_WRITE`), tulis-sembarang ke memori kernel (`SYS_STAT`/`PROC_LIST`/`FS_READ`/`NET_RECV` = eskalasi privilege), dan page-fault kernel dari pointer tak-terpeta. 14 probe bermusuhan → `MILESTONE: SECURITY OK`. Docs `docs/abi.md` §Model Keamanan Pointer. **Sandbox per-app + permission broker** butuh isolasi multi-proses (model sekarang single-proses run-to-completion) → pasca-1.0
+- [x] **Debugger + profiler ✓ (2026-07-24)** — **Debugger:** `scripts/debug-kernel.ps1`/`.sh`/`.gdb` (attach GDB ke QEMU-paused pakai simbol kernel + helper break/fault/register; verified GDB stub jawab RSP `T05`). **Profiler:** `profile.rs` zona ter-instrumentasi TSC (inert saat off; jalur panas syscall/compositor terinstrumentasi; shell `prof`) → `MILESTONE: PROFILER OK`. Docs `docs/debugging.md`. (DAP breakpoint penuh VS Code menyusul)
+- [x] **Dokumentasi lengkap + tutorial ✓ (2026-07-24)** — `CHANGELOG.md` (riwayat per codename), `docs/tutorial.md` (tutorial berurutan nol→app 8-langkah), `docs/README.md` (indeks docs), README di-refresh ke status v0.16+jalur v1.0; semua cross-link diverifikasi resolve
+- [~] **Boot di hardware nyata** — **perkakas SIAP** (2026-07-24): `scripts/flash-usb.ps1`/`.sh` (tulis image ke USB, pengaman berlapis + verifikasi baca-ulang) + `docs/install-hardware.md` (pilih firmware, boot menu, tabel kompatibilitas jujur: PS/2 bukan USB-HID, IDE-PIO bukan NVMe, PIC/PIT bukan APIC, loopback saja). **Validasi di mesin fisik BELUM** (tak bisa dari lingkungan dev) — ditandai eksperimental
+- [~] **Image resmi VMware / QEMU / Hyper-V / VirtualBox** — QEMU = jalur boot native (4 media, teruji smoke); `make-vm-images.ps1`/`.sh` emit **VMware `.vmdk` + VirtualBox `.vdi` + Hyper-V `.vhdx`** (VHDX 64 MiB whole-MiB via create+`convert -n`, krn `-O vhdx` telanjang 5,47 MiB ditolak Hyper-V) + `make-hyperv-vm.ps1` (VM Gen-1/BIOS, guarded). Konversi terverifikasi; **boot di VMware/VBox/Hyper-V nyata BELUM divalidasi tim** (sama spt hardware)
+- [x] **Lisensi ✓ (2026-07-24): MIT** — berkas `LICENSE` (© 2026 Gravicode Studios)
+- [ ] Rilis v1.0 — tag rilis + validasi boot HW/hypervisor nyata (satu-satunya item tersisa; butuh mesin fisik)
 
 ### 🌍 Multi-Arch & Pasca-1.x
 - [ ] Port ARM64
