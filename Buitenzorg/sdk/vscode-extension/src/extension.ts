@@ -14,6 +14,7 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as path from "path";
+import * as fs from "fs";
 
 function repoRoot(): string {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
@@ -52,14 +53,24 @@ export function activate(context: vscode.ExtensionContext): void {
       run(`dotnet run --project sdk/bz -- new ${template} ${name}`, repoRoot(), out);
     }),
 
-    // Build the C# apps + kernel image, then boot in QEMU (dev loop).
+    // Build & run (dev loop). If the workspace is a template app project (has a
+    // build.ps1/build.sh), deploy that app's ELF and boot — so `run myapp` picks
+    // it up. Otherwise build every bundled C# app + the image, then boot.
     vscode.commands.registerCommand("buitenzorg.buildRun", () => {
       const root = repoRoot();
-      run(
-        `${ps("scripts/build-hello-csharp.ps1")} ; cd kernel ; cargo run --release -p bzimage -- --run`,
-        root,
-        out
-      );
+      const appBuild = isWin ? "build.ps1" : "build.sh";
+      if (fs.existsSync(path.join(root, appBuild))) {
+        const cmd = isWin ? `pwsh -File build.ps1 -Run` : `bash build.sh --run`;
+        out.appendLine("Detected an app project — building & deploying userapp.elf.");
+        out.appendLine("At the OS prompt, launch it with:  run myapp");
+        run(cmd, root, out);
+      } else {
+        run(
+          `${ps("scripts/build-hello-csharp.ps1")} ; cd kernel ; cargo run --release -p bzimage -- --run`,
+          root,
+          out
+        );
+      }
     }),
 
     // Deploy = full build + headless smoke test across all boot media.

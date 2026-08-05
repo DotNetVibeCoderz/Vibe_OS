@@ -81,6 +81,10 @@ fn app_file(name: &str) -> Option<&'static str> {
         "editor" | "notepad" | "edit" => Some("EDITOR.ELF"),
         "imgview" | "image" | "viewer" | "photo" => Some("IMGVIEW.ELF"),
         "jpgtest" | "jpg" | "jpeg" => Some("JPGTEST.ELF"),
+        // Generic slot for a user-authored app: the SDK/VS Code/MagicAppGen
+        // template builds its ELF to userland/hello-csharp/userapp.elf, which
+        // build.rs embeds as /disk/USERAPP.ELF. `run myapp` then launches it.
+        "myapp" | "userapp" | "app" => Some("USERAPP.ELF"),
         _ => None,
     }
 }

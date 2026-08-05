@@ -2,10 +2,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ae="using:AvaloniaEdit"
         x:Class="MagicAppGen.Views.MainWindow"
-        Width="1200" Height="700" MinWidth="820" MinHeight="480"
+        Width="1240" Height="740" MinWidth="880" MinHeight="520"
         WindowStartupLocation="CenterScreen"
         Title="Magic App Generator — Jack, The Code Bender"
-        Background="#1E1F26">
+        Background="{StaticResource Void}">
 
   <DockPanel>
     <!-- Menu bar -->
@@ -39,92 +39,157 @@
       </MenuItem>
     </Menu>
 
-    <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#25262E" Padding="6,4">
-      <StackPanel Orientation="Horizontal" Spacing="6">
-        <Button Content="New" Click="OnNewBlank" />
-        <Button Content="Open" Click="OnOpenFile" />
-        <Button Content="Save" Click="OnSave" />
-        <Border Width="1" Background="#3A3B45" Margin="4,0" />
-        <Button Content="Build" Click="OnBuild" />
-        <Button Content="Run" Click="OnRun" />
-        <Button Content="Deploy" Click="OnDeploy" />
-        <Border Width="1" Background="#3A3B45" Margin="4,0" />
-        <TextBlock Text="Language:" VerticalAlignment="Center" />
-        <ComboBox x:Name="LanguageBox" Width="130" SelectionChanged="OnLanguageChanged">
-          <ComboBoxItem>C#</ComboBoxItem>
-          <ComboBoxItem>JavaScript</ComboBoxItem>
-          <ComboBoxItem>TypeScript</ComboBoxItem>
-          <ComboBoxItem>Python</ComboBoxItem>
-        </ComboBox>
-        <CheckBox x:Name="LineNumbersToggle" Content="Line #" IsChecked="True" Click="OnToggleLineNumbers" />
-      </StackPanel>
+    <!-- Command strip -->
+    <Border DockPanel.Dock="Top" Background="{StaticResource Moss}"
+            BorderBrush="{StaticResource Ridge}" BorderThickness="0,0,0,1" Padding="10,8">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+          <Button Classes="ghost" Content="New" Click="OnNewBlank" ToolTip.Tip="New project (blank)" />
+          <Button Classes="ghost" Content="Open" Click="OnOpenFile" ToolTip.Tip="Open a file" />
+          <Button Classes="ghost" Content="Save" Click="OnSave" ToolTip.Tip="Save the current file" />
+          <Border Width="1" Height="20" Background="{StaticResource Ridge}" Margin="6,0" />
+          <Button Classes="primary" Content="Build ▸ Run" Click="OnRun" ToolTip.Tip="Build &amp; run in QEMU" />
+          <Button Classes="ghost" Content="Build" Click="OnBuild" ToolTip.Tip="Build the OS image" />
+          <Button Classes="ghost" Content="Deploy" Click="OnDeploy" ToolTip.Tip="Produce VM/USB images" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <TextBlock Text="Language" Foreground="{StaticResource Sage}" FontSize="12" VerticalAlignment="Center" />
+          <ComboBox x:Name="LanguageBox" Width="132" SelectionChanged="OnLanguageChanged">
+            <ComboBoxItem>C#</ComboBoxItem>
+            <ComboBoxItem>JavaScript</ComboBoxItem>
+            <ComboBoxItem>TypeScript</ComboBoxItem>
+            <ComboBoxItem>Python</ComboBoxItem>
+          </ComboBox>
+          <CheckBox x:Name="LineNumbersToggle" Content="Line #" IsChecked="True" Click="OnToggleLineNumbers" />
+        </StackPanel>
+      </Grid>
     </Border>
 
-    <!-- Status bar -->
-    <Border DockPanel.Dock="Bottom" Background="#0E639C" Height="24">
-      <DockPanel LastChildFill="False">
-        <TextBlock x:Name="StatusText" DockPanel.Dock="Left" Margin="8,0" VerticalAlignment="Center"
-                   Foreground="White" Text="Ready" />
-        <TextBlock x:Name="ProviderStatus" DockPanel.Dock="Right" Margin="8,0" VerticalAlignment="Center"
-                   Foreground="White" Text="" />
-      </DockPanel>
+    <!-- Status ribbon -->
+    <Border DockPanel.Dock="Bottom" Background="{StaticResource Void}"
+            BorderBrush="{StaticResource Ridge}" BorderThickness="0,1,0,0" Height="30">
+      <Grid ColumnDefinitions="Auto,*,Auto" Margin="12,0">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Ellipse Width="8" Height="8" Fill="{StaticResource Leaf}" VerticalAlignment="Center" />
+          <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource Mist}"
+                     FontSize="12" VerticalAlignment="Center" />
+        </StackPanel>
+        <Border Grid.Column="2" Background="{StaticResource Moss}" CornerRadius="6"
+                Padding="9,3" VerticalAlignment="Center">
+          <TextBlock x:Name="ProviderStatus" Text="" Foreground="{StaticResource Sage}"
+                     FontSize="11.5" VerticalAlignment="Center" />
+        </Border>
+      </Grid>
     </Border>
 
     <!-- Editor | splitter | chat -->
-    <Grid ColumnDefinitions="*,4,340">
+    <Grid ColumnDefinitions="*,3,368">
       <!-- Editor over a logs panel -->
-      <Grid Grid.Column="0" RowDefinitions="*,4,150">
-        <ae:TextEditor x:Name="Editor" Grid.Row="0"
+      <Grid Grid.Column="0" RowDefinitions="Auto,*,3,168">
+        <!-- Editor caption -->
+        <Border Grid.Row="0" Background="{StaticResource Bark}" Padding="12,7"
+                BorderBrush="{StaticResource Ridge}" BorderThickness="0,0,0,1">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Border Width="3" Height="14" Background="{StaticResource Leaf}" CornerRadius="2" VerticalAlignment="Center" />
+            <TextBlock Text="EDITOR" Foreground="{StaticResource Sage}" FontSize="11"
+                       FontWeight="SemiBold" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+
+        <ae:TextEditor x:Name="Editor" Grid.Row="1"
                        ShowLineNumbers="True"
                        FontFamily="Cascadia Code,Consolas,Menlo,monospace"
-                       FontSize="14" Background="#1B1C22" Foreground="#E6E6E6" />
-        <GridSplitter Grid.Row="1" Background="#3A3B45" ResizeDirection="Rows" />
-        <DockPanel Grid.Row="2" Background="#15161B">
-          <TextBlock DockPanel.Dock="Top" Text="Logs" Foreground="#9AA0AA" Margin="8,4,0,0" />
-          <TextBox x:Name="LogBox" IsReadOnly="True" AcceptsReturn="True"
+                       FontSize="14" Background="{StaticResource Bark}" Foreground="{StaticResource Mist}" />
+
+        <GridSplitter Grid.Row="2" ResizeDirection="Rows" />
+
+        <DockPanel Grid.Row="3" Background="{StaticResource Void}">
+          <Border DockPanel.Dock="Top" Padding="12,6" BorderBrush="{StaticResource Ridge}" BorderThickness="0,1,0,1">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Border Width="3" Height="14" Background="{StaticResource Ember}" CornerRadius="2" VerticalAlignment="Center" />
+              <TextBlock Text="LOGS" Foreground="{StaticResource Sage}" FontSize="11"
+                         FontWeight="SemiBold" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+          <TextBox x:Name="LogBox" Classes="bare" IsReadOnly="True" AcceptsReturn="True"
                    TextWrapping="NoWrap" FontFamily="Cascadia Code,Consolas,monospace"
-                   FontSize="12" Background="#15161B" Foreground="#B7C0CC"
-                   VerticalContentAlignment="Top" />
+                   FontSize="12" Background="{StaticResource Void}" Foreground="{StaticResource Sage}"
+                   VerticalContentAlignment="Top" Padding="12,6" />
         </DockPanel>
       </Grid>
 
-      <GridSplitter Grid.Column="1" Background="#3A3B45" ResizeDirection="Columns" />
+      <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
       <!-- Chat panel -->
-      <Grid Grid.Column="2" x:Name="ChatPanel" Background="#232430" RowDefinitions="Auto,*,Auto">
-        <StackPanel Grid.Row="0" Margin="8" Spacing="4">
-          <TextBlock Text="Jack — The Code Bender" FontWeight="Bold" Foreground="#7CC0FF" />
-          <StackPanel Orientation="Horizontal" Spacing="6">
-            <ComboBox x:Name="ProviderBox" Width="120" SelectionChanged="OnProviderChanged">
+      <Grid Grid.Column="2" x:Name="ChatPanel" Background="{StaticResource Bark}" RowDefinitions="Auto,Auto,*,Auto">
+
+        <!-- ===== Signature: Jack's presence ===== -->
+        <Border Grid.Row="0" Background="{StaticResource ForgeGlow}"
+                BorderBrush="{StaticResource Ridge}" BorderThickness="0,0,0,1" Padding="16,15">
+          <Grid ColumnDefinitions="Auto,*">
+            <!-- Leaf avatar -->
+            <Border Grid.Column="0" Width="42" Height="42" CornerRadius="21"
+                    Background="{StaticResource LeafFill}" VerticalAlignment="Center">
+              <Viewbox Width="22" Height="22" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Canvas Width="24" Height="24">
+                  <Path Fill="#0E1710"
+                        Data="M12,2 C6.5,5.5 4,11 5.5,18.5 C6,19 6.6,19 7,18.6 C6.2,13 8,8.5 12,5.5 C9.5,9 8.4,13 8.8,17.3 C13.5,15.2 18,11.5 19,4 C16,7.2 12.5,7.6 12,2 Z" />
+                </Canvas>
+              </Viewbox>
+            </Border>
+            <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center" Spacing="1">
+              <TextBlock Text="Jack" Foreground="{StaticResource Mist}" FontSize="20" FontWeight="Bold" />
+              <TextBlock Text="THE  CODE  BENDER" Foreground="{StaticResource Leaf}"
+                         FontSize="10.5" FontWeight="SemiBold" />
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <!-- Provider row -->
+        <Border Grid.Row="1" Background="{StaticResource Moss}" Padding="12,9"
+                BorderBrush="{StaticResource Ridge}" BorderThickness="0,0,0,1">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <ComboBox Grid.Column="0" x:Name="ProviderBox" Width="122" SelectionChanged="OnProviderChanged">
               <ComboBoxItem>OpenAI</ComboBoxItem>
               <ComboBoxItem>Claude</ComboBoxItem>
               <ComboBoxItem>Gemini</ComboBoxItem>
               <ComboBoxItem>Ollama</ComboBoxItem>
             </ComboBox>
-            <TextBlock x:Name="ModelText" VerticalAlignment="Center" Foreground="#9AA0AA" />
-            <Button Content="Clear" Click="OnClearChat" HorizontalAlignment="Right" />
-          </StackPanel>
-        </StackPanel>
+            <TextBlock Grid.Column="1" x:Name="ModelText" VerticalAlignment="Center" Margin="10,0"
+                       Foreground="{StaticResource Sage}" FontSize="12" TextTrimming="CharacterEllipsis" />
+            <Button Grid.Column="2" Classes="ghost" Content="Clear" Click="OnClearChat"
+                    ToolTip.Tip="Clear the conversation" />
+          </Grid>
+        </Border>
 
-        <ScrollViewer Grid.Row="1" x:Name="ChatScroll" Padding="8">
-          <StackPanel x:Name="ChatList" Spacing="8" />
+        <!-- Conversation -->
+        <ScrollViewer Grid.Row="2" x:Name="ChatScroll" Padding="14,12">
+          <StackPanel x:Name="ChatList" Spacing="10" />
         </ScrollViewer>
 
-        <Grid Grid.Row="2" Margin="8" RowDefinitions="Auto,Auto">
-          <TextBlock x:Name="AttachInfo" Grid.Row="0" Foreground="#8AD68A" FontSize="12" />
-          <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
-            <TextBox x:Name="InputBox" Grid.Column="0" AcceptsReturn="True" TextWrapping="Wrap"
-                     Watermark="Describe the app… (Ctrl+Enter to send)" MinHeight="60" MaxHeight="140"
-                     KeyDown="OnInputKeyDown" />
-            <StackPanel Grid.Column="1" Margin="6,0,0,0" Spacing="4">
-              <!-- Plain text, not an emoji: the bundled Inter font has no glyph
-                   for U+1F4CE and it renders as a tofu box. -->
-              <Button Content="Img" ToolTip.Tip="Attach image" Click="OnAttach" />
-              <Button x:Name="SendButton" Content="Send" Click="OnSend" />
-            </StackPanel>
-          </Grid>
-        </Grid>
+        <!-- Composer -->
+        <Border Grid.Row="3" Background="{StaticResource Moss}" Padding="12"
+                BorderBrush="{StaticResource Ridge}" BorderThickness="0,1,0,0">
+          <StackPanel Spacing="8">
+            <TextBlock x:Name="AttachInfo" Foreground="{StaticResource Ember}" FontSize="12" IsVisible="False" />
+            <Border Background="{StaticResource Bark}" CornerRadius="10"
+                    BorderBrush="{StaticResource Ridge}" BorderThickness="1" Padding="4">
+              <Grid RowDefinitions="Auto,Auto">
+                <TextBox x:Name="InputBox" Grid.Row="0" Classes="bare" AcceptsReturn="True" TextWrapping="Wrap"
+                         Watermark="Describe the app you want Jack to build…" MinHeight="58" MaxHeight="150"
+                         KeyDown="OnInputKeyDown" />
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" Margin="4,0,2,2">
+                  <Button Grid.Column="0" Classes="ghost" Content="＋ Image" Click="OnAttach"
+                          FontSize="12" ToolTip.Tip="Attach an image" />
+                  <TextBlock Grid.Column="1" Text="Ctrl+Enter" Foreground="{StaticResource Fog}"
+                             FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,10,0" />
+                  <Button Grid.Column="2" x:Name="SendButton" Classes="primary" Content="Send ▸" Click="OnSend" />
+                </Grid>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </Border>
       </Grid>
     </Grid>
   </DockPanel>

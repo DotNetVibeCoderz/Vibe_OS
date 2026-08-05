@@ -1,36 +1,34 @@
-# Menjalankan Buitenzorg OS di VMware Player, VirtualBox & Hyper-V
+# Jalankan di VM — VMware, VirtualBox & Hyper-V
 
 Selain QEMU, image Buitenzorg bisa dijalankan di **VMware Workstation Player**,
-**Oracle VirtualBox**, dan **Microsoft Hyper-V**. Build menghasilkan disk mentah (`dist/buitenzorg-bios.img`,
-MBR/BIOS); skrip di bawah mengonversinya ke format masing-masing hypervisor.
+**Oracle VirtualBox**, dan **Microsoft Hyper-V**. Build menghasilkan disk mentah
+(`dist/buitenzorg-bios.img`, MBR/BIOS); skrip di bawah mengonversinya ke format
+tiap hypervisor.
 
-Prasyarat: sudah build OS (`.\scripts\build.ps1` / `./scripts/build.sh` atau
+Prasyarat: Anda sudah build OS (`.\scripts\build.ps1` / `./scripts/build.sh` atau
 quickstart). Konversi memakai **`qemu-img`** (bagian dari QEMU).
+
+[English](run-in-vm.md) · **Bahasa Indonesia** · ← [Indeks dokumentasi](README.id.md)
 
 ---
 
-## 🔧 Buat image VM (satu perintah)
+## Buat image VM (satu perintah)
 
-**Windows:**
 ```powershell
-.\scripts\make-vm-images.ps1
-```
-**Linux / macOS:**
-```bash
-./scripts/make-vm-images.sh
+.\scripts\make-vm-images.ps1     # Linux/macOS: ./scripts/make-vm-images.sh
 ```
 
 Menghasilkan di `dist/`:
 
 | Berkas | Untuk |
-|--------|-------|
+|---|---|
 | `buitenzorg.vmdk` | VMware (Player / Workstation / Fusion) |
 | `buitenzorg.vdi`  | Oracle VirtualBox |
 | `buitenzorg.vhdx` | Microsoft Hyper-V (Generation 1 / BIOS) |
 | `Buitenzorg.vmx`  | konfigurasi VM VMware siap-buka |
 
-Jika `VBoxManage` ada di PATH, skrip juga otomatis **mendaftarkan VM
-VirtualBox** bernama `Buitenzorg`.
+Kalau `VBoxManage` ada di PATH, skrip juga otomatis **mendaftarkan VM VirtualBox**
+bernama `Buitenzorg`.
 
 > Konversi manual (kalau perlu):
 > ```
@@ -38,26 +36,23 @@ VirtualBox** bernama `Buitenzorg`.
 > qemu-img convert -f raw -O vdi  dist/buitenzorg-bios.img dist/buitenzorg.vdi
 > ```
 
----
-
 ## 🟦 VMware Workstation Player
 
 1. Jalankan `make-vm-images` (menghasilkan `dist/Buitenzorg.vmx` + `.vmdk`).
 2. VMware Player → **Open a Virtual Machine** → pilih `dist/Buitenzorg.vmx`.
 3. Klik **Play**.
 
-VM dikonfigurasi: firmware **BIOS**, RAM **512 MB**, disk `.vmdk` sebagai IDE,
-kartu suara (ES1371). Serial di-log ke `buitenzorg-serial.log` di folder VM.
+VM dikonfigurasi dengan firmware **BIOS**, RAM **512 MB**, `.vmdk` sebagai disk
+IDE, dan kartu suara (ES1371). Serial di-log ke `buitenzorg-serial.log` di folder
+VM.
 
-> Membuat manual: New VM → *I will install the OS later* → Guest OS **Other** →
-> hapus disk default, **Add → Hard Disk → Use an existing disk** →
+> Untuk membuatnya manual: New VM → *I will install the OS later* → Guest OS
+> **Other** → hapus disk default, **Add → Hard Disk → Use an existing disk** →
 > `buitenzorg.vmdk` (IDE) → pastikan firmware **BIOS** (bukan UEFI).
-
----
 
 ## 🟧 Oracle VirtualBox
 
-**Otomatis** (jika `VBoxManage` di PATH, `make-vm-images` sudah melakukannya):
+**Otomatis** (kalau `VBoxManage` di PATH, `make-vm-images` sudah melakukannya):
 ```
 VBoxManage startvm Buitenzorg
 ```
@@ -79,12 +74,10 @@ VBoxManage storageattach Buitenzorg --storagectl IDE --port 0 --device 0 --type 
 VBoxManage startvm Buitenzorg
 ```
 
----
-
 ## 🟦 Microsoft Hyper-V
 
 Buitenzorg boot lewat **MBR di disk IDE**, jadi pakai **Generation 1** (BIOS).
-Generation 2 itu UEFI + SCSI + Secure Boot, dan bootloader Buitenzorg belum
+Generation 2 adalah UEFI + SCSI + Secure Boot, dan bootloader Buitenzorg belum
 ditandatangani — jangan pakai Gen 2.
 
 **Otomatis** — dari **PowerShell elevated** dengan Hyper-V aktif:
@@ -114,33 +107,33 @@ vmconnect localhost Buitenzorg
 
 > **Catatan VHDX:** `make-vm-images` membuat VHDX **dinamis 64 MiB** (whole-MiB,
 > supaya Hyper-V menerimanya — konversi `-O vhdx` telanjang menghasilkan disk
-> 5,47 MiB ganjil yang bisa ditolak, dan qemu build ini tak bisa `resize` vhdx).
-> Ruang lebih tak terpakai — MBR hanya menjelaskan sektor yang dibutuhkan OS.
-> Jaringan opsional (stack OS baru loopback), jadi VM tanpa NIC tetap boot.
-
----
+> 5,47 MiB ganjil yang bisa ditolak Hyper-V, dan build qemu ini tak bisa
+> `resize` vhdx). Ruang lebih tak terpakai — MBR hanya menjelaskan sektor yang
+> dibutuhkan OS. Jaringan opsional (stack OS baru loopback), jadi VM tanpa NIC
+> tetap boot.
 
 ## ❓ Catatan & troubleshooting
 
 - **Harus BIOS, bukan UEFI** — image `-bios.img` boot lewat MBR. (Untuk UEFI di
-  QEMU ada `buitenzorg-uefi.img`; VMware/VirtualBox contoh di atas memakai jalur
+  QEMU ada `buitenzorg-uefi.img`; contoh VMware/VirtualBox di atas memakai jalur
   BIOS yang paling portabel.)
 - **Layar hitam beberapa detik** — kernel merender ke framebuffer; tunggu
-  desktop muncul. Log lengkap ada di serial (file log VMware/VBox).
-- **Tidak boot / "no bootable medium"** — pastikan disk terpasang sebagai
-  **IDE** dan firmware **BIOS**.
-- **Audio** — driver AC'97; pilih kontroler **AC97/ICH AC97** di VM (opsional).
-  Hyper-V tak punya emulasi audio — normal, audio mati di Hyper-V.
-- **Hyper-V VM tak boot / "boot failure"** — pastikan **Generation 1** (bukan
+  desktop. Log lengkap ada di serial (file log VMware/VBox).
+- **Tak boot / "no bootable medium"** — pastikan disk terpasang sebagai **IDE**
+  dan firmware **BIOS**.
+- **Audio** — driver AC'97; pilih kontroler **AC97 / ICH AC97** di VM (opsional).
+  Hyper-V tak punya emulasi audio — audio mati di sana adalah normal.
+- **VM Hyper-V tak boot / "boot failure"** — pastikan **Generation 1** (bukan
   Gen 2); Gen 2 (UEFI) tak akan boot disk MBR ini.
-- **Hyper-V "The system cannot find the file"/format ditolak** — pakai VHDX yang
-  dibuat `make-vm-images` (64 MiB whole-MiB), bukan hasil `qemu-img -O vhdx`
+- **Hyper-V "The system cannot find the file" / format ditolak** — pakai VHDX
+  dari `make-vm-images` (64 MiB whole-MiB), bukan hasil `qemu-img -O vhdx`
   telanjang (5,47 MiB, bisa ditolak Hyper-V).
-- **Re-generate** — setelah rebuild OS, jalankan `make-vm-images` lagi untuk
-  memperbarui `.vmdk`/`.vdi`/`.vhdx`.
+- **Regenerasi** — setelah rebuild OS, jalankan `make-vm-images` lagi untuk
+  memperbarui `.vmdk` / `.vdi` / `.vhdx`.
 
 ---
 
-Mau boot di **komputer fisik** (bukan VM)? Lihat
-**[install-hardware.md](install-hardware.md)** — tulis image ke USB dengan
-`scripts/flash-usb.ps1` / `.sh`.
+Ingin boot **mesin fisik** (bukan VM)? Lihat **[Pasang di Hardware](install-hardware.id.md)**
+— tulis image ke USB dengan `scripts/flash-usb.ps1` / `.sh`.
+
+← [Indeks dokumentasi](README.id.md) · *Buitenzorg OS — dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.*

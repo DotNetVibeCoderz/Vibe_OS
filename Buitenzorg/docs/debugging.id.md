@@ -1,13 +1,13 @@
-# Debugging & Profiling Buitenzorg OS
+# Debugging & Profiling
 
 Dua alat pengembang untuk kernel Buitenzorg (v1.0):
 
-1. **Debugger** — GDB attach ke kernel yang berjalan di QEMU (breakpoint,
+1. **Debugger** — attach GDB ke kernel yang berjalan di QEMU (breakpoint,
    single-step, inspeksi register/memori di ring 0).
 2. **Profiler** — profiler zona ter-instrumentasi berbasis TSC di dalam kernel
-   (ukur di mana siklus CPU dihabiskan, deterministik).
+   (ukur ke mana siklus CPU dihabiskan, deterministik).
 
-> Dibuat oleh **Gravicode Studios**, dipimpin oleh **Kang Fadhil**.
+[English](debugging.md) · **Bahasa Indonesia** · ← [Indeks dokumentasi](README.id.md)
 
 ---
 
@@ -21,21 +21,21 @@ GDB di `tcp:1234`, lalu GDB di-attach memakai **simbol kernel** dari ELF
 
 **Windows:**
 ```powershell
-.\scripts\debug-kernel.ps1            # BIOS image, auto-attach GDB
-.\scripts\debug-kernel.ps1 -Uefi      # UEFI image
-.\scripts\debug-kernel.ps1 -NoAttach  # QEMU paused saja; attach GDB manual
+.\scripts\debug-kernel.ps1            # image BIOS, auto-attach GDB
+.\scripts\debug-kernel.ps1 -Uefi      # image UEFI
+.\scripts\debug-kernel.ps1 -NoAttach  # QEMU ditahan saja; attach GDB sendiri
 ```
 **Linux / macOS:**
 ```bash
-./scripts/debug-kernel.sh             # BIOS image, auto-attach GDB
+./scripts/debug-kernel.sh             # image BIOS, auto-attach GDB
 ./scripts/debug-kernel.sh --uefi
 ./scripts/debug-kernel.sh --no-attach
 ```
 
 Skrip: (1) mencari ELF kernel ber-simbol (release, fallback debug), (2)
-menjalankan QEMU dengan `-gdb tcp::1234 -S` (ditahan), (3) meng-attach GDB
-dengan `scripts/debug-kernel.gdb` + `target remote :1234`. Kalau `gdb` tak ada
-di PATH, skrip tetap menjalankan QEMU dan mencetak perintah attach manual.
+menjalankan QEMU dengan `-gdb tcp::1234 -S` (ditahan), (3) meng-attach GDB dengan
+`scripts/debug-kernel.gdb` + `target remote :1234`. Kalau `gdb` tak ada di PATH,
+skrip tetap menjalankan QEMU dan mencetak perintah attach manual.
 
 Prasyarat: kernel sudah di-build (`build.ps1`/`build.sh`) dan **`gdb`** (atau
 `gdb-multiarch` di Linux) tersedia. QEMU dideteksi otomatis (atau env `QEMU`).
@@ -52,10 +52,10 @@ Prasyarat: kernel sudah di-build (`build.ps1`/`build.sh`) dan **`gdb`** (atau
 (gdb) x/8i $pc             # disassemble 8 instruksi di PC
 ```
 
-`scripts/debug-kernel.gdb` menambah helper:
+`scripts/debug-kernel.gdb` menambah helper ini:
 
 | Perintah | Fungsi |
-|----------|--------|
+|---|---|
 | `bz-break-main` | break di `kernel_main` (tepat setelah handoff bootloader) |
 | `bz-faults` | break di handler page/double/GP fault — berhenti di debugger, bukan dump rodata |
 | `bz-regs` | dump ringkas register umum |
@@ -65,7 +65,7 @@ Simbol Rust ter-mangle (`_RNvCs...8bzkernel11kernel_main`); GDB men-demangle
 otomatis, jadi `break kernel_main` / `break page_fault_handler` tetap jalan.
 
 > **Cara manual** (tanpa skrip): jalankan `QEMU_EXTRA="-s -S"` lewat runner biasa
-> (mis. `cargo run -p bzimage -- --run`), lalu di terminal lain:
+> (mis. `cargo run -p bzimage -- --run`), lalu dari terminal lain:
 > ```
 > gdb -x scripts/debug-kernel.gdb kernel/target/x86_64-unknown-none/release/bzkernel
 > (gdb) target remote :1234
@@ -78,8 +78,6 @@ tracing cepat tanpa GDB, `println!` di kernel muncul di serial — skrip smoke &
 runner sudah mengarahkannya. Ini sering lebih cepat daripada breakpoint untuk
 memverifikasi alur boot.
 
----
-
 ## 📊 Profiler (zona TSC ter-instrumentasi)
 
 Kernel punya profiler zona ringan (`kernel/bzkernel/src/profile.rs`): bungkus
@@ -90,22 +88,22 @@ total.
 
 Karakteristik:
 
-- **Inert saat mati.** `Guard::new` hanya membaca satu atomic ketika profiler
-  off, jadi instrumentasi yang ditinggal di kode **tidak mengganggu timing boot
+- **Inert saat mati.** `Guard::new` hanya membaca satu atomic ketika profiler off,
+  jadi instrumentasi yang ditinggal di kode **tidak mengganggu timing boot
   normal**. Nyalakan dengan `profile::enable()` di sekitar area yang diukur.
 - **Deterministik**, bukan statistik: mengukur siklus wall inklusif sebenarnya
-  dari tiap scope — sebuah run headless bisa meng-assert jumlah panggilan &
-  biaya relatif yang tepat (beda dari sampling profiler).
-- **Single-core / kooperatif.** Registry di balik spin lock (interrupt
-  dimatikan saat lock), aman terhadap timer IRQ; bukan untuk dipanggil dari
-  interrupt handler.
+  dari tiap scope — sebuah run headless bisa meng-assert jumlah panggilan & biaya
+  relatif yang tepat (beda dari sampling profiler).
+- **Single-core / kooperatif.** Registry di balik spin lock (interrupt dimatikan
+  saat lock), aman terhadap timer IRQ; bukan untuk dipanggil dari interrupt
+  handler.
 
 ### Titik instrumentasi bawaan
 
 Sudah dipasang di jalur panas (inert kecuali di-enable):
 
 | Zona | Lokasi |
-|------|--------|
+|---|---|
 | `syscall` | total waktu melayani syscall ring-3 (`dispatch_from_user`) |
 | `wm::compose` | compositor menyusun frame (bagian terdalam `WIN_PRESENT`) |
 | `fb::present` | blit back buffer ke framebuffer |
@@ -148,15 +146,13 @@ fn hot_path() {
 }   // Guard drop di sini mencatat siklus yang berlalu
 ```
 
-Nama zona dibandingkan **per-isi** (bukan pointer), jadi literal sama di call
-site berbeda menyatu ke satu bucket. Maksimum 64 zona berbeda; kelebihannya
-dihitung di `overflow` dan dilaporkan (degradasi berisik, bukan diam-diam).
+Nama zona dibandingkan **per-isi** (bukan pointer), jadi literal sama di call site
+berbeda menyatu ke satu bucket. Maksimum 64 zona berbeda; kelebihannya dihitung di
+`overflow` dan dilaporkan (degradasi berisik, bukan diam-diam).
 
-Batasan: mengukur waktu **inklusif** scope (termasuk anak-anaknya); rekursi
-zona bernama sama akan menghitung ganda. Untuk "self time", pisahkan kerja anak
-ke zona bernama sendiri (seperti `wm::compose` vs `fb::present`).
-
----
+Batasan: mengukur waktu **inklusif** scope (termasuk anak-anaknya); rekursi zona
+bernama sama menghitung ganda. Untuk "self time", pisahkan kerja anak ke zona
+bernama sendiri (seperti `wm::compose` vs `fb::present`).
 
 ## Ringkasan perintah
 
@@ -167,3 +163,7 @@ ke zona bernama sendiri (seperti `wm::compose` vs `fb::present`).
 # Profiler (di shell OS)
 prof self
 ```
+
+---
+
+← [Indeks dokumentasi](README.id.md) · *Buitenzorg OS — dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.*

@@ -6,5 +6,7 @@
     <FluentTheme />
     <!-- The package is "Avalonia.AvaloniaEdit" but the assembly is "AvaloniaEdit". -->
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    <!-- MagicAppGen "Forest at dusk" theme (palette + control styles). -->
+    <StyleInclude Source="avares://MagicAppGen/Styles/AppStyles.axaml" />
   </Application.Styles>
 </Application>

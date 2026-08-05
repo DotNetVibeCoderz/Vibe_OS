@@ -10,6 +10,11 @@ This is a *host-side* developer tool (desktop .NET), not a ring-3 Buitenzorg app
 
 ![status](https://img.shields.io/badge/status-working-brightgreen)
 
+> **Design** — MagicAppGen wears a "Forest at dusk" theme (`Styles/AppStyles.axaml`)
+> that borrows Buitenzorg OS's own identity: green-black chrome, a leaf-green
+> signature accent for primary actions, and the ember of the sunset horizon used
+> sparingly. Jack's presence in the chat header is the one branded moment.
+
 ## Run
 
 ```powershell

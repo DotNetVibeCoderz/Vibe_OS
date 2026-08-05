@@ -24,10 +24,11 @@ namespace Buitenzorg.UI
         public virtual void RenderPopup(Graphics g) { }
         public virtual UIElement PopupHitTest(int px, int py) { return null; }
 
-        // Attached layout properties (used by Grid / Canvas).
+        // Attached layout properties (used by Grid / Canvas / DockPanel).
         public int GridRow, GridCol;
         public int GridRowSpan = 1, GridColSpan = 1;
         public int CanvasLeft, CanvasTop;
+        public int Dock; // used by DockPanel: 0=Left 1=Top 2=Right 3=Bottom
 
         // Input events, routed by UIHost (virtual dispatch works under zerolib).
         public virtual void MouseEnter() { }
@@ -739,6 +740,552 @@ namespace Buitenzorg.UI
             int row = (my - Y) / RowHeight - 1; // -1 for the header
             if (row >= 0 && row < _nrow) SelectedRow = row;
         }
+    }
+
+    /// <summary>Small value-type helpers shared by controls that draw dynamic
+    /// numbers (no managed strings under zerolib — format into a char[] buffer).</summary>
+    public static class UiText
+    {
+        /// <summary>Format a non-negative int into buf (right-to-left), return length.</summary>
+        public static int Int(int v, char[] buf)
+        {
+            if (v < 0) v = 0;
+            int n = 0; char[] tmp = new char[12];
+            if (v == 0) tmp[n++] = '0';
+            while (v > 0) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
+            for (int i = 0; i < n; i++) buf[i] = tmp[n - 1 - i];
+            return n;
+        }
+        /// <summary>Zero-padded int (e.g. 07) into buf, return length.</summary>
+        public static int Int2(int v, char[] buf)
+        {
+            buf[0] = (char)('0' + (v / 10) % 10);
+            buf[1] = (char)('0' + v % 10);
+            return 2;
+        }
+    }
+
+    /// <summary>Docks children to an edge (Left/Top/Right/Bottom via child.Dock);
+    /// the last child fills the remaining space when LastChildFill is set.</summary>
+    public class DockPanel : UIElement
+    {
+        public bool LastChildFill = true;
+        public override void Measure(int aw, int ah)
+        {
+            for (int i = 0; i < ChildCount; i++) Child(i).Measure(aw, ah);
+            DesiredW = Width >= 0 ? Width : aw;
+            DesiredH = Height >= 0 ? Height : ah;
+        }
+        public override void Arrange(int x, int y, int w, int h)
+        {
+            X = x; Y = y; W = w; H = h;
+            int l = x, t = y, r = x + w, b = y + h;
+            int n = ChildCount;
+            for (int i = 0; i < n; i++)
+            {
+                UIElement c = Child(i);
+                bool last = LastChildFill && i == n - 1;
+                if (last) { c.Arrange(l, t, r - l, b - t); continue; }
+                if (c.Dock == 0) { int cw = c.DesiredW; c.Arrange(l, t, cw, b - t); l += cw; }        // Left
+                else if (c.Dock == 2) { int cw = c.DesiredW; c.Arrange(r - cw, t, cw, b - t); r -= cw; } // Right
+                else if (c.Dock == 1) { int chh = c.DesiredH; c.Arrange(l, t, r - l, chh); t += chh; }  // Top
+                else { int chh = c.DesiredH; c.Arrange(l, b - chh, r - l, chh); b -= chh; }             // Bottom
+            }
+        }
+    }
+
+    /// <summary>A titled, bordered container (a caption breaking the top border).</summary>
+    public class GroupBox : UIElement
+    {
+        public string Title;
+        public Font Font;
+        public UIElement Content;
+        public Color BorderColor = new Color(0xFF3A4048);
+        public int Pad = 10;
+        int TitleH => (Font != null ? Font.CharH : 8) + 8;
+        public GroupBox(string title, Font f) { Title = title; Font = f; }
+        public void SetContent(UIElement c) { Content = c; if (c != null) Add(c); }
+        public override void Measure(int aw, int ah)
+        {
+            if (Content != null) Content.Measure(aw - 2 * Pad, ah - TitleH - Pad);
+            DesiredW = Width >= 0 ? Width : (Content != null ? Content.DesiredW + 2 * Pad : aw);
+            DesiredH = Height >= 0 ? Height : (Content != null ? Content.DesiredH + TitleH + Pad : ah);
+        }
+        public override void Arrange(int x, int y, int w, int h)
+        {
+            X = x; Y = y; W = w; H = h;
+            if (Content != null) Content.Arrange(x + Pad, y + TitleH, w - 2 * Pad, h - TitleH - Pad);
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            int th = TitleH;
+            if (Background.A > 0) g.FillRectangle(Background, X, Y + th / 2, W, H - th / 2);
+            // border with a gap for the caption
+            int capW = (Title != null && Font != null ? Font.Measure(Title) : 0) + 8;
+            int top = Y + th / 2;
+            g.DrawLine(BorderColor, X, top, X + 10, top);
+            g.DrawLine(BorderColor, X + 10 + capW, top, X + W - 1, top);
+            g.DrawLine(BorderColor, X, top, X, Y + H - 1);
+            g.DrawLine(BorderColor, X + W - 1, top, X + W - 1, Y + H - 1);
+            g.DrawLine(BorderColor, X, Y + H - 1, X + W - 1, Y + H - 1);
+            if (Title != null && Font != null) g.DrawString(Font, Title, Foreground, X + 14, Y);
+            if (Content != null) Content.Render(g);
+        }
+    }
+
+    /// <summary>Displays a Bitmap with a stretch mode (0=None, 1=Fill, 2=Uniform/fit).</summary>
+    public class Image : UIElement
+    {
+        public Bitmap Source;
+        public int Stretch = 2; // 0 none, 1 fill, 2 uniform
+        public Image(Bitmap src) { Source = src; }
+        public override void Measure(int aw, int ah)
+        {
+            DesiredW = Width >= 0 ? Width : (Source != null ? Source.Width : 0);
+            DesiredH = Height >= 0 ? Height : (Source != null ? Source.Height : 0);
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible || Source == null) return;
+            if (Background.A > 0) g.FillRectangle(Background, X, Y, W, H);
+            if (Stretch == 0) { g.DrawImage(Source, X, Y); return; }
+            int dw = W, dh = H;
+            if (Stretch == 2)
+            {
+                int sw = Source.Width, sh = Source.Height;
+                if (sw > 0 && sh > 0)
+                {
+                    // fit inside W×H preserving aspect ratio
+                    if (W * sh <= H * sw) { dw = W; dh = sh * W / sw; }
+                    else { dh = H; dw = sw * H / sh; }
+                }
+            }
+            int dx = X + (W - dw) / 2, dy = Y + (H - dh) / 2;
+            g.DrawImageScaled(Source, dx, dy, dw, dh);
+        }
+    }
+
+    /// <summary>Base for vector shapes: a stroke + optional fill inside the bounds.</summary>
+    public class Shape : UIElement
+    {
+        public Color Stroke = new Color(0xFFB0B0B0);
+        public Color Fill = Color.Transparent;
+        public int Thickness = 1;
+        public override void Measure(int aw, int ah)
+        {
+            DesiredW = Width >= 0 ? Width : aw;
+            DesiredH = Height >= 0 ? Height : ah;
+        }
+    }
+
+    /// <summary>A (optionally rounded) rectangle.</summary>
+    public class RectShape : Shape
+    {
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            if (CornerRadius > 0)
+            {
+                if (Fill.A > 0) g.FillRoundedRectangle(Fill, X, Y, W, H, CornerRadius);
+                if (Thickness > 0) g.DrawRoundedRectangle(Stroke, X, Y, W, H, CornerRadius);
+            }
+            else
+            {
+                if (Fill.A > 0) g.FillRectangle(Fill, X, Y, W, H);
+                if (Thickness > 0) g.DrawRectangle(Stroke, X, Y, W, H);
+            }
+        }
+    }
+
+    /// <summary>An ellipse filling the element bounds.</summary>
+    public class EllipseShape : Shape
+    {
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            if (Fill.A > 0) g.FillEllipse(Fill, X, Y, W, H);
+            if (Thickness > 0)
+            {
+                // outline: plot the ellipse boundary (no DrawEllipse in Graphics)
+                int cx = X + W / 2, cy = Y + H / 2, rx = W / 2, ry = H / 2;
+                int prevx = 0, prevy = 0;
+                for (int d = 0; d <= 360; d += 6)
+                {
+                    int px = cx + rx * Graphics.CosFx(d) / 256;
+                    int py = cy + ry * Graphics.SinFx(d) / 256;
+                    if (d > 0) g.DrawLine(Stroke, prevx, prevy, px, py, Thickness);
+                    prevx = px; prevy = py;
+                }
+            }
+        }
+    }
+
+    /// <summary>A line from one corner of the bounds to the other (direction by Down).</summary>
+    public class LineShape : Shape
+    {
+        public bool Down = true; // top-left→bottom-right, else bottom-left→top-right
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            if (Down) g.DrawLine(Stroke, X, Y, X + W, Y + H, Thickness);
+            else g.DrawLine(Stroke, X, Y + H, X + W, Y, Thickness);
+        }
+    }
+
+    /// <summary>A closed polygon over a set of points (relative to the element origin).</summary>
+    public class PolygonShape : Shape
+    {
+        int[] _xs, _ys; int _n;
+        /// <summary>Set the vertices (copied); coordinates are relative to X,Y.</summary>
+        public void SetPoints(int[] xs, int[] ys, int n)
+        {
+            _xs = new int[n]; _ys = new int[n]; _n = n;
+            for (int i = 0; i < n; i++) { _xs[i] = xs[i]; _ys[i] = ys[i]; }
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible || _n < 2) return;
+            int[] ax = new int[_n], ay = new int[_n];
+            for (int i = 0; i < _n; i++) { ax[i] = X + _xs[i]; ay[i] = Y + _ys[i]; }
+            if (Fill.A > 0) g.FillPolygon(Fill, ax, ay, _n);
+            if (Thickness > 0)
+                for (int i = 0; i < _n; i++)
+                    g.DrawLine(Stroke, ax[i], ay[i], ax[(i + 1) % _n], ay[(i + 1) % _n], Thickness);
+        }
+    }
+
+    /// <summary>A header that expands/collapses its content on click (▶ / ▼).</summary>
+    public class Expander : UIElement
+    {
+        public string Header;
+        public Font Font;
+        public UIElement Content;
+        public bool Expanded = true;
+        public Color HeaderColor = new Color(0xFF262B33);
+        int HeadH => (Font != null ? Font.CharH : 8) + 12;
+        public Expander(string header, Font f) { Header = header; Font = f; }
+        public void SetContent(UIElement c) { Content = c; if (c != null) Add(c); }
+        public void Toggle() { Expanded = !Expanded; }
+        public override void MouseDown(int mx, int my) { if (my < Y + HeadH) Toggle(); }
+        public override void Measure(int aw, int ah)
+        {
+            if (Content != null) Content.Measure(aw, ah);
+            DesiredW = Width >= 0 ? Width : aw;
+            DesiredH = HeadH + (Expanded && Content != null ? Content.DesiredH : 0);
+        }
+        public override void Arrange(int x, int y, int w, int h)
+        {
+            X = x; Y = y; W = w; H = h;
+            if (Content != null) Content.Arrange(x, y + HeadH, w, h - HeadH);
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            int hh = HeadH;
+            g.FillRoundedRectangle(HeaderColor, X, Y, W, hh, 6);
+            if (Font != null)
+            {
+                g.DrawString(Font, Expanded ? "-" : "+", new Color(0xFF7FD48C), X + 8, Y + 6);
+                if (Header != null) g.DrawString(Font, Header, Foreground, X + 24, Y + 6);
+            }
+            if (Expanded && Content != null) Content.Render(g);
+        }
+        public override UIElement HitTest(int px, int py)
+        {
+            if (!Visible || px < X || px >= X + W || py < Y || py >= Y + H) return null;
+            if (py < Y + HeadH) return this;
+            if (Expanded && Content != null) { UIElement h = Content.HitTest(px, py); if (h != null) return h; }
+            return this;
+        }
+    }
+
+    /// <summary>A semicircular gauge (arc + needle) with a numeric readout.</summary>
+    public class Gauge : UIElement
+    {
+        public int Value, Min = 0, Max = 100;
+        public Font Font;
+        public Color Arc = new Color(0xFF33A048);
+        public Color Needle = new Color(0xFFEBA05B);
+        public Gauge(Font f) { Font = f; }
+        public override void Measure(int aw, int ah)
+        {
+            DesiredW = Width >= 0 ? Width : 160;
+            DesiredH = Height >= 0 ? Height : 100;
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            if (Background.A > 0) g.FillRectangle(Background, X, Y, W, H);
+            int cx = X + W / 2, cy = Y + H - 14;
+            int r = (W < 2 * (H - 20) ? W / 2 : H - 20) - 6; if (r < 8) r = 8;
+            // 180°..0° arc (left to right, over the top)
+            Color track = new Color(0xFF2A2F38);
+            for (int a = 180; a >= 0; a -= 4)
+            {
+                int x0 = cx + Graphics.CosFx(a) * r / 256, y0 = cy - Graphics.SinFx(a) * r / 256;
+                g.FillRectangle(track, x0 - 1, y0 - 1, 3, 3);
+            }
+            int range = Max - Min; if (range <= 0) range = 1;
+            int v = Value < Min ? Min : (Value > Max ? Max : Value);
+            int frac = (v - Min) * 180 / range;      // 0..180 of fill
+            for (int a = 180; a >= 180 - frac; a -= 4)
+            {
+                int x0 = cx + Graphics.CosFx(a) * r / 256, y0 = cy - Graphics.SinFx(a) * r / 256;
+                g.FillRectangle(Arc, x0 - 1, y0 - 1, 3, 3);
+            }
+            int na = 180 - frac;
+            int nx = cx + Graphics.CosFx(na) * (r - 6) / 256, ny = cy - Graphics.SinFx(na) * (r - 6) / 256;
+            g.DrawLine(Needle, cx, cy, nx, ny, 2);
+            g.FillCircleAA(new Color(0xFFD0D0D0), cx, cy, 3);
+            if (Font != null)
+            {
+                char[] buf = new char[12]; int n = UiText.Int(v, buf);
+                g.DrawChars(Font, buf, n, Foreground, cx - n * Font.CharW / 2, Y + 4);
+            }
+        }
+    }
+
+    /// <summary>A bar or line chart over an int[] series (value types only).</summary>
+    public class Chart : UIElement
+    {
+        int[] _vals; int _n;
+        public bool AsLine = false;
+        public Color BarColor = new Color(0xFF5FD46E);
+        public Color AxisColor = new Color(0xFF3A4048);
+        public Color Fill = new Color(0xFF161A20);
+        public void SetData(int[] vals, int n)
+        {
+            _vals = new int[n]; _n = n;
+            for (int i = 0; i < n; i++) _vals[i] = vals[i];
+        }
+        public override void Measure(int aw, int ah)
+        {
+            DesiredW = Width >= 0 ? Width : aw;
+            DesiredH = Height >= 0 ? Height : 120;
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            g.FillRectangle(Fill, X, Y, W, H);
+            g.DrawRectangle(AxisColor, X, Y, W, H);
+            if (_vals == null || _n <= 0) return;
+            int max = 1;
+            for (int i = 0; i < _n; i++) if (_vals[i] > max) max = _vals[i];
+            int plotH = H - 12, y0 = Y + H - 6;
+            if (AsLine)
+            {
+                int px = 0, py = 0;
+                for (int i = 0; i < _n; i++)
+                {
+                    int cx = X + 6 + (_n > 1 ? i * (W - 12) / (_n - 1) : 0);
+                    int cy = y0 - _vals[i] * plotH / max;
+                    if (i > 0) g.DrawLine(BarColor, px, py, cx, cy, 2);
+                    g.FillCircle(BarColor, cx, cy, 2);
+                    px = cx; py = cy;
+                }
+            }
+            else
+            {
+                int slot = (W - 12) / _n; int bw = slot - 4; if (bw < 2) bw = 2;
+                for (int i = 0; i < _n; i++)
+                {
+                    int bh = _vals[i] * plotH / max;
+                    int bx = X + 6 + i * slot;
+                    g.FillRoundedRectangle(BarColor, bx, y0 - bh, bw, bh, 3);
+                }
+            }
+        }
+    }
+
+    /// <summary>A month calendar grid with a selectable day.</summary>
+    public class Calendar : UIElement
+    {
+        public int Year = 2026, Month = 8; // 1..12
+        public int Day = 1;                 // selected
+        public int FirstDow = 6;            // day-of-week of the 1st (0=Sun)
+        public Font Font;
+        public Color HeaderColor = new Color(0xFF243024);
+        public Color SelColor = new Color(0xFF33A048);
+        public Calendar(Font f) { Font = f; }
+        int CellW => W / 7;
+        int CellH => (H - HeadH) / 6;
+        int HeadH => (Font != null ? Font.CharH : 8) + 12;
+        static int DaysIn(int y, int m)
+        {
+            if (m == 2) return ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0) ? 29 : 28;
+            if (m == 4 || m == 6 || m == 9 || m == 11) return 30;
+            return 31;
+        }
+        public override void Measure(int aw, int ah)
+        {
+            DesiredW = Width >= 0 ? Width : 224;
+            DesiredH = Height >= 0 ? Height : 200;
+        }
+        public override void MouseDown(int mx, int my)
+        {
+            if (my < Y + HeadH) return;
+            int col = (mx - X) / CellW, row = (my - Y - HeadH) / CellH;
+            int idx = row * 7 + col - FirstDow + 1;
+            if (idx >= 1 && idx <= DaysIn(Year, Month)) Day = idx;
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            g.FillRoundedRectangle(new Color(0xFF161A20), X, Y, W, H, 6);
+            g.FillRectangle(HeaderColor, X, Y, W, HeadH);
+            if (Font != null)
+            {
+                g.DrawString(Font, MonthName(Month), Foreground, X + 8, Y + 6);
+                char[] yb = new char[6]; int yl = UiText.Int(Year, yb);
+                g.DrawChars(Font, yb, yl, Foreground, X + W - yl * Font.CharW - 8, Y + 6);
+            }
+            int cw = CellW, chh = CellH, days = DaysIn(Year, Month);
+            for (int d = 1; d <= days; d++)
+            {
+                int cell = FirstDow + d - 1;
+                int col = cell % 7, row = cell / 7;
+                int cx = X + col * cw, cy = Y + HeadH + row * chh;
+                if (d == Day) g.FillRoundedRectangle(SelColor, cx + 2, cy + 2, cw - 4, chh - 4, 4);
+                if (Font != null)
+                {
+                    char[] db = new char[4]; int dl = UiText.Int(d, db);
+                    Color fc = d == Day ? new Color(0xFF0E1710) : Foreground;
+                    g.DrawChars(Font, db, dl, fc, cx + (cw - dl * Font.CharW) / 2, cy + (chh - Font.CharH) / 2);
+                }
+            }
+        }
+        static string MonthName(int m)
+        {
+            if (m == 1) return "Jan"; if (m == 2) return "Feb"; if (m == 3) return "Mar";
+            if (m == 4) return "Apr"; if (m == 5) return "May"; if (m == 6) return "Jun";
+            if (m == 7) return "Jul"; if (m == 8) return "Aug"; if (m == 9) return "Sep";
+            if (m == 10) return "Oct"; if (m == 11) return "Nov"; return "Dec";
+        }
+    }
+
+    /// <summary>Flowing rich text: a sequence of colored runs, word-wrapped.</summary>
+    public class TextFlow : UIElement
+    {
+        sealed class Run { public string Text; public Color Color; public Run Next; }
+        Run _head, _tail;
+        public Font Font;
+        public int LineGap = 2;
+        public TextFlow(Font f) { Font = f; }
+        public void Append(string text, Color color)
+        {
+            Run r = new Run(); r.Text = text; r.Color = color;
+            if (_tail == null) { _head = r; _tail = r; } else { _tail.Next = r; _tail = r; }
+        }
+        public override void Measure(int aw, int ah)
+        {
+            DesiredW = Width >= 0 ? Width : aw;
+            DesiredH = Height >= 0 ? Height : Layout(aw, null);
+        }
+        public override void Arrange(int x, int y, int w, int h) { X = x; Y = y; W = w; H = h; }
+        public override void Render(Graphics g)
+        {
+            if (!Visible) return;
+            if (Background.A > 0) g.FillRectangle(Background, X, Y, W, H);
+            Layout(W, g);
+        }
+        // Walks runs word by word, wrapping at width. If g!=null, draws; returns total height.
+        int Layout(int w, Graphics g)
+        {
+            if (Font == null) return 0;
+            int cw = Font.CharW, lh = Font.CharH + LineGap;
+            int px = 0, py = 0;
+            for (Run r = _head; r != null; r = r.Next)
+            {
+                string s = r.Text; int i = 0, len = s.Length;
+                while (i < len)
+                {
+                    // find next word (skip leading spaces, handle newline)
+                    while (i < len && s[i] == ' ') { px += cw; i++; }
+                    if (i < len && s[i] == '\n') { px = 0; py += lh; i++; continue; }
+                    int ws = i; while (i < len && s[i] != ' ' && s[i] != '\n') i++;
+                    int wlen = i - ws;
+                    if (wlen == 0) continue;
+                    if (px + wlen * cw > w && px > 0) { px = 0; py += lh; }
+                    if (g != null)
+                    {
+                        char[] cbuf = new char[wlen];
+                        for (int k = 0; k < wlen; k++) cbuf[k] = s[ws + k];
+                        g.DrawChars(Font, cbuf, wlen, r.Color, X + px, Y + py);
+                    }
+                    px += wlen * cw;
+                }
+            }
+            return py + lh;
+        }
+    }
+
+    /// <summary>A modal dialog overlay: dims the screen and centers a box with a
+    /// title, message, and OK/Cancel buttons. Add it to the root and toggle Show.</summary>
+    public class MessageBox : UIElement
+    {
+        public string Title, Message;
+        public Font Font;
+        public bool Shown = false;
+        public bool HasCancel = true;
+        public int Result = -1; // 0=OK, 1=Cancel, -1=none
+        Button _ok, _cancel;
+        public MessageBox(Font f) { Font = f; Visible = false; }
+        public void Show(string title, string message)
+        {
+            Title = title; Message = message; Shown = true; Visible = true; Result = -1;
+        }
+        void Ensure()
+        {
+            if (_ok == null)
+            {
+                _ok = new Button("OK", Font); _ok.Tag = 0;
+                _cancel = new Button("Cancel", Font); _cancel.Tag = 1;
+            }
+        }
+        // Geometry of the centered box.
+        public int BoxW => 300; public int BoxH => 150;
+        public int BoxX => X + (W - BoxW) / 2;
+        public int BoxY => Y + (H - BoxH) / 2;
+        // Arrange the buttons from the current bounds — called by both Render and
+        // MouseDown so hit-testing works even before the first paint.
+        void LayoutButtons()
+        {
+            Ensure();
+            int bx = BoxX, by = BoxY, btnY = by + BoxH - 40, btnW = 80, btnH = 26;
+            _ok.Arrange(bx + BoxW - btnW - 16, btnY, btnW, btnH);
+            _cancel.Arrange(bx + BoxW - 2 * btnW - 26, btnY, btnW, btnH);
+        }
+        public override void Render(Graphics g)
+        {
+            if (!Shown) return;
+            LayoutButtons();
+            g.FillRectangle(new Color(0xA0000000), X, Y, W, H); // dim backdrop
+            int bx = BoxX, by = BoxY;
+            g.DrawShadow(bx, by, BoxW, BoxH, 10, 8, 90);
+            g.FillRoundedRectangle(new Color(0xFF20252E), bx, by, BoxW, BoxH, 10);
+            g.DrawRoundedRectangle(new Color(0xFF3A4048), bx, by, BoxW, BoxH, 10);
+            if (Font != null)
+            {
+                if (Title != null) g.DrawString(Font, Title, new Color(0xFF7FD48C), bx + 16, by + 14);
+                if (Message != null) g.DrawString(Font, Message, Foreground, bx + 16, by + 44);
+            }
+            _ok.Render(g);
+            if (HasCancel) _cancel.Render(g);
+        }
+        public override UIElement HitTest(int px, int py)
+        {
+            if (!Shown) return null;
+            return this; // modal: swallow all input
+        }
+        public override void MouseDown(int mx, int my)
+        {
+            if (!Shown) return;
+            LayoutButtons();
+            if (_ok.HitTest(mx, my) != null) { Result = 0; Close(); }
+            else if (HasCancel && _cancel.HitTest(mx, my) != null) { Result = 1; Close(); }
+        }
+        void Close() { Shown = false; Visible = false; }
     }
 
     /// <summary>Hosts a UI tree: runs layout, renders to a Bitmap, blits to a window.</summary>

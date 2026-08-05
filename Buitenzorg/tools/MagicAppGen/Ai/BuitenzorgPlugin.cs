@@ -64,9 +64,22 @@ public sealed class BuitenzorgPlugin
                 "  UIElement fields: Width/Height (-1 = auto), DesiredW/DesiredH, X/Y/W/H, Visible, Background\n" +
                 "  override void Measure(int availW, int availH) and void Render(Graphics g)\n" +
                 "  Panels: StackPanel (.Spacing .Padding .Add(e)), Grid (.AddColumn/.AddRow(-1 = star), .Add(e,row,col)), Canvas, Border\n" +
+                "          DockPanel (set child.Dock = 0/1/2/3 for Left/Top/Right/Bottom; .LastChildFill fills the rest)\n" +
+                "          GroupBox(string title, Font) .SetContent(e) — a titled bordered frame\n" +
                 "  Controls: new TextBlock(string, Font), new Button(string, Font) (.Tag int), new CheckBox(string, Font),\n" +
                 "            ProgressBar, Slider, RadioButton+RadioGroup, ListBox, TextBox, Menu, ComboBox,\n" +
                 "            TabControl, TreeView, ScrollViewer, DataGrid\n" +
+                "  v0.16 additions (modelled on TinyCLR): \n" +
+                "    new Image(Bitmap) .Stretch (0 none/1 fill/2 uniform) — draws a bitmap fit-to-box\n" +
+                "    new Expander(string header, Font) .SetContent(e) .Expanded — collapsible section (click header toggles)\n" +
+                "    new Gauge(Font) .Value/.Min/.Max — semicircular dial + numeric readout\n" +
+                "    new Chart() .SetData(int[] vals, int n) .AsLine (bars default) — bar/line chart over a value series\n" +
+                "    new Calendar(Font) .Year/.Month/.Day/.FirstDow — month grid, click selects a day\n" +
+                "    new TextFlow(Font) .Append(string, Color) — word-wrapped multi-color rich text (no live numbers)\n" +
+                "    new MessageBox(Font) .Show(title, msg); modal overlay, .Result (0=OK 1=Cancel) after a click, auto-closes\n" +
+                "    Shapes (Stroke/Fill/Thickness, use Width/Height for size): RectShape (.CornerRadius),\n" +
+                "      EllipseShape, LineShape (.Down), PolygonShape .SetPoints(int[] xs, int[] ys, int n) (coords relative to X,Y)\n" +
+                "    UiText.Int(int, char[])->len and UiText.Int2(int, char[])->len format numbers into a char[] (no strings)\n" +
                 "  new UIHost(string title, int w, int h); host.Root = e; host.Layout(); host.Render(Color clear);\n" +
                 "  host.Present(); host.Mouse(int x, int y, bool down) routes hover/click/drag.\n" +
                 "  BUTTON CLICKS: Button has NO event/callback (no OnClick, no delegate - a delegate would be a\n" +
@@ -266,6 +279,115 @@ public sealed class BuitenzorgPlugin
             return "COMPILE ERRORS (fix these and call CompileCheck again):\n" + tail;
         }
         catch (Exception ex) { return $"error: {ex.Message}"; }
+    }
+
+    [KernelFunction, Description(
+        "Compile AND DEPLOY a ring-3 C# app so the OS can run it. Builds <csFile> (+ the Buitenzorg " +
+        "library sources detected from its usings) with bflat --stdlib:zero, links it with the bzstart " +
+        "shim into a static ELF, and installs it as userland/hello-csharp/userapp.elf — which the kernel " +
+        "image embeds as /disk/USERAPP.ELF. After this succeeds, call BuildApp() to rebuild the image, then " +
+        "in the Buitenzorg shell launch it with `run myapp`. Returns 'OK: deployed' or the build errors. " +
+        "Call CompileCheck first; only Deploy once it compiles.")]
+    public string DeployApp([Description("path to the app's main .cs file")] string csFile)
+    {
+        try
+        {
+            if (!File.Exists(csFile)) return $"error: {csFile} not found";
+            var bflat = Path.Combine(Root, "tools", "bflat", OperatingSystem.IsWindows() ? "bflat.exe" : "bflat");
+            if (!File.Exists(bflat)) return "error: bflat not found under <repo>/tools/bflat (set Buitenzorg.Root in Settings)";
+            var userland = Path.Combine(Root, "userland", "hello-csharp");
+            var lld = FindRustLld();
+            if (lld is null) return "error: rust-lld not found (install the rust nightly toolchain)";
+
+            // Ensure the freestanding startup/PAL shim object exists.
+            var bzstartO = Path.Combine(userland, "bzstart.o");
+            if (!File.Exists(bzstartO))
+            {
+                var (rc, ro) = RunTool("rustc", "+nightly --edition 2021 --crate-type staticlib --emit obj " +
+                    $"--target x86_64-unknown-none -C panic=abort -C opt-level=2 -o \"{bzstartO}\" \"{Path.Combine(userland, "bzstart.rs")}\"",
+                    userland);
+                if (rc != 0) return "error building bzstart.o:\n" + ro;
+            }
+
+            // Library sources this app pulls in (same detection as CompileCheck).
+            var src = File.ReadAllText(csFile);
+            var sources = new System.Collections.Generic.List<string> { Path.GetFullPath(csFile) };
+            void Need(string lib, params string[] files)
+            {
+                if (src.Contains(lib))
+                    foreach (var f in files)
+                    {
+                        var p = Path.Combine(userland, f);
+                        if (File.Exists(p) && !sources.Contains(Path.GetFullPath(p))) sources.Add(Path.GetFullPath(p));
+                    }
+            }
+            Need("Buitenzorg.Drawing", "bzgfx.cs");
+            Need("Buitenzorg.UI", "bzui.cs", "bzgfx.cs");
+            Need("Buitenzorg.Audio", "bzaudio.cs");
+            Need("using Buitenzorg;", "bzbcl.cs", "bzbcl2.cs");
+
+            var obj = Path.Combine(userland, "userapp.o");
+            var elf = Path.Combine(userland, "userapp.elf");
+            var cargs = "build " + string.Join(' ', sources.Select(s => $"\"{s}\"")) +
+                        " --stdlib:zero --os:linux --arch:x64 -c -Os --no-debug-info " +
+                        $"--no-reflection --no-stacktrace-data -o \"{obj}\"";
+            _log($"[buitenzorg] deploy: bflat {sources.Count} source(s)");
+            var (cc, co) = RunTool(bflat, cargs, userland);
+            if (cc != 0) return "COMPILE ERRORS (fix, then CompileCheck + DeployApp again):\n" + Tail(co);
+
+            var largs = $"-flavor gnu -o \"{elf}\" -T \"{Path.Combine(userland, "user.ld")}\" " +
+                        $"--static --no-dynamic-linker -e _start \"{obj}\" \"{bzstartO}\"";
+            _log("[buitenzorg] deploy: rust-lld link -> userapp.elf");
+            var (lc, lo) = RunTool(lld, largs, userland);
+            if (lc != 0) return "LINK ERRORS:\n" + Tail(lo);
+
+            _log("[buitenzorg] deploy: OK (userapp.elf)");
+            return "OK: deployed userapp.elf. Next: call BuildApp() to rebuild the image, then in the OS shell run: run myapp";
+        }
+        catch (Exception ex) { return $"error: {ex.Message}"; }
+    }
+
+    static string Tail(string s) => s.Length > 2000 ? s[^2000..] : s;
+
+    // Locate rust-lld inside the installed rustup toolchains (glob, cross-OS).
+    static string? FindRustLld()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var toolchains = Path.Combine(home, ".rustup", "toolchains");
+        if (!Directory.Exists(toolchains)) return null;
+        var name = OperatingSystem.IsWindows() ? "rust-lld.exe" : "rust-lld";
+        foreach (var tc in Directory.GetDirectories(toolchains))
+        {
+            try
+            {
+                var hit = Directory.GetFiles(tc, name, SearchOption.AllDirectories).FirstOrDefault();
+                if (hit != null) return hit;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    // Run a build tool, draining both pipes so a full buffer can't deadlock.
+    (int code, string output) RunTool(string file, string args, string cwd)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = file,
+            Arguments = args,
+            WorkingDirectory = cwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi)!;
+        var outTask = proc.StandardOutput.ReadToEndAsync();
+        var errTask = proc.StandardError.ReadToEndAsync();
+        bool exited = proc.WaitForExit(180_000);
+        var diag = ((errTask.GetAwaiter().GetResult() ?? "") + "\n" +
+                    (outTask.GetAwaiter().GetResult() ?? "")).Trim();
+        return (exited ? proc.ExitCode : -1, diag);
     }
 
     [KernelFunction, Description("Build the Buitenzorg OS image (runs scripts/build.ps1 in the repo root). Returns the tail of the build output.")]

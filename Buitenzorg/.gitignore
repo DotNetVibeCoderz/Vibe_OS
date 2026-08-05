@@ -33,3 +33,6 @@ tools/MagicAppGen/obj/
 *.swp
 Thumbs.db
 .DS_Store
+
+# Local secrets — API keys for LLM/testing. NEVER commit.
+testkey.txt

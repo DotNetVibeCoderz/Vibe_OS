@@ -1,0 +1,26 @@
+{
+  // Buitenzorg app build tasks. Ctrl+Shift+B runs the default (Build & Deploy).
+  // Requires the repo's tools/bflat + rust nightly (scripts/quickstart).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Buitenzorg: Build & Deploy",
+      "detail": "Compile app.cs -> userapp.elf and deploy it as /disk/USERAPP.ELF",
+      "type": "shell",
+      "group": { "kind": "build", "isDefault": true },
+      "windows": { "command": "pwsh", "args": ["-File", "${workspaceFolder}/build.ps1"] },
+      "linux":   { "command": "bash", "args": ["${workspaceFolder}/build.sh"] },
+      "osx":     { "command": "bash", "args": ["${workspaceFolder}/build.sh"] },
+      "problemMatcher": []
+    },
+    {
+      "label": "Buitenzorg: Build, Deploy & Run",
+      "detail": "Build + deploy, then rebuild the image and boot QEMU (type `run myapp`)",
+      "type": "shell",
+      "windows": { "command": "pwsh", "args": ["-File", "${workspaceFolder}/build.ps1", "-Run"] },
+      "linux":   { "command": "bash", "args": ["${workspaceFolder}/build.sh", "--run"] },
+      "osx":     { "command": "bash", "args": ["${workspaceFolder}/build.sh", "--run"] },
+      "problemMatcher": []
+    }
+  ]
+}

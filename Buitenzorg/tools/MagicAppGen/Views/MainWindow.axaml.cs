@@ -65,26 +65,40 @@ public partial class MainWindow : Window
     };
 
     // ---- chat ---------------------------------------------------------------
+    // Bubble palette matches the "Forest at dusk" theme: the user speaks in a
+    // deep leaf-green, Jack replies on a mossy card, system notes are a quiet
+    // ember whisper.
     TextBlock AddBubble(string role, string text)
     {
-        var (bg, fg, align) = role switch
+        var (bg, fg, border, align, radius) = role switch
         {
-            "user" => (Color.Parse("#2A4D6E"), Colors.White, HorizontalAlignment.Right),
-            "assistant" => (Color.Parse("#2C2F3A"), Color.Parse("#E6E6E6"), HorizontalAlignment.Left),
-            _ => (Color.Parse("#1F2733"), Color.Parse("#9AD0FF"), HorizontalAlignment.Left),
+            "user" => (Color.Parse("#1E3A24"), Color.Parse("#EAF1EB"), Color.Parse("#33A048"),
+                       HorizontalAlignment.Right, new Avalonia.CornerRadius(12, 12, 3, 12)),
+            "assistant" => (Color.Parse("#1C251E"), Color.Parse("#EAF1EB"), Color.Parse("#2C3A30"),
+                       HorizontalAlignment.Left, new Avalonia.CornerRadius(12, 12, 12, 3)),
+            _ => (Color.Parse("#171C16"), Color.Parse("#EBA05B"), Color.Parse("#2C3A30"),
+                       HorizontalAlignment.Left, new Avalonia.CornerRadius(9)),
         };
-        var tb = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(fg) };
-        var border = new Border
+        var tb = new TextBlock
+        {
+            Text = text,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(fg),
+            FontSize = 13,
+            LineHeight = 19,
+        };
+        var bubble = new Border
         {
             Background = new SolidColorBrush(bg),
-            CornerRadius = new Avalonia.CornerRadius(8),
-            Padding = new Avalonia.Thickness(10, 6),
-            Margin = new Avalonia.Thickness(0, 2),
+            BorderBrush = new SolidColorBrush(border),
+            BorderThickness = new Avalonia.Thickness(1),
+            CornerRadius = radius,
+            Padding = new Avalonia.Thickness(12, 8),
             HorizontalAlignment = align,
             MaxWidth = 320,
             Child = tb,
         };
-        ChatList.Children.Add(border);
+        ChatList.Children.Add(bubble);
         Dispatcher.UIThread.Post(() => ChatScroll.ScrollToEnd(), DispatcherPriority.Background);
         return tb;
     }
@@ -101,7 +115,7 @@ public partial class MainWindow : Window
         AddBubble("user", shown);
         var reply = AddBubble("assistant", "");
         var img = _attachBytes; var mime = _attachMime;
-        _attachBytes = null; _attachMime = null; AttachInfo.Text = "";
+        _attachBytes = null; _attachMime = null; AttachInfo.Text = ""; AttachInfo.IsVisible = false;
 
         _cts = new CancellationTokenSource();
         try
@@ -153,7 +167,8 @@ public partial class MainWindow : Window
         _attachBytes = ms.ToArray();
         _attachMime = f.Name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)
             ? "image/jpeg" : "image/png";
-        AttachInfo.Text = $"Attached: {f.Name}";
+        AttachInfo.Text = $"＋ {f.Name}";
+        AttachInfo.IsVisible = true;
     }
 
     // ---- provider / language ------------------------------------------------

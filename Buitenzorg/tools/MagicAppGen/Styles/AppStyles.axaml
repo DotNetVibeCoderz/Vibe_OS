@@ -1,0 +1,205 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    MagicAppGen "Forest at dusk" theme. Borrows Buitenzorg OS's own identity:
+    green-black chrome, a leaf-green signature accent, and the ember of the
+    sunset horizon used sparingly. Palette and control styles live here so every
+    surface stays cohesive.
+  -->
+  <Styles.Resources>
+    <!-- Surfaces -->
+    <Color x:Key="VoidColor">#101512</Color>
+    <SolidColorBrush x:Key="Void" Color="#101512" />
+    <SolidColorBrush x:Key="Bark" Color="#151C17" />
+    <SolidColorBrush x:Key="Moss" Color="#1C251E" />
+    <SolidColorBrush x:Key="MossHi" Color="#243024" />
+    <SolidColorBrush x:Key="Ridge" Color="#2C3A30" />
+    <!-- Accents -->
+    <Color x:Key="LeafColor">#5FD46E</Color>
+    <SolidColorBrush x:Key="Leaf" Color="#5FD46E" />
+    <SolidColorBrush x:Key="LeafDeep" Color="#33A048" />
+    <SolidColorBrush x:Key="Ember" Color="#EBA05B" />
+    <!-- Text -->
+    <SolidColorBrush x:Key="Mist" Color="#EAF1EB" />
+    <SolidColorBrush x:Key="Sage" Color="#92A899" />
+    <SolidColorBrush x:Key="Fog" Color="#62786B" />
+
+    <!-- Signature gradient: forest floor rising into a faint dusk ember. -->
+    <LinearGradientBrush x:Key="ForgeGlow" StartPoint="0%,0%" EndPoint="100%,140%">
+      <GradientStop Offset="0" Color="#243024" />
+      <GradientStop Offset="0.55" Color="#1B241D" />
+      <GradientStop Offset="1" Color="#2A2018" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="LeafFill" StartPoint="0%,0%" EndPoint="0%,100%">
+      <GradientStop Offset="0" Color="#6FE07C" />
+      <GradientStop Offset="1" Color="#3FB055" />
+    </LinearGradientBrush>
+  </Styles.Resources>
+
+  <!-- ===== Menu ===== -->
+  <Style Selector="Menu">
+    <Setter Property="Background" Value="{StaticResource Void}" />
+    <Setter Property="Padding" Value="4,2" />
+  </Style>
+  <Style Selector="Menu > MenuItem">
+    <Setter Property="Foreground" Value="{StaticResource Sage}" />
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+  <Style Selector="Menu > MenuItem:selected">
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+  </Style>
+  <Style Selector="MenuItem">
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+  </Style>
+
+  <!-- ===== Buttons ===== -->
+  <!-- Quiet default: a subtle mossy chip. -->
+  <Style Selector="Button">
+    <Setter Property="Background" Value="{StaticResource Moss}" />
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Ridge}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="7" />
+    <Setter Property="Padding" Value="12,7" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+  <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource MossHi}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Leaf}" />
+  </Style>
+  <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource Bark}" />
+  </Style>
+
+  <!-- Primary action: the leaf. Used once or twice, never everywhere. -->
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{StaticResource LeafFill}" />
+    <Setter Property="Foreground" Value="{StaticResource Void}" />
+    <Setter Property="BorderBrush" Value="{StaticResource LeafDeep}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource Leaf}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Leaf}" />
+  </Style>
+  <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource LeafDeep}" />
+  </Style>
+
+  <!-- Ghost: toolbar commands, no chrome until hovered. -->
+  <Style Selector="Button.ghost">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+    <Setter Property="Padding" Value="11,6" />
+  </Style>
+  <Style Selector="Button.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource Moss}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Ridge}" />
+  </Style>
+
+  <!-- Icon-only, circular. -->
+  <Style Selector="Button.icon">
+    <Setter Property="Padding" Value="9" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Background" Value="{StaticResource Moss}" />
+  </Style>
+
+  <!-- ===== TextBox ===== -->
+  <Style Selector="TextBox">
+    <Setter Property="Background" Value="{StaticResource Bark}" />
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+    <Setter Property="CaretBrush" Value="{StaticResource Leaf}" />
+    <Setter Property="SelectionBrush" Value="#3F5FD46E" />
+    <Setter Property="CornerRadius" Value="7" />
+    <Setter Property="Padding" Value="10,8" />
+  </Style>
+  <Style Selector="TextBox /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource Bark}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Ridge}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="#3E5244" />
+  </Style>
+  <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="{StaticResource Leaf}" />
+  </Style>
+
+  <!-- Bare: borderless, for embedding inside a composer card. -->
+  <Style Selector="TextBox.bare">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="TextBox.bare /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+  <Style Selector="TextBox.bare:focus /template/ Border#PART_BorderElement">
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <!-- ===== ComboBox ===== -->
+  <Style Selector="ComboBox">
+    <Setter Property="Background" Value="{StaticResource Moss}" />
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Ridge}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="7" />
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+  <Style Selector="ComboBox:pointerover /template/ Border#Background">
+    <Setter Property="BorderBrush" Value="{StaticResource Leaf}" />
+  </Style>
+
+  <!-- ===== ListBox ===== -->
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="{StaticResource Bark}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Ridge}" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="8,6" />
+  </Style>
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource Moss}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#1E3A24" />
+  </Style>
+  <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#254A2C" />
+  </Style>
+
+  <!-- ===== CheckBox ===== -->
+  <Style Selector="CheckBox">
+    <Setter Property="Foreground" Value="{StaticResource Sage}" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+
+  <!-- ===== GridSplitter ===== -->
+  <Style Selector="GridSplitter">
+    <Setter Property="Background" Value="{StaticResource Void}" />
+  </Style>
+  <Style Selector="GridSplitter:pointerover">
+    <Setter Property="Background" Value="{StaticResource LeafDeep}" />
+  </Style>
+
+  <!-- ===== ScrollViewer / ScrollBar tint ===== -->
+  <Style Selector="ScrollBar">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+  <!-- ===== ToolTip ===== -->
+  <Style Selector="ToolTip">
+    <Setter Property="Background" Value="{StaticResource Moss}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Ridge}" />
+    <Setter Property="Foreground" Value="{StaticResource Mist}" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+</Styles>

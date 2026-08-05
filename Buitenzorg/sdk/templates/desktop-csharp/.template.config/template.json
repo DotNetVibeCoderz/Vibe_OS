@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Gravicode Studios",
+  "classifications": ["Buitenzorg", "Desktop", "UI"],
+  "identity": "Buitenzorg.DesktopApp.CSharp",
+  "name": "Buitenzorg Desktop App (C#)",
+  "shortName": "bzapp",
+  "description": "A Buitenzorg OS desktop app built on the Buitenzorg.UI toolkit, with build/deploy scripts and VS Code tasks for direct build-run-debug.",
+  "tags": { "language": "C#", "type": "item" },
+  "sourceName": "MyApp",
+  "preferNameDirectory": true,
+  "symbols": {
+    "AppName": {
+      "type": "parameter",
+      "datatype": "text",
+      "replaces": "MyApp",
+      "defaultValue": "MyApp",
+      "description": "The application name used in app.manifest."
+    }
+  }
+}

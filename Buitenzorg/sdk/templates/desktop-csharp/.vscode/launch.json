@@ -1,10 +1,22 @@
 {
-  // Buitenzorg SDK for VS Code — build the app and run it in QEMU.
-  // Requires the "Buitenzorg SDK" extension (sdk/vscode-extension).
+  // F5 launches the app. "Deploy & Run" builds the ELF, rebuilds the image and
+  // boots QEMU — type `run myapp` at the OS prompt. "Debug Kernel" needs the
+  // Buitenzorg SDK extension (sdk/vscode-extension): it boots QEMU paused with a
+  // GDB server on :1234 for kernel-level debugging. Managed-app breakpoint
+  // debugging (DAP) is future work; use serial `Console.WriteLine` for now.
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Buitenzorg: Build & Run in QEMU",
+      "name": "Buitenzorg: Deploy & Run",
+      "type": "buitenzorg",
+      "request": "launch",
+      "program": "${workspaceFolder}/app.cs",
+      "manifest": "${workspaceFolder}/app.manifest",
+      "media": "ide",
+      "preLaunchTask": "Buitenzorg: Build, Deploy & Run"
+    },
+    {
+      "name": "Buitenzorg: Debug Kernel (QEMU + GDB)",
       "type": "buitenzorg",
       "request": "launch",
       "program": "${workspaceFolder}/app.cs",
