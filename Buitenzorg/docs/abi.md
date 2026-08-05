@@ -1,205 +1,222 @@
-# Syscall ABI v1 — Kontrak Rust ↔ C#
+# Syscall ABI v1 — the Rust ↔ C# Contract
 
-Sumber kebenaran: [`kernel/abi/src/lib.rs`](../kernel/abi/src/lib.rs) (`bz-abi`).
-Mirror C#: [`runtime/Buitenzorg.Runtime/Sys/`](../runtime/Buitenzorg.Runtime/Sys/).
-Keduanya dijaga test kontrak identik (`cargo test -p bz-abi` ↔ `AbiContractTests.cs`).
+Source of truth: [`kernel/abi/src/lib.rs`](../kernel/abi/src/lib.rs) (`bz-abi`).
+C# mirror: [`runtime/Buitenzorg.Runtime/Sys/`](../runtime/Buitenzorg.Runtime/Sys/).
+Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` ↔
+`AbiContractTests.cs`).
 
-## Aturan (requirements.md §4)
+**English** · [Bahasa Indonesia](abi.id.md) · ← [Documentation index](README.md)
 
-1. **C ABI saja** — `extern "C"` + P/Invoke (`[LibraryImport("bzsys")]`).
-2. **Marshalling minimal** — hanya primitif, pointer, struct `#[repr(C)]` /
-   `[StructLayout(LayoutKind.Sequential)]`.
-3. **Nomor stabil** — append-only; tidak pernah dinomori ulang setelah rilis.
-4. **Zero-copy** — data besar (framebuffer, file, tensor) lewat shared memory.
-5. **GC-aware pinning** — objek managed di-`fixed`/pin selama pointer dipegang Rust.
+## Rules (requirements.md §4)
 
-## Tabel Syscall v1
+1. **C ABI only** — `extern "C"` + P/Invoke (`[LibraryImport("bzsys")]`).
+2. **Minimal marshalling** — only primitives, pointers, and `#[repr(C)]` /
+   `[StructLayout(LayoutKind.Sequential)]` structs.
+3. **Stable numbers** — append-only; never renumbered after release.
+4. **Zero-copy** — large data (framebuffers, files, tensors) travels via shared memory.
+5. **GC-aware pinning** — managed objects are `fixed`/pinned while Rust holds a pointer.
 
-| # | Nama | a0 | a1 | Hasil |
+## The v1 syscall table
+
+| # | Name | a0 | a1 | Result |
 |---|---|---|---|---|
-| 0 | `ABI_VERSION` | — | — | versi ABI (saat ini `1`) |
-| 1 | `DEBUG_WRITE` | ptr (u64) | len (u64) | byte tertulis |
-| 2 | `EXIT` | exit code | — | tidak kembali |
+| 0 | `ABI_VERSION` | — | — | ABI version (currently `1`) |
+| 1 | `DEBUG_WRITE` | ptr (u64) | len (u64) | bytes written |
+| 2 | `EXIT` | exit code | — | does not return |
 | 3 | `YIELD` | — | — | 0 |
-| 4 | `TICKS` | — | — | tick timer sejak boot (PIT ~18,2 Hz) |
-| 5 | `FB_INFO` | ptr → `FramebufferInfo` | — | 0 = sukses |
-| 6 | `WIN_CREATE` | title ptr | title len | window id (a2=(w≪32)\|h) |
-| 7 | `WIN_CMD` | window id | ptr → `DrawCmd` | 0 = sukses |
-| 8 | `WIN_PRESENT` | window id | — | 0 (recompose desktop) |
-| 9 | `KEY_READ` | — | — | 1 char (0 bila kosong) |
-| 10 | `PROC_LIST` | buffer ptr (ProcInfo[]) | max count | jumlah entri ditulis |
-| 11 | `PROC_KILL` | pid | — | 0 = sukses |
-| 12 | `SYS_STAT` | ptr → `SysStat` | — | 0 = sukses |
-| 13 | `MMAP` | size (u64) | prot (u64) | base VA (syserr di rentang tinggi bila gagal); a2 tak dipakai |
-| 14 | `MPROTECT` | addr (u64) | size (u64) | 0 = sukses (a2 = prot) |
-| 15 | `MUNMAP` | addr (u64) | size (u64) | 0 = sukses |
-| 16 | `THREAD_CREATE` | entry rip (u64) | arg (u64) | thread id (a2 = user stack top); syserr bila gagal |
-| 17 | `THREAD_JOIN` | thread id (u64) | — | 0 setelah thread selesai |
-| 18 | `THREAD_EXIT` | exit code (u64) | — | tak kembali |
-| 19 | `FUTEX_WAIT` | addr (u64) | expected (u64) | 0 (blok bila *addr==expected sampai di-wake) |
-| 20 | `FUTEX_WAKE` | addr (u64) | count (u64) | jumlah thread yang dibangunkan |
-| 21 | `THREAD_SELF` | — | — | id thread pemanggil |
-| 22 | `CLOCK_MONO` | — | — | pencacah monotonik (siklus TSC) |
-| 23 | `AUDIO_STAT` | ptr → `AudioInfo` | — | 0 = sukses |
-| 24 | `AUDIO_SET_VOLUME` | volume 0..=100 (u64) | — | 0 = sukses (non-zero = un-mute) |
-| 25 | `AUDIO_TONE` | frekuensi Hz (u64) | durasi ms (u64) | 0 = sukses (DMA, non-blocking) |
-| 26 | `AUDIO_PLAY` | ptr PCM i16 stereo | panjang byte (u64) | 0 = sukses |
-| 27 | `PKG_LIST` | ptr `PkgInfo[]` | max count (u64) | jumlah entri ditulis |
-| 28 | `PKG_SET` | ptr nama | panjang nama (u64) | 0 = sukses (a2 = 1 pasang / 0 hapus) |
-| 29 | `FS_LIST` | ptr path (NUL-term) | ptr `FsEntry[]` | jumlah entri (a2 = max; path kosong = daftar mount) |
-| 30 | `FS_READ` | ptr path (NUL-term) | ptr buffer keluaran | jumlah byte dibaca (a2 = max byte; 0 = tidak ada) |
-| 31 | `IS_INTERACTIVE` | - | - | 1 jika sesi interaktif (desktop hidup), 0 saat boot-demo headless |
-| 32 | `FS_WRITE` | ptr path (NUL-term) | ptr buffer sumber | jumlah byte ditulis (a2 = jumlah byte; 0 = gagal/read-only) |
-| 33 | `CLOCK_RTC` | ptr `RtcTime` | - | 0 = sukses (tahun/bulan/hari/jam/menit/detik dari CMOS RTC) |
-| 34 | `NET_SOCKET` | kind (0 = UDP) | - | handle socket (>= 1), 0 = gagal |
-| 35 | `NET_BIND` | handle | port | 0 = sukses |
-| 36 | `NET_SEND` | handle | ptr `NetDatagram` + payload | jumlah byte payload terkirim (a2 = panjang payload) |
-| 37 | `NET_RECV` | handle | ptr `NetDatagram` + ruang payload | panjang payload; 0 = tidak ada (non-blocking, a2 = max) |
-| 38 | `NET_CLOSE` | handle | - | 0 = sukses |
-| 39 | `NET_INFO` | ptr `NetInfo` | - | 0 = sukses (alamat + status + counter) |
+| 4 | `TICKS` | — | — | timer ticks since boot (PIT ~18.2 Hz) |
+| 5 | `FB_INFO` | ptr → `FramebufferInfo` | — | 0 = success |
+| 6 | `WIN_CREATE` | title ptr | title len | window id (a2 = (w≪32)\|h) |
+| 7 | `WIN_CMD` | window id | ptr → `DrawCmd` | 0 = success |
+| 8 | `WIN_PRESENT` | window id | — | 0 (recompose the desktop) |
+| 9 | `KEY_READ` | — | — | 1 char (0 if empty) |
+| 10 | `PROC_LIST` | buffer ptr (ProcInfo[]) | max count | entries written |
+| 11 | `PROC_KILL` | pid | — | 0 = success |
+| 12 | `SYS_STAT` | ptr → `SysStat` | — | 0 = success |
+| 13 | `MMAP` | size (u64) | prot (u64) | base VA (syserr in the high range on failure) |
+| 14 | `MPROTECT` | addr (u64) | size (u64) | 0 = success (a2 = prot) |
+| 15 | `MUNMAP` | addr (u64) | size (u64) | 0 = success |
+| 16 | `THREAD_CREATE` | entry rip (u64) | arg (u64) | thread id (a2 = user stack top); syserr on failure |
+| 17 | `THREAD_JOIN` | thread id (u64) | — | 0 once the thread finishes |
+| 18 | `THREAD_EXIT` | exit code (u64) | — | does not return |
+| 19 | `FUTEX_WAIT` | addr (u64) | expected (u64) | 0 (blocks while *addr==expected until woken) |
+| 20 | `FUTEX_WAKE` | addr (u64) | count (u64) | threads woken |
+| 21 | `THREAD_SELF` | — | — | the calling thread's id |
+| 22 | `CLOCK_MONO` | — | — | monotonic counter (TSC cycles) |
+| 23 | `AUDIO_STAT` | ptr → `AudioInfo` | — | 0 = success |
+| 24 | `AUDIO_SET_VOLUME` | volume 0..=100 (u64) | — | 0 = success (non-zero un-mutes) |
+| 25 | `AUDIO_TONE` | frequency Hz (u64) | duration ms (u64) | 0 = success (DMA, non-blocking) |
+| 26 | `AUDIO_PLAY` | ptr to i16 stereo PCM | length in bytes (u64) | 0 = success |
+| 27 | `PKG_LIST` | ptr `PkgInfo[]` | max count (u64) | entries written |
+| 28 | `PKG_SET` | name ptr | name len (u64) | 0 = success (a2 = 1 install / 0 remove) |
+| 29 | `FS_LIST` | path ptr (NUL-term) | ptr `FsEntry[]` | entries written (a2 = max; empty path = list mounts) |
+| 30 | `FS_READ` | path ptr (NUL-term) | out buffer ptr | bytes read (a2 = max bytes; 0 = none) |
+| 31 | `IS_INTERACTIVE` | — | — | 1 in an interactive session (desktop up), 0 during headless boot demos |
+| 32 | `FS_WRITE` | path ptr (NUL-term) | source buffer ptr | bytes written (a2 = byte count; 0 = failed/read-only) |
+| 33 | `CLOCK_RTC` | ptr `RtcTime` | — | 0 = success (year/month/day/hour/minute/second from the CMOS RTC) |
+| 34 | `NET_SOCKET` | kind (0 = UDP) | — | socket handle (≥ 1), 0 = failure |
+| 35 | `NET_BIND` | handle | port | 0 = success |
+| 36 | `NET_SEND` | handle | ptr `NetDatagram` + payload | payload bytes sent (a2 = payload length) |
+| 37 | `NET_RECV` | handle | ptr `NetDatagram` + room for payload | payload length; 0 = none (non-blocking, a2 = max) |
+| 38 | `NET_CLOSE` | handle | — | 0 = success |
+| 39 | `NET_INFO` | ptr `NetInfo` | — | 0 = success (address + state + counters) |
 
-## 🔒 Model Keamanan Pointer (hardening v1.0)
+Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
+`INVAL = u64::MAX - 1`.
 
-**Setiap pointer dari ring 3 tidak dipercaya.** Sebelum hardening ini, syscall
-menyalin lewat pointer mentah apa adanya, sehingga app tak-istimewa bisa:
+## 🔒 Pointer security model (v1.0 hardening)
 
-- `DEBUG_WRITE(alamat_kernel, len)` → kernel mencetak memorinya sendiri ke serial
-  (**kebocoran informasi**);
-- `SYS_STAT` / `PROC_LIST` / `PKG_LIST` / `FS_READ` / `NET_RECV`
-  (`out_ptr = alamat_kernel`) → kernel **menulis hasil ke memori kernel**
-  (**tulis-sembarang = eskalasi privilege penuh**);
-- pointer tak-terpeta → kernel **page fault di dalam syscall** dan mati.
+**Every pointer from ring 3 is untrusted.** Before this hardening, syscalls
+copied through raw pointers as-is, so an unprivileged app could:
 
-Sekarang `memory::validate_user_range(ptr, len, need_write)` mensyaratkan:
+- `DEBUG_WRITE(kernel_addr, len)` → the kernel prints its own memory to serial
+  (an **information leak**);
+- `SYS_STAT` / `PROC_LIST` / `PKG_LIST` / `FS_READ` / `NET_RECV` with
+  `out_ptr = kernel_addr` → the kernel **writes results into kernel memory**
+  (an **arbitrary kernel write = full privilege escalation**);
+- an unmapped pointer → the kernel **page-faults inside the syscall** and dies.
 
-1. rentang tidak `wrap` dan seluruhnya **di bawah `USER_ADDR_MAX` = 0x8000_0000**
-   (semua peta kernel — heap `0x4444_4444_0000`, jendela memori fisik, image
-   kernel — ada di atasnya);
-2. **setiap halaman** dalam rentang **present** dan ber-`USER_ACCESSIBLE`;
-3. untuk buffer keluaran, halamannya juga **writable** (`user_write`).
+Now `memory::validate_user_range(ptr, len, need_write)` requires:
 
-`validate_user_cstr` melakukan hal sama untuk path NUL-terminated (dicek ulang
-tiap batas halaman). Pengecekan hanya berlaku pada jalur **ring 3**
-(`dispatch_from_user`, dipanggil dari entry SYSCALL); pemanggil kernel-internal
-(`dispatch`) memang mengirim alamatnya sendiri dan tetap dipercaya.
+1. the range does not wrap and lies entirely **below `USER_ADDR_MAX` = 0x8000_0000**
+   (every kernel mapping — the heap at `0x4444_4444_0000`, the physical-memory
+   window, the kernel image — is above it);
+2. **every page** in the range is present and `USER_ACCESSIBLE`;
+3. for output buffers, the pages are also **writable** (`user_write`).
 
-Diverifikasi headless oleh `syscall::security_self_test()` — 14 probe bermusuhan
-(alamat kernel, halaman tak-terpeta, rentang meluap, panjang wrap, null) harus
-semuanya ditolak dengan `INVAL` → `MILESTONE: SECURITY OK`.
+`validate_user_cstr` does the same for NUL-terminated paths (re-checking at each
+page boundary). Validation applies only on the **ring-3** path
+(`dispatch_from_user`, called from the SYSCALL entry); kernel-internal callers of
+`dispatch` legitimately pass their own addresses and stay trusted.
 
-## 🧊 Pembekuan ABI v1 (v1.0)
+Verified headlessly by `syscall::security_self_test()` — 14 hostile probes
+(kernel addresses, unmapped pages, overflowing ranges, wrapping lengths, null)
+must all be refused with `INVAL` → `MILESTONE: SECURITY OK`.
 
-Tabel v1 **beku**: nomor syscall append-only, layout struct tidak boleh berubah.
-Penjaganya mekanis — `abi_v1_is_frozen` (Rust) + `AbiV1IsFrozen` (C#) memaku
-`ABI_VERSION`, `COUNT`, serta **ukuran + alignment tiap struct** dan kode error.
-Menambah syscall = tambahkan konstanta, naikkan `COUNT`, perbarui kedua test.
-Mengubah syscall/struct yang sudah ada = **versi ABI mayor baru**, bukan edit.
+## 🧊 ABI v1 freeze (v1.0)
 
-**Kelengkapan BCL (pra-v1.0, permintaan 2026-07-24):** `FS_WRITE` melengkapi
-`System.IO` (tulis file — butuh mount yang writable, mis. RAM disk FAT12 `/ram`);
-`CLOCK_RTC` memberi `System.Globalization`/`BzDateTime` jam dinding sungguhan
-(`rtc.rs`, CMOS, BCD/biner + 12/24 jam, dibaca ulang sampai dua sampel sama agar
-tak ter-tear); `NET_*` memberi `System.Net.Sockets` socket **UDP nyata** di atas
-stack loopback (`net.rs`: Ethernet/ARP/IPv4/ICMP + UDP dengan checksum
-pseudo-header). Wrapper shim: `bz_fs_write`, `bz_clock_rtc`, `bz_net_socket`/
-`bind`/`send`/`recv`/`close`/`info`.
+The v1 table is **frozen**: syscall numbers are append-only and struct layouts
+may never change. The guard is mechanical — `abi_v1_is_frozen` (Rust) +
+`AbiV1IsFrozen` (C#) pin `ABI_VERSION`, `COUNT`, the **size and alignment of
+every struct**, and the error codes. Adding a syscall = append a constant, bump
+`COUNT`, extend both tests. Changing an existing syscall/struct = a **new ABI
+major version**, not an edit.
 
-**Batas jujur:** hanya **UDP** yang ada. `sock_kind::STREAM` (TCP) ditolak
-dengan `INVAL`, jadi `System.Net.Http` (`BzHttp`) baru lapisan pesan
-(build request / parse response), bukan klien — begitu TCP mendarat, klien =
-`BzHttp` + stream. Perangkatnya juga masih **loopback**, belum ada driver NIC
-(e1000 menyusul), jadi datagram hanya sampai ke mesin ini sendiri.
+## Syscall groups
 
-**Package manager (v0.16 "Panen" App Store):** `PKG_LIST` mengembalikan katalog
-registry (`pkg.rs`) + status terpasang; `PKG_SET` memasang/menghapus paket by
-nama (gating `run`). Wrapper shim: `bz_pkg_list`/`bz_pkg_set`.
+**BCL completion (pre-v1.0):** `FS_WRITE` completes `System.IO` (file write —
+needs a writable mount, e.g. the FAT12 RAM disk `/ram`); `CLOCK_RTC` gives
+`System.Globalization` / `BzDateTime` a real wall clock (`rtc.rs`, CMOS,
+BCD/binary + 12/24 h, re-read until two samples agree so it can't tear); `NET_*`
+gives `System.Net.Sockets` a **real UDP** socket over the loopback stack
+(`net.rs`: Ethernet/ARP/IPv4/ICMP + UDP with a pseudo-header checksum). Shim
+wrappers: `bz_fs_write`, `bz_clock_rtc`, `bz_net_socket`/`bind`/`send`/`recv`/`close`/`info`.
 
-**File I/O (v0.16 "Panen"):** `FS_LIST` menjelajah direktori VFS; `FS_READ`
-membaca isi file ke buffer klien (mis. Image Viewer memuat `PHOTO.BMP`, editor
-membuka file). Wrapper shim: `bz_fs_list`/`bz_fs_read`.
+> **Honest limits:** only **UDP** exists. `sock_kind::STREAM` (TCP) is rejected
+> with `INVAL`, so `System.Net.Http` (`BzHttp`) is only a message layer (build a
+> request / parse a response), not a client — it becomes one the moment TCP
+> lands. The device is also still **loopback** (no NIC driver yet, e1000 to
+> follow), so datagrams reach this machine only.
 
-**Audio (v0.16 "Panen"):** driver AC'97 (`audio.rs`) — enumerasi PCI (kelas
-0x04/0x01), cold-reset codec, mixer (master + PCM-out volume), dan playback PCM
-16-bit stereo 48 kHz lewat DMA bus-master (buffer descriptor list). `AUDIO_TONE`
-membangkitkan sinus di kernel; `AUDIO_PLAY` menyalin PCM klien ke buffer DMA.
-Wrapper shim: `bz_audio_stat`/`bz_audio_set_volume`/`bz_audio_tone`/`bz_audio_play`;
-library `Buitenzorg.Audio` (`Mixer`/`Tone`) di atasnya.
+**Package manager (v0.16 App Store):** `PKG_LIST` returns the registry catalog
+(`pkg.rs`) + install state; `PKG_SET` installs/removes a package by name (gating
+`run`). Shim: `bz_pkg_list` / `bz_pkg_set`.
 
-**Sync/TLS/clock (v0.15 "Matang" increment 3):** `FUTEX_WAIT`/`FUTEX_WAKE`
-menambah state scheduler **Blocked** (thread benar-benar diblok, bukan busy-yield)
-— fondasi mutex/cond. Shim menyediakan `bz_mutex_lock`/`bz_mutex_unlock` di
-atasnya. `THREAD_SELF` = fondasi `pthread_self`/TLS. `CLOCK_MONO` = TSC (PAL
-memasangkannya dengan frekuensi untuk Stopwatch/`GetTimestamp`).
+**File I/O (v0.16):** `FS_LIST` browses a VFS directory; `FS_READ` reads a file's
+bytes into a client buffer (e.g. the Image Viewer loads `PHOTO.BMP`, the editor
+opens a file). Shim: `bz_fs_list` / `bz_fs_read`.
 
-**Threading (v0.15 "Matang" increment 2, kooperatif):** `THREAD_CREATE`
-menjalankan `entry(arg)` di ring 3 pada stack `a2`, berbagi address space; thread
-dijadwalkan kooperatif (yield lewat `YIELD`). Tiap thread punya SYSCALL kernel
-stack sendiri (terpisah dari stack interrupt TSS). Wrapper shim: `bz_thread_create`
-/`bz_thread_join`/`bz_thread_exit`/`bz_yield`.
+**Audio (v0.16):** the AC'97 driver (`audio.rs`) — PCI enumeration (class
+0x04/0x01), codec cold-reset, the mixer (master + PCM-out volume), and 16-bit
+stereo 48 kHz PCM playback over bus-master DMA (a buffer-descriptor list).
+`AUDIO_TONE` generates a sine in the kernel; `AUDIO_PLAY` copies client PCM into
+the DMA buffer. Shim: `bz_audio_stat`/`set_volume`/`tone`/`play`; the
+`Buitenzorg.Audio` library (`Mixer`/`Tone`) sits on top.
 
-> **Catatan register (penting):** syscall meng-clobber `rcx`+`r11` (instruksi
-> `syscall`) **dan** `r8`/`r9`/`r10` + register caller-saved lain (kernel entry
-> marshaling + C dispatch). Inline-asm syscall di sisi user harus mendeklarasikan
-> `r8`/`r9`/`r10` sebagai clobbered, jika tidak nilai yang disimpan di register
-> itu bisa rusak melintasi syscall.
+**Sync/TLS/clock (v0.15 increment 3):** `FUTEX_WAIT`/`FUTEX_WAKE` add a scheduler
+**Blocked** state (a thread truly blocks rather than busy-yielding) — the
+foundation for mutexes/condvars. The shim builds `bz_mutex_lock`/`unlock` on top.
+`THREAD_SELF` is the `pthread_self`/TLS foundation. `CLOCK_MONO` is the TSC (the
+PAL pairs it with a frequency for `Stopwatch`/`GetTimestamp`).
 
-**`prot`** (flag `mmap_prot`, OR-kan): `NONE=0`, `READ=1`, `WRITE=2`, `EXEC=4`.
-`MMAP` (v0.15 "Matang") memetakan `ceil(size/4096)` halaman anonim di arena
-mmap user (0x2000_0000..0x6000_0000), di-reset tiap proses. Ini fondasi memori
-yang dipakai runtime .NET/GC untuk managed heap.
+**Threading (v0.15 increment 2, cooperative):** `THREAD_CREATE` runs `entry(arg)`
+in ring 3 on stack `a2`, sharing the address space; threads are scheduled
+cooperatively (they yield via `YIELD`). Each thread has its own SYSCALL kernel
+stack (separate from the TSS interrupt stack). Shim:
+`bz_thread_create`/`join`/`exit`/`bz_yield`.
 
-**Reserve/commit (increment 5):** `MMAP` dengan `prot=NONE` hanya **mereservasi**
-rentang alamat (tanpa frame) — model yang dipakai GC .NET untuk memesan heap
-besar di muka. `MPROTECT` dengan akси (READ/WRITE) **meng-commit on demand**:
-halaman yang belum ter-map dapat frame zeroed baru; yang sudah ter-map hanya
-di-re-flag. Jadi reservasi 256 MiB tak menghabiskan RAM fisik sampai
-benar-benar dipakai.
+> **Register note (important):** a syscall clobbers `rcx` + `r11` (the `syscall`
+> instruction) **and** `r8`/`r9`/`r10` plus other caller-saved registers (kernel
+> entry marshalling + the C dispatcher). A user-side inline-asm syscall must
+> declare `r8`/`r9`/`r10` (and the argument registers) clobbered, or a value
+> kept there can be corrupted across the call.
 
-Error dikembalikan di rentang atas `u64`: `NOSYS = u64::MAX`, `INVAL = u64::MAX - 1`.
+**Memory PAL (v0.15).** `prot` (`mmap_prot` flags, OR them): `NONE=0`, `READ=1`,
+`WRITE=2`, `EXEC=4`. `MMAP` maps `ceil(size/4096)` anonymous pages in the user
+mmap arena (0x2000_0000..0x6000_0000), reset per process. This is the memory
+foundation the .NET runtime/GC uses for the managed heap.
 
-## Struct Bersama
+**Reserve/commit (increment 5):** `MMAP` with `prot=NONE` only **reserves**
+address space (no frames) — the pattern the .NET GC uses to pre-book a large
+heap. `MPROTECT` with access (READ/WRITE) **commits on demand**: an unmapped page
+gets a fresh zeroed frame; an already-mapped page is only re-flagged. So a 256
+MiB reservation does not consume physical RAM until it is actually touched.
 
-`FramebufferInfo` — `#[repr(C)]`, 7 × u64 = **56 byte**:
+## Shared structs
+
+`FramebufferInfo` — `#[repr(C)]`, 7 × u64 = **56 bytes**:
 `address, size, width, height, stride, bytes_per_pixel, pixel_format`.
 Pixel format: `0 = RGB`, `1 = BGR`, `2 = GRAY`, `255 = UNKNOWN`.
 
-`DrawCmd` (v0.8) — `#[repr(C)]`, **48 byte**:
+`DrawCmd` (v0.8) — `#[repr(C)]`, **48 bytes**:
 `op:u64, x,y,w,h:i32, color:u32, _pad:u32, text_ptr:u64, text_len:u64`.
 Op: `0 = fill_rect`, `1 = draw_text`, `2 = clear`, `3 = line`, `4 = ellipse`,
-`5 = fill_ellipse`, `6 = rect` (v0.9), `7 = blit` (v0.16). Warna `0x00RRGGBB`.
-**`blit`**: `text_ptr` = buffer piksel ARGB klien (`w`×`h` `u32`, `text_len`
-byte), disalin ke canvas window di (x,y). Ini fondasi renderer software
-client-side `Buitenzorg.Drawing` (model kompositor WPF/Avalonia).
+`5 = fill_ellipse`, `6 = rect` (v0.9), `7 = blit` (v0.16). Color is `0x00RRGGBB`.
+**`blit`**: `text_ptr` is the client's ARGB pixel buffer (`w`×`h` `u32`,
+`text_len` bytes), copied to the window canvas at (x,y). This backs the
+client-side `Buitenzorg.Drawing` software renderer (the WPF/Avalonia compositor
+model).
 
-`ProcInfo` (v0.9) — `#[repr(C)]`, **64 byte**:
+`ProcInfo` (v0.9) — `#[repr(C)]`, **64 bytes**:
 `pid:u64, state:u64, cpu_ticks:u64, kind:u64, name:[u8;32]`.
 State: `0=runnable, 1=running, 2=finished`. Kind: `0=kernel task, 1=user app`.
 
-`SysStat` (v0.9) — `#[repr(C)]`, **48 byte**:
-`uptime_ticks, tick_hz, heap_used, heap_total, task_count, mem_total_mib` (semua u64).
+`SysStat` (v0.9) — `#[repr(C)]`, **48 bytes**:
+`uptime_ticks, tick_hz, heap_used, heap_total, task_count, mem_total_mib` (all u64).
 
-`AudioInfo` (v0.16) — `#[repr(C)]`, **48 byte**:
-`present, sample_rate, channels, bits, volume, muted` (semua u64).
+`AudioInfo` (v0.16) — `#[repr(C)]`, **48 bytes**:
+`present, sample_rate, channels, bits, volume, muted` (all u64). `present`/`muted`
+= 0/1; `volume` = 0..=100.
 
-`PkgInfo` (v0.16) — `#[repr(C)]`, **48 byte**:
-`name:[u8;24], category:[u8;16], installed:u64`. Nama/kategori null-padded ASCII.
+`PkgInfo` (v0.16) — `#[repr(C)]`, **48 bytes**:
+`name:[u8;24], category:[u8;16], installed:u64`. Name/category are null-padded ASCII.
 
-`FsEntry` (v0.16) — `#[repr(C)]`, **32 byte**:
-`name:[u8;24], is_dir:u64`. Nama null-padded ASCII; `is_dir=1` untuk mount/direktori.
-`present`/`muted` = 0/1; `volume` = 0..=100.
+`FsEntry` (v0.16) — `#[repr(C)]`, **32 bytes**:
+`name:[u8;24], is_dir:u64`. Name is null-padded ASCII; `is_dir=1` for a mount/directory.
 
-## Status Implementasi
+`RtcTime` (pre-v1.0) — `#[repr(C)]`, **48 bytes**: `year, month, day, hour, minute, second` (all u64).
 
-- **Kernel** (`bzkernel/src/syscall.rs`): dispatcher lengkap untuk tabel v1,
-  saat ini dipanggil dari konteks kernel (self-test saat boot).
-- **C#** (`BzSys`): facade seragam — `NativeSyscalls` (P/Invoke `bzsys`, dipakai
-  ketika berjalan di Buitenzorg) atau `HostSyscalls` (simulasi host untuk dev/test).
-- **Belum ada**: entry point ring-3 (`syscall`/`sysret`) dan validasi pointer
-  lintas address-space — menyusul bersama user-space task (v0.2 lanjutan → v0.4).
+`NetDatagram` (pre-v1.0) — `#[repr(C)]`, **16 bytes**: `addr:[u8;4], port:u32, length:u64`; the payload follows immediately.
 
-## Menambah Syscall Baru
+`NetInfo` (pre-v1.0) — `#[repr(C)]`, **48 bytes**: `addr:[u8;8], up, tx_datagrams, rx_datagrams, icmp_replies, arp_replies`.
 
-1. Tambah konstanta di `bz-abi` (`sysno`) **di akhir tabel**, naikkan `COUNT`.
-2. Mirror di `SyscallNumbers.cs`.
-3. Implementasi di `bzkernel/src/syscall.rs` + (bila perlu) `HostSyscalls`.
-4. Update test kontrak **di kedua sisi** dan tabel di dokumen ini.
+## Implementation status
+
+- **Kernel** (`bzkernel/src/syscall.rs`): a complete dispatcher for the v1 table,
+  reached from ring 3 via the SYSCALL/SYSRET entry (`usermode.rs`) and, for boot
+  self-tests, directly from kernel context. Ring-3 pointer arguments are
+  validated (see the security model above).
+- **C#** (`BzSys`): a uniform facade — `NativeSyscalls` (P/Invoke `bzsys`, used
+  when running on Buitenzorg) or `HostSyscalls` (a host simulation for dev/test).
+
+## Adding a new syscall
+
+1. Add a constant to `bz-abi` (`sysno`) **at the end of the table**, bump `COUNT`.
+2. Mirror it in `SyscallNumbers.cs`.
+3. Implement it in `bzkernel/src/syscall.rs` + (if needed) `HostSyscalls`.
+4. Update the contract test **on both sides**, the freeze test, and the table
+   above.
+
+---
+
+← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

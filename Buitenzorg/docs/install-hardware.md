@@ -1,187 +1,184 @@
-# Memasang & Menjalankan Buitenzorg OS di Hardware Nyata
+# Install & Boot on Real Hardware
 
-Selain QEMU dan VM (VMware/VirtualBox — lihat [run-in-vm.md](run-in-vm.md)),
-Buitenzorg OS bisa **boot dari USB di komputer fisik**. Build menghasilkan dua
-disk image mentah yang bisa langsung ditulis ke stik USB:
+Besides QEMU and VMs (VMware/VirtualBox/Hyper-V — see [run-in-vm.md](run-in-vm.md)),
+Buitenzorg OS can **boot from USB on a physical machine**. The build produces two
+raw disk images you can write directly to a USB stick:
 
-| Berkas | Firmware | Skema disk |
-|--------|----------|------------|
+| File | Firmware | Disk scheme |
+|---|---|---|
 | `dist/buitenzorg-bios.img` | Legacy BIOS / CSM | MBR |
 | `dist/buitenzorg-uefi.img` | UEFI | GPT + ESP (FAT) |
 
-> Dibuat oleh **Gravicode Studios**, dipimpin oleh **Kang Fadhil**.
+**English** · [Bahasa Indonesia](install-hardware.id.md) · ← [Documentation index](README.md)
 
-> ⚠️ **Status:** jalur boot USB ini disiapkan lengkap (skrip + verifikasi
-> baca-ulang), tetapi **belum diverifikasi di mesin fisik** oleh tim — Buitenzorg
-> baru teruji otomatis di QEMU (4 media) dan VMware/VirtualBox. Perlakukan boot
-> hardware sebagai **eksperimen**: pakai mesin/USB yang boleh Anda korbankan, dan
-> lihat [Kompatibilitas & batasan](#-kompatibilitas--batasan) di bawah.
+> ⚠️ **Status:** the USB boot path is fully prepared (scripts + read-back
+> verification), but it has **not yet been verified on a physical machine** — so
+> far Buitenzorg is tested automatically in QEMU (4 media) and in VMware/
+> VirtualBox. Treat hardware boot as an **experiment**: use a machine and a USB
+> stick you can afford to lose, and read [Compatibility &
+> limitations](#-compatibility--limitations) below.
 
 ---
 
-## 0. Prasyarat
+## 0. Prerequisites
 
-1. **Build OS lebih dulu:**
+1. **Build the OS first:**
    ```powershell
    .\scripts\build.ps1        # Windows   (Linux/macOS: ./scripts/build.sh)
    ```
-   Setelah itu `dist\buitenzorg-bios.img` dan `dist\buitenzorg-uefi.img` ada.
-2. **Stik USB** yang isinya boleh dihapus (image kecil, ~5 MB — USB berapa pun cukup).
-3. **Pilih firmware** sesuai target:
-   - Mesin lama / opsi *Legacy*/*CSM* di BIOS → pakai **bios**.
-   - Mesin UEFI modern → pakai **uefi**. **Matikan Secure Boot** (bootloader
-     Buitenzorg belum ditandatangani).
+   Afterwards `dist\buitenzorg-bios.img` and `dist\buitenzorg-uefi.img` exist.
+2. **A USB stick** whose contents can be erased (the image is tiny, ~5 MB — any
+   stick is big enough).
+3. **Pick the firmware** to match the target:
+   - Older machine, or a *Legacy*/*CSM* option in the BIOS → use **bios**.
+   - Modern UEFI machine → use **uefi**, and **turn off Secure Boot** (the
+     Buitenzorg bootloader is not signed).
 
----
+## 1. Write the image to USB (script)
 
-## 1. Tulis image ke USB (skrip)
+**The script erases the whole target disk.** It is layered with safeguards: only
+**USB/removable** disks are offered, the target is chosen **explicitly** (never
+guessed), the **system/boot disk is refused outright**, the size + model are
+shown with a typed confirmation, and the write is **verified by reading it back**.
 
-**Skrip menghapus total disk target.** Ada pengaman berlapis: hanya
-disk **USB/removable** yang ditawarkan, target dipilih **eksplisit** (bukan
-ditebak), disk **sistem/boot ditolak mentah**, ukuran+model ditampilkan dengan
-konfirmasi ketik, dan hasil tulis **diverifikasi baca-ulang**.
-
-### Windows (PowerShell **sebagai Administrator**)
+### Windows (PowerShell **as Administrator**)
 
 ```powershell
-# 1) Lihat kandidat disk USB (aman, read-only):
+# 1) List candidate USB disks (safe, read-only):
 .\scripts\flash-usb.ps1 -List
 
-# 2) Tulis (interaktif — akan meminta nomor disk + konfirmasi ketik ERASE):
+# 2) Write (interactive — prompts for the disk number + a typed ERASE):
 .\scripts\flash-usb.ps1
 
-# atau langsung, mis. physical disk 2, firmware UEFI:
+# or directly, e.g. physical disk 2, UEFI firmware:
 .\scripts\flash-usb.ps1 -DiskNumber 2 -Firmware uefi
 ```
 
-Menulis butuh akses disk mentah → **wajib PowerShell elevated**; skrip berhenti
-kalau tidak. Disk non-USB ditolak kecuali `-Force` (jaring pengaman terakhir).
+Writing needs raw disk access → an **elevated PowerShell is required**; the
+script stops otherwise. A non-USB disk is refused unless you pass `-Force` (the
+last safety net).
 
 ### Linux / macOS
 
 ```bash
-# 1) Lihat kandidat perangkat:
+# 1) List candidate devices:
 ./scripts/flash-usb.sh --list
 
-# 2) Tulis (butuh sudo untuk akses perangkat mentah):
-sudo ./scripts/flash-usb.sh /dev/sdX            # Linux, image BIOS
-sudo ./scripts/flash-usb.sh /dev/sdX --uefi     # image UEFI
-sudo ./scripts/flash-usb.sh /dev/rdiskN         # macOS: pakai node RAW rdiskN
+# 2) Write (needs sudo for raw device access):
+sudo ./scripts/flash-usb.sh /dev/sdX            # Linux, BIOS image
+sudo ./scripts/flash-usb.sh /dev/sdX --uefi     # UEFI image
+sudo ./scripts/flash-usb.sh /dev/rdiskN         # macOS: use the RAW rdiskN node
 ```
 
-Target harus **seluruh disk** (`/dev/sdb`), bukan partisi (`/dev/sdb1`). Skrip
-menolak disk root/sistem dan meng-`unmount` partisi yang ter-mount lebih dulu.
+Target the **whole disk** (`/dev/sdb`), not a partition (`/dev/sdb1`). The script
+refuses the root/system disk and unmounts any mounted partitions first.
 
----
+## 2. Write the image to USB (GUI tool — recommended for beginners)
 
-## 2. Tulis image ke USB (alat GUI, jalur yang disarankan untuk pemula)
+If you'd rather not use the script, use a well-known flashing tool — these also
+list the disks safely:
 
-Kalau ragu dengan skrip, pakai alat flash yang sudah dikenal — mereka juga
-menampilkan daftar disk dengan aman:
-
-- **[balenaEtcher](https://etcher.balena.io/)** (Windows/macOS/Linux) — pilih
-  `buitenzorg-bios.img` **atau** `buitenzorg-uefi.img`, pilih USB, *Flash*.
-- **[Rufus](https://rufus.ie/)** (Windows) — *Boot selection* → pilih image,
-  mode **DD image** saat ditanya.
-- **`dd`** manual (Linux/macOS), tanpa skrip:
+- **[balenaEtcher](https://etcher.balena.io/)** (Windows/macOS/Linux) — pick
+  `buitenzorg-bios.img` **or** `buitenzorg-uefi.img`, pick the USB, *Flash*.
+- **[Rufus](https://rufus.ie/)** (Windows) — *Boot selection* → pick the image,
+  choose **DD image** mode when asked.
+- **`dd`** manually (Linux/macOS), no script:
   ```bash
   sudo dd if=dist/buitenzorg-bios.img of=/dev/sdX bs=4M conv=fsync status=progress
   sync
   ```
 
-> Image ini bootable apa adanya (bukan ISO hybrid biasa, tapi disk MBR/GPT
-> penuh), jadi mode **DD/raw** — bukan mode "ISO"— yang benar di Rufus.
+> These images are bootable as-is (not a hybrid ISO, but a full MBR/GPT disk), so
+> **DD/raw** mode — not "ISO" mode — is the correct choice in Rufus.
 
----
+## 3. Boot the machine from USB
 
-## 3. Boot mesin dari USB
+1. Plug in the USB, power on / restart.
+2. Enter the **boot menu** (usually `F12`, `F10`, `F9`, `Esc`, or `F2` → Boot
+   order — depends on the vendor).
+3. Pick the USB entry:
+   - the **uefi** image shows as **"UEFI: <USB name>"**,
+   - the **bios** image shows as a plain USB (non-UEFI).
+4. Buitenzorg boots: ASCII logo → kernel log on screen → desktop.
 
-1. Colok USB, nyalakan/restart mesin.
-2. Masuk **boot menu** (biasanya `F12`, `F10`, `F9`, `Esc`, atau `F2`→Boot
-   order — tergantung vendor).
-3. Pilih entri USB:
-   - image **uefi** muncul sebagai **"UEFI: <nama USB>"**,
-   - image **bios** muncul sebagai USB biasa (non-UEFI).
-4. Buitenzorg mem-boot: logo ASCII → log kernel di layar → desktop.
+If the USB doesn't appear in the boot menu: make sure **Secure Boot is OFF**, and
+for the bios image enable **Legacy/CSM**; for the uefi image ensure **UEFI** mode
+is active.
 
-Kalau USB tak muncul di boot menu: pastikan **Secure Boot OFF**, dan untuk image
-bios aktifkan **Legacy/CSM**; untuk image uefi pastikan mode **UEFI** aktif.
+## 4. Verify on physical hardware (please report)
 
----
+Because hardware boot is not yet validated, note the following if you try it — it
+helps a lot toward marking it "tested":
 
-## 4. Verifikasi di mesin fisik (yang perlu dilaporkan)
+- **Boot & framebuffer:** does the logo appear? Are the resolution and colors
+  right? The bootloader requests a linear framebuffer; some GPUs/monitors may
+  hand back a different mode.
+- **PS/2 vs USB input:** the Buitenzorg keyboard/mouse drivers are **PS/2**.
+  Modern laptops/PCs often only have **USB HID** (no USB driver yet) → input may
+  be dead even though boot succeeds. A PS/2 port or adapter, or the BIOS
+  **"USB Legacy / emulation"** option (which presents HID as PS/2), helps.
+- **Storage:** the disk driver is **IDE/SATA PIO (ATA)** only. The app suite is on
+  `/disk`, which needs it; native AHCI/NVMe are not implemented, so on an
+  NVMe-only machine `/disk` may be unreadable (the kernel still boots).
+- **Timer & interrupts:** legacy PIT + PIC 8259 (not APIC). Usually still
+  supported via legacy emulation on modern chipsets.
+- **ACPI shutdown:** the shell `shutdown` uses ACPI (the QEMU/VBox port fallback
+  does not apply on hardware) — report whether it actually powers off.
 
-Karena boot hardware belum tervalidasi, catat hal-hal ini bila Anda mencobanya —
-sangat membantu untuk menandainya "teruji":
+The serial log is not automatically available on hardware as it is in QEMU; rely
+on the screen (all kernel logs are also printed to the framebuffer console).
 
-- **Boot & framebuffer:** logo muncul? resolusi & warna benar? Bootloader
-  meminta framebuffer linear; sebagian GPU/monitor bisa memberi mode lain.
-- **Input PS/2 vs USB:** driver keyboard/mouse Buitenzorg saat ini **PS/2**.
-  Laptop/PC modern sering hanya punya keyboard **USB HID** (driver USB belum
-  ada) → input mungkin mati walau boot sukses. Port PS/2 atau adaptor, atau opsi
-  BIOS **"USB Legacy / emulation"** (yang menyajikan HID sebagai PS/2), membantu.
-- **Penyimpanan:** driver disk hanya **IDE/SATA PIO (ATA)**. App suite ada di
-  `/disk` yang butuh driver ini; AHCI/NVMe native belum ada, jadi di mesin
-  NVMe-only `/disk` mungkin tak terbaca (kernel tetap boot).
-- **Timer & interrupt:** PIT + PIC 8259 legacy (bukan APIC). Umumnya masih
-  didukung lewat legacy emulation di chipset modern.
-- **ACPI shutdown:** `shutdown` di shell memakai ACPI (fallback port QEMU/VBox
-  tak berlaku di HW) — laporkan apakah benar-benar mematikan.
+## 🧭 Compatibility & limitations
 
-Serial log tidak otomatis tersedia di HW seperti di QEMU; andalkan tampilan
-layar (semua log kernel juga dicetak ke framebuffer console).
-
----
-
-## 🧭 Kompatibilitas & batasan
-
-| Area | Dukungan sekarang | Catatan |
-|------|-------------------|---------|
-| Firmware | UEFI **dan** legacy BIOS | Secure Boot harus OFF (unsigned) |
+| Area | Current support | Notes |
+|---|---|---|
+| Firmware | UEFI **and** legacy BIOS | Secure Boot must be OFF (unsigned) |
 | CPU | x86-64 | ARM64/RISC-V = v1.x "Rimba" |
-| Grafis | framebuffer linear dari bootloader | tanpa driver GPU/akselerasi |
-| Keyboard/Mouse | **PS/2** | USB HID belum; pakai USB-legacy BIOS |
-| Storage | IDE/SATA **PIO (ATA)** | AHCI/NVMe/USB-MSD native belum |
-| Interrupt/timer | PIC 8259 + PIT | APIC belum (blok SMP) |
-| Jaringan | loopback saja | driver NIC (e1000) belum |
-| SMP | single-core | multi-core belum |
+| Graphics | linear framebuffer from the bootloader | no GPU driver/acceleration |
+| Keyboard/Mouse | **PS/2** | no USB HID yet; use USB-legacy BIOS |
+| Storage | IDE/SATA **PIO (ATA)** | no native AHCI/NVMe/USB-MSD yet |
+| Interrupt/timer | PIC 8259 + PIT | no APIC yet (blocks SMP) |
+| Networking | loopback only | no NIC driver (e1000) yet |
+| SMP | single-core | no multi-core yet |
 
-Semua item "belum" ada di backlog **[PLAN.md](../PLAN.md)** (§Utang Teknis) dan
-dilacak di **[Progress.md](../Progress.md)**.
+All the "not yet" items are in the backlog in **[PLAN.md](../PLAN.md)** (Technical
+Debt) and tracked in **[Progress.md](../Progress.md)**.
 
----
+## 🆘 Troubleshooting
 
-## 🆘 Pemecahan masalah
+- **USB not in the boot menu** → Secure Boot OFF; match the firmware
+  (bios↔Legacy/CSM, uefi↔UEFI); try writing the **other** image; try a different
+  USB port (sometimes only certain ports are bootable).
+- **Black screen after selecting the USB** → usually a firmware mismatch (you
+  wrote the bios image but booted in UEFI mode, or vice versa) — write the
+  matching image.
+- **Boots but the keyboard is dead** → see the PS/2 vs USB note above; enable
+  **USB Legacy** in the BIOS.
+- **`flash-usb.ps1` says it needs Administrator** → open PowerShell via
+  right-click → *Run as administrator*.
+- **`flash-usb.ps1` refuses the disk** → it isn't a USB/removable disk (or it is
+  the system disk). Confirm the disk number with `-List`; this is a deliberate
+  safeguard.
+- **Verification FAILED** after writing → do **not** boot from that USB; re-flash
+  (the stick may be worn/counterfeit — try another one).
+- **Restore the USB to normal** → reformat it: Windows `diskpart` → `clean` →
+  create a new partition; Linux/macOS `sudo wipefs -a /dev/sdX`, then partition.
 
-- **USB tak muncul di boot menu** → Secure Boot OFF; cocokkan firmware
-  (bios↔Legacy/CSM, uefi↔UEFI); coba tulis image **satunya**; coba port USB lain
-  (kadang hanya port tertentu bootable).
-- **Layar hitam setelah pilih USB** → biasanya mismatch firmware (menulis image
-  bios lalu boot mode UEFI, atau sebaliknya) — tulis image yang cocok.
-- **Boot tapi keyboard mati** → lihat catatan PS/2 vs USB di atas; aktifkan
-  **USB Legacy** di BIOS.
-- **`flash-usb.ps1` bilang butuh Administrator** → buka PowerShell via klik-kanan
-  → *Run as administrator*.
-- **`flash-usb.ps1` menolak disk** → itu bukan disk USB/removable (atau disk
-  sistem). Pastikan nomor disk benar via `-List`; ini pengaman yang disengaja.
-- **Verifikasi GAGAL** setelah menulis → **jangan** boot dari USB itu; ulangi
-  penulisan (stik bisa aus/palsu — coba stik lain).
-- **Kembalikan USB jadi normal** → format ulang: Windows `diskpart` → `clean` →
-  buat partisi baru; Linux/macOS `sudo wipefs -a /dev/sdX` lalu buat partisi.
-
----
-
-## Ringkasan perintah
+## Command summary
 
 ```powershell
 # Windows
 .\scripts\build.ps1
 .\scripts\flash-usb.ps1 -List
-.\scripts\flash-usb.ps1 -DiskNumber <N> -Firmware uefi   # atau -Firmware bios
+.\scripts\flash-usb.ps1 -DiskNumber <N> -Firmware uefi   # or -Firmware bios
 ```
 ```bash
 # Linux / macOS
 ./scripts/build.sh
 ./scripts/flash-usb.sh --list
-sudo ./scripts/flash-usb.sh /dev/sdX --uefi              # atau --bios
+sudo ./scripts/flash-usb.sh /dev/sdX --uefi              # or --bios
 ```
+
+---
+
+← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

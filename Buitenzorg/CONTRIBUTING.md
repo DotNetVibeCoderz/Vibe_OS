@@ -1,43 +1,43 @@
-# Contributing — Buitenzorg OS
+# Contributing to Buitenzorg OS
 
-## Prinsip
+## Principles
 
-Ikuti [requirements.md](requirements.md) §1: safety by default (Rust di ring 0),
-productivity by default (C# di user-space), batas ABI tegas, microkernel-leaning,
-optimasi sebagai kebijakan.
+Follow [requirements.md](requirements.md) §1: safety by default (Rust in ring 0),
+productivity by default (C# in user-space), a firm ABI boundary, microkernel-
+leaning, and performance as policy.
 
-## Standar Koding
+## Coding standards
 
-**Rust (kernel/)**
-- `cargo fmt` + `cargo clippy` bersih sebelum PR.
-- `unsafe` selalu diberi komentar `// Safety:` yang menjelaskan invariannya.
-- Kernel `no_std`; dependensi baru harus `no_std`-compatible dan dipertimbangkan
-  matang (setiap crate menambah permukaan kepercayaan di ring 0).
-- Target hanya `x86_64-unknown-none` untuk `bzkernel` (bukan default-member).
+**Rust (`kernel/`)**
+- `cargo fmt` + `cargo clippy` clean before a PR.
+- Every `unsafe` block carries a `// Safety:` comment explaining its invariants.
+- The kernel is `no_std`; new dependencies must be `no_std`-compatible and
+  weighed carefully (each crate adds trust surface in ring 0).
+- Build `bzkernel` only for `x86_64-unknown-none` (it is not a default member).
 
-**C# (runtime/, sdk/)**
-- Nullable + ImplicitUsings aktif; `Buitenzorg.Runtime` wajib tetap
-  NativeAOT-compatible (`IsAotCompatible=true`) — hindari reflection dinamis.
-- Struct interop: `[StructLayout(LayoutKind.Sequential)]` + test ukuran byte.
+**C# (`runtime/`, `sdk/`)**
+- Nullable + ImplicitUsings are on; `Buitenzorg.Runtime` must stay
+  NativeAOT-compatible (`IsAotCompatible=true`) — avoid dynamic reflection.
+- Interop structs: `[StructLayout(LayoutKind.Sequential)]` + a byte-size test.
 
-**Kontrak ABI (kernel/abi ↔ runtime/.../Sys)**
-- Perubahan ABI harus mengubah **kedua sisi + test kontrak keduanya + docs/abi.md**
-  dalam satu PR. Nomor syscall append-only.
+**The ABI contract (`kernel/abi` ↔ `runtime/.../Sys`)**
+- Any ABI change must touch **both sides + both contract test suites +
+  docs/abi.md** in the same PR. Syscall numbers are append-only.
 
-## Alur PR
+## PR flow
 
-1. Branch dari `main`, satu topik per PR.
-2. Wajib hijau: `cargo test -p bz-abi`, build kernel, boot smoke test QEMU,
-   `dotnet test`. CI menjalankan semuanya (`.github/workflows/ci.yml`).
-3. Update checklist di requirements.md §17 bila menyelesaikan item.
-4. Commit message: baris ringkas bahasa Inggris, isi bebas (EN/ID).
+1. Branch from `master`, one topic per PR.
+2. Must be green: `cargo test -p bz-abi`, the kernel build, the QEMU boot smoke
+   test, and `dotnet test`. CI runs all of it (`.github/workflows/ci.yml`).
+3. Update the checklist in requirements.md §17 when you complete an item.
+4. Commit messages: a concise English subject line; the body may be EN or ID.
 
-## Menandai progres
+## Tracking progress
 
-Item selesai ditandai `[x]` di [requirements.md §17](requirements.md) pada PR
-yang sama dengan implementasinya — checklist itu adalah papan status proyek.
+Completed items are marked `[x]` in [requirements.md §17](requirements.md) in the
+same PR as the implementation — that checklist is the project's status board.
 
-## Lisensi kontribusi
+## Contribution license
 
-Proyek berlisensi **MIT** ([LICENSE](LICENSE)). Dengan mengirim kontribusi,
-Anda setuju kontribusi itu dilisensikan di bawah MIT juga.
+The project is licensed under the **MIT License** ([LICENSE](LICENSE)). By
+submitting a contribution, you agree it is licensed under MIT as well.

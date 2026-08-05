@@ -1,42 +1,49 @@
-# Dokumentasi Buitenzorg OS
+# Documentation
 
-Indeks seluruh dokumen. Dibuat oleh **Gravicode Studios**, dipimpin oleh
-**Kang Fadhil**.
+The complete documentation index for **Buitenzorg OS**. Docs are written in
+**English**; the technical spec and planning trackers in the repo root are in
+**Bahasa Indonesia** (marked *ID* below).
 
-## Mulai di sini
+**English** · [Bahasa Indonesia](README.id.md) · ← Back to the [project README](../README.md).
 
-| Dokumen | Isi |
-|---------|-----|
-| [tutorial.md](tutorial.md) | **Tutorial berurutan**: build → keliling desktop → shell → bikin app → debug/profil → bawa keluar QEMU |
-| [getting-started.md](getting-started.md) | Setup ramah-pemula: prasyarat, quickstart, alur harian, troubleshooting |
-| [first-app.md](first-app.md) | Bikin app pertama (SDK + native) + katalog API library bawaan + aturan zerolib |
+## Start here
 
-## Menjalankan & memasang
+| Doc | What it covers |
+|---|---|
+| [**Tutorial**](tutorial.md) | A sequential zero-to-app walkthrough: build → explore the desktop → shell → write an app → debug/profile → leave QEMU. **Read this first.** |
+| [Getting Started](getting-started.md) | Prerequisites, one-command quickstart, the daily workflow, and troubleshooting. |
+| [Your First App](first-app.md) | Both ways to build an app (SDK and native), the built-in library catalog, and the zerolib rules every app author must know. |
 
-| Dokumen | Isi |
-|---------|-----|
-| [run-in-vm.md](run-in-vm.md) | Jalankan image di VMware Player & VirtualBox |
-| [install-hardware.md](install-hardware.md) | Tulis image ke USB & boot di komputer fisik (BIOS/UEFI) |
-| [debugging.md](debugging.md) | Debug kernel dengan GDB + profiler zona (TSC) |
+## Run & install
 
-## Referensi teknis
+| Doc | What it covers |
+|---|---|
+| [Run in a VM](run-in-vm.md) | Convert the image and run it in VMware Player, VirtualBox, or Hyper-V. |
+| [Install on Hardware](install-hardware.md) | Flash the image to a USB stick and boot a physical machine (BIOS/UEFI), with an honest capability matrix. |
+| [Debugging & Profiling](debugging.md) | Attach GDB to the running kernel, and the instrumented TSC zone profiler. |
 
-| Dokumen | Isi |
-|---------|-----|
-| [abi.md](abi.md) | Tabel syscall ABI v1, struct lintas-batas, model keamanan pointer, aturan evolusi |
-| [csharp-userland.md](csharp-userland.md) | Runtime C# ↔ kernel: interop, ELF loader, shim `bzstart` |
-| [app-framework.md](app-framework.md) | App framework, manifest, SDK, window syscall |
-| [system-services.md](system-services.md) | VFS, service/init manager, async I/O, jaringan |
-| [desktop-environment.md](desktop-environment.md) | Kompositor, window manager, tema, workspace, shell |
-| [window-system.md](window-system.md) | Sistem grafik & window (v0.6 "Daun") |
-| [ai-power.md](ai-power.md) | Subsistem AI (LLM/CV/GenAI + Model Manager) & power management |
+## Technical reference
 
-## Perencanaan & riwayat (di root repo)
+| Doc | What it covers |
+|---|---|
+| [Syscall ABI](abi.md) | The v1 syscall table, cross-boundary structs, the pointer security model, and the evolution rules. |
+| [C# in Ring 3](csharp-userland.md) | How C# runs in user-space: the bflat pipeline, the ELF loader, and the `bzstart` shim. |
+| [App Framework](app-framework.md) | The app model, manifest, SDK, and window syscalls. |
+| [System Services](system-services.md) | VFS, the service/init manager, async I/O, and networking. |
+| [Desktop Environment](desktop-environment.md) | Compositor, window manager, themes, workspaces, and the shell. |
+| [Graphics & Window System](window-system.md) | The rendering stack and window management. |
+| [AI Subsystem & Power](ai-power.md) | The local LLM / CV / GenAI subsystem, the Model Manager, and power management. |
 
-| Dokumen | Isi |
-|---------|-----|
-| [../PLAN.md](../PLAN.md) | Roadmap produk per-versi (v0.1 → v1.x) |
-| [../Progress.md](../Progress.md) | Tracking checklist fitur (sudah/sebagian/belum) |
-| [../CHANGELOG.md](../CHANGELOG.md) | Riwayat rilis per codename versi |
-| [../requirements.md](../requirements.md) | Desain teknis penuh (spec, Bahasa Indonesia); §17 checklist |
-| [../CONTRIBUTING.md](../CONTRIBUTING.md) | Standar koding & alur kontribusi |
+## Planning & history (repo root)
+
+| Doc | What it covers |
+|---|---|
+| [PLAN.md](../PLAN.md) *(ID)* | Product roadmap, version by version (v0.1 → v1.x). |
+| [Progress.md](../Progress.md) *(ID)* | Per-feature checklist tracker (done / partial / pending). |
+| [CHANGELOG.md](../CHANGELOG.md) | Release history by version codename. |
+| [requirements.md](../requirements.md) *(ID)* | The full technical spec; §17 is the development checklist. |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Coding standards and the contribution flow. |
+
+---
+
+*Buitenzorg OS is made by Gravicode Studios, led by Kang Fadhil.*

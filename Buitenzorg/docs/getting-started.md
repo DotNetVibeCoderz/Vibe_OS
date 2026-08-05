@@ -1,19 +1,20 @@
-# Getting Started — Menjalankan Buitenzorg OS
+# Getting Started
 
-Panduan ini membawa kamu dari nol sampai **Buitenzorg OS berjalan di QEMU**,
-bahkan jika kamu belum pernah membangun sistem operasi. Buitenzorg dibuat oleh
-**Gravicode Studios**, dipimpin oleh **Kang Fadhil**.
+This guide takes you from nothing to **Buitenzorg OS running in QEMU**, even if
+you have never built an operating system before.
 
-> Buitenzorg OS adalah OS hibrida AI-native: kernel di **Rust** (ring 0),
-> aplikasi & layanan di **C#/.NET** (ring 3). Ia berjalan di dalam emulator
-> **QEMU** — kamu tidak perlu memformat komputermu.
+> Buitenzorg OS is a hybrid, AI-native OS: a **Rust** kernel (ring 0) and
+> **C#/.NET** apps and services (ring 3). It runs inside the **QEMU** emulator —
+> you never touch your real machine.
+
+**English** · [Bahasa Indonesia](getting-started.id.md) · ← [Documentation index](README.md)
 
 ---
 
-## 🚀 Jalur cepat (satu perintah)
+## 1. Fastest path (one command)
 
-Skrip **quickstart** memasang semua yang dibutuhkan (Rust, .NET, QEMU, bflat),
-membangun OS, lalu menjalankannya di QEMU. Buka terminal di folder repo:
+The **quickstart** script installs everything you need (Rust, .NET, QEMU,
+bflat), builds the OS, and boots it in QEMU. Open a terminal in the repo folder:
 
 **Windows** (PowerShell):
 ```powershell
@@ -25,129 +26,114 @@ membangun OS, lalu menjalankannya di QEMU. Buka terminal di folder repo:
 ./scripts/quickstart.sh
 ```
 
-Selesai — sebuah jendela QEMU akan terbuka dan mem-boot Buitenzorg OS. Untuk
-hanya membangun tanpa menjalankan tambahkan `-NoRun` (Windows) / `--no-run`
-(Linux); untuk uji-otomatis headless gunakan `-SmokeTest` / `--smoke`.
+That's it — a QEMU window opens and boots Buitenzorg. To build without running,
+add `-NoRun` (Windows) / `--no-run` (Linux); for a headless self-test use
+`-SmokeTest` / `--smoke`.
 
-> Skrip aman dijalankan berulang: langkah yang sudah terpasang dilewati. Di
-> Windows ia memakai **winget**; di Linux memakai **apt/dnf/pacman/brew** +
-> rustup. Jika sebuah langkah gagal, ikuti pesan yang muncul atau lanjut ke
-> **Setup manual** di bawah.
+> The script is safe to re-run: steps that are already done are skipped. On
+> Windows it uses **winget**; on Linux, **apt / dnf / pacman / brew** + rustup.
+> If a step fails, follow the printed message or use the manual setup below.
 
----
+## 2. Dependencies
 
-## 🧰 Apa saja dependensinya
+| Tool | Used for | Manual install |
+|---|---|---|
+| **Rust** (rustup) | building the kernel (Rust `no_std`) | [rustup.rs](https://rustup.rs) — the nightly toolchain + `x86_64-unknown-none` target are pinned automatically by `kernel/rust-toolchain.toml` |
+| **.NET SDK 10** | building the C# runtime/SDK + running tests | [dotnet.microsoft.com](https://dotnet.microsoft.com/download) |
+| **QEMU** | the emulator the OS boots in | [qemu.org/download](https://www.qemu.org/download/) — on Windows it is auto-detected at `C:\Program Files\qemu\` |
+| **bflat** | compiling C# apps → native ELF (ring 3) | download a release from [bflattened/bflat](https://github.com/bflattened/bflat/releases) and extract it into `tools/bflat/` (quickstart does this for you) |
 
-| Alat | Untuk apa | Cara pasang manual |
-|------|-----------|--------------------|
-| **Rust** (rustup) | membangun kernel (Rust `no_std`) | [rustup.rs](https://rustup.rs) — toolchain nightly + target `x86_64-unknown-none` dipasang otomatis via `kernel/rust-toolchain.toml` |
-| **.NET SDK 10** | membangun runtime/SDK C# + menjalankan test | [dotnet.microsoft.com](https://dotnet.microsoft.com/download) |
-| **QEMU** | emulator tempat OS boot | [qemu.org/download](https://www.qemu.org/download/) — di Windows default terdeteksi di `C:\Program Files\qemu\` |
-| **bflat** | mengompilasi app C# → ELF native (ring 3) | Unduh rilis dari [github.com/bflattened/bflat](https://github.com/bflattened/bflat/releases), ekstrak ke `tools/bflat/` (quickstart melakukannya otomatis) |
+> `bflat` and `tools/` are gitignored. Without bflat the kernel still boots, but
+> the ring-3 C# apps are not built.
 
-> `bflat` dan `tools/` di-gitignore. Tanpa bflat, kernel tetap boot tetapi app
-> C# ring-3 tidak dibangun.
+## 3. Manual setup (without quickstart)
 
----
-
-## 🛠️ Setup manual (kalau tidak pakai quickstart)
-
-1. Pasang **Rust**, **.NET SDK 10**, dan **QEMU** (lihat tabel di atas).
-2. Unduh **bflat** (windows-x64 / linux-glibc-x64) dan ekstrak isinya ke
-   `tools/bflat/` sehingga ada `tools/bflat/bflat.exe` (Windows) atau
+1. Install **Rust**, **.NET SDK 10**, and **QEMU** (see the table above).
+2. Download **bflat** (windows-x64 / linux-glibc-x64) and extract it into
+   `tools/bflat/`, so you have `tools/bflat/bflat.exe` (Windows) or
    `tools/bflat/bflat` (Linux).
-3. Build + jalankan (lihat **Alur harian**).
+3. Build and run (see the daily workflow below).
 
----
-
-## 📅 Alur harian
+## 4. Daily workflow
 
 **Windows:**
 ```powershell
-.\scripts\build.ps1        # build semuanya -> dist\*.img
-.\scripts\run-qemu.ps1     # boot + lihat serial; -Uefi untuk jalur UEFI/OVMF
-.\scripts\smoke-test.ps1   # verifikasi milestone boot otomatis (4 media)
+.\scripts\build.ps1        # build everything  → dist\*.img
+.\scripts\run-qemu.ps1     # boot + watch serial; -Uefi for the UEFI/OVMF path
+.\scripts\smoke-test.ps1   # verify boot milestones automatically (4 media)
 ```
 
-**Linux/macOS:**
+**Linux / macOS:**
 ```bash
 ./scripts/build.sh
 ./scripts/smoke-test.sh
 ```
 
-**Iterasi kernel saja (paling cepat):**
+**Kernel-only iteration (fastest):**
 ```powershell
 cd kernel
-cargo run --release -p bzimage -- --run    # build ulang + langsung boot
+cargo run --release -p bzimage -- --run    # rebuild + boot in one step
 ```
 
-`bzimage` adalah pipeline boot: ia mengompilasi `bzkernel` (artifact dependency,
-target `x86_64-unknown-none`), membungkusnya dengan bootloader `bootloader` 0.11
-menjadi image GPT/FAT (UEFI) + MBR (BIOS), lalu (opsional) menjalankan QEMU.
-Firmware OVMF untuk UEFI diunduh otomatis ke `kernel/target/ovmf/`.
+`bzimage` is the boot pipeline: it compiles `bzkernel` (an artifact dependency,
+target `x86_64-unknown-none`), wraps it with the `bootloader` 0.11 crate into a
+GPT/FAT image (UEFI) plus an MBR image (BIOS), then optionally launches QEMU. The
+OVMF firmware for UEFI is downloaded automatically to `kernel/target/ovmf/`.
 
-> ⚠️ Jangan jalankan `cargo build` untuk `bzkernel` tanpa
-> `--target x86_64-unknown-none` — kernel tidak bisa (dan tidak perlu) dibangun
-> untuk host; karena itu ia bukan `default-members` workspace.
+> ⚠️ Never run `cargo build` for `bzkernel` without `--target
+> x86_64-unknown-none` — the kernel cannot (and need not) be built for the host,
+> which is why it is excluded from the workspace `default-members`.
 
----
-
-## 🖥️ Menjalankan di VMware / VirtualBox
-
-Ingin menjalankannya di VMware Player atau Oracle VirtualBox alih-alih QEMU?
-Lihat **[run-in-vm.md](run-in-vm.md)** — ada skrip `scripts/make-vm-images.ps1`
-(`.sh`) yang mengonversi image ke `.vmdk`/`.vdi`.
-
-## 💽 Boot dari USB di hardware nyata
-
-Buitenzorg juga bisa boot dari stik USB di komputer fisik (BIOS atau UEFI).
-Lihat **[install-hardware.md](install-hardware.md)** — ada skrip
-`scripts/flash-usb.ps1` (`.sh`) yang menulis image ke USB dengan pengaman
-berlapis + verifikasi. *(Boot hardware masih eksperimental — belum tervalidasi
-tim; lihat batasan di dokumen itu.)*
-
----
-
-## 👩‍💻 Sisi C# (host)
+## 5. The C# side (host)
 
 ```powershell
-dotnet build Buitenzorg.slnx     # catatan: .slnx, bukan .sln
-dotnet test  Buitenzorg.slnx     # kontrak ABI Rust<->C#
+dotnet build Buitenzorg.slnx     # note: .slnx, not .sln
+dotnet test  Buitenzorg.slnx     # the Rust ↔ C# ABI contract
 dotnet run --project runtime\samples\HelloBuitenzorg
 ```
 
-App C# di host berjalan pada **backend simulasi** (`HostSyscalls`) dengan API
-identik dengan target — jadi kode yang sama jalan di bare metal.
+On the host, C# apps run against a **simulation backend** (`HostSyscalls`) whose
+API is identical to the real target — so the same code runs on bare metal. Want
+to build your own app? See **[Your First App](first-app.md)**.
 
-Ingin membuat app sendiri? Lihat **[first-app.md](first-app.md)**.
+## 6. Debug the kernel (GDB)
 
----
-
-## 🐞 Debugging kernel (GDB)
+The turnkey way is `scripts/debug-kernel.ps1` / `.sh` (see
+[Debugging & Profiling](debugging.md)). The manual way:
 
 ```powershell
 cd kernel
-$env:QEMU_EXTRA = "-s -S"                   # QEMU: GDB server, boot ditahan
+$env:QEMU_EXTRA = "-s -S"                   # QEMU: GDB server, boot paused
 cargo run --release -p bzimage -- --run
-# dari terminal lain: gdb -> target remote :1234
+# from another terminal:  gdb → target remote :1234
 ```
-Simbol kernel: `kernel/target/x86_64-unknown-none/release/bzkernel`.
+
+Kernel symbols: `kernel/target/x86_64-unknown-none/release/bzkernel`.
+
+## Beyond QEMU
+
+- **Run in a VM** (VMware / VirtualBox / Hyper-V): [run-in-vm.md](run-in-vm.md).
+- **Boot on real hardware** from USB: [install-hardware.md](install-hardware.md)
+  *(experimental — not yet validated on a physical machine; see the doc for the
+  honest capability matrix).*
+
+## Troubleshooting
+
+- **`rustup` / `dotnet` / `qemu` not found after quickstart** — open a new
+  terminal (PATH was just refreshed) and try again.
+- **QEMU not on PATH (Windows)** — the build still detects
+  `C:\Program Files\qemu\`. If yours is elsewhere, set the `QEMU` env var to the
+  full path of `qemu-system-x86_64.exe`.
+- **"offset is not a multiple of 16" when building the kernel** — you built
+  `bzkernel` for the host. Always go through `bzimage` (`cargo run -p bzimage`),
+  which uses the bare-metal target.
+- **C# apps don't appear at boot** — make sure `tools/bflat/bflat.exe` exists,
+  then run `scripts/build-hello-csharp.ps1` and check for bflat errors.
+- **Boot feels slow (~1 minute to READY)** — normal: the boot runs many demo
+  apps. The full log always streams to serial.
+- **QEMU screen is black but serial is running** — the kernel renders to the
+  framebuffer; give it a few seconds for the desktop, or read the serial output.
 
 ---
 
-## ❓ Troubleshooting
-
-- **`rustup`/`dotnet`/`qemu` tidak ditemukan setelah quickstart** — buka
-  terminal baru (PATH baru di-refresh), lalu jalankan lagi.
-- **QEMU tidak di PATH (Windows)** — build tetap mendeteksi
-  `C:\Program Files\qemu\`. Kalau lokasimu beda, set env var `QEMU` ke path
-  `qemu-system-x86_64.exe`.
-- **"offset is not a multiple of 16" saat build kernel** — kamu membangun
-  `bzkernel` untuk host. Selalu lewat `bzimage` (`cargo run -p bzimage`), yang
-  memakai target bare-metal.
-- **App C# tidak muncul saat boot** — pastikan `tools/bflat/bflat.exe` ada;
-  jalankan `scripts/build-hello-csharp.ps1` dan cek tidak ada error bflat.
-- **Boot terasa lama (~1 menit ke READY)** — normal: banyak demo app dijalankan
-  saat boot. Log lengkap selalu tampil di serial.
-- **Layar QEMU hitam tapi serial jalan** — kernel merender ke framebuffer;
-  beri beberapa detik hingga desktop tampil, atau baca output di serial.
+← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

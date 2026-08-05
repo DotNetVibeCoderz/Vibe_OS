@@ -1,70 +1,82 @@
 # Graphics & Window System (v0.6 "Daun")
 
-Milestone v0.6: **"dua window bisa dipindah & di-resize"**. Kernel merender
-desktop berjendela ke framebuffer dan merutekan event mouse ke window.
+The v0.6 milestone: **"two windows can be moved and resized"**. The kernel
+renders a windowed desktop to the framebuffer and routes mouse events to windows.
 
-## Lapisan
+**English** · [Bahasa Indonesia](window-system.id.md) · ← [Documentation index](README.md)
 
-| Modul | Peran |
+## Layers
+
+| Module | Role |
 |---|---|
-| `gfx.rs` | Primitif render ke buffer `0x00RRGGBB`: `fill_rect`, `rect_outline`, `fill_gradient`, alpha `blend`, teks (font Noto). |
-| `wm.rs` | Window manager + compositor: window floating, z-order, hit-test, move/resize, taskbar, kursor. |
-| `framebuffer::present` | Blit back-buffer full-screen ke hardware framebuffer (konversi ke format piksel BGR/RGB). |
+| `gfx.rs` | Rendering primitives into a `0x00RRGGBB` buffer: `fill_rect`, `rect_outline`, `fill_gradient`, alpha `blend`, text (the Noto font). |
+| `wm.rs` | The window manager + compositor: floating windows, z-order, hit-testing, move/resize, taskbar, cursor. |
+| `framebuffer::present` | Blit the full-screen back buffer to the hardware framebuffer (converting to the BGR/RGB pixel format). |
 
 ## Compositor
 
-Double-buffered: tiap frame di-render penuh ke back-buffer (`Vec<u32>`
-seukuran layar), lalu `present` menyalinnya sekali ke framebuffer (tanpa
-flicker). Urutan gambar: wallpaper gradien → window (belakang→depan, dengan
-drop shadow, title bar, teks, border, resize grip) → taskbar → kursor.
+Double-buffered: each frame is rendered in full into a back buffer (a `Vec<u32>`
+the size of the screen), then `present` copies it to the framebuffer once (no
+flicker). Draw order: gradient wallpaper → windows (back-to-front, with drop
+shadow, title bar, text, border, resize grip) → taskbar → cursor.
 
 ## Window manager
 
 - **Floating windows**: `create_window(title, x, y, w, h, lines)`.
-- **Z-order**: `Vec<Window>` belakang-ke-depan; klik menaikkan window ke atas.
-- **Hit-test**: `window_at(x, y)` mengembalikan window teratas di titik itu.
-- **Move**: tekan di title bar → drag → window mengikuti kursor (offset tetap).
-- **Resize**: tekan di grip kanan-bawah (`RESIZE_GRIP` px) → drag → ukuran
-  berubah (dibatasi `MIN_W`/`MIN_H` dan tepi layar).
+- **Z-order**: a `Vec<Window>` back-to-front; a click raises a window to the top.
+- **Hit-testing**: `window_at(x, y)` returns the topmost window at that point.
+- **Move**: press on the title bar → drag → the window follows the cursor (with a
+  fixed offset).
+- **Resize**: press on the bottom-right grip (`RESIZE_GRIP` px) → drag → the size
+  changes (clamped by `MIN_W`/`MIN_H` and the screen edges).
 
 ## Event routing
 
-`handle_mouse(x, y, left)` menerima satu sampel mouse (posisi absolut + tombol
-kiri), mendeteksi tepi press/release, memulai/melanjutkan/mengakhiri drag.
-Sumbernya bisa:
-- **Mouse PS/2 nyata** (`desktop_loop`): poll `mouse::state()`, recompose saat
-  pointer bergerak / tombol berubah.
-- **Event ter-script** (`daun_demo`): urutan `handle_mouse` untuk memindah satu
-  window dan me-resize window lain, lalu memverifikasi geometrinya berubah
-  (`window_rect`) — inilah yang membuat milestone teruji headless di CI.
+`handle_mouse(x, y, left)` takes one mouse sample (an absolute position + the
+left button), detects press/release edges, and starts/continues/ends a drag. The
+source can be:
+- **The real PS/2 mouse** (`desktop_loop`): poll `mouse::state()`, recompose when
+  the pointer moves or a button changes.
+- **Scripted events** (`daun_demo`): a sequence of `handle_mouse` calls that move
+  one window and resize another, then verify the geometry changed
+  (`window_rect`) — this is what makes the milestone headless-testable in CI.
 
-## Verifikasi
+## Verification
 
-`daun_demo` mencetak perubahan geometri lalu `MILESTONE: WINDOWS OK`, dan
-smoke test mewajibkan marker itu di semua media boot. Verifikasi visual lewat
-screenshot QEMU (`docs/img/desktop-daun.png`).
+`daun_demo` prints the geometry changes, then `MILESTONE: WINDOWS OK`, and the
+smoke test requires that marker on every boot medium. Visual verification via a
+QEMU screenshot:
 
-## v0.11 "Cahaya": kontrol window, screensaver, personalization, micro-interaction
+![The v0.6 "Daun" windowed desktop](img/desktop-daun.png)
 
-- **Kontrol window** (`wm.rs`): tombol **minimize/maximize/close** di setiap
-  title bar, state normal/minimized/maximized (restore/focus dari taskbar),
-  dan **sudut membulat** (rounded corners, per-tema; beveled tetap kotak).
-- **Screensaver** (`screensaver.rs`): 6 saver gaya Win 3.1/98 (Starfield,
-  Mystify, 3D Pipes, Marquee, Bouncing, Blank), aktif setelah idle ~12s
-  (`desktop_loop`), dismiss saat ada input. Pilih: `saver <nama|list|off>`.
-- **Wallpaper** (`wallpaper.rs`): bawaan (theme/waves/grid/dots/aurora) +
-  **gambar user** (BMP 24-bit dari VFS). Pilih: `bg <nama|/path.bmp|list>`.
-- **Micro-interactions**: hover highlight tombol kontrol, **click ripple**
-  beranimasi, loop desktop kontinu. Matikan: `anim off`.
-- **Personalization** via shell: `settings`, `bg`, `saver`, `cursor`, `anim`,
+## v0.11 "Cahaya": window controls, screensaver, personalization, micro-interactions
+
+- **Window controls** (`wm.rs`): **minimize/maximize/close** buttons on each
+  title bar, normal/minimized/maximized states (restore/focus from the taskbar),
+  and **rounded corners** (per-theme; beveled themes stay square).
+- **Screensaver** (`screensaver.rs`): 6 Win 3.1/98-style savers (Starfield,
+  Mystify, 3D Pipes, Marquee, Bouncing, Blank), activated after ~12 s of idle
+  (`desktop_loop`), dismissed on input. Choose with `saver <name|list|off>`.
+
+  ![The Mystify screensaver](img/screensaver-mystify.png)
+
+- **Wallpaper** (`wallpaper.rs`): built-in (theme/waves/grid/dots/aurora) + a
+  **user image** (a 24-bit BMP from the VFS). Choose with `bg <name|/path.bmp|list>`.
+- **Micro-interactions**: hover highlight on control buttons, an animated **click
+  ripple**, a continuous desktop loop. Turn off with `anim off`.
+- **Personalization** via the shell: `settings`, `bg`, `saver`, `cursor`, `anim`,
   `theme`.
-- **Compute API** (`compute.rs`): backend CPU, interface siap GPU.
+- **Compute API** (`compute.rs`): a CPU backend with a GPU-ready interface.
 
-> Catatan penting: `desktop_loop` butuh timer hidup. `usermode::enter_user`
-> me-*re-enable* interrupts setelah app ring-3 keluar (IF dulu tetap mati →
-> timer mati → desktop interaktif/screensaver/animasi tak jalan sejak v0.4).
+> Important note: `desktop_loop` needs the timer alive. `usermode::enter_user`
+> re-enables interrupts after a ring-3 app exits (IF used to stay off → the timer
+> stopped → the interactive desktop/screensaver/animation was broken from v0.4).
 
-## Berikutnya
+## What's next
 
-Tiling layout, animasi buka/tutup window, transisi tema/workspace, app
-Personalization GUI, dan driver GPU nyata (compositor dipercepat GPU).
+Tiling layout, window open/close animations, theme/workspace transitions, a
+Personalization GUI app, and a real GPU driver (a GPU-accelerated compositor).
+
+---
+
+← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

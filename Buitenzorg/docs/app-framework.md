@@ -1,71 +1,78 @@
 # App Framework (v0.8 "Kembang")
 
-Milestone v0.8: **"desktop app pihak ketiga jalan"** — sebuah app C# gaya
-pihak-ketiga membuat window sendiri dan menggambar UI-nya lewat syscall.
+The v0.8 milestone: **"a third-party desktop app runs"** — a third-party-style C#
+app creates its own window and draws its UI via syscalls.
+
+**English** · [Bahasa Indonesia](app-framework.id.md) · ← [Documentation index](README.md)
 
 ## Window syscall ABI (append-only, v0.8)
 
-Ditambahkan ke kontrak `bz-abi` ↔ C# (`docs/abi.md`):
+Added to the `bz-abi` ↔ C# contract (see [Syscall ABI](abi.md)):
 
-| # | Nama | Argumen | Hasil |
+| # | Name | Arguments | Result |
 |---|---|---|---|
-| 6 | `WIN_CREATE` | a0=title ptr, a1=len, a2=(w&lt;&lt;32)\|h | window id |
-| 7 | `WIN_CMD` | a0=window id, a1=ptr ke `DrawCmd` | 0 sukses |
-| 8 | `WIN_PRESENT` | a0=window id | 0 (recompose desktop) |
-| 9 | `KEY_READ` | — | 1 char (0 bila kosong) |
+| 6 | `WIN_CREATE` | a0=title ptr, a1=len, a2=(w≪32)\|h | window id |
+| 7 | `WIN_CMD` | a0=window id, a1=ptr to `DrawCmd` | 0 = success |
+| 8 | `WIN_PRESENT` | a0=window id | 0 (recompose the desktop) |
+| 9 | `KEY_READ` | — | 1 char (0 if empty) |
 
-`DrawCmd` (`#[repr(C)]`, 48 byte) berisi op (fill_rect / draw_text / clear),
-koordinat, warna `0x00RRGGBB`, dan pointer+len teks. Test kontrak ukuran ada
-di kedua sisi (`cargo test -p bz-abi`, `AbiContractTests.cs`).
+`DrawCmd` (`#[repr(C)]`, 48 bytes) holds an op (fill_rect / draw_text / clear),
+coordinates, a `0x00RRGGBB` color, and a text pointer + length. The size contract
+test exists on both sides (`cargo test -p bz-abi`, `AbiContractTests.cs`).
 
-## Alur
+## Flow
 
-1. App C# (mis. `userland/hello-csharp/xox.cs`) memanggil `bz_win_create`,
-   `bz_win_cmd`, `bz_win_present` (disediakan `bzstart.rs` sebagai fungsi
-   `#[no_mangle]` yang membungkus syscall Buitenzorg).
-2. Kernel `create_app_window` membuat `Window` dengan `AppCanvas` (buffer
-   piksel client area). `draw_on_window` menerapkan `DrawCmd` ke canvas.
-3. Compositor mem-blit `AppCanvas` ke framebuffer saat window dikomposit.
-4. Shell `run <app>` (`app::run_named`) membaca `<APP>.ELF` dari `/disk`,
-   memuatnya via ELF loader, dan menjalankannya di ring 3 (load → run → unmap).
+1. A C# app (e.g. `userland/hello-csharp/xox.cs`) calls `bz_win_create`,
+   `bz_win_cmd`, `bz_win_present` (provided by `bzstart.rs` as `#[no_mangle]`
+   functions that wrap the Buitenzorg syscalls).
+2. The kernel's `create_app_window` makes a `Window` with an `AppCanvas` (the
+   client-area pixel buffer). `draw_on_window` applies a `DrawCmd` to the canvas.
+3. The compositor blits the `AppCanvas` to the framebuffer when the window is
+   composited.
+4. The shell's `run <app>` (`app::run_named`) reads `<APP>.ELF` from `/disk`,
+   loads it via the ELF loader, and runs it in ring 3 (load → run → unmap).
 
 ## SDK & tooling
 
-- Template: `sdk/templates/console-csharp`, `sdk/templates/desktop-csharp`
-  (dengan helper `bzui.cs`, `app.manifest`, `.vscode/launch.json`).
-- `bz new desktop-csharp <nama>` men-scaffold app baru.
-- `sdk/vscode-extension` — skeleton extension VS Code (§13.1): New Project,
-  Build & Run in QEMU, Validate Manifest, plus tipe debug `buitenzorg`.
+- Templates: `sdk/templates/console-csharp`, `sdk/templates/desktop-csharp` (with
+  a `bzui.cs` helper, `app.manifest`, `.vscode/launch.json`).
+- `bz new desktop-csharp <name>` scaffolds a new app.
+- `sdk/vscode-extension` — a skeleton VS Code extension (§13.1): New Project,
+  Build & Run in QEMU, Validate Manifest, plus a `buitenzorg` debug type.
 
-## Batasan: tanpa GC (lihat CLAUDE.md)
+## Constraint: no GC (see CLAUDE.md)
 
-App freestanding (zerolib, tanpa GC). **Hindari `new T[]`/heap** — pakai
-`stackalloc`. GC penuh + CoreCLR/JIT + reflection adalah pekerjaan lanjutan
-v0.8 (jalur "Menengah" di requirements.md §5.1).
+Freestanding apps (zerolib, no GC). **As of v0.15 the heap works** (`new`,
+arrays, generics), but the zerolib rules still apply — no static reference
+fields, no method-group→delegate, no `object[]` element stores, no
+`ToString()`/concat. See [Your First App](first-app.md) for the full rules.
 
-## v0.9 "Serbuk": Drawing, Task Manager, 4 varian app
+## v0.9 "Serbuk": Drawing, Task Manager, 4 app variants
 
-- **`Buitenzorg.Drawing`** (`userland/hello-csharp/bzdraw.cs`) — library grafik
-  managed bergaya System.Drawing: `Graphics`, `Pen`, `Brush`, `Color`, `Point`,
-  `Rectangle`, `Size`; `FillRectangle`/`DrawRectangle`, `DrawLine`,
-  `DrawEllipse`/`FillEllipse`, `DrawString`/`DrawChars`. Menerjemahkan ke draw
-  op window ABI baru (LINE=3, ELLIPSE=4, FILL_ELLIPSE=5, RECT=6). Demo: `paint.cs`.
-- **Task Manager** (`taskmgr.cs`) — daftar proses (kernel task + app aktif),
-  uptime/heap/RAM, dan kill. Didukung registry proses kernel (`process.rs`)
-  dengan akuntansi CPU-time per-tick + syscall `PROC_LIST`/`PROC_KILL`/`SYS_STAT`.
-- **Varian app**: **widget** (`widget.cs`, ter-dock di widget board lewat prefix
-  judul `widget:`) dan **web** (`webview.cs`, mini renderer subset HTML) —
-  melengkapi console/desktop → keempat varian app berjalan.
+- **`Buitenzorg.Drawing`** (`userland/hello-csharp/bzdraw.cs`) — a managed,
+  System.Drawing-style graphics library: `Graphics`, `Pen`, `Brush`, `Color`,
+  `Point`, `Rectangle`, `Size`; `FillRectangle`/`DrawRectangle`, `DrawLine`,
+  `DrawEllipse`/`FillEllipse`, `DrawString`/`DrawChars`. It translates to the new
+  window-ABI draw ops (LINE=3, ELLIPSE=4, FILL_ELLIPSE=5, RECT=6). Demo: `paint.cs`.
+  *(The v0.16 client-side renderer `bzgfx.cs` supersedes this — see
+  [Your First App](first-app.md).)*
+- **Task Manager** (`taskmgr.cs`) — a process list (kernel tasks + the active
+  app), uptime/heap/RAM, and kill. Backed by the kernel process registry
+  (`process.rs`) with per-tick CPU-time accounting + the `PROC_LIST`/`PROC_KILL`/
+  `SYS_STAT` syscalls.
+- **App variants**: a **widget** (`widget.cs`, docked on the widget board via a
+  `widget:` title prefix) and a **web view** (`webview.cs`, a subset-HTML
+  renderer) — completing console/desktop, so all four app variants run.
 
-### Batasan freestanding (penting)
-Tanpa GC: hindari `new T[]`/`new string`/`ToString`/concat. Bangun teks di
-`stackalloc char[]` lalu `DrawChars`. `stackalloc` array-of-struct memicu
-`mul.ovf` (butuh `ThrowOverflowException` yang tak ada di zerolib) — pakai
-`stackalloc byte[N]` konstan lalu cast pointer. Shim menyediakan
-`memset/memcpy/memmove/memcmp`.
+![The v0.9 "Serbuk" desktop — Drawing, Task Manager, and the app variants](img/desktop-serbuk.png)
 
-## Berikutnya
+## What's next
 
-UI Toolkit XAML-based (binding/MVVM), `Bitmap`/`GraphicsPath`/`Font` di Drawing,
-engine web HTML/CSS/JS penuh, tab + Details di Task Manager, template SDK
-web/widget, debugging DAP dari VS Code + debug bridge, dan CoreCLR/JIT + GC.
+An XAML-based UI toolkit (binding/MVVM) — since realized as the retained-mode
+`Buitenzorg.UI` in v0.16 — a full HTML/CSS/JS web engine, tabs + Details in the
+Task Manager, web/widget SDK templates, DAP debugging from VS Code + a debug
+bridge, and CoreCLR/JIT + GC.
+
+---
+
+← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

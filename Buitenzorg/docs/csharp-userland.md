@@ -1,56 +1,63 @@
-# Menjalankan C# di ring 3 (v0.4 "Tunas")
+# Running C# in Ring 3 (v0.4 "Tunas")
 
-Milestone v0.4: program **C#** yang dikompilasi ahead-of-time berjalan di
-user-space (ring 3) di atas kernel Rust, dan memanggil kernel lewat syscall.
-Inilah "Layer 4 — Managed Runtime" (requirements.md §3, §5.1) dalam bentuk
-paling ringan: jalur **NativeAOT**, tanpa JIT, tanpa GC.
+The v0.4 milestone: an ahead-of-time-compiled **C#** program runs in user-space
+(ring 3) on top of the Rust kernel and calls into the kernel via syscalls. This
+is "Layer 4 — the Managed Runtime" (requirements.md §3, §5.1) in its lightest
+form: the **NativeAOT** path, no JIT, no GC.
 
-## Pipeline build
+**English** · [Bahasa Indonesia](csharp-userland.id.md) · ← [Documentation index](README.md)
+
+## Build pipeline
 
 ```
 hello.cs ──bflat(ILC/NativeAOT, zerolib)──► hello.o ─┐
-                                                     ├─rust-lld─► hello.elf (ELF statis)
+                                                     ├─rust-lld─► hello.elf (static ELF)
 bzstart.rs ──rustc(x86_64-unknown-none)──► bzstart.o ┘
 ```
 
-- **bflat** (`--stdlib:zero`) mengompilasi C# ke objek freestanding: tanpa
-  runtime .NET penuh, tanpa GC. `Console.Write` memanggil `SystemNative_Log`.
-- **bzstart.rs** adalah shim startup + PAL: menyediakan `_start` (memanggil
-  entry NativeAOT `__managed__Main`) dan `SystemNative_Log/Malloc/Abort` yang
-  menerjemahkan ke syscall Buitenzorg. Ini menggantikan glibc + libSystem.Native.
-- **rust-lld** menaut keduanya jadi ELF statis (tanpa interpreter) di `0x400000`.
+- **bflat** (`--stdlib:zero`) compiles C# to a freestanding object: no full .NET
+  runtime, no GC. `Console.Write` calls `SystemNative_Log`.
+- **bzstart.rs** is the startup shim + PAL: it provides `_start` (which calls the
+  NativeAOT entry `__managed__Main`) and `SystemNative_Log/Malloc/Abort` that
+  translate to Buitenzorg syscalls. This replaces glibc + libSystem.Native.
+- **rust-lld** links both into a static ELF (no interpreter) at `0x400000`.
 
-Build: `scripts/build-hello-csharp.ps1` (atau `.sh`). Butuh `tools/bflat`
-(diunduh dari github.com/bflattened/bflat) + Rust nightly.
+Build: `scripts/build-hello-csharp.ps1` (or `.sh`). Needs `tools/bflat`
+(downloaded from github.com/bflattened/bflat) + Rust nightly.
 
-## Jalur eksekusi di kernel
+## Execution path in the kernel
 
-1. `bzimage/build.rs` menanam `hello.elf` ke image (sebagai `HELLO.ELF`).
-2. Saat boot, `tunas_demo` membaca `HELLO.ELF` dari disk lewat driver IDE + FAT.
-3. `elf::load` memetakan segmen PT_LOAD sebagai halaman **user-accessible**.
-4. `usermode::enter_user` melakukan `sysretq` ke ring 3 di entry point.
-5. C# mencetak via `SystemNative_Log` → syscall `DEBUG_WRITE` → kernel.
-6. `Main` selesai → `exit` syscall → `usermode::exit_user` (longjmp) → kembali
-   ke kernel dengan exit code.
+1. `bzimage/build.rs` embeds `hello.elf` in the image (as `HELLO.ELF`).
+2. At boot, `tunas_demo` reads `HELLO.ELF` from disk via the IDE + FAT driver.
+3. `elf::load` maps the PT_LOAD segments as **user-accessible** pages.
+4. `usermode::enter_user` does a `sysretq` into ring 3 at the entry point.
+5. C# prints via `SystemNative_Log` → the `DEBUG_WRITE` syscall → the kernel.
+6. `Main` returns → the `exit` syscall → `usermode::exit_user` (longjmp) →
+   returns to the kernel with the exit code.
 
-## ABI ring-3
+## Ring-3 ABI
 
-`syscall` dengan `rax` = nomor syscall, `rdi/rsi/rdx` = argumen, hasil di `rax`
-(lihat `docs/abi.md`). SFMASK mematikan IF saat entry sehingga syscall tak
-terinterupsi; timer tetap men-preempt kode *user* lewat TSS ring-0 stack.
+`syscall` with `rax` = the syscall number, `rdi/rsi/rdx` = the arguments, result
+in `rax` (see [Syscall ABI](abi.md)). SFMASK clears IF on entry so a syscall is
+uninterrupted; the timer still preempts *user* code via the ring-0 TSS stack.
 
-## Dua gotcha page-table (penting)
+## Two page-table gotchas (important)
 
-Untuk mengeksekusi halaman user, **setiap** level page-table pada walk harus:
-- punya bit `USER_ACCESSIBLE` (izin = AND semua level), dan
-- **tidak** punya bit `NX` (fetch instruksi gagal bila NX di level manapun).
+To execute a user page, **every** level of the page-table walk must:
+- have the `USER_ACCESSIBLE` bit (permission is the AND of all levels), and
+- **not** have the `NX` bit (an instruction fetch faults if NX appears at any level).
 
-Entri level-atas dibagi dengan mapping kernel (dibuat tanpa USER, dan entri
-PML4 low milik bootloader punya NX). `memory::make_user_path` meng-OR USER dan
-meng-clear NX pada entri induk sepanjang jalur ke tiap halaman user. Leaf tetap
-memakai bit-nya sendiri, jadi memori kernel tetap terlindungi & non-executable.
+The upper-level entries are shared with kernel mappings (created without USER,
+and the bootloader's low PML4 entry has NX). `memory::make_user_path` ORs in USER
+and clears NX on the intermediate entries along the path to each user page. The
+leaves keep their own bits, so kernel memory stays protected and non-executable.
 
-## Berikutnya (v0.8 "Kembang")
+## What's next (v0.8+)
 
-Jalur CoreCLR + JIT untuk fitur C# lengkap (reflection, dynamic loading),
-integrasi GC dengan memory manager, dan BCL penuh — di atas fondasi ring-3 ini.
+The CoreCLR + JIT path for full C# features (reflection, dynamic loading), GC
+integration with the memory manager, and a full BCL — all built on this ring-3
+foundation.
+
+---
+
+← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*
