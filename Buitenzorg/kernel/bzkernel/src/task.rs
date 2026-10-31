@@ -433,25 +433,26 @@ pub fn detach_current_from_space(space_id: u64) {
 }
 
 /// Finish every task of process `space_id` (PROC_KILL). Refuses to kill the
-/// caller's own process (it should EXIT). Returns true if any task was live.
-pub fn kill_space(space_id: u64) -> bool {
+/// caller's own process (it should EXIT). Returns the victim's space if any
+/// task was live (for the caller to destroy).
+pub fn kill_space(space_id: u64) -> Option<aspace::Space> {
     if space_id == 0 {
-        return false;
+        return None;
     }
     interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
-        let Some(sched) = guard.as_mut() else { return false };
+        let sched = guard.as_mut()?;
         if sched.tasks[sched.current].space.id == space_id {
-            return false;
+            return None;
         }
-        let mut any = false;
+        let mut victim = None;
         for t in sched.tasks.iter_mut() {
             if t.space.id == space_id && t.state != State::Finished {
                 t.state = State::Finished;
-                any = true;
+                victim = Some(t.space);
             }
         }
-        any
+        victim
     })
 }
 

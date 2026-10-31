@@ -43,7 +43,7 @@ fn load_program(pid: u64, image: &[u8]) -> Result<(aspace::Space, u64, u64), &'s
     match loaded {
         Ok((entry, stack_top)) => Ok((space, entry, stack_top)),
         Err(e) => {
-            aspace::destroy(pid);
+            aspace::destroy(space);
             Err(e)
         }
     }
@@ -69,7 +69,7 @@ pub fn run_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
     // default (TSS) syscall stack and address space, then drop the app's.
     task::terminate_user_threads();
     task::set_current_space(prev);
-    aspace::destroy(pid);
+    aspace::destroy(space);
     process::app_exit(pid, code);
     Ok(code)
 }
@@ -104,18 +104,19 @@ pub fn spawn_image_at(
 /// syscall or a fatal fault): stop its other threads, leave and drop its
 /// address space, and record the exit code.
 pub fn process_exited(pid: u64, code: u64) {
+    let space = task::current_space();
     task::detach_current_from_space(pid);
-    aspace::destroy(pid);
+    aspace::destroy(space);
     process::app_exit(pid, code);
     crate::println!("[app] process {} exited with code {:#x}", pid, code);
 }
 
 /// Terminate spawned process `pid` from outside (PROC_KILL / Task Manager).
 pub fn kill(pid: u64) -> bool {
-    if !task::kill_space(pid) {
+    let Some(space) = task::kill_space(pid) else {
         return false;
-    }
-    aspace::destroy(pid);
+    };
+    aspace::destroy(space);
     process::app_exit(pid, KILLED_EXIT_CODE);
     crate::println!("[app] process {} killed", pid);
     true

@@ -488,6 +488,9 @@ fn multiproc_demo() {
         println!("[kernel] multiproc: MPROC.ELF not on /disk (skipped)");
         return;
     };
+    // Frames in use before any test process exists: every frame the processes
+    // take (pages, page tables, directories) must come back when they end.
+    let frames_start = memory::frames_in_use();
     let spawn = |name: &str, entry: Option<u64>| app::spawn_image_at(name, &image, entry);
     let (Ok(a), Ok(b), Ok(c), Ok(f)) = (
         spawn("mproc-a", None),
@@ -544,6 +547,30 @@ fn multiproc_demo() {
         );
         control = listed && closed && killed_by_shell;
     }
+
+    // Frame reclamation. Every process above has ended (normally, killed, or
+    // faulted): the frame count must be back exactly where it started. Then
+    // churn 20 short-lived processes: usage must stay flat, not grow.
+    let leaked = memory::frames_in_use() as i64 - frames_start as i64;
+    let churn_start = memory::frames_in_use();
+    let mut churned = 0;
+    for _ in 0..20 {
+        if let Ok(pid) = app::spawn_with_args("proctest", "child 3") {
+            while process::is_alive(pid) {
+                task::yield_now();
+            }
+            if process::exit_code(pid) == Some(3) {
+                churned += 1;
+            }
+        }
+    }
+    let churn_growth = memory::frames_in_use() as i64 - churn_start as i64;
+    let (allocated, freed) = memory::frame_stats();
+    println!(
+        "[kernel] multiproc: frames leaked by the test processes = {}; 20 spawn/exit cycles ok={} growth={} frames (allocated {} / freed {} since boot)",
+        leaked, churned, churn_growth, allocated, freed
+    );
+    let reclaim = leaked == 0 && churned == 20 && churn_growth == 0;
     let code = |pid| process::exit_code(pid).unwrap_or(u64::MAX);
     println!(
         "[kernel] multiproc: exit codes a={:#x} b={:#x} c={:#x} fault={:#x}; concurrent={} killed={} ring-3 preemptions={}",
@@ -553,6 +580,7 @@ fn multiproc_demo() {
     // let them share the CPU; require plenty (a cooperative-only kernel scores 0).
     if concurrent
         && control
+        && reclaim
         && preemptions >= 10
         && code(a) == 0
         && code(b) == 0
@@ -560,7 +588,7 @@ fn multiproc_demo() {
         && code(c) == app::KILLED_EXIT_CODE
         && code(f) == interrupts::FAULT_EXIT_CODE
     {
-        println!("[kernel] MILESTONE: MULTIPROC OK (preemptive processes, isolated address spaces, kill + fault containment, ps/kill + close-to-quit)");
+        println!("[kernel] MILESTONE: MULTIPROC OK (preemptive processes, isolated address spaces, kill + fault containment, ps/kill + close-to-quit, frames reclaimed)");
     } else {
         println!("[kernel] multiproc self-test FAILED");
     }
@@ -1181,8 +1209,8 @@ fn run_user_elf(
 
     let code = usermode::enter_user(program.entry, stack_top);
 
-    memory::unmap_user_pages(&program.pages, mapper);
-    memory::unmap_user_pages(&stack_pages, mapper);
+    memory::unmap_user_pages(&program.pages, mapper, frame_allocator);
+    memory::unmap_user_pages(&stack_pages, mapper, frame_allocator);
     Ok(code)
 }
 

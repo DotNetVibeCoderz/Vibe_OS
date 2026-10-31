@@ -217,18 +217,18 @@ pub fn map_user_region(
     Ok((base + count * 4096, pages))
 }
 
-/// Unmap a set of user pages (on process exit). Frames are not returned to the
-/// bump allocator (it does not reclaim); this frees the virtual mappings so a
-/// later program can reuse the same addresses.
+/// Unmap a set of user pages and return their frames to the allocator.
 pub fn unmap_user_pages(
     pages: &[u64],
     mapper: &mut impl x86_64::structures::paging::Mapper<Size4KiB>,
+    frames: &mut BootInfoFrameAllocator,
 ) {
-    use x86_64::structures::paging::{Page, Size4KiB};
+    use x86_64::structures::paging::{FrameDeallocator, Page, Size4KiB};
     for &addr in pages {
         let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
-        if let Ok((_frame, flush)) = mapper.unmap(page) {
+        if let Ok((frame, flush)) = mapper.unmap(page) {
             flush.flush();
+            unsafe { frames.deallocate_frame(frame) };
         }
     }
     x86_64::instructions::tlb::flush_all();
@@ -401,7 +401,7 @@ pub fn user_munmap(addr: u64, size: u64) -> u64 {
     for i in 0..count {
         pages.push(addr + i * 4096);
     }
-    with_ctx(|ctx| unmap_user_pages(&pages, &mut ctx.mapper));
+    with_ctx(|ctx| unmap_user_pages(&pages, &mut ctx.mapper, &mut ctx.frames));
     with_arena(|a| a.pages.retain(|p| !pages.contains(p)));
     0
 }
@@ -462,13 +462,22 @@ pub struct BootInfoFrameAllocator {
     regions: &'static MemoryRegions,
     region: usize,
     addr: u64,
+    /// Intrusive free list of returned frames: each free frame stores the
+    /// physical address of the next one in its first 8 bytes (FREE_END ends
+    /// it). Costs no heap and is O(1) both ways.
+    free_head: u64,
+    allocated: u64,
+    freed: u64,
 }
+
+/// End of the free list (phys 0 can be a usable frame, so it is no sentinel).
+const FREE_END: u64 = u64::MAX;
 
 impl BootInfoFrameAllocator {
     /// # Safety
     /// The memory map must be valid and its `Usable` regions really unused.
     pub unsafe fn init(regions: &'static MemoryRegions) -> Self {
-        Self { regions, region: 0, addr: 0 }
+        Self { regions, region: 0, addr: 0, free_head: FREE_END, allocated: 0, freed: 0 }
     }
 
     fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> + '_ {
@@ -488,7 +497,15 @@ impl BootInfoFrameAllocator {
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        // Same sequence as walking `usable_frames()` in order.
+        // Recycled frames first. Callers zero what they need (the ELF loader,
+        // map_user_region, page-table creation and aspace::create all do).
+        if self.free_head != FREE_END {
+            let head = self.free_head;
+            self.free_head = unsafe { core::ptr::read_volatile(phys_to_virt(head) as *const u64) };
+            self.allocated += 1;
+            return Some(PhysFrame::containing_address(PhysAddr::new(head)));
+        }
+        // Then fresh frames, in memory-map order.
         loop {
             let r = self.regions.get(self.region)?;
             if r.kind == MemoryRegionKind::Usable {
@@ -498,6 +515,7 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
                 if self.addr < r.end {
                     let frame = PhysFrame::containing_address(PhysAddr::new(self.addr));
                     self.addr += 4096;
+                    self.allocated += 1;
                     return Some(frame);
                 }
             }
@@ -505,4 +523,34 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
             self.addr = 0;
         }
     }
+}
+
+impl x86_64::structures::paging::FrameDeallocator<Size4KiB> for BootInfoFrameAllocator {
+    /// Return a frame to the free list. The caller guarantees nothing maps or
+    /// references it any more.
+    unsafe fn deallocate_frame(&mut self, frame: PhysFrame) {
+        let phys = frame.start_address().as_u64();
+        unsafe { core::ptr::write_volatile(phys_to_virt(phys) as *mut u64, self.free_head) };
+        self.free_head = phys;
+        self.freed += 1;
+    }
+}
+
+/// (frames handed out, frames returned) since boot; in use = the difference.
+pub fn frame_stats() -> (u64, u64) {
+    with_ctx(|ctx| (ctx.frames.allocated, ctx.frames.freed))
+}
+
+/// Frames currently in use (handed out and not yet returned).
+pub fn frames_in_use() -> u64 {
+    let (a, f) = frame_stats();
+    a - f
+}
+
+/// Return the physical frame at `phys` to the allocator.
+pub fn free_frame(phys: u64) {
+    use x86_64::structures::paging::FrameDeallocator;
+    with_ctx(|ctx| unsafe {
+        ctx.frames.deallocate_frame(PhysFrame::containing_address(PhysAddr::new(phys)))
+    });
 }

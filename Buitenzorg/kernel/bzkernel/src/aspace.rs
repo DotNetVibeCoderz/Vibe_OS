@@ -15,9 +15,9 @@
 //! Space id 0 is the kernel's own ("base") space, used by kernel tasks.
 //! Process space ids double as process ids (see `process.rs`).
 //!
-//! Frames are never returned: the frame allocator is a bump allocator, so a
-//! dead space's page tables and pages leak, exactly as unmapped user pages did
-//! before this change.
+//! When a space dies (`destroy`), every frame it owns goes back to the frame
+//! allocator: user pages, the page tables under its two directories, and the
+//! directories themselves.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -133,11 +133,52 @@ pub fn create(id: u64) -> Result<Space, &'static str> {
     Ok(Space { id, pd })
 }
 
-/// Forget a dead space's bookkeeping. It must not be installed anywhere.
-pub fn destroy(id: u64) {
-    if id != 0 {
-        memory::mmap_space_destroy(id);
+/// Tear down a dead space: free every user page, every page table under its
+/// two directories, and the directories, then drop its mmap arena. It must
+/// not be installed (callers switch to another space first) and none of its
+/// tasks may ever run again. Returns the number of frames freed.
+///
+/// Directory entries shared from the kernel's base directories (bootloader
+/// identity maps such as 0x0 and 0x1200000) are skipped: those frames are not
+/// the process's. An entry is shared if it equals the base entry at the same
+/// index, *or* lacks the USER bit — either test alone would already do.
+pub fn destroy(space: Space) -> u64 {
+    if space.id == 0 {
+        return 0;
     }
+    assert!(CURRENT.load(Ordering::SeqCst) != space.id, "aspace: destroying the installed space");
+    let mut freed = 0;
+    for slot in 0..2 {
+        let pd_phys = space.pd[slot];
+        if pd_phys == 0 {
+            continue;
+        }
+        let pd = memory::phys_to_virt(pd_phys) as *const u64;
+        let base = memory::phys_to_virt(BASE_PD[slot].load(Ordering::Relaxed) & PTE_ADDR_MASK)
+            as *const u64;
+        for i in 0..512 {
+            let pde = unsafe { core::ptr::read_volatile(pd.add(i)) };
+            let shared = pde == unsafe { core::ptr::read_volatile(base.add(i)) };
+            if pde & PTE_PRESENT == 0 || pde & PTE_USER == 0 || shared || pde & (1 << 7) != 0 {
+                continue;
+            }
+            let pt_phys = pde & PTE_ADDR_MASK;
+            let pt = memory::phys_to_virt(pt_phys) as *const u64;
+            for j in 0..512 {
+                let pte = unsafe { core::ptr::read_volatile(pt.add(j)) };
+                if pte & PTE_PRESENT != 0 && pte & PTE_USER != 0 {
+                    memory::free_frame(pte & PTE_ADDR_MASK);
+                    freed += 1;
+                }
+            }
+            memory::free_frame(pt_phys);
+            freed += 1;
+        }
+        memory::free_frame(pd_phys);
+        freed += 1;
+    }
+    memory::mmap_space_destroy(space.id);
+    freed
 }
 
 /// Install `space` into the shared PDPT (no-op if already current) and flush

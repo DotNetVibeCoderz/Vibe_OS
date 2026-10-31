@@ -28,6 +28,10 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Frame reclamation.** The frame allocator has an intrusive free list; a dead
+  process's pages, page tables and directories go back to it (`aspace::destroy`),
+  and `MUNMAP` frees frames too. `multiproc_demo` requires 0 frames leaked and 0
+  growth over 20 spawn/exit cycles.
 - **Spawn + argv + wait from ring 3.** New syscalls `PROC_SPAWN` (40),
   `PROC_WAIT` (41, a real blocking wait woken on exit) and `PROC_ARGS` (42);
   `COUNT` = 43, both ABI mirrors + contract tests + `docs/abi.md` updated.
