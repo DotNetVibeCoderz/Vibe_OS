@@ -2,9 +2,8 @@ name: CI
 
 on:
   push:
-    # The repository's default branch is `master`; `main` is listed too so the
-    # workflow keeps firing if it is ever renamed. Without `master` here CI
-    # never ran on a push at all.
+    # The Vibe_OS default branch is `main`; `master` is kept from the original
+    # standalone Buitenzorg repo.
     branches: [master, main]
   pull_request:
   workflow_dispatch:
@@ -13,6 +12,10 @@ jobs:
   kernel:
     name: Kernel (Rust) — build, test, boot smoke test
     runs-on: ubuntu-latest
+    # Buitenzorg lives in a subfolder of the Vibe_OS repo.
+    defaults:
+      run:
+        working-directory: Buitenzorg
     steps:
       - uses: actions/checkout@v4
 
@@ -20,19 +23,19 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86
 
       - name: Install Rust toolchain (pinned by kernel/rust-toolchain.toml)
-        working-directory: kernel
+        working-directory: Buitenzorg/kernel
         run: rustup show
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: kernel
+          workspaces: Buitenzorg/kernel
 
       - name: ABI contract tests
-        working-directory: kernel
+        working-directory: Buitenzorg/kernel
         run: cargo test -p bz-abi
 
       - name: Build kernel + boot images
-        working-directory: kernel
+        working-directory: Buitenzorg/kernel
         run: cargo build --release
 
       - name: Boot smoke test (QEMU, BIOS)
@@ -47,6 +50,10 @@ jobs:
   managed:
     name: Runtime + SDK (.NET) — build, test
     runs-on: ubuntu-latest
+    # Buitenzorg lives in a subfolder of the Vibe_OS repo.
+    defaults:
+      run:
+        working-directory: Buitenzorg
     steps:
       - uses: actions/checkout@v4
 
