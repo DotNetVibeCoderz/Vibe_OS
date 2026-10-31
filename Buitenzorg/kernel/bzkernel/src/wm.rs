@@ -125,6 +125,8 @@ struct Wm {
     pending: Option<String>,
     /// A power action requested from the start menu: 1 = shutdown, 2 = restart.
     pending_power: u8,
+    /// Owners of windows the user closed, for the desktop loop to reap.
+    closed_owners: Vec<u64>,
     /// (desktop-icon index, frame) of the last icon click, for double-click.
     last_icon: (usize, u64),
 }
@@ -150,6 +152,7 @@ pub fn init(width: usize, height: usize) {
         start_open: false,
         pending: None,
         pending_power: 0,
+        closed_owners: Vec::new(),
         last_icon: (usize::MAX, 0),
     });
 }
@@ -158,6 +161,25 @@ pub fn init(width: usize, height: usize) {
 /// desktop icon). The desktop loop calls this and runs the app.
 pub fn take_pending_launch() -> Option<String> {
     WM.lock().as_mut().and_then(|wm| wm.pending.take())
+}
+
+/// Drain the owners of windows the user has closed since the last call.
+pub fn take_closed_owners() -> Vec<u64> {
+    WM.lock().as_mut().map(|wm| core::mem::take(&mut wm.closed_owners)).unwrap_or_default()
+}
+
+/// Reassign window `id` to process `owner` (kernel self-tests).
+pub fn set_window_owner(id: u32, owner: u64) {
+    if let Some(wm) = WM.lock().as_mut() {
+        if let Some(w) = wm.windows.iter_mut().find(|w| w.id == id) {
+            w.owner = owner;
+        }
+    }
+}
+
+/// True if process `owner` still has at least one window.
+pub fn has_windows(owner: u64) -> bool {
+    WM.lock().as_ref().map(|wm| wm.windows.iter().any(|w| w.owner == owner)).unwrap_or(false)
 }
 
 /// Drain a pending power action from the start menu (1 = shutdown, 2 = restart).
@@ -663,6 +685,11 @@ impl Wm {
     fn press_button(&mut self, id: u32, btn: TitleButton) {
         match btn {
             TitleButton::Close => {
+                if let Some(w) = self.windows.iter().find(|w| w.id == id) {
+                    if w.owner != 0 {
+                        self.closed_owners.push(w.owner);
+                    }
+                }
                 self.windows.retain(|w| w.id != id);
             }
             TitleButton::Minimize => {

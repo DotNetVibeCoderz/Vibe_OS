@@ -121,6 +121,17 @@ pub fn kill(pid: u64) -> bool {
     true
 }
 
+/// Terminate spawned processes whose last window the user just closed — an
+/// interactive app (editor, file manager) otherwise keeps running invisibly,
+/// polling for keys. Called from the desktop loop.
+pub fn reap_closed_windows() {
+    for pid in crate::wm::take_closed_owners() {
+        if process::is_detached(pid) && !crate::wm::has_windows(pid) {
+            kill(pid);
+        }
+    }
+}
+
 /// Read a named app's ELF from `/disk`.
 fn read_app(name: &str) -> Result<Vec<u8>, &'static str> {
     let file = app_file(name).ok_or("unknown app")?;

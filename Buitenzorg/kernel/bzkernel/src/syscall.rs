@@ -559,10 +559,16 @@ fn sys_key_read() -> u64 {
     } else {
         !crate::process::is_detached(me)
     };
-    if !allowed {
-        return 0;
+    let key = if allowed { crate::keyboard::pop().map(|c| c as u64).unwrap_or(0) } else { 0 };
+    if key == 0 && crate::process::is_detached(me) {
+        // Nothing to read: give the CPU away rather than letting an app's
+        // KEY_READ polling loop burn its whole time slice. Safe for spawned
+        // processes, which run on their own kernel stack; synchronously
+        // launched apps share the boot task's privilege stack and keep the old
+        // non-yielding behavior.
+        task::yield_now();
     }
-    crate::keyboard::pop().map(|c| c as u64).unwrap_or(0)
+    key
 }
 
 fn sys_thread_join(tid: u64) -> u64 {

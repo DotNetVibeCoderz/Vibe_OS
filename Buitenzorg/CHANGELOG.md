@@ -24,8 +24,19 @@ Hardening toward a stable x86-64 release.
   the desktop and the shell's `run` launch apps as processes; `KEY_READ`
   follows window focus. `mproc.cs` + `multiproc_demo` → `MILESTONE: MULTIPROC
   OK`, with a negative control (fails with ring-3 preemption disabled).
+- **Process control (increment 2).** Closing a process's last window ends it;
+  shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
+  processes instead of spinning.
 
 ### Fixed
+- **Recurring layout-sensitive boot crash — root cause found.** The static
+  kernel stacks (`PRIVILEGE_STACK`, `DOUBLE_FAULT_STACK`) were `[u8; N]` with
+  alignment 1; in some layouts the privilege stack landed on an odd address,
+  so every ring-3 syscall ran on a misaligned stack and the boot died with a
+  rodata dump at the first syscall. Now 16-byte aligned; proven causally by
+  forcing an odd stack top on a working layout (identical crash).
+- **Mouse position was not clamped** to the screen, leaving a dead zone after
+  overshooting an edge.
 - **Frame allocator was O(n) per frame** (`usable_frames().nth(next)` re-walked
   the memory map every allocation) — now a cursor; boot-to-READY ~35 s → ~20 s
   (tick estimate), ~83 s → ~52 s wall on IDE.

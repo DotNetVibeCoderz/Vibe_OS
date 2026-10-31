@@ -381,7 +381,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
 - **Terminal & Shell**
   - [ ] Line editing (kursor, Home/End, Ctrl+A/E/U/K/W) + history (↑/↓, persist) + tab-completion perintah/path
   - [ ] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`export`/`env`/`$PATH`/`$?`), alias, skrip `.bzsh` + `source`
-  - [ ] Coreutils: `cp mv rm mkdir rmdir touch head tail wc grep find hexdump which tee sort` + `ps kill top` + `dmesg free uptime df`
+  - [~] Coreutils: [ ] `cp mv rm mkdir rmdir touch head tail wc grep find hexdump which tee sort` · [x] `ps` + `kill <pid>` (2026-11-01, terverifikasi `multiproc_demo` + desktop live) · [ ] `top` · [ ] `dmesg free uptime df`
   - [ ] App Terminal mandiri (multi-tab, scrollback, copy/paste, ANSI) · [ ] job control (`&`/`jobs`/`fg`/Ctrl+C) — butuh multi-proses
 - **Package Manager**
   - [ ] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install ./x.bzpkg`

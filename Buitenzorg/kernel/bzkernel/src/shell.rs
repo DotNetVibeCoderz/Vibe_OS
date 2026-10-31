@@ -57,6 +57,8 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied()),
+        "ps" => (ps_cmd(), Effect::None),
+        "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
         "cursor" => cursor_cmd(args.first().copied()),
@@ -109,7 +111,9 @@ fn help() -> Vec<String> {
      "  anim [on|off]               micro-interaction on/off",
      "  settings                    tampilkan pengaturan (personalization)",
      "  ws [1-4]          pindah virtual desktop",
-     "  run <app>         jalankan app (xox, paint, taskmgr)",
+     "  run <app>         jalankan app sebagai proses (xox, paint, taskmgr)",
+     "  ps                daftar proses (task kernel + app)",
+     "  kill <pid>        hentikan proses app",
      "  ask <prompt>      AI: lengkapi teks (LLM lokal)",
      "  vm <sub>          virtualisasi (list/create/start/snapshot/restore)",
      "  script <lang> [f] polyglot: js|ts|py (jalankan demo/file)",
@@ -231,6 +235,31 @@ fn run_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     match app::spawn_named(name) {
         Ok(pid) => (vec![format!("app '{}' berjalan (pid {})", name, pid)], Effect::Redraw),
         Err(e) => (vec![format!("run: {}: {}", name, e)], Effect::None),
+    }
+}
+
+fn ps_cmd() -> Vec<String> {
+    let mut buf: Vec<bz_abi::ProcInfo> = Vec::new();
+    buf.resize_with(64, || unsafe { core::mem::zeroed() });
+    let n = crate::process::list(&mut buf);
+    let mut out = vec![String::from("  PID  JENIS   CPU  NAMA")];
+    for p in &buf[..n] {
+        let len = p.name.iter().position(|&b| b == 0).unwrap_or(p.name.len());
+        let name = core::str::from_utf8(&p.name[..len]).unwrap_or("?");
+        let kind = if p.kind == 1 { "app" } else { "kernel" };
+        out.push(format!("{:>5}  {:<6} {:>5}  {}", p.pid, kind, p.cpu_ticks, name));
+    }
+    out
+}
+
+fn kill_cmd(arg: Option<&str>) -> Vec<String> {
+    let Some(pid) = arg.and_then(|a| a.parse::<u64>().ok()) else {
+        return vec![String::from("kill: butuh pid (lihat 'ps')")];
+    };
+    if crate::process::kill(pid) {
+        vec![format!("proses {} dihentikan", pid)]
+    } else {
+        vec![format!("kill: {}: tidak bisa dihentikan (tidak ada, app sinkron, atau task inti)", pid)]
     }
 }
 

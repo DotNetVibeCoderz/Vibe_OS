@@ -13,6 +13,30 @@ static Y: AtomicI64 = AtomicI64::new(0);
 static BUTTONS: AtomicU8 = AtomicU8::new(0);
 static PHASE: AtomicUsize = AtomicUsize::new(0);
 static PACKET: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
+/// Largest valid x / y (screen size - 1); 0 = unbounded until the desktop sets it.
+static MAX_X: AtomicI64 = AtomicI64::new(0);
+static MAX_Y: AtomicI64 = AtomicI64::new(0);
+
+/// Confine the pointer to a `w` x `h` screen and center it. Without bounds the
+/// position kept accumulating past the edges, so after pushing the mouse far
+/// off-screen it took the same distance back before the cursor moved again.
+pub fn set_bounds(w: usize, h: usize) {
+    MAX_X.store(w.saturating_sub(1) as i64, Ordering::Relaxed);
+    MAX_Y.store(h.saturating_sub(1) as i64, Ordering::Relaxed);
+    X.store(w as i64 / 2, Ordering::Relaxed);
+    Y.store(h as i64 / 2, Ordering::Relaxed);
+}
+
+/// Add `d` to `axis`, clamped to `0..=max` when bounds are set. Only the IRQ12
+/// handler writes the position, so a plain load/store is race-free.
+fn move_axis(axis: &AtomicI64, d: i64, max: &AtomicI64) {
+    let max = max.load(Ordering::Relaxed);
+    let mut v = axis.load(Ordering::Relaxed) + d;
+    if max > 0 {
+        v = v.clamp(0, max);
+    }
+    axis.store(v, Ordering::Relaxed);
+}
 
 fn wait_input_clear() -> bool {
     let mut status = Port::<u8>::new(STATUS_CMD);
@@ -118,8 +142,8 @@ pub fn handle_byte(byte: u8) {
             let dx = PACKET[1].load(Ordering::Relaxed) as i64
                 - if flags & 0x10 != 0 { 256 } else { 0 };
             let dy = byte as i64 - if flags & 0x20 != 0 { 256 } else { 0 };
-            X.fetch_add(dx, Ordering::Relaxed);
-            Y.fetch_sub(dy, Ordering::Relaxed); // screen y grows downward
+            move_axis(&X, dx, &MAX_X);
+            move_axis(&Y, -dy, &MAX_Y); // screen y grows downward
             BUTTONS.store(flags & 0x07, Ordering::Relaxed);
             PACKETS.fetch_add(1, Ordering::Relaxed);
         }

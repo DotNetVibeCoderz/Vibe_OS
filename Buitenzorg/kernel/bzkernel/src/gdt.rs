@@ -20,8 +20,18 @@ const STACK_SIZE: usize = 4096 * 5;
 // (layout-dependent), smashing return addresses (breakpoint/#PF/#DF cascade).
 const PRIV_STACK_SIZE: usize = 64 * 1024;
 
-static mut DOUBLE_FAULT_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-static mut PRIVILEGE_STACK: [u8; PRIV_STACK_SIZE] = [0; PRIV_STACK_SIZE];
+/// A statically allocated kernel stack, 16-byte aligned. A bare `[u8; N]` has
+/// alignment 1, so the linker may place it at any byte: the privilege stack
+/// once landed at an odd address (…4b1), making SYSCALL_KSTACK_TOP / TSS rsp0
+/// misaligned, so every syscall from ring 3 ran on a stack violating the
+/// x86-64 16-byte ABI alignment. Whether it was aligned depended on the binary
+/// layout — the boot crashed (rodata-dump cascade at the first ring-3 syscall)
+/// or not depending on unrelated code changes.
+#[repr(C, align(16))]
+struct Stack<const N: usize>([u8; N]);
+
+static mut DOUBLE_FAULT_STACK: Stack<STACK_SIZE> = Stack([0; STACK_SIZE]);
+static mut PRIVILEGE_STACK: Stack<PRIV_STACK_SIZE> = Stack([0; PRIV_STACK_SIZE]);
 /// The TSS lives in a `static mut` (not a `Once`) because its ring-0 stack
 /// pointer changes on every context switch between user processes: each
 /// process/thread takes ring-3 interrupts on its own kernel stack, so a timer
@@ -72,11 +82,8 @@ pub fn enable_sse() {
 /// with interrupts disabled.
 ///
 /// `TaskStateSegment` is `packed(4)`, so rsp0 (a u64) sits at offset 4 and is
-/// NOT 8-byte aligned. It must be written with `write_unaligned`: a plain or
-/// `write_volatile` store through a misaligned `*mut VirtAddr` is undefined
-/// behavior, and LLVM — which can see the static's alignment — miscompiled the
-/// surrounding code (boot crashed with a rodata dump at the first ring-3 entry
-/// although the value written was correct).
+/// NOT 8-byte aligned, so it must be written with `write_unaligned` — a
+/// `write_volatile` through a misaligned `*mut VirtAddr` is undefined behavior.
 pub fn set_rsp0(top: u64) {
     unsafe {
         core::ptr::write_unaligned(

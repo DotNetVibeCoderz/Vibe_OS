@@ -524,6 +524,26 @@ fn multiproc_demo() {
     }
 
     let preemptions = task::user_preemptions() - preempt_start;
+
+    // Process control from the desktop and the shell. Closing a process's last
+    // window ends it (an interactive app would otherwise run on invisibly), and
+    // `ps` / `kill <pid>` see and stop spawned processes.
+    let mut control = false;
+    if let (Ok(w), Ok(k)) = (spawn("mproc-win", None), spawn("mproc-kill", None)) {
+        let win = wm::create_window("mproc-win", 40, 40, 220, 80, &[]);
+        wm::set_window_owner(win, w);
+        let listed = shell::run("ps").0.iter().any(|l| l.contains("mproc-win"));
+        wm::close(win);
+        app::reap_closed_windows();
+        let closed = process::exit_code(w) == Some(app::KILLED_EXIT_CODE);
+        let _ = shell::run(&alloc::format!("kill {}", k));
+        let killed_by_shell = process::exit_code(k) == Some(app::KILLED_EXIT_CODE);
+        println!(
+            "[kernel] multiproc: ps lists spawned={} close-last-window ends process={} shell kill={}",
+            listed, closed, killed_by_shell
+        );
+        control = listed && closed && killed_by_shell;
+    }
     let code = |pid| process::exit_code(pid).unwrap_or(u64::MAX);
     println!(
         "[kernel] multiproc: exit codes a={:#x} b={:#x} c={:#x} fault={:#x}; concurrent={} killed={} ring-3 preemptions={}",
@@ -532,6 +552,7 @@ fn multiproc_demo() {
     // The copies never yield, so timer preemptions of ring-3 code are what
     // let them share the CPU; require plenty (a cooperative-only kernel scores 0).
     if concurrent
+        && control
         && preemptions >= 10
         && code(a) == 0
         && code(b) == 0
@@ -539,7 +560,7 @@ fn multiproc_demo() {
         && code(c) == app::KILLED_EXIT_CODE
         && code(f) == interrupts::FAULT_EXIT_CODE
     {
-        println!("[kernel] MILESTONE: MULTIPROC OK (preemptive processes, isolated address spaces, kill + fault containment)");
+        println!("[kernel] MILESTONE: MULTIPROC OK (preemptive processes, isolated address spaces, kill + fault containment, ps/kill + close-to-quit)");
     } else {
         println!("[kernel] multiproc self-test FAILED");
     }
@@ -904,6 +925,7 @@ fn desktop_loop() -> ! {
     // From here on a real user can type: shell-launched apps may block on input.
     interactive::set_active();
     let (w, h) = framebuffer::dimensions().unwrap_or((0, 0));
+    mouse::set_bounds(w, h);
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];
     let mut last_packets = u64::MAX;
     let mut last_left = false;
@@ -963,6 +985,7 @@ fn desktop_loop() -> ! {
                 }
                 input = true;
             }
+            app::reap_closed_windows();
             match wm::take_pending_power() {
                 1 => power::shutdown(),
                 2 => power::restart(),
