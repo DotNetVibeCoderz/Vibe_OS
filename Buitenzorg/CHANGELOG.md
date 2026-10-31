@@ -16,6 +16,23 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Preemptive multi-process ring 3 (increment 1).** Several ring-3 programs
+  run at once, timer-preempted, each in its own address space (`aspace.rs`:
+  two private page directories per process covering the 2 GiB user half,
+  swapped in the shared PDPT on a switch). Per-task SYSCALL stack + TSS rsp0 +
+  FXSAVE state; spawn/kill; a ring-3 #PF/#GP ends only the faulting program;
+  the desktop and the shell's `run` launch apps as processes; `KEY_READ`
+  follows window focus. `mproc.cs` + `multiproc_demo` → `MILESTONE: MULTIPROC
+  OK`, with a negative control (fails with ring-3 preemption disabled).
+
+### Fixed
+- **Frame allocator was O(n) per frame** (`usable_frames().nth(next)` re-walked
+  the memory map every allocation) — now a cursor; boot-to-READY ~35 s → ~20 s
+  (tick estimate), ~83 s → ~52 s wall on IDE.
+- **Keyboard queue deadlock risk** — `keyboard::pop` now holds interrupts off
+  while taking the lock the keyboard IRQ also takes.
+
+### Added (earlier on this track)
 - **Security hardening — syscall pointer validation.** Every pointer from ring 3
   is validated (`memory::validate_user_range`/`validate_user_cstr`): no wrap,
   entirely below `USER_ADDR_MAX`, every page *present* & `USER_ACCESSIBLE`

@@ -87,6 +87,9 @@ pub struct Window {
     pub canvas: Option<AppCanvas>,
     pub state: WinState,
     pub saved: (i32, i32, i32, i32), // geometry to restore from max/min
+    /// Process that created the window (0 = kernel/shell). Keyboard focus
+    /// follows the topmost window's owner (multi-process increment 1).
+    pub owner: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -249,8 +252,22 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
         canvas: None,
         state: WinState::Normal,
         saved: (x, y, w, h),
+        owner: crate::aspace::current_id(),
     });
     id
+}
+
+/// Owner process of the window that has keyboard focus: the topmost
+/// non-minimized window on the current workspace (0 = kernel/terminal).
+pub fn focus_owner() -> u64 {
+    let guard = WM.lock();
+    let Some(wm) = guard.as_ref() else { return 0 };
+    wm.windows
+        .iter()
+        .rev()
+        .find(|w| w.workspace == wm.workspace && w.state != WinState::Minimized)
+        .map(|w| w.owner)
+        .unwrap_or(0)
 }
 
 /// Create an app window with a drawable pixel canvas (v0.8 WIN_CREATE).
@@ -293,6 +310,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             }),
             state: WinState::Normal,
             saved: (board_x, y, ww, h),
+            owner: crate::aspace::current_id(),
         });
         return id;
     }
@@ -320,6 +338,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         }),
         state: WinState::Normal,
         saved: (x, y, w, h),
+        owner: crate::aspace::current_id(),
     });
     id
 }

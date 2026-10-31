@@ -1,9 +1,19 @@
 //! Kernel tasks: preemptive round-robin scheduler + context switch
-//! (v0.2 "Akar" milestone: two tasks running alternately).
+//! (v0.2 "Akar" milestone: two tasks running alternately), extended to
+//! preemptive multi-process ring 3 (multi-process increment 1).
 //!
 //! Design notes:
 //! - Single core. Preemption happens in the timer IRQ (after EOI) via
 //!   [`preempt`]; voluntary switches via [`yield_now`].
+//! - **Only ring-3 code is preempted** (plus kernel code during the v0.2
+//!   scheduler demo). Kernel code stays cooperative: preempting the boot task
+//!   mid heap/framebuffer work corrupted memory in the past, while a timer that
+//!   interrupts *user* code holds no kernel lock by construction.
+//! - The per-CPU state the SYSCALL path uses (kernel stack, longjmp context,
+//!   user-rsp scratch, user-active flag), the TSS ring-0 stack, the SSE/x87
+//!   registers (FXSAVE) and the installed user address space are all saved and
+//!   restored per task on every switch, so each process/thread runs on its own
+//!   kernel stack in its own address space.
 //! - The scheduler lock is only ever taken with interrupts disabled, so the
 //!   timer handler can never observe it held.
 //! - Each task owns a heap-allocated kernel stack. Task 0 is the boot flow
@@ -12,17 +22,56 @@
 //!   next time [`spawn`] runs (single-core, so nothing references them then).
 
 use alloc::{boxed::Box, vec::Vec};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-use crate::{gdt, usermode};
+use crate::{aspace, gdt, usermode};
 
 const STACK_SIZE: usize = 32 * 1024;
-/// Per-thread SYSCALL kernel stack for cooperative ring-3 user threads. Kept
-/// separate from the TSS interrupt stack so a timer taken during one thread's
-/// ring-3 never lands on another thread's suspended syscall frame.
-const SYS_STACK_SIZE: usize = 16 * 1024;
+/// Per-thread SYSCALL + ring-0 interrupt stack for ring-3 processes/threads.
+/// Sized like the boot task's privilege stack (gdt.rs): a WIN_PRESENT syscall
+/// composites every window on it, which needs real headroom.
+const SYS_STACK_SIZE: usize = 64 * 1024;
+
+/// FXSAVE/FXRSTOR area (x87 + SSE state). The kernel itself is built without
+/// SSE, so only ring-3 code ever dirties these registers.
+#[repr(C, align(16))]
+struct FxArea([u8; 512]);
+
+impl FxArea {
+    /// Default state for a fresh thread: x87 control word 0x037F, MXCSR 0x1F80
+    /// (all exceptions masked), everything else zero — no state leaks in from
+    /// whatever ran before.
+    fn clean() -> Box<FxArea> {
+        let mut a = Box::new(FxArea([0; 512]));
+        a.0[0] = 0x7F;
+        a.0[1] = 0x03;
+        a.0[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
+        a
+    }
+}
+
+/// Per-task copy of the SYSCALL-path globals in `usermode.rs`.
+#[derive(Clone, Copy)]
+struct CpuCtx {
+    /// SYSCALL kernel stack top; also loaded into TSS rsp0.
+    sys_kstack_top: u64,
+    kctx: u64,
+    user_rsp: u64,
+    user_active: bool,
+}
+
+impl CpuCtx {
+    fn kernel() -> CpuCtx {
+        CpuCtx {
+            sys_kstack_top: gdt::privilege_stack_top().as_u64(),
+            kctx: 0,
+            user_rsp: 0,
+            user_active: false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -33,19 +82,13 @@ enum State {
     Finished,
 }
 
-/// Ring-3 user-thread context (v0.15 "Matang" increment 2). Present only for
-/// tasks that back a user thread; `None` for kernel tasks and the boot task
-/// while it runs a single-threaded app (so those paths are unchanged).
+/// Ring-3 thread record (v0.15 "Matang" increment 2). Present for tasks that
+/// back a user thread or a spawned process's main thread; `None` for kernel
+/// tasks and for the boot task while it runs a single-threaded app.
 struct UserThread {
-    /// This thread's private SYSCALL kernel stack top (loaded into the global
-    /// on switch-in).
-    sys_kstack_top: u64,
-    /// Saved longjmp context + user-rsp scratch while switched out.
-    kctx: u64,
-    user_rsp: u64,
     /// Ring-3 entry to run on first schedule: (rip, arg, user_stack_top).
     params: Option<(u64, u64, u64)>,
-    /// Owned SYSCALL kernel stack.
+    /// Owned SYSCALL kernel stack (its top is in the task's `ctx`).
     _sys_stack: Option<Box<[u8]>>,
 }
 
@@ -64,6 +107,13 @@ struct Task {
     user: Option<UserThread>,
     /// Futex address this task is blocked on (valid only in `Blocked` state).
     wait_key: u64,
+    /// Saved SYSCALL-path state while switched out.
+    ctx: CpuCtx,
+    /// Saved x87/SSE registers while switched out.
+    fpu: Box<FxArea>,
+    /// User address space this task runs in (`aspace::kernel()` for kernel
+    /// tasks); its id is the owning process id.
+    space: aspace::Space,
 }
 
 struct Scheduler {
@@ -80,6 +130,8 @@ pub struct TaskInfo {
     pub running: bool,
     pub finished: bool,
     pub cpu_ticks: u64,
+    /// Owning process (address-space id); 0 for kernel tasks.
+    pub space_id: u64,
 }
 
 /// Charge one timer tick to the currently running task (called from the timer
@@ -107,6 +159,7 @@ pub fn list() -> Vec<TaskInfo> {
                     running: t.state == State::Runnable && t.id == sched.tasks[sched.current].id,
                     finished: t.state == State::Finished,
                     cpu_ticks: t.cpu_ticks,
+                    space_id: t.space.id,
                 })
                 .collect(),
             None => Vec::new(),
@@ -177,6 +230,9 @@ pub fn init() {
                 cpu_ticks: 0,
                 user: None,
                 wait_key: 0,
+                ctx: CpuCtx::kernel(),
+                fpu: FxArea::clean(),
+                space: aspace::kernel(),
             }],
             current: 0,
             next_id: 1,
@@ -193,6 +249,7 @@ pub fn spawn(entry: fn()) {
 /// Spawn a named kernel task (name appears in the process listing).
 pub fn spawn_named(name: &'static str, entry: fn()) {
     let stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
+    let fpu = FxArea::clean();
     interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         let sched = guard.as_mut().expect("scheduler not initialized");
@@ -216,6 +273,9 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
             cpu_ticks: 0,
             user: None,
             wait_key: 0,
+            ctx: CpuCtx::kernel(),
+            fpu,
+            space: aspace::kernel(),
         });
     });
 }
@@ -252,15 +312,14 @@ pub fn ensure_main_user_thread() {
         let cur = sched.current;
         if sched.tasks[cur].user.is_none() {
             sched.tasks[cur].user = Some(UserThread {
-                sys_kstack_top: top,
-                kctx: usermode::get_kctx(),
-                user_rsp: usermode::get_user_rsp(),
                 params: None,
                 _sys_stack: Some(stack),
             });
-            // Effective on the main thread's NEXT syscall (this one is still on
-            // the TSS stack and returns normally).
+            // Effective on the main thread's NEXT syscall / ring-3 interrupt
+            // (this syscall is still on the privilege stack and returns normally).
+            sched.tasks[cur].ctx.sys_kstack_top = top;
             usermode::set_syscall_kstack(top);
+            gdt::set_rsp0(top);
         }
     });
 }
@@ -268,9 +327,27 @@ pub fn ensure_main_user_thread() {
 /// Spawn a cooperative ring-3 user thread that enters `rip(arg)` on
 /// `user_stack_top`. Returns its thread id.
 pub fn spawn_user_thread(rip: u64, arg: u64, user_stack_top: u64) -> u64 {
+    // Threads run in the creating task's address space (same process).
+    let space = interrupts::without_interrupts(|| {
+        let guard = SCHEDULER.lock();
+        let s = guard.as_ref().expect("scheduler not initialized");
+        s.tasks[s.current].space
+    });
+    spawn_ring3("uthread", user_thread_body, (rip, arg, user_stack_top), space)
+}
+
+/// Spawn a task that enters ring 3 at `params` = (rip, arg, user_stack_top) in
+/// `space`, with its own kernel task stack and SYSCALL/interrupt stack.
+fn spawn_ring3(
+    name: &'static str,
+    body: fn(),
+    params: (u64, u64, u64),
+    space: aspace::Space,
+) -> u64 {
     let kstack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
     let sys_stack = alloc::vec![0u8; SYS_STACK_SIZE].into_boxed_slice();
     let sys_top = (sys_stack.as_ptr() as u64 + sys_stack.len() as u64) & !0xF;
+    let fpu = FxArea::clean();
     interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         let sched = guard.as_mut().expect("scheduler not initialized");
@@ -285,23 +362,141 @@ pub fn spawn_user_thread(rip: u64, arg: u64, user_stack_top: u64) -> u64 {
         sched.next_id += 1;
         sched.tasks.push(Task {
             id,
-            name: "uthread",
+            name,
             state: State::Runnable,
             rsp,
-            entry: user_thread_body,
+            entry: body,
             stack: Some(kstack),
             cpu_ticks: 0,
             user: Some(UserThread {
-                sys_kstack_top: sys_top,
-                kctx: 0,
-                user_rsp: 0,
-                params: Some((rip, arg, user_stack_top)),
+                params: Some(params),
                 _sys_stack: Some(sys_stack),
             }),
             wait_key: 0,
+            ctx: CpuCtx {
+                sys_kstack_top: sys_top,
+                kctx: 0,
+                user_rsp: 0,
+                user_active: false,
+            },
+            fpu,
+            space,
         });
         id
     })
+}
+
+// --- Ring-3 processes (multi-process increment 1) ------------------------------
+
+/// Body of a process's main task: enter ring 3 at the program entry, and when
+/// the program exits (EXIT syscall, or a fault that killed it) hand the exit
+/// code to `app::process_exited` for teardown.
+fn process_body() {
+    let (params, space_id) = interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let sched = guard.as_mut().expect("scheduler not initialized");
+        let cur = sched.current;
+        let t = &mut sched.tasks[cur];
+        (t.user.as_mut().and_then(|u| u.params.take()), t.space.id)
+    });
+    let Some((rip, arg, user_stack_top)) = params else {
+        return;
+    };
+    let code = usermode::enter_user_thread(rip, user_stack_top, arg);
+    usermode::set_user_active(false);
+    crate::app::process_exited(space_id, code);
+}
+
+/// Start a ring-3 process: a new task whose main thread enters `entry` on
+/// `user_stack_top` inside `space` (already loaded by the caller). Returns the
+/// task id of its main thread.
+pub fn spawn_process(entry: u64, user_stack_top: u64, space: aspace::Space) -> u64 {
+    spawn_ring3("app", process_body, (entry, 0, user_stack_top), space)
+}
+
+/// Move the current task back to the kernel address space (so its own space
+/// can be destroyed) and finish every other task of `space_id`.
+pub fn detach_current_from_space(space_id: u64) {
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        if let Some(sched) = guard.as_mut() {
+            let cur = sched.current;
+            for (i, t) in sched.tasks.iter_mut().enumerate() {
+                if i != cur && t.space.id == space_id && t.state != State::Finished {
+                    t.state = State::Finished;
+                }
+            }
+            sched.tasks[cur].space = aspace::kernel();
+        }
+        aspace::install(aspace::kernel());
+    });
+}
+
+/// Finish every task of process `space_id` (PROC_KILL). Refuses to kill the
+/// caller's own process (it should EXIT). Returns true if any task was live.
+pub fn kill_space(space_id: u64) -> bool {
+    if space_id == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let Some(sched) = guard.as_mut() else { return false };
+        if sched.tasks[sched.current].space.id == space_id {
+            return false;
+        }
+        let mut any = false;
+        for t in sched.tasks.iter_mut() {
+            if t.space.id == space_id && t.state != State::Finished {
+                t.state = State::Finished;
+                any = true;
+            }
+        }
+        any
+    })
+}
+
+/// True if a task other than the current one belonging to a user process is
+/// runnable — the desktop loop yields to it instead of halting.
+pub fn user_work_pending() -> bool {
+    interrupts::without_interrupts(|| {
+        let guard = SCHEDULER.lock();
+        let Some(s) = guard.as_ref() else { return false };
+        s.tasks
+            .iter()
+            .enumerate()
+            .any(|(i, t)| i != s.current && t.state == State::Runnable && t.space.id != 0)
+    })
+}
+
+/// Process (address-space id) of the running task, for the timer IRQ's CPU
+/// accounting; `None` if the scheduler lock is momentarily held.
+pub fn current_space_id_irq() -> Option<u64> {
+    let guard = SCHEDULER.try_lock()?;
+    guard.as_ref().map(|s| s.tasks[s.current].space.id)
+}
+
+/// Address space of the current task.
+pub fn current_space() -> aspace::Space {
+    interrupts::without_interrupts(|| {
+        let guard = SCHEDULER.lock();
+        guard
+            .as_ref()
+            .map(|s| s.tasks[s.current].space)
+            .unwrap_or_else(aspace::kernel)
+    })
+}
+
+/// Set (and install) the current task's address space. Synchronous app
+/// launches run the program in its own space on the launching task.
+pub fn set_current_space(space: aspace::Space) {
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        if let Some(s) = guard.as_mut() {
+            let cur = s.current;
+            s.tasks[cur].space = space;
+        }
+        aspace::install(space);
+    });
 }
 
 /// Current thread's id (backs THREAD_SELF; a TLS/pthread_self foundation).
@@ -370,19 +565,24 @@ pub fn is_finished(id: u64) -> bool {
 /// the TSS interrupt stack for syscalls. Called when an app finishes so the
 /// next (possibly single-threaded) app starts from the clean default.
 pub fn terminate_user_threads() {
+    let top = gdt::privilege_stack_top().as_u64();
     interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         if let Some(sched) = guard.as_mut() {
             let cur = sched.current;
+            let space = sched.tasks[cur].space.id;
             for (i, t) in sched.tasks.iter_mut().enumerate() {
-                if i != cur && t.user.is_some() {
+                // Only this app's threads — other processes keep running.
+                if i != cur && t.user.is_some() && t.space.id == space {
                     t.state = State::Finished;
                 }
             }
             sched.tasks[cur].user = None;
+            sched.tasks[cur].ctx.sys_kstack_top = top;
         }
+        usermode::set_syscall_kstack(top);
+        gdt::set_rsp0(top);
     });
-    usermode::set_syscall_kstack(gdt::privilege_stack_top().as_u64());
 }
 
 /// Build the initial stack frame consumed by [`context_switch`]'s restore
@@ -439,45 +639,70 @@ pub fn yield_now() {
 }
 
 /// Called from the timer interrupt (interrupts disabled, EOI already sent).
-pub fn preempt() {
-    if !STARTED.load(Ordering::SeqCst) || !PREEMPT_ENABLED.load(Ordering::SeqCst) {
+/// Ring-3 code is always preemptible; kernel code only while the v0.2 demo
+/// has kernel preemption switched on.
+pub fn preempt(from_user: bool) {
+    if !STARTED.load(Ordering::SeqCst) {
         return;
     }
-    switch_with(|_| ());
+    if from_user || PREEMPT_ENABLED.load(Ordering::SeqCst) {
+        if switch_with(|_| ()) && from_user {
+            USER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Number of times the timer took the CPU away from ring-3 code and gave it to
+/// another task — direct evidence of preemptive multitasking (the multiproc
+/// self-test requires it to grow; cooperative yields do not count).
+static USER_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
+
+pub fn user_preemptions() -> u64 {
+    USER_PREEMPTIONS.load(Ordering::Relaxed)
 }
 
 /// Run `before` on the scheduler, then context-switch to the next runnable
 /// task if it differs from the current one. Interrupts must be disabled.
-fn switch_with(before: impl FnOnce(&mut Scheduler)) {
-    let (prev_rsp_ptr, next_rsp) = {
+/// Returns true if a switch happened (once this task has been resumed).
+fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
+    let (prev_rsp_ptr, next_rsp, prev_fx, next_fx) = {
         let mut guard = SCHEDULER.lock();
-        let Some(sched) = guard.as_mut() else { return };
+        let Some(sched) = guard.as_mut() else { return false };
         before(sched);
         let next = sched.pick_next();
         if next == sched.current {
-            return; // nothing else runnable (or still just the boot task)
+            return false; // nothing else runnable (or still just the boot task)
         }
         let cur = sched.current;
-        // Save the outgoing user thread's live longjmp/user-rsp context. (No-op
-        // for kernel tasks, so single-threaded/kernel paths are unaffected.)
-        if let Some(u) = sched.tasks[cur].user.as_mut() {
-            u.kctx = usermode::get_kctx();
-            u.user_rsp = usermode::get_user_rsp();
-        }
+        // Save the outgoing task's SYSCALL-path state...
+        let c = &mut sched.tasks[cur].ctx;
+        c.kctx = usermode::get_kctx();
+        c.user_rsp = usermode::get_user_rsp();
+        c.user_active = usermode::user_active();
         let prev: *mut u64 = &mut sched.tasks[cur].rsp;
+        let prev_fx: *mut FxArea = &mut *sched.tasks[cur].fpu;
         sched.current = next;
-        // Load the incoming user thread's private SYSCALL stack + context, so
-        // two ring-3 threads never share a syscall kernel stack.
-        if let Some(u) = sched.tasks[next].user.as_ref() {
-            usermode::set_syscall_kstack(u.sys_kstack_top);
-            usermode::set_kctx(u.kctx);
-            usermode::set_user_rsp(u.user_rsp);
-        }
-        (prev, sched.tasks[next].rsp)
-        // Lock is dropped here; no allocation happens before the switch, so
-        // `prev` stays valid (single core, interrupts off).
+        // ...and load the incoming one's: its own SYSCALL + ring-0 interrupt
+        // stack (so two ring-3 tasks never share one), its longjmp context, and
+        // its address space.
+        let n = sched.tasks[next].ctx;
+        usermode::set_syscall_kstack(n.sys_kstack_top);
+        gdt::set_rsp0(n.sys_kstack_top);
+        usermode::set_kctx(n.kctx);
+        usermode::set_user_rsp(n.user_rsp);
+        usermode::set_user_active(n.user_active);
+        aspace::install(sched.tasks[next].space);
+        let next_fx: *const FxArea = &*sched.tasks[next].fpu;
+        (prev, sched.tasks[next].rsp, prev_fx, next_fx)
+        // Lock is dropped here; no allocation happens before the switch, so the
+        // pointers stay valid (single core, interrupts off; boxed areas never move).
     };
-    unsafe { context_switch(prev_rsp_ptr, next_rsp) };
+    unsafe {
+        core::arch::asm!("fxsave64 [{}]", in(reg) prev_fx, options(nostack, preserves_flags));
+        core::arch::asm!("fxrstor64 [{}]", in(reg) next_fx, options(nostack, preserves_flags));
+        context_switch(prev_rsp_ptr, next_rsp)
+    };
+    true
 }
 
 /// Save callee-saved state + rflags on the current stack, store rsp through

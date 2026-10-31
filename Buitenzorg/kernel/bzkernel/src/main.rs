@@ -14,6 +14,7 @@ mod ai;
 mod aio;
 mod allocator;
 mod app;
+mod aspace;
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -155,6 +156,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Hand the paging context to the global store so the app launcher and the
     // shell's `run` command can map user memory after boot.
     memory::install_ctx(mapper, frame_allocator);
+    // Per-process user address spaces (multi-process increment 1).
+    aspace::init();
 
     // Pre-install the base app set so `run`/`bz` work out of the box.
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
@@ -171,6 +174,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     matang_demo();
     panen_audio_demo();
     panen_suite_demo();
+    multiproc_demo();
 
     // v1.0 hardening: syscalls must refuse user pointers the caller does not
     // own (kernel addresses, unmapped pages, ranges that overflow the user
@@ -467,6 +471,78 @@ fn panen_suite_demo() {
     }
 
     println!("[kernel] MILESTONE: SUITE OK (preloaded apps: kalkulator, 2048, jam, piano, store, files, editor, imgview)");
+}
+
+/// Multi-process increment 1: several ring-3 programs at once, preemptively
+/// scheduled, each in its own address space. Starts three copies of MPROC.ELF
+/// plus one deliberately faulting process, then — from the boot task, which
+/// only gets the CPU back because the busy programs are preempted — checks:
+/// two copies made progress *while both were alive* (time slicing, they never
+/// yield), both finish with exit 0 (their same-address memory stayed private
+/// and their SSE state survived every switch), the third is killed mid-run,
+/// and the faulting one is terminated with the kernel still standing.
+fn multiproc_demo() {
+    println!();
+    println!("[kernel] multiproc: preemptive multi-process (address space per process)");
+    let Ok(image) = vfs::read("/disk/MPROC.ELF") else {
+        println!("[kernel] multiproc: MPROC.ELF not on /disk (skipped)");
+        return;
+    };
+    let spawn = |name: &str, entry: Option<u64>| app::spawn_image_at(name, &image, entry);
+    let (Ok(a), Ok(b), Ok(c), Ok(f)) = (
+        spawn("mproc-a", None),
+        spawn("mproc-b", None),
+        spawn("mproc-c", None),
+        // Enter at an unmapped address: an instant ring-3 page fault.
+        spawn("mproc-fault", Some(0x1000)),
+    ) else {
+        println!("[kernel] multiproc: spawn failed");
+        return;
+    };
+    println!("[kernel] multiproc: started pids {} {} {} + faulting pid {}", a, b, c, f);
+
+    let start = interrupts::ticks();
+    let preempt_start = task::user_preemptions();
+    let mut concurrent = false;
+    let mut killed = false;
+    loop {
+        let (alive_a, alive_b) = (process::is_alive(a), process::is_alive(b));
+        if alive_a && alive_b && process::cpu_ticks(a) >= 3 && process::cpu_ticks(b) >= 3 {
+            concurrent = true;
+        }
+        if !killed && process::cpu_ticks(c) >= 3 {
+            killed = process::kill(c);
+        }
+        if !alive_a && !alive_b && !process::is_alive(c) && !process::is_alive(f) {
+            break;
+        }
+        if interrupts::ticks() - start > 18 * 30 {
+            println!("[kernel] multiproc: timed out waiting for the processes");
+            break;
+        }
+        task::yield_now();
+    }
+
+    let preemptions = task::user_preemptions() - preempt_start;
+    let code = |pid| process::exit_code(pid).unwrap_or(u64::MAX);
+    println!(
+        "[kernel] multiproc: exit codes a={:#x} b={:#x} c={:#x} fault={:#x}; concurrent={} killed={} ring-3 preemptions={}",
+        code(a), code(b), code(c), code(f), concurrent, killed, preemptions
+    );
+    // The copies never yield, so timer preemptions of ring-3 code are what
+    // let them share the CPU; require plenty (a cooperative-only kernel scores 0).
+    if concurrent
+        && preemptions >= 10
+        && code(a) == 0
+        && code(b) == 0
+        && killed
+        && code(c) == app::KILLED_EXIT_CODE
+        && code(f) == interrupts::FAULT_EXIT_CODE
+    {
+        println!("[kernel] MILESTONE: MULTIPROC OK (preemptive processes, isolated address spaces, kill + fault containment)");
+    } else {
+        println!("[kernel] multiproc self-test FAILED");
+    }
 }
 
 /// v0.14 "Babel": polyglot app support. Runs the same algorithm written in
@@ -839,17 +915,28 @@ fn desktop_loop() -> ! {
     }
 
     loop {
-        x86_64::instructions::hlt();
+        // With user processes ready to run, give them the CPU (they are
+        // preempted back to us on the next timer tick); otherwise sleep until
+        // the next interrupt.
+        if task::user_work_pending() {
+            task::yield_now();
+        } else {
+            x86_64::instructions::hlt();
+        }
         if w == 0 {
             continue;
         }
         let now = interrupts::ticks();
         let mut input = false;
 
-        while let Some(c) = keyboard::pop() {
-            input = true;
-            if !saver_active {
-                terminal::feed_char(c);
+        // Keys go to the terminal unless the focused window belongs to a
+        // running program — then they stay queued for its KEY_READ.
+        if !process::is_alive(wm::focus_owner()) {
+            while let Some(c) = keyboard::pop() {
+                input = true;
+                if !saver_active {
+                    terminal::feed_char(c);
+                }
             }
         }
 
@@ -869,13 +956,12 @@ fn desktop_loop() -> ! {
         // app or trigger a power action.
         if !saver_active {
             if let Some(app_name) = wm::take_pending_launch() {
-                // Redraw first so the app's window opens over a fresh desktop.
-                wm::render_frame(&mut back, w, h);
-                match app::run_named(&app_name) {
-                    Ok(_) => {}
+                // Start it as its own process; the desktop keeps running.
+                match app::spawn_named(&app_name) {
+                    Ok(pid) => println!("[desktop] launched '{}' as pid {}", app_name, pid),
                     Err(e) => println!("[desktop] launch '{}' failed: {}", app_name, e),
                 }
-                input = true; // recompose the desktop after the app exits
+                input = true;
             }
             match wm::take_pending_power() {
                 1 => power::shutdown(),

@@ -22,7 +22,11 @@ const PRIV_STACK_SIZE: usize = 64 * 1024;
 
 static mut DOUBLE_FAULT_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 static mut PRIVILEGE_STACK: [u8; PRIV_STACK_SIZE] = [0; PRIV_STACK_SIZE];
-static TSS: Once<TaskStateSegment> = Once::new();
+/// The TSS lives in a `static mut` (not a `Once`) because its ring-0 stack
+/// pointer changes on every context switch between user processes: each
+/// process/thread takes ring-3 interrupts on its own kernel stack, so a timer
+/// that preempts one process never lands on another's suspended frame.
+static mut TSS: TaskStateSegment = TaskStateSegment::new();
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
 
 #[derive(Clone, Copy)]
@@ -63,16 +67,35 @@ pub fn enable_sse() {
     }
 }
 
+/// Point the TSS ring-0 stack (rsp0) at `top`: the stack the CPU switches to
+/// when an interrupt or exception is taken from ring 3. Called by the scheduler
+/// with interrupts disabled.
+///
+/// `TaskStateSegment` is `packed(4)`, so rsp0 (a u64) sits at offset 4 and is
+/// NOT 8-byte aligned. It must be written with `write_unaligned`: a plain or
+/// `write_volatile` store through a misaligned `*mut VirtAddr` is undefined
+/// behavior, and LLVM — which can see the static's alignment — miscompiled the
+/// surrounding code (boot crashed with a rodata dump at the first ring-3 entry
+/// although the value written was correct).
+pub fn set_rsp0(top: u64) {
+    unsafe {
+        core::ptr::write_unaligned(
+            core::ptr::addr_of_mut!(TSS.privilege_stack_table[0]),
+            VirtAddr::new(top),
+        );
+    }
+}
+
 pub fn init() {
-    let tss = TSS.call_once(|| {
-        let mut tss = TaskStateSegment::new();
+    let tss: &'static TaskStateSegment = unsafe {
+        let tss = &mut *core::ptr::addr_of_mut!(TSS);
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             let start = VirtAddr::from_ptr(core::ptr::addr_of!(DOUBLE_FAULT_STACK));
             start + STACK_SIZE as u64
         };
         tss.privilege_stack_table[0] = privilege_stack_top();
-        tss
-    });
+        &*core::ptr::addr_of!(TSS)
+    };
 
     let (gdt, selectors) = GDT.call_once(|| {
         let mut gdt = GlobalDescriptorTable::new();

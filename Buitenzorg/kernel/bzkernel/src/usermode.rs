@@ -29,14 +29,17 @@ static USER_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub fn user_active() -> bool {
     USER_ACTIVE.load(Ordering::SeqCst)
 }
+pub fn set_user_active(v: bool) {
+    USER_ACTIVE.store(v, Ordering::SeqCst);
+}
 
 // --- Per-thread context accessors (v0.15 "Matang" increment 2) ---------------
 //
-// The SYSCALL entry, longjmp context, and user-rsp scratch are single globals
-// (single core, one running thread). Cooperative user threads make them
-// per-thread: the scheduler saves the outgoing thread's KCTX/USER_RSP and loads
-// the incoming thread's KSTACK/KCTX/USER_RSP around each context switch, so two
-// ring-3 threads never share a syscall kernel stack.
+// The SYSCALL entry, longjmp context, user-rsp scratch and user-active flag are
+// single globals (single core, one running thread). The scheduler makes them
+// per-task: it saves the outgoing task's values and loads the incoming task's
+// around every context switch (task.rs `switch_with`), so ring-3 processes and
+// threads never share a syscall kernel stack.
 
 pub fn get_kctx() -> u64 {
     KCTX_RSP.load(Ordering::SeqCst)

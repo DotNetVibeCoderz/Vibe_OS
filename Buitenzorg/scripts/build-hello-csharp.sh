@@ -54,3 +54,4 @@ build_prog files filemgr.cs bzui.cs bzgfx.cs bzbcl.cs bzbcl2.cs
 build_prog editor editor.cs bzui.cs bzgfx.cs bzbcl.cs bzbcl2.cs
 build_prog imgview imgview.cs bzui.cs bzgfx.cs bzbcl.cs bzbcl2.cs
 build_prog jpgtest jpgtest.cs bzgfx.cs
+build_prog mproc mproc.cs

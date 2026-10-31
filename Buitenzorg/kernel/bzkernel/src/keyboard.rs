@@ -16,7 +16,9 @@ pub fn push(c: char) {
     }
 }
 
-/// Drain one queued character.
+/// Drain one queued character. Interrupts are held off while the lock is
+/// taken: the keyboard IRQ pushes under the same spin lock, so an IRQ landing
+/// while the desktop loop holds it would deadlock.
 pub fn pop() -> Option<char> {
-    QUEUE.lock().pop_front()
+    x86_64::instructions::interrupts::without_interrupts(|| QUEUE.lock().pop_front())
 }

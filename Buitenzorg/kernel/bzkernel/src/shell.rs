@@ -226,8 +226,10 @@ fn run_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             Effect::None,
         );
     }
-    match app::run_named(name) {
-        Ok(code) => (vec![format!("app '{}' selesai (exit {})", name, code)], Effect::Redraw),
+    // Start it as its own process: the desktop and shell stay responsive while
+    // it runs, and several apps can run side by side.
+    match app::spawn_named(name) {
+        Ok(pid) => (vec![format!("app '{}' berjalan (pid {})", name, pid)], Effect::Redraw),
         Err(e) => (vec![format!("run: {}: {}", name, e)], Effect::None),
     }
 }

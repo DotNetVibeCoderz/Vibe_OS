@@ -177,7 +177,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
             crate::wm::present_now();
             0
         }
-        sysno::KEY_READ => crate::keyboard::pop().map(|c| c as u64).unwrap_or(0),
+        sysno::KEY_READ => sys_key_read(),
         sysno::PROC_LIST => sys_proc_list(a0, a1),
         sysno::PROC_KILL => {
             if crate::process::kill(a0) {
@@ -544,6 +544,25 @@ fn sys_thread_create(rip: u64, arg: u64, user_stack_top: u64) -> u64 {
     // Give the main thread its own SYSCALL stack before a second thread exists.
     task::ensure_main_user_thread();
     task::spawn_user_thread(rip, arg, user_stack_top)
+}
+
+/// KEY_READ: with several programs alive, keystrokes belong to whoever has
+/// focus. If the topmost window's owner is a running program, only it reads
+/// keys; otherwise (terminal focused) only a synchronously launched program —
+/// which blocks the desktop and so owns the keyboard — may read them. A
+/// background process polling KEY_READ gets 0 instead of stealing input.
+fn sys_key_read() -> u64 {
+    let me = crate::aspace::current_id();
+    let owner = crate::wm::focus_owner();
+    let allowed = if crate::process::is_alive(owner) {
+        owner == me
+    } else {
+        !crate::process::is_detached(me)
+    };
+    if !allowed {
+        return 0;
+    }
+    crate::keyboard::pop().map(|c| c as u64).unwrap_or(0)
 }
 
 fn sys_thread_join(tid: u64) -> u64 {

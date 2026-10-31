@@ -118,6 +118,7 @@ fn main() {
         ("editor.elf", "editor.elf"),
         ("imgview.elf", "imgview.elf"),
         ("jpgtest.elf", "jpgtest.elf"),
+        ("mproc.elf", "mproc.elf"),
         // Generic user-app slot (SDK / VS Code / MagicAppGen template output).
         // Optional: absent until a template app is built and deployed here.
         ("userapp.elf", "userapp.elf"),

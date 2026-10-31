@@ -95,7 +95,31 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _code
     panic!("EXCEPTION: double fault\n{:#?}", frame);
 }
 
+/// True if the interrupted code was running in ring 3.
+fn from_user(frame: &InterruptStackFrame) -> bool {
+    frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3
+}
+
+/// Exit code reported for a program the kernel terminated because it faulted.
+pub const FAULT_EXIT_CODE: u64 = 0xDEAD;
+
+/// A fault in ring-3 code is the program's bug, not the kernel's: report it
+/// and end just that program (unwinding back into its launcher, exactly like
+/// an EXIT syscall) instead of panicking the whole OS.
+fn kill_faulting_program(what: &str, frame: &InterruptStackFrame) -> ! {
+    println!(
+        "[kernel] ring-3 {} at rip={:#x} rsp={:#x} -- program terminated",
+        what,
+        frame.instruction_pointer.as_u64(),
+        frame.stack_pointer.as_u64()
+    );
+    crate::usermode::exit_user(FAULT_EXIT_CODE)
+}
+
 extern "x86-interrupt" fn general_protection_handler(frame: InterruptStackFrame, code: u64) {
+    if from_user(&frame) {
+        kill_faulting_program("general protection fault", &frame);
+    }
     panic!(
         "EXCEPTION: general protection fault (code {:#x})\n{:#?}",
         code, frame
@@ -104,6 +128,10 @@ extern "x86-interrupt" fn general_protection_handler(frame: InterruptStackFrame,
 
 extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
+    if from_user(&frame) {
+        println!("[kernel] page fault address {:?} ({:?})", Cr2::read().ok(), code);
+        kill_faulting_program("page fault", &frame);
+    }
     panic!(
         "EXCEPTION: page fault\naccessed address: {:?}\nerror code: {:?}\n{:#?}",
         Cr2::read().ok(),
@@ -112,15 +140,16 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     );
 }
 
-extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::account_tick();
     crate::process::account_tick();
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
-    // EOI is done, interrupts are still disabled: safe point to preempt.
-    crate::task::preempt();
+    // EOI is done, interrupts are still disabled: safe point to preempt. Ring-3
+    // code is always preemptible (it holds no kernel lock); kernel code is not.
+    crate::task::preempt(from_user(&frame));
 }
 
 static KEYBOARD: Once<Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Once::new();

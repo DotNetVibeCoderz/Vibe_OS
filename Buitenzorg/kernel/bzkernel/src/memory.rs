@@ -238,18 +238,37 @@ pub fn unmap_user_pages(
 //
 // A per-process bump arena the ring-3 C# runtime uses for its managed heap
 // (via the MMAP/MPROTECT/MUNMAP syscalls). It sits above the program image
-// (0x40_0000) and below the user stack (0x7000_0000). Reset on each app launch;
-// pages committed here are unmapped at reset so the next process starts clean.
-//
-// NOTE (increment 1): `mmap` commits frames immediately. The reserve-then-commit
-// split (mmap PROT_NONE + mprotect to commit) the .NET GC prefers arrives with
-// the GC-integration increment; `mprotect` here already re-flags mapped pages.
+// (0x40_0000) and below the user stack (0x7000_0000). Each address space
+// (`aspace.rs`) has its own arena, keyed by space id, so concurrent processes
+// hand out the same virtual ranges from their own page directories.
 
 const USER_MMAP_BASE: u64 = 0x2000_0000; // 512 MiB
 const USER_MMAP_LIMIT: u64 = 0x6000_0000; // stay well below the stack at 0x7000_0000
 
-static MMAP_NEXT: AtomicU64 = AtomicU64::new(USER_MMAP_BASE);
-static MMAP_PAGES: spin::Mutex<alloc::vec::Vec<u64>> = spin::Mutex::new(alloc::vec::Vec::new());
+/// Per-space arena: next free address + the pages committed so far.
+struct MmapArena {
+    next: u64,
+    pages: alloc::vec::Vec<u64>,
+}
+
+static ARENAS: spin::Mutex<alloc::collections::BTreeMap<u64, MmapArena>> =
+    spin::Mutex::new(alloc::collections::BTreeMap::new());
+
+/// Give address space `id` a fresh, empty arena.
+pub fn mmap_space_create(id: u64) {
+    ARENAS.lock().insert(id, MmapArena { next: USER_MMAP_BASE, pages: alloc::vec::Vec::new() });
+}
+
+/// Drop address space `id`'s arena (its pages die with the space).
+pub fn mmap_space_destroy(id: u64) {
+    ARENAS.lock().remove(&id);
+}
+
+/// Run `f` on the arena of the address space currently installed.
+fn with_arena<R>(f: impl FnOnce(&mut MmapArena) -> R) -> Option<R> {
+    let id = crate::aspace::current_id();
+    ARENAS.lock().get_mut(&id).map(f)
+}
 
 fn flags_from_prot(prot: u64) -> x86_64::structures::paging::PageTableFlags {
     use x86_64::structures::paging::PageTableFlags as F;
@@ -292,15 +311,6 @@ fn map_user_region_flags(
     Ok(pages)
 }
 
-/// Reset the mmap arena for a fresh process (unmaps everything it handed out).
-pub fn reset_user_mmap() {
-    let pages = core::mem::take(&mut *MMAP_PAGES.lock());
-    if !pages.is_empty() {
-        with_ctx(|ctx| unmap_user_pages(&pages, &mut ctx.mapper));
-    }
-    MMAP_NEXT.store(USER_MMAP_BASE, Ordering::SeqCst);
-}
-
 fn prot_has_access(prot: u64) -> bool {
     use bz_abi::mmap_prot::{EXEC, READ, WRITE};
     prot & (READ | WRITE | EXEC) != 0
@@ -315,7 +325,13 @@ pub fn user_mmap(size: u64, prot: u64) -> u64 {
         return bz_abi::syserr::INVAL;
     }
     let count = (size + 4095) / 4096;
-    let base = MMAP_NEXT.fetch_add(count * 4096, Ordering::SeqCst);
+    let Some(base) = with_arena(|a| {
+        let base = a.next;
+        a.next += count * 4096;
+        base
+    }) else {
+        return bz_abi::syserr::INVAL; // no arena: not a user process
+    };
     if base + count * 4096 > USER_MMAP_LIMIT {
         return bz_abi::syserr::INVAL;
     }
@@ -329,7 +345,7 @@ pub fn user_mmap(size: u64, prot: u64) -> u64 {
     });
     match mapped {
         Ok(pages) => {
-            MMAP_PAGES.lock().extend(pages);
+            with_arena(|a| a.pages.extend(pages));
             base
         }
         Err(_) => bz_abi::syserr::INVAL,
@@ -363,7 +379,9 @@ pub fn user_mprotect(addr: u64, size: u64, prot: u64) -> u64 {
             } else if has_access {
                 // Reserved but not committed: map a fresh zeroed frame.
                 match map_user_region_flags(va, 1, flags, &mut ctx.mapper, &mut ctx.frames) {
-                    Ok(mut pages) => MMAP_PAGES.lock().append(&mut pages),
+                    Ok(mut pages) => {
+                        with_arena(|a| a.pages.append(&mut pages));
+                    }
                     Err(_) => return bz_abi::syserr::INVAL,
                 }
             }
@@ -384,7 +402,7 @@ pub fn user_munmap(addr: u64, size: u64) -> u64 {
         pages.push(addr + i * 4096);
     }
     with_ctx(|ctx| unmap_user_pages(&pages, &mut ctx.mapper));
-    MMAP_PAGES.lock().retain(|p| !pages.contains(p));
+    with_arena(|a| a.pages.retain(|p| !pages.contains(p)));
     0
 }
 
@@ -434,17 +452,23 @@ pub fn alloc_dma_frame() -> Option<(u64, *mut u8)> {
     })
 }
 
-/// Frame allocator over the bootloader-provided memory map.
+/// Frame allocator over the bootloader-provided memory map. Hands out the
+/// usable frames in map order and never reclaims them. It keeps a cursor
+/// (region index + next address) — it used to re-walk the whole memory map
+/// from the start for every frame (`usable_frames().nth(next)`), making each
+/// allocation O(frames already handed out), which slowed every ELF load as
+/// boot went on.
 pub struct BootInfoFrameAllocator {
     regions: &'static MemoryRegions,
-    next: usize,
+    region: usize,
+    addr: u64,
 }
 
 impl BootInfoFrameAllocator {
     /// # Safety
     /// The memory map must be valid and its `Usable` regions really unused.
     pub unsafe fn init(regions: &'static MemoryRegions) -> Self {
-        Self { regions, next: 0 }
+        Self { regions, region: 0, addr: 0 }
     }
 
     fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> + '_ {
@@ -464,8 +488,21 @@ impl BootInfoFrameAllocator {
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
+        // Same sequence as walking `usable_frames()` in order.
+        loop {
+            let r = self.regions.get(self.region)?;
+            if r.kind == MemoryRegionKind::Usable {
+                if self.addr < r.start {
+                    self.addr = r.start;
+                }
+                if self.addr < r.end {
+                    let frame = PhysFrame::containing_address(PhysAddr::new(self.addr));
+                    self.addr += 4096;
+                    return Some(frame);
+                }
+            }
+            self.region += 1;
+            self.addr = 0;
+        }
     }
 }

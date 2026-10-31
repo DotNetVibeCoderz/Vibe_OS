@@ -139,8 +139,9 @@
 - [x] Milestone: **Task Manager menampilkan proses & sumber daya; bisa kill proses** (`TASKMGR OK`)
 
 > Catatan: model ring-3 masih satu app run-to-completion. Task manager memantau
-> task kernel + app aktif dan bisa kill task kernel; kill app lain penuh
-> menyusul saat multi-proses preemptive matang (lihat backlog PLAN.md).
+> task kernel + app aktif dan bisa kill task kernel. *(2026-11-01: multi-proses
+> preemptif sudah ada — app yang di-spawn sebagai proses kini bisa di-kill lewat
+> `PROC_KILL`; app yang diluncurkan sinkron oleh demo boot tetap tidak.)*
 
 ---
 
@@ -373,7 +374,7 @@ oleh `bcl2.cs` di ring-3 QEMU -> **`MILESTONE: BCL2 OK`**, smoke 4-media LOLOS,
 ### 🛠️ Developer Workstation — IDE, Terminal, Package Manager, Debug & Deploy (permintaan 2026-11-01)
 Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 1 tak butuh prasyarat baru.
 - **Prasyarat**
-  - [ ] Multi-proses ring-3 preemptif (IDE + app + debugger hidup bersamaan)
+  - [x] **Multi-proses ring-3 preemptif ✓ (increment 1, 2026-11-01)** — beberapa app ring-3 jalan bersamaan, di-preempt timer, masing-masing di **address space sendiri** (`aspace.rs`: 2 page directory privat per proses untuk 2 GiB user, ditukar di PDPT saat switch); stack SYSCALL + **TSS rsp0** + **FXSAVE** per task; spawn/kill (`app::spawn_named`/`kill`); fault ring-3 (#PF/#GP) hanya mematikan app-nya (exit 0xDEAD), kernel tetap hidup; desktop + shell `run` meluncurkan app sebagai proses; `KEY_READ` mengikuti fokus window. Diverifikasi `mproc.cs` (3 salinan non-yield + 1 proses fault): memori di VA sama tetap privat, register SSE utuh, ≥10 preemption ring-3 nyata (36), 1 di-kill, 1 fault terisolasi → `MILESTONE: MULTIPROC OK`; **kontrol negatif**: tanpa preemption ring-3 tes GAGAL (`preemptions=0, concurrent=false`). Bonus: frame allocator O(n)→kursor, boot ke READY ~35 s → ~20 s (tick).
   - [ ] FS tulis persisten di `/disk` (FAT16/32 write atau FS journaled)
   - [ ] Driver NIC (virtio-net → e1000) + TCP
   - [ ] Kernel log ring buffer (`dmesg`) + log per-app
@@ -411,7 +412,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
 ### 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)
 Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](PLAN.md). Fase 1 tak butuh prasyarat baru.
 - **Prasyarat (kernel & driver)**
-  - [ ] Multi-proses preemptif (musik di latar saat game/browsing)
+  - [x] Multi-proses preemptif (musik di latar saat game/browsing) — ✓ increment 1 (2026-11-01), lihat §Developer Workstation
   - [ ] Surface shared-memory zero-copy (ganti salinan per-piksel `BLIT`) + vsync/frame pacing + fullscreen eksklusif
   - [ ] Timer resolusi tinggi (APIC timer/HPET)
   - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [ ] driver Intel HDA · [ ] capture mic

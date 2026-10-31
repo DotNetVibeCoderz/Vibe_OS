@@ -607,8 +607,10 @@ satu per satu (run-to-completion)**, **belum ada NIC nyata & TCP**, dan **`/disk
 belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 
 ### Prasyarat lintas-fitur
-- **Multi-proses ring-3 preemptif** — IDE + app yang dijalankan + debugger harus
-  hidup bersamaan; tanpa ini IDE tak bisa "Run" lalu tetap tampil.
+- ✅ **Multi-proses ring-3 preemptif** *(increment 1 selesai 2026-11-01:
+  address space per proses, preemption ring-3, kill, isolasi fault, fokus
+  keyboard; `MILESTONE: MULTIPROC OK`)* — IDE + app yang dijalankan + debugger
+  harus hidup bersamaan; tanpa ini IDE tak bisa "Run" lalu tetap tampil.
 - **FS tulis persisten** — FAT16/32 write di `/disk` (atau FS journaled) agar app/
   paket hasil deploy bertahan setelah reboot.
 - **Driver NIC** (virtio-net dulu — paling sederhana di QEMU — lalu e1000) +
@@ -709,7 +711,7 @@ saja (tanpa NIC, TCP, DNS, TLS). Format: BMP + JPEG baseline. WebView = subset
 HTML mini. App ring-3 jalan **satu per satu**.
 
 ### Prasyarat bersama (kernel & driver)
-- **Multi-proses preemptif** — musik tetap jalan saat bermain game/browsing.
+- ✅ **Multi-proses preemptif** *(increment 1 selesai 2026-11-01)* — musik tetap jalan saat bermain game/browsing.
 - **Surface shared-memory zero-copy** — app menggambar langsung ke buffer yang
   dipetakan ke compositor (ganti salinan per-piksel `BLIT`) + **vsync/frame
   pacing** + mode **fullscreen eksklusif**.
@@ -886,7 +888,7 @@ Item yang belum tuntas dan dijadwalkan menyusul (lihat anotasi di [Progress.md](
 - **Driver native NVMe/AHCI/USB & e1000** — saat ini hanya IDE PIO + net loopback.
 - **Filesystem kustom journaled** — baru FAT12/16/32 read + FAT12 write.
 - **TCP** — sudah Ethernet/ARP/IPv4/ICMP + **UDP** (loopback); TCP + driver NIC belum.
-- **Multi-proses preemptive di ring 3** — model saat ini satu app run-to-completion; task manager & multitasking penuh butuh ini.
+- ~~**Multi-proses preemptive di ring 3**~~ — ✓ increment 1 (2026-11-01). Sisa: argv/`wait`/handle per proses, tutup window saat proses keluar, reklamasi frame, SMP.
 - **Tiling WM, settings/notifikasi, pipes/redirection shell** *(launcher Start menu + tray ✓ v0.16)*.
 - **VS Code DAP debugging + debug bridge** — extension punya new/build/deploy/GDB-kernel; DAP + bridge ke OS belum (lihat §Developer Workstation).
 
