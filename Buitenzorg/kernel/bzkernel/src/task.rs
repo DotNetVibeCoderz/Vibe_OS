@@ -487,19 +487,6 @@ pub fn current_space() -> aspace::Space {
     })
 }
 
-/// Set (and install) the current task's address space. Synchronous app
-/// launches run the program in its own space on the launching task.
-pub fn set_current_space(space: aspace::Space) {
-    interrupts::without_interrupts(|| {
-        let mut guard = SCHEDULER.lock();
-        if let Some(s) = guard.as_mut() {
-            let cur = s.current;
-            s.tasks[cur].space = space;
-        }
-        aspace::install(space);
-    });
-}
-
 /// Current thread's id (backs THREAD_SELF; a TLS/pthread_self foundation).
 pub fn current_id() -> u64 {
     interrupts::without_interrupts(|| {
@@ -560,30 +547,6 @@ pub fn is_finished(id: u64) -> bool {
             .map(|t| t.state == State::Finished)
             .unwrap_or(true)
     })
-}
-
-/// Tear down any lingering user threads and restore the main thread to using
-/// the TSS interrupt stack for syscalls. Called when an app finishes so the
-/// next (possibly single-threaded) app starts from the clean default.
-pub fn terminate_user_threads() {
-    let top = gdt::privilege_stack_top().as_u64();
-    interrupts::without_interrupts(|| {
-        let mut guard = SCHEDULER.lock();
-        if let Some(sched) = guard.as_mut() {
-            let cur = sched.current;
-            let space = sched.tasks[cur].space.id;
-            for (i, t) in sched.tasks.iter_mut().enumerate() {
-                // Only this app's threads — other processes keep running.
-                if i != cur && t.user.is_some() && t.space.id == space {
-                    t.state = State::Finished;
-                }
-            }
-            sched.tasks[cur].user = None;
-            sched.tasks[cur].ctx.sys_kstack_top = top;
-        }
-        usermode::set_syscall_kstack(top);
-        gdt::set_rsp0(top);
-    });
 }
 
 /// Build the initial stack frame consumed by [`context_switch`]'s restore

@@ -4,9 +4,7 @@
 //!
 //! A program's pid is the id of its address space (`aspace.rs`); all of its
 //! threads are scheduler tasks tagged with that id, and they are listed once,
-//! as the program. Programs are either *attached* (run synchronously by the
-//! boot demos via `app::run_named`, on the launching task) or *detached*
-//! (spawned as their own process via `app::spawn_named`).
+//! as the program. Every program is its own process (killable).
 
 use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -18,8 +16,6 @@ struct App {
     pid: u64,
     name: [u8; 32],
     cpu_ticks: u64,
-    /// Spawned as its own process (killable); false for synchronous launches.
-    detached: bool,
     /// Argument string handed to PROC_SPAWN / `run <app> <args>`.
     args: String,
 }
@@ -38,13 +34,12 @@ fn copy_name(name: &str) -> [u8; 32] {
 }
 
 /// Register a launching program. Returns its pid.
-pub fn app_start(name: &str, detached: bool) -> u64 {
+pub fn app_start(name: &str) -> u64 {
     let pid = NEXT_APP_PID.fetch_add(1, Ordering::SeqCst);
     APPS.lock().push(App {
         pid,
         name: copy_name(name),
         cpu_ticks: 0,
-        detached,
         args: String::new(),
     });
     pid
@@ -84,11 +79,6 @@ pub fn app_exit(pid: u64, code: u64) {
 /// True while program `pid` is registered (running).
 pub fn is_alive(pid: u64) -> bool {
     pid != 0 && APPS.lock().iter().any(|a| a.pid == pid)
-}
-
-/// True if `pid` is a running program spawned as its own process.
-pub fn is_detached(pid: u64) -> bool {
-    APPS.lock().iter().any(|a| a.pid == pid && a.detached)
 }
 
 /// Exit code of a recently finished program, if known.
@@ -169,15 +159,13 @@ pub fn list(out: &mut [ProcInfo]) -> usize {
     n
 }
 
-/// Terminate a process by pid. Spawned programs are killed through
-/// `app::kill`; a program launched synchronously runs on its launcher's task
-/// and cannot be killed from outside. Kernel task ids route to `task::kill`.
+/// Terminate a process by pid: programs through `app::kill`, kernel task ids
+/// through `task::kill`.
 pub fn kill(pid: u64) -> bool {
-    let target = APPS.lock().iter().find(|a| a.pid == pid).map(|a| a.detached);
-    match target {
-        Some(true) => crate::app::kill(pid),
-        Some(false) => false,
-        None => crate::task::kill(pid),
+    if is_alive(pid) {
+        crate::app::kill(pid)
+    } else {
+        crate::task::kill(pid)
     }
 }
 

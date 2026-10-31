@@ -3,16 +3,19 @@
 //! (WIN_CREATE / WIN_CMD / WIN_PRESENT) and read input via KEY_READ.
 //!
 //! Uses the global memory context so it can be invoked from the shell after
-//! boot. Every program gets its own address space (`aspace.rs`), so several
-//! can be resident at once. Two ways to launch:
-//! - [`run_named`]: synchronous — the program runs on the calling task and the
-//!   call returns its exit code (the boot demos, which check results in order).
-//! - [`spawn_named`]: a separate, preemptively scheduled process — the call
-//!   returns its pid at once (the desktop and the shell's `run`).
+//! boot. Every program runs as its own preemptively scheduled process, in its
+//! own address space (`aspace.rs`), on its own kernel stack. Two ways to start
+//! one:
+//! - [`spawn_named`] / [`spawn_with_args`]: returns the pid at once (the
+//!   desktop, the shell's `run`, PROC_SPAWN).
+//! - [`run_named`]: spawn, then block until it exits and return its exit code
+//!   (the boot demos, which check results in order). The program is a normal
+//!   process either way — it used to run on the launcher's own task, sharing
+//!   the boot task's privilege stack and impossible to kill.
 
 use alloc::vec::Vec;
 
-use crate::{aspace, elf, memory, process, task, usermode, vfs};
+use crate::{aspace, elf, memory, process, task, vfs};
 
 const USER_STACK_BASE: u64 = 0x7000_0000;
 const USER_STACK_PAGES: u64 = 32; // 128 KiB (apps use more stack than hello)
@@ -49,29 +52,17 @@ fn load_program(pid: u64, image: &[u8]) -> Result<(aspace::Space, u64, u64), &'s
     }
 }
 
-/// Load and run an app image on the calling task, in its own address space.
-/// Returns its exit code.
-pub fn run_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
-    let pid = process::app_start(name, false);
-    let (space, entry, stack_top) = match load_program(pid, image) {
-        Ok(v) => v,
-        Err(e) => {
-            process::app_exit(pid, u64::MAX);
-            return Err(e);
+/// Block the calling (kernel) task until process `pid` exits; return its exit
+/// code. Sleeps in the scheduler's Blocked state, woken by `process::app_exit`
+/// — no race, since kernel code is not preempted between the check and the
+/// sleep and the child can only exit after we switch away.
+pub fn wait(pid: u64) -> u64 {
+    loop {
+        if !process::is_alive(pid) {
+            return process::exit_code(pid).unwrap_or(u64::MAX);
         }
-    };
-    let prev = task::current_space();
-    task::set_current_space(space);
-
-    let code = usermode::enter_user(entry, stack_top);
-
-    // Tear down any user threads the app spawned, restore the launcher's
-    // default (TSS) syscall stack and address space, then drop the app's.
-    task::terminate_user_threads();
-    task::set_current_space(prev);
-    aspace::destroy(space);
-    process::app_exit(pid, code);
-    Ok(code)
+        task::futex_wait_block(process::wait_key(pid));
+    }
 }
 
 /// Start `image` as its own preemptively scheduled process. Returns its pid.
@@ -87,7 +78,7 @@ pub fn spawn_image_at(
     image: &[u8],
     entry_override: Option<u64>,
 ) -> Result<u64, &'static str> {
-    let pid = process::app_start(name, true);
+    let pid = process::app_start(name);
     match load_program(pid, image) {
         Ok((space, entry, stack_top)) => {
             task::spawn_process(entry_override.unwrap_or(entry), stack_top, space);
@@ -127,7 +118,7 @@ pub fn kill(pid: u64) -> bool {
 /// polling for keys. Called from the desktop loop.
 pub fn reap_closed_windows() {
     for pid in crate::wm::take_closed_owners() {
-        if process::is_detached(pid) && !crate::wm::has_windows(pid) {
+        if process::is_alive(pid) && !crate::wm::has_windows(pid) {
             kill(pid);
         }
     }
@@ -140,11 +131,11 @@ fn read_app(name: &str) -> Result<Vec<u8>, &'static str> {
     vfs::read(&path).map_err(|_| "app not found on /disk")
 }
 
-/// Resolve an app name to a VFS path and run it synchronously. Known apps live
-/// on `/disk` as uppercase 8.3 ELF files (e.g. "xox" -> /disk/XOX.ELF).
+/// Run a named app as a process and wait for it; returns its exit code. Known
+/// apps live on `/disk` as uppercase 8.3 ELF files (e.g. "xox" -> /disk/XOX.ELF).
 pub fn run_named(name: &str) -> Result<u64, &'static str> {
-    let bytes = read_app(name)?;
-    run_image(name, &bytes)
+    let pid = spawn_named(name)?;
+    Ok(wait(pid))
 }
 
 /// Resolve an app name and start it as its own process. Returns its pid.

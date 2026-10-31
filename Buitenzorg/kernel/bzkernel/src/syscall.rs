@@ -550,25 +550,20 @@ fn sys_thread_create(rip: u64, arg: u64, user_stack_top: u64) -> u64 {
 }
 
 /// KEY_READ: with several programs alive, keystrokes belong to whoever has
-/// focus. If the topmost window's owner is a running program, only it reads
-/// keys; otherwise (terminal focused) only a synchronously launched program —
-/// which blocks the desktop and so owns the keyboard — may read them. A
-/// background process polling KEY_READ gets 0 instead of stealing input.
+/// focus — only the owner of the topmost window reads keys (when the terminal
+/// has focus they stay with the terminal). A background process polling
+/// KEY_READ gets 0 instead of stealing input.
 fn sys_key_read() -> u64 {
     let me = crate::aspace::current_id();
-    let owner = crate::wm::focus_owner();
-    let allowed = if crate::process::is_alive(owner) {
-        owner == me
+    let key = if me != 0 && crate::wm::focus_owner() == me {
+        crate::keyboard::pop().map(|c| c as u64).unwrap_or(0)
     } else {
-        !crate::process::is_detached(me)
+        0
     };
-    let key = if allowed { crate::keyboard::pop().map(|c| c as u64).unwrap_or(0) } else { 0 };
-    if key == 0 && crate::process::is_detached(me) {
+    if key == 0 && me != 0 {
         // Nothing to read: give the CPU away rather than letting an app's
-        // KEY_READ polling loop burn its whole time slice. Safe for spawned
-        // processes, which run on their own kernel stack; synchronously
-        // launched apps share the boot task's privilege stack and keep the old
-        // non-yielding behavior.
+        // polling loop burn its whole time slice (every program runs on its
+        // own kernel stack, so yielding inside the syscall is safe).
         task::yield_now();
     }
     key

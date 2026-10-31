@@ -28,6 +28,10 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Every app is a process.** `app::run_named` (the boot demos) is now spawn +
+  blocking wait instead of running the app on the launching task, so no app
+  shares the boot task's privilege stack any more and every app can be killed;
+  the "attached" mode is gone.
 - **Frame reclamation.** The frame allocator has an intrusive free list; a dead
   process's pages, page tables and directories go back to it (`aspace::destroy`),
   and `MUNMAP` frees frames too. `multiproc_demo` requires 0 frames leaked and 0
