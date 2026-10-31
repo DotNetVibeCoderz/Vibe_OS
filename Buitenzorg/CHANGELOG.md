@@ -28,7 +28,18 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Persistent `/disk`.** ATA PIO sector writes + cache flush; generic FAT12/16/32
+  writing (cluster allocation, every FAT copy, timestamps, old chain freed after
+  the new entry is written, delete, free space, FAT32 FSInfo invalidated);
+  `/disk` mounted read-write; shell `echo > / >>`, `rm`, `df`; the Editor saves
+  to `/disk/NOTE.TXT`. A boot counter survives reboots; the smoke test finds the
+  written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
+
 ### Fixed
+- **FAT12 writer corrupted the `/ram` root directory** — it located the second
+  FAT copy at `(data_start - fat_start) / 2`, which includes the root directory
+  sectors, so FAT entries were written into directory entries 64+. Overwriting a
+  file also leaked its old cluster chain.
 - **Recurring layout-sensitive boot crash — root cause found.** The static
   kernel stacks (`PRIVILEGE_STACK`, `DOUBLE_FAULT_STACK`) were `[u8; N]` with
   alignment 1; in some layouts the privilege stack landed on an odd address,

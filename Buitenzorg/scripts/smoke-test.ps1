@@ -90,10 +90,20 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: PIANO OK", "MILESTONE: STORE OK",
                      "MILESTONE: FILES OK", "MILESTONE: EDITOR OK",
                      "MILESTONE: IMGVIEW OK", "MILESTONE: JPEG OK",
-                     "MILESTONE: MULTIPROC OK")
+                     "MILESTONE: MULTIPROC OK", "MILESTONE: DISK WRITE OK")
 }
 Assert-Markers -Log $ideLog -Markers $ideMarkers
 Write-Host "smoke [ide]: all milestones present"
+
+# Persistent /disk: the kernel printed the exact contents it wrote to
+# /disk/BOOTCNT.TXT. Those bytes must now be inside the disk image file on the
+# host — proof the write reached the medium, not just a cache.
+$persist = Select-String -Path $ideLog -Pattern 'BOOTCNT\.TXT = (BZPERSIST[^\r\n]*)' | Select-Object -First 1
+if (-not $persist) { Write-Error "SMOKE TEST FAILED: kernel did not report BOOTCNT.TXT"; exit 1 }
+$needle = $persist.Matches[0].Groups[1].Value
+$diskText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($image))
+if (-not $diskText.Contains($needle)) { Write-Error "SMOKE TEST FAILED: '$needle' not found in $image"; exit 1 }
+Write-Host "smoke [ide]: /disk write persisted to the image ($needle)"
 
 foreach ($media in @("ahci", "nvme", "usb")) {
     $log = Join-Path $root "dist\boot-$media.log"

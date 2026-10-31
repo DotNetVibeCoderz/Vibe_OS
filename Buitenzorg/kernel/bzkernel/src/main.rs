@@ -1210,6 +1210,67 @@ fn tunas_demo(
     }
 }
 
+/// Persistent /disk: a boot counter that survives reboots, plus checks that
+/// overwriting a file does not leak its old clusters and deleting one frees
+/// them. The counter file's exact contents are printed so the smoke test can
+/// find the same bytes inside the disk image on the host — proof the write
+/// reached the medium, not just a cache. IDE only (the other boot media have no
+/// /disk driver yet).
+fn disk_persist_demo() {
+    const COUNTER: &str = "/disk/BOOTCNT.TXT";
+    if vfs::free_space("/disk").is_err() {
+        return; // no /disk on this boot medium
+    }
+    let previous = vfs::read(COUNTER)
+        .ok()
+        .and_then(|b| {
+            let text = core::str::from_utf8(&b).ok()?;
+            text.split("boot=").nth(1)?.split_whitespace().next()?.parse::<u64>().ok()
+        })
+        .unwrap_or(0);
+    let count = previous + 1;
+    let content = alloc::format!("BZPERSIST boot={} ticks={}\n", count, interrupts::ticks());
+
+    let free_before = vfs::free_space("/disk").map(|(b, _)| b).unwrap_or(0);
+    let wrote = vfs::write(COUNTER, content.as_bytes()).is_ok();
+    let read_back = vfs::read(COUNTER).map(|b| b == content.as_bytes()).unwrap_or(false);
+    // Overwrite with same-size content: the old chain must be freed.
+    let free_mid = vfs::free_space("/disk").map(|(b, _)| b).unwrap_or(0);
+    let _ = vfs::write(COUNTER, content.as_bytes());
+    let free_after_overwrite = vfs::free_space("/disk").map(|(b, _)| b).unwrap_or(1);
+    let no_leak = free_after_overwrite == free_mid;
+    // Create + delete a scratch file: the space must come back.
+    let scratch = alloc::vec![0x5Au8; 3000];
+    let created = vfs::write("/disk/SCRATCH.BIN", &scratch).is_ok()
+        && vfs::read("/disk/SCRATCH.BIN").map(|b| b == scratch).unwrap_or(false);
+    let deleted = vfs::remove("/disk/SCRATCH.BIN").is_ok()
+        && vfs::read("/disk/SCRATCH.BIN").is_err()
+        && vfs::free_space("/disk").map(|(b, _)| b).unwrap_or(0) == free_after_overwrite;
+
+    // The shell drives the same path: echo > / >> creates and appends, rm deletes,
+    // df reports the writable mount.
+    let _ = shell::run("echo halo buitenzorg > /disk/SHELL.TXT");
+    let _ = shell::run("echo baris dua >> /disk/SHELL.TXT");
+    let shell_ok = vfs::read("/disk/SHELL.TXT").map(|b| b == b"halo buitenzorg\nbaris dua\n").unwrap_or(false)
+        && shell::run("df").0.iter().any(|l| l.starts_with("/disk") && l.ends_with("rw"))
+        && shell::run("rm /disk/SHELL.TXT").0.iter().any(|l| l.contains("dihapus"))
+        && vfs::read("/disk/SHELL.TXT").is_err();
+
+    println!(
+        "[kernel] disk: boot count {} (previous {}), free {} KiB -> {} KiB",
+        count, previous, free_before / 1024, free_after_overwrite / 1024
+    );
+    println!("[kernel] disk: BOOTCNT.TXT = {}", content.trim_end());
+    if wrote && read_back && no_leak && created && deleted && shell_ok {
+        println!("[kernel] MILESTONE: DISK WRITE OK (persistent /disk: write + read-back, overwrite frees old clusters, delete, shell echo>/rm/df)");
+    } else {
+        println!(
+            "[kernel] disk write self-test FAILED (wrote={} read_back={} no_leak={} created={} deleted={} shell={})",
+            wrote, read_back, no_leak, created, deleted, shell_ok
+        );
+    }
+}
+
 /// v0.5 "Dahan": VFS + FAT write, service/init manager, async I/O benchmark,
 /// networking, and a C# service running as a ring-3 process.
 fn dahan_demo(
@@ -1219,9 +1280,10 @@ fn dahan_demo(
     println!();
 
     // --- VFS + FAT read/write ---------------------------------------------
-    // Move the boot disk into the VFS as read-only /disk.
+    // Move the boot disk into the VFS as read/write /disk (persistent: the
+    // ATA driver writes sectors + flushes the drive cache).
     if let Some(dev) = driver::take_boot_block_device() {
-        if let Err(e) = vfs::mount("disk", dev, true) {
+        if let Err(e) = vfs::mount("disk", dev, false) {
             println!("[vfs] mounting /disk failed: {}", e);
         }
     }
@@ -1233,6 +1295,7 @@ fn dahan_demo(
         }
     }
     println!("[vfs] mounts: {}", vfs::mounts().join(" "));
+    disk_persist_demo();
 
     let payload = b"Dahan tumbuh: VFS + FAT write bekerja. Ditulis lalu dibaca kembali.\n";
     match vfs::write("/ram/DAHAN.TXT", payload) {

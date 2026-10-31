@@ -1,6 +1,11 @@
-//! Read-only FAT12/16/32 access over a [`BlockDevice`] (v0.3 "Batang"
-//! milestone: "baca file dari disk"). The full VFS arrives in v0.5 "Dahan";
-//! this is deliberately minimal: MBR partition 0, root directory, 8.3 names.
+//! FAT12/16/32 access over a [`BlockDevice`] (v0.3 "Batang" milestone: "baca
+//! file dari disk"; writes on all three variants since the persistent-`/disk`
+//! increment). Deliberately minimal: first FAT partition, root directory only,
+//! 8.3 names.
+//!
+//! Write ordering (no journal yet): new data clusters -> FAT chain (every FAT
+//! copy) -> directory entry -> free the old chain. A crash in between can leak
+//! clusters but never leaves a directory entry pointing at unwritten data.
 
 use alloc::{string::String, vec::Vec};
 
@@ -23,6 +28,10 @@ pub struct FatVolume {
     data_start: u64,
     root_cluster: u32, // FAT32 only
     kind: FatKind,
+    num_fats: u64,
+    fat_size: u64,      // sectors per FAT copy
+    cluster_count: u64, // data clusters; valid cluster numbers are 2..cluster_count+2
+    fsinfo_sector: u64, // FAT32 FSInfo LBA (0 = none)
 }
 
 fn u16_at(buf: &[u8], off: usize) -> u64 {
@@ -118,6 +127,14 @@ impl FatVolume {
             data_start,
             root_cluster: u32_at(&vbr, 44) as u32,
             kind,
+            num_fats,
+            fat_size,
+            cluster_count,
+            fsinfo_sector: if kind == FatKind::Fat32 && u16_at(&vbr, 48) != 0 {
+                partition_start + u16_at(&vbr, 48)
+            } else {
+                0
+            },
         })
     }
 
@@ -316,95 +333,231 @@ impl FatVolume {
         self.partition_start
     }
 
-    /// Read one FAT12 entry (only FAT12 write is implemented for the ramdisk).
-    fn fat12_get(&self, dev: &mut dyn BlockDevice, cluster: u32) -> Result<u32, &'static str> {
-        let offset = cluster as u64 + cluster as u64 / 2;
-        let sec = self.fat_start + offset / self.bytes_per_sector;
-        let idx = (offset % self.bytes_per_sector) as usize;
-        let mut s0 = [0u8; SECTOR_SIZE];
-        dev.read_sector(sec, &mut s0)?;
-        let lo = s0[idx] as u32;
-        let hi = if idx + 1 < SECTOR_SIZE {
-            s0[idx + 1] as u32
-        } else {
-            let mut s1 = [0u8; SECTOR_SIZE];
-            dev.read_sector(sec + 1, &mut s1)?;
-            s1[0] as u32
-        };
-        let raw = lo | (hi << 8);
-        Ok(if cluster & 1 == 0 { raw & 0xFFF } else { raw >> 4 })
+    /// End-of-chain marker for this FAT variant.
+    fn eoc(&self) -> u32 {
+        match self.kind {
+            FatKind::Fat12 => 0xFFF,
+            FatKind::Fat16 => 0xFFFF,
+            FatKind::Fat32 => 0x0FFF_FFFF,
+        }
     }
 
-    /// Write one FAT12 entry into both FAT copies.
-    fn fat12_set(&self, dev: &mut dyn BlockDevice, cluster: u32, value: u32) -> Result<(), &'static str> {
-        let fat_sectors = (self.data_start - self.fat_start) / 2; // 2 FATs
-        for copy in 0..2u64 {
-            let base = self.fat_start + copy * fat_sectors;
-            let offset = cluster as u64 + cluster as u64 / 2;
-            let sec = base + offset / self.bytes_per_sector;
-            let idx = (offset % self.bytes_per_sector) as usize;
+    /// Sector + byte offset of `cluster`'s entry in FAT copy `copy`.
+    fn fat_pos(&self, copy: u64, cluster: u32) -> (u64, usize) {
+        let offset = match self.kind {
+            FatKind::Fat12 => cluster as u64 + cluster as u64 / 2,
+            FatKind::Fat16 => cluster as u64 * 2,
+            FatKind::Fat32 => cluster as u64 * 4,
+        };
+        // Copies are `fat_size` sectors apart. (The FAT12-only writer this
+        // replaces used (data_start - fat_start) / 2, which also counts the
+        // root directory — so it wrote the second FAT copy *into the root
+        // directory*, corrupting entries 64+ of the /ram volume.)
+        let base = self.fat_start + copy * self.fat_size;
+        (base + offset / self.bytes_per_sector, (offset % self.bytes_per_sector) as usize)
+    }
 
+    /// Raw value of `cluster`'s FAT entry (first copy). 0 = free.
+    fn fat_get(&self, dev: &mut dyn BlockDevice, cluster: u32) -> Result<u32, &'static str> {
+        let (sec, idx) = self.fat_pos(0, cluster);
+        let mut s0 = [0u8; SECTOR_SIZE];
+        dev.read_sector(sec, &mut s0)?;
+        Ok(match self.kind {
+            FatKind::Fat12 => {
+                let hi = if idx + 1 < SECTOR_SIZE {
+                    s0[idx + 1] as u32
+                } else {
+                    let mut s1 = [0u8; SECTOR_SIZE];
+                    dev.read_sector(sec + 1, &mut s1)?;
+                    s1[0] as u32
+                };
+                let raw = s0[idx] as u32 | (hi << 8);
+                if cluster & 1 == 0 { raw & 0xFFF } else { raw >> 4 }
+            }
+            FatKind::Fat16 => u16_at(&s0, idx) as u32,
+            FatKind::Fat32 => (u32_at(&s0, idx) & 0x0FFF_FFFF) as u32,
+        })
+    }
+
+    /// Write `cluster`'s FAT entry into every FAT copy.
+    fn fat_set(&self, dev: &mut dyn BlockDevice, cluster: u32, value: u32) -> Result<(), &'static str> {
+        for copy in 0..self.num_fats {
+            let (sec, idx) = self.fat_pos(copy, cluster);
             let mut s0 = [0u8; SECTOR_SIZE];
             dev.read_sector(sec, &mut s0)?;
-            let mut s1 = [0u8; SECTOR_SIZE];
-            let straddle = idx + 1 >= SECTOR_SIZE;
-            if straddle {
-                dev.read_sector(sec + 1, &mut s1)?;
+            match self.kind {
+                FatKind::Fat12 => {
+                    let straddle = idx + 1 >= SECTOR_SIZE;
+                    let mut s1 = [0u8; SECTOR_SIZE];
+                    if straddle {
+                        dev.read_sector(sec + 1, &mut s1)?;
+                    }
+                    let (mut b0, mut b1) = (s0[idx], if straddle { s1[0] } else { s0[idx + 1] });
+                    if cluster & 1 == 0 {
+                        b0 = (value & 0xFF) as u8;
+                        b1 = (b1 & 0xF0) | ((value >> 8) & 0x0F) as u8;
+                    } else {
+                        b0 = (b0 & 0x0F) | ((value << 4) & 0xF0) as u8;
+                        b1 = ((value >> 4) & 0xFF) as u8;
+                    }
+                    s0[idx] = b0;
+                    if straddle {
+                        s1[0] = b1;
+                        dev.write_sector(sec + 1, &s1)?;
+                    } else {
+                        s0[idx + 1] = b1;
+                    }
+                }
+                FatKind::Fat16 => s0[idx..idx + 2].copy_from_slice(&(value as u16).to_le_bytes()),
+                FatKind::Fat32 => {
+                    // The top 4 bits are reserved and must be preserved.
+                    let old = u32_at(&s0, idx) as u32;
+                    let v = (old & 0xF000_0000) | (value & 0x0FFF_FFFF);
+                    s0[idx..idx + 4].copy_from_slice(&v.to_le_bytes());
+                }
             }
-            let byte1 = |s0: &[u8; SECTOR_SIZE], s1: &[u8; SECTOR_SIZE]| {
-                if straddle { s1[0] } else { s0[idx + 1] }
-            };
-            let (mut b0, mut b1) = (s0[idx], byte1(&s0, &s1));
-            if cluster & 1 == 0 {
-                b0 = (value & 0xFF) as u8;
-                b1 = (b1 & 0xF0) | ((value >> 8) & 0x0F) as u8;
-            } else {
-                b0 = (b0 & 0x0F) | ((value << 4) & 0xF0) as u8;
-                b1 = ((value >> 4) & 0xFF) as u8;
-            }
-            s0[idx] = b0;
-            if straddle {
-                s1[0] = b1;
-                dev.write_sector(sec, &s0)?;
-                dev.write_sector(sec + 1, &s1)?;
-            } else {
-                s0[idx + 1] = b1;
-                dev.write_sector(sec, &s0)?;
-            }
+            dev.write_sector(sec, &s0)?;
         }
         Ok(())
     }
 
-    /// Create or overwrite a root-directory file with `data` (FAT12 volumes).
+    /// Find `n` free clusters, lowest first.
+    fn alloc_clusters(&self, dev: &mut dyn BlockDevice, n: u64) -> Result<Vec<u32>, &'static str> {
+        let mut chain = Vec::new();
+        let end = (self.cluster_count + 2) as u32;
+        let mut c = 2u32;
+        while (chain.len() as u64) < n && c < end {
+            if self.fat_get(dev, c)? == 0 {
+                chain.push(c);
+            }
+            c += 1;
+        }
+        if (chain.len() as u64) < n {
+            return Err("not enough free clusters");
+        }
+        Ok(chain)
+    }
+
+    /// Mark every cluster of the chain starting at `first` free.
+    fn free_chain(&self, dev: &mut dyn BlockDevice, first: u32) -> Result<(), &'static str> {
+        let mut c = first;
+        let mut steps = 0u64;
+        while c >= 2 && (c as u64) < self.cluster_count + 2 {
+            let next = self.fat_get(dev, c)?;
+            self.fat_set(dev, c, 0)?;
+            steps += 1;
+            // Stop at end of chain (>= 0x..FF8) or on a loop in a corrupt FAT.
+            if steps > self.cluster_count || next >= (self.eoc() & !7) {
+                break;
+            }
+            c = next;
+        }
+        Ok(())
+    }
+
+    /// LBAs of every root-directory sector.
+    fn root_sectors(&self, dev: &mut dyn BlockDevice) -> Result<Vec<u64>, &'static str> {
+        let mut out = Vec::new();
+        match self.kind {
+            FatKind::Fat12 | FatKind::Fat16 => {
+                for s in 0..self.root_dir_sectors {
+                    out.push(self.root_dir_start + s);
+                }
+            }
+            FatKind::Fat32 => {
+                let mut cluster = self.root_cluster;
+                loop {
+                    let first = self.cluster_to_sector(cluster);
+                    for s in 0..self.sectors_per_cluster {
+                        out.push(first + s);
+                    }
+                    match self.next_cluster(dev, cluster)? {
+                        Some(next) => cluster = next,
+                        None => break,
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Locate `wanted` in the root directory: (sector LBA, entry offset, first
+    /// cluster). Also returns the first free slot seen, for creating it.
+    fn find_entry(
+        &self,
+        dev: &mut dyn BlockDevice,
+        wanted: &[u8; 11],
+    ) -> Result<(Option<(u64, usize, u32)>, Option<(u64, usize)>), &'static str> {
+        let mut free = None;
+        for lba in self.root_sectors(dev)? {
+            let mut sector = [0u8; SECTOR_SIZE];
+            dev.read_sector(lba, &mut sector)?;
+            for off in (0..SECTOR_SIZE).step_by(32) {
+                let first = sector[off];
+                if first == 0x00 || first == 0xE5 {
+                    if free.is_none() {
+                        free = Some((lba, off));
+                    }
+                    if first == 0x00 {
+                        return Ok((None, free)); // end of directory
+                    }
+                    continue;
+                }
+                if sector[off + 11] & 0x0F == 0x0F {
+                    continue; // long-file-name entry
+                }
+                if sector[off..off + 11] == wanted[..] {
+                    let cluster =
+                        (u16_at(&sector, off + 20) as u32) << 16 | u16_at(&sector, off + 26) as u32;
+                    return Ok((Some((lba, off, cluster)), free));
+                }
+            }
+        }
+        Ok((None, free))
+    }
+
+    /// FAT32 keeps a free-cluster hint in FSInfo; once we change the FAT it
+    /// would be stale, so mark it "unknown" (0xFFFFFFFF), which every FAT
+    /// implementation must accept and recompute.
+    fn invalidate_fsinfo(&self, dev: &mut dyn BlockDevice) -> Result<(), &'static str> {
+        if self.fsinfo_sector == 0 {
+            return Ok(());
+        }
+        let mut s = [0u8; SECTOR_SIZE];
+        dev.read_sector(self.fsinfo_sector, &mut s)?;
+        if u32_at(&s, 0) != 0x4161_5252 || u32_at(&s, 484) != 0x6141_7272 {
+            return Ok(()); // not a valid FSInfo sector; leave it alone
+        }
+        if u32_at(&s, 488) == 0xFFFF_FFFF && u32_at(&s, 492) == 0xFFFF_FFFF {
+            return Ok(());
+        }
+        s[488..492].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        s[492..496].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        dev.write_sector(self.fsinfo_sector, &s)
+    }
+
+    /// Create or overwrite a root-directory file with `data`.
     pub fn write_file(
         &self,
         dev: &mut dyn BlockDevice,
         name: &str,
         data: &[u8],
     ) -> Result<(), &'static str> {
-        if self.kind != FatKind::Fat12 {
-            return Err("write only implemented for FAT12");
-        }
+        let wanted = encode_83(name)?;
+        let (existing, free) = self.find_entry(dev, &wanted)?;
+        let (lba, off) = match (existing, free) {
+            (Some((lba, off, _)), _) => (lba, off),
+            (None, Some(slot)) => slot,
+            (None, None) => return Err("root directory is full"),
+        };
+        self.invalidate_fsinfo(dev)?;
+
+        // 1. Data into freshly allocated clusters (an empty file has none).
         let cluster_bytes = self.sectors_per_cluster * self.bytes_per_sector;
-        let needed = (data.len() as u64).div_ceil(cluster_bytes).max(1);
-
-        // Find `needed` free clusters (value 0), scanning from cluster 2.
-        let max_cluster = ((dev.sector_count() - self.data_start) / self.sectors_per_cluster) as u32 + 2;
-        let mut chain: Vec<u32> = Vec::new();
-        let mut c = 2u32;
-        while (chain.len() as u64) < needed && c < max_cluster {
-            if self.fat12_get(dev, c)? == 0 {
-                chain.push(c);
-            }
-            c += 1;
-        }
-        if (chain.len() as u64) < needed {
-            return Err("not enough free clusters");
-        }
-
-        // Write data into the cluster chain.
+        let needed = (data.len() as u64).div_ceil(cluster_bytes);
+        let chain = self.alloc_clusters(dev, needed)?;
         for (i, &cluster) in chain.iter().enumerate() {
-            let first = self.data_start + (cluster as u64 - 2) * self.sectors_per_cluster;
+            let first = self.cluster_to_sector(cluster);
             for s in 0..self.sectors_per_cluster {
                 let mut sector = [0u8; SECTOR_SIZE];
                 let file_off = (i as u64 * cluster_bytes + s * self.bytes_per_sector) as usize;
@@ -415,49 +568,67 @@ impl FatVolume {
                 dev.write_sector(first + s, &sector)?;
             }
         }
-
-        // Link the FAT chain (each entry -> next, last -> EOC).
+        // 2. Link the chain (each entry -> next, last -> end of chain).
         for i in 0..chain.len() {
-            let value = if i + 1 < chain.len() { chain[i + 1] } else { 0xFFF };
-            self.fat12_set(dev, chain[i], value)?;
+            let value = if i + 1 < chain.len() { chain[i + 1] } else { self.eoc() };
+            self.fat_set(dev, chain[i], value)?;
         }
-
-        // Write the directory entry (create or overwrite in the root dir).
-        self.put_dir_entry(dev, name, chain[0], data.len() as u32)?;
+        // 3. Point the directory entry at the new data.
+        let first_cluster = chain.first().copied().unwrap_or(0);
+        let mut sector = [0u8; SECTOR_SIZE];
+        dev.read_sector(lba, &mut sector)?;
+        let entry = &mut sector[off..off + 32];
+        entry.fill(0);
+        entry[..11].copy_from_slice(&wanted);
+        entry[11] = 0x20; // archive
+        let (time, date) = fat_timestamp();
+        entry[14..16].copy_from_slice(&time.to_le_bytes()); // created
+        entry[16..18].copy_from_slice(&date.to_le_bytes());
+        entry[18..20].copy_from_slice(&date.to_le_bytes()); // accessed
+        entry[20..22].copy_from_slice(&((first_cluster >> 16) as u16).to_le_bytes());
+        entry[22..24].copy_from_slice(&time.to_le_bytes()); // modified
+        entry[24..26].copy_from_slice(&date.to_le_bytes());
+        entry[26..28].copy_from_slice(&(first_cluster as u16).to_le_bytes());
+        entry[28..32].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        dev.write_sector(lba, &sector)?;
+        // 4. Only now release what the old version occupied.
+        if let Some((_, _, old)) = existing {
+            self.free_chain(dev, old)?;
+        }
         Ok(())
     }
 
-    fn put_dir_entry(
-        &self,
-        dev: &mut dyn BlockDevice,
-        name: &str,
-        first_cluster: u32,
-        size: u32,
-    ) -> Result<(), &'static str> {
+    /// Delete a root-directory file and free its clusters.
+    pub fn delete_file(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<(), &'static str> {
         let wanted = encode_83(name)?;
-        for s in 0..self.root_dir_sectors {
-            let lba = self.root_dir_start + s;
-            let mut sector = [0u8; SECTOR_SIZE];
-            dev.read_sector(lba, &mut sector)?;
-            for e in 0..(SECTOR_SIZE / 32) {
-                let off = e * 32;
-                let first = sector[off];
-                let matches = sector[off..off + 11] == wanted;
-                if first == 0x00 || first == 0xE5 || matches {
-                    let entry = &mut sector[off..off + 32];
-                    entry.fill(0);
-                    entry[..11].copy_from_slice(&wanted);
-                    entry[11] = 0x20; // archive
-                    entry[26] = (first_cluster & 0xFF) as u8;
-                    entry[27] = ((first_cluster >> 8) & 0xFF) as u8;
-                    entry[28..32].copy_from_slice(&size.to_le_bytes());
-                    dev.write_sector(lba, &sector)?;
-                    return Ok(());
-                }
+        let (existing, _) = self.find_entry(dev, &wanted)?;
+        let (lba, off, first) = existing.ok_or("file not found in root directory")?;
+        self.invalidate_fsinfo(dev)?;
+        let mut sector = [0u8; SECTOR_SIZE];
+        dev.read_sector(lba, &mut sector)?;
+        sector[off] = 0xE5; // deleted
+        dev.write_sector(lba, &sector)?;
+        self.free_chain(dev, first)
+    }
+
+    /// (free data clusters, cluster size in bytes).
+    pub fn free_space(&self, dev: &mut dyn BlockDevice) -> Result<(u64, u64), &'static str> {
+        let mut free = 0;
+        for c in 2..(self.cluster_count + 2) as u32 {
+            if self.fat_get(dev, c)? == 0 {
+                free += 1;
             }
         }
-        Err("root directory is full")
+        Ok((free, self.sectors_per_cluster * self.bytes_per_sector))
     }
+}
+
+/// Current CMOS time as FAT (time, date) words.
+fn fat_timestamp() -> (u16, u16) {
+    let (year, month, day, hour, min, sec) = crate::rtc::read();
+    let time = (hour as u16) << 11 | (min as u16) << 5 | (sec as u16) / 2;
+    let date = (year.saturating_sub(1980) & 0x7F) << 9 | (month as u16) << 5 | day as u16;
+    (time, date)
 }
 
 /// Format a device as an empty FAT12 volume (superfloppy, VBR at LBA 0).

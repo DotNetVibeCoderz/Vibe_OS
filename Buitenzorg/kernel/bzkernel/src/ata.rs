@@ -1,4 +1,5 @@
-//! IDE/PATA driver, PIO mode with LBA28 (v0.3 "Batang" storage baseline).
+//! IDE/PATA driver, PIO mode with LBA28 (v0.3 "Batang" storage baseline;
+//! sector writes + cache flush since the persistent-`/disk` increment).
 //!
 //! Polling only: device interrupts are suppressed via nIEN, so no IRQ14/15
 //! handling is needed. DMA and LBA48 are follow-up work (§8.3 targets DMA).
@@ -13,6 +14,8 @@ const STATUS_DRQ: u8 = 0x08;
 const STATUS_ERR: u8 = 0x01;
 
 const CMD_READ_SECTORS: u8 = 0x20;
+const CMD_WRITE_SECTORS: u8 = 0x30;
+const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
 
 struct Channel {
@@ -140,6 +143,45 @@ impl Channel {
         }
         Ok(())
     }
+
+    fn write_sector(&self, slave: bool, lba: u64, buf: &[u8; SECTOR_SIZE]) -> Result<(), &'static str> {
+        if lba >= 1 << 28 {
+            return Err("LBA28 limit exceeded");
+        }
+        self.wait_not_busy()?;
+        self.select(slave, (lba >> 24) as u8);
+        unsafe {
+            self.reg(2).write(1); // sector count
+            self.reg(3).write(lba as u8);
+            self.reg(4).write((lba >> 8) as u8);
+            self.reg(5).write((lba >> 16) as u8);
+            self.reg(7).write(CMD_WRITE_SECTORS);
+        }
+        self.wait_data_request()?;
+        for chunk in buf.chunks_exact(2) {
+            unsafe { self.data().write(chunk[0] as u16 | (chunk[1] as u16) << 8) };
+        }
+        // The drive raises BSY while it commits the sector; then check ERR.
+        self.io_delay();
+        let status = self.wait_not_busy()?;
+        if status & STATUS_ERR != 0 {
+            return Err("ATA write failed");
+        }
+        self.flush(slave)
+    }
+
+    /// FLUSH CACHE: make the drive commit its write cache to the medium, so a
+    /// written sector survives a power-off rather than living in drive RAM.
+    fn flush(&self, slave: bool) -> Result<(), &'static str> {
+        self.select(slave, 0);
+        unsafe { self.reg(7).write(CMD_CACHE_FLUSH) };
+        self.io_delay();
+        let status = self.wait_not_busy()?;
+        if status & STATUS_ERR != 0 {
+            return Err("ATA cache flush failed");
+        }
+        Ok(())
+    }
 }
 
 struct AtaDisk {
@@ -165,6 +207,13 @@ impl BlockDevice for AtaDisk {
 
     fn read_sector(&mut self, lba: u64, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), &'static str> {
         self.channel.read_sector(self.slave, lba, buf)
+    }
+
+    fn write_sector(&mut self, lba: u64, buf: &[u8; SECTOR_SIZE]) -> Result<(), &'static str> {
+        if lba >= self.sectors {
+            return Err("write past end of disk");
+        }
+        self.channel.write_sector(self.slave, lba, buf)
     }
 }
 

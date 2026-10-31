@@ -611,7 +611,7 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
   address space per proses, preemption ring-3, kill, isolasi fault, fokus
   keyboard; `MILESTONE: MULTIPROC OK`)* — IDE + app yang dijalankan + debugger
   harus hidup bersamaan; tanpa ini IDE tak bisa "Run" lalu tetap tampil.
-- **FS tulis persisten** — FAT16/32 write di `/disk` (atau FS journaled) agar app/
+- ✅ **FS tulis persisten** *(selesai 2026-11-01: FAT12/16/32 write di `/disk`, ATA write + flush, `MILESTONE: DISK WRITE OK`)* — FAT16/32 write di `/disk` (atau FS journaled) agar app/
   paket hasil deploy bertahan setelah reboot.
 - **Driver NIC** (virtio-net dulu — paling sederhana di QEMU — lalu e1000) +
   **TCP** — untuk deploy/remote via jaringan. UDP sudah ada.
@@ -886,7 +886,7 @@ Item yang belum tuntas dan dijadwalkan menyusul (lihat anotasi di [Progress.md](
 - **CoreCLR/JIT + GC + reflection** — runtime C# masih NativeAOT/bflat freestanding (heap bump tanpa kolektor sejak v0.15). Loncatan Layer-4 "Menengah" (§5.1).
 - **APIC** — masih PIC 8259 legacy; migrasi ke APIC untuk SMP.
 - **Driver native NVMe/AHCI/USB & e1000** — saat ini hanya IDE PIO + net loopback.
-- **Filesystem kustom journaled** — baru FAT12/16/32 read + FAT12 write.
+- **Filesystem kustom journaled** — FAT12/16/32 read + write sudah ada (2026-11-01); journaling, subdirektori, LFN belum.
 - **TCP** — sudah Ethernet/ARP/IPv4/ICMP + **UDP** (loopback); TCP + driver NIC belum.
 - ~~**Multi-proses preemptive di ring 3**~~ — ✓ increment 1 (2026-11-01). Sisa: argv/`wait`/handle per proses, tutup window saat proses keluar, reklamasi frame, SMP.
 - **Tiling WM, settings/notifikasi, pipes/redirection shell** *(launcher Start menu + tray ✓ v0.16)*.

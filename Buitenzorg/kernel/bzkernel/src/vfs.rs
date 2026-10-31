@@ -84,6 +84,29 @@ pub fn write(path: &str, data: &[u8]) -> Result<(), &'static str> {
     })
 }
 
+/// Delete the file at `path`, freeing its clusters.
+pub fn remove(path: &str) -> Result<(), &'static str> {
+    let (mount, file) = split_path(path)?;
+    if file.is_empty() {
+        return Err("path names a directory, not a file");
+    }
+    with_mount(mount, |m| {
+        if m.read_only {
+            return Err("mount is read-only");
+        }
+        m.volume.delete_file(m.device.as_mut(), file)
+    })
+}
+
+/// (free bytes, read_only) of the mount `path` lives on.
+pub fn free_space(path: &str) -> Result<(u64, bool), &'static str> {
+    let (mount, _) = split_path(path)?;
+    with_mount(mount, |m| {
+        let (clusters, bytes) = m.volume.free_space(m.device.as_mut())?;
+        Ok((clusters * bytes, m.read_only))
+    })
+}
+
 /// List the root directory of a mount (`/disk`).
 pub fn list(path: &str) -> Result<Vec<String>, &'static str> {
     let (mount, _) = split_path(path)?;

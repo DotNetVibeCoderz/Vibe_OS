@@ -78,8 +78,8 @@
 - [ ] async/await · [x] threading map ke scheduler (thread kooperatif + futex, v0.15) · [~] BCL (Buitenzorg.Bcl tulisan-sendiri; CoreLib resmi = eksperimen pasca-v1.0)
 
 ### 🗂️ System Services
-- [x] VFS (mount table `/disk` ro + `/ram` rw)
-- [x] FAT12/16/32 read + FAT12 write (teruji round-trip)
+- [x] VFS (mount table `/disk` rw sejak 2026-11-01 + `/ram` rw)
+- [x] FAT12/16/32 read + **write** (FAT12/16/32 sejak 2026-11-01; teruji lintas reboot)
 - [x] Service/init manager (parallel, dependency-aware)
 - [~] Async I/O io_uring-style (SQ/CQ + benchmark) — *zero-copy & syscall submit belum*
 - [~] Networking (Ethernet/ARP/IPv4/ICMP loopback) — *TCP/UDP & driver NIC belum*
@@ -366,7 +366,7 @@ oleh `bcl2.cs` di ring-3 QEMU -> **`MILESTONE: BCL2 OK`**, smoke 4-media LOLOS,
     - `store.cs` → **`BzPkg`**: hapus dekode `PkgInfo` lewat pointer-aritmetik (`*(ulong*)(e + 40)`) + 2 P/Invoke; verifikasi re-read registry tetap membuktikan state KERNEL berubah
     - `filemgr.cs` → **`BzDir` + `BzPath`**: hapus dekode `FsEntry` (`*(ulong*)(e + 24)`) + P/Invoke; path pakai `char[]` bukan `byte*` stackalloc
     - `imgview.cs` → **`BzFile` + `BzPath` + `BzCulture`**: hapus `ReadFile` + `PutInt` sendiri; nama file di caption kini **diturunkan dari path** (`BzPath.GetFileName`) bukan ditulis dua kali
-    - `editor.cs` → **`BzFile`**: menu FILE jadi **NYATA** — Ctrl+S simpan & Ctrl+O buka `/ram/NOTE.TXT`; demo boot menyimpan lalu membaca ulang dan membandingkan (round-trip masuk kriteria `MILESTONE: EDITOR OK`)
+    - `editor.cs` → **`BzFile`**: menu FILE jadi **NYATA** — Ctrl+S simpan & Ctrl+O buka `/ram/NOTE.TXT` *(sejak 2026-11-01: `/disk/NOTE.TXT`, persisten)*; demo boot menyimpan lalu membaca ulang dan membandingkan (round-trip masuk kriteria `MILESTONE: EDITOR OK`)
   - **Sengaja TIDAK diadopsi** (menautkan ~30 KB library hanya demi satu formatter angka = rugi; formatternya lokal, dipakai di dalam `UIElement` custom): `calc.cs`, `game2048.cs`, `piano.cs`, `paint.cs`, `webview.cs`, `xox.cs`, `audiopanel.cs`. `hello.cs`/`svc.cs` sengaja minimal (milestone v0.4/v0.5)
   - **2 bug ketemu saat audit:** (1) `scripts/build-hello-csharp.sh` (jalur Linux/CI) **tidak punya `imgview` & `jpgtest`** — hanya ditambahkan ke `.ps1`, jadi build Linux menghasilkan image tanpa IMGVIEW.ELF/JPGTEST.ELF dan smoke CI akan gagal di marker itu; kedua skrip kini sama-sama 27 program. (2) `sdk/templates/desktop-csharp/README.md` masih menulis "belum punya GC — **hindari `new T[]`**", padahal heap sudah jalan sejak v0.15 inc 4 — diganti dengan aturan zerolib yang benar + katalog library
   - **Tool host:** `MagicAppGen` — `GetApiReference("bcl")` diperluas jadi katalog tanda-tangan **lengkap** `bzbcl.cs`+`bzbcl2.cs` (12 namespace, termasuk batas jujur "UDP loopback saja / tak ada TCP" dan "`Collect()` = false"), dan system prompt di `app.config` menyebut `bzbcl2.cs` + menyuruh panggil `GetApiReference` dulu — tanpa ini AI menghasilkan kode yang tak tahu System.IO/Regex/dll ada. `docs/first-app.md` dapat tabel katalog namespace baru. `bz` CLI tak butuh perubahan (scaffolding manifest/template, tak menyentuh API app)
@@ -375,7 +375,7 @@ oleh `bcl2.cs` di ring-3 QEMU -> **`MILESTONE: BCL2 OK`**, smoke 4-media LOLOS,
 Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 1 tak butuh prasyarat baru.
 - **Prasyarat**
   - [x] **Multi-proses ring-3 preemptif ✓ (increment 1, 2026-11-01)** — beberapa app ring-3 jalan bersamaan, di-preempt timer, masing-masing di **address space sendiri** (`aspace.rs`: 2 page directory privat per proses untuk 2 GiB user, ditukar di PDPT saat switch); stack SYSCALL + **TSS rsp0** + **FXSAVE** per task; spawn/kill (`app::spawn_named`/`kill`); fault ring-3 (#PF/#GP) hanya mematikan app-nya (exit 0xDEAD), kernel tetap hidup; desktop + shell `run` meluncurkan app sebagai proses; `KEY_READ` mengikuti fokus window. Diverifikasi `mproc.cs` (3 salinan non-yield + 1 proses fault): memori di VA sama tetap privat, register SSE utuh, ≥10 preemption ring-3 nyata (36), 1 di-kill, 1 fault terisolasi → `MILESTONE: MULTIPROC OK`; **kontrol negatif**: tanpa preemption ring-3 tes GAGAL (`preemptions=0, concurrent=false`). Bonus: frame allocator O(n)→kursor, boot ke READY ~35 s → ~20 s (tick).
-  - [ ] FS tulis persisten di `/disk` (FAT16/32 write atau FS journaled)
+  - [x] **FS tulis persisten di `/disk` ✓ (2026-11-01)** — driver ATA kini `WRITE SECTORS` + `CACHE FLUSH`; penulisan FAT generik **FAT12/16/32** (alokasi cluster, semua salinan FAT, entri dir + stempel waktu RTC, rantai lama dibebaskan *setelah* entri baru ditulis, `delete_file`, `free_space`, FSInfo FAT32 di-invalidate); `/disk` di-mount **rw**; shell `echo > / >>`, `rm`, `df`; Editor menyimpan ke `/disk/NOTE.TXT`. **Bug laten diperbaiki:** penulis FAT12 lama menulis salinan FAT kedua *ke dalam root directory* `/ram` (offset dihitung dari `(data_start-fat_start)/2`), dan overwrite membocorkan rantai cluster lama. Diverifikasi: penghitung boot `BOOTCNT.TXT` naik 1→2 lintas reboot pada image yang sama; smoke test mencari byte yang ditulis kernel di dalam file image host; pemeriksa FAT independen (Python) → salinan FAT identik, 0 cluster bocor, tanpa cross-link → `MILESTONE: DISK WRITE OK` (IDE). Belum: FS journaled, subdirektori, nama panjang (LFN), AHCI/NVMe.
   - [ ] Driver NIC (virtio-net → e1000) + TCP
   - [ ] Kernel log ring buffer (`dmesg`) + log per-app
 - **Terminal & Shell**

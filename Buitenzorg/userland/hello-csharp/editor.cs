@@ -11,9 +11,9 @@
 // blocking boot.
 //
 // Open/Save go through Buitenzorg.Bcl's `BzFile` (System.IO): Ctrl+S writes the
-// buffer to /ram/NOTE.TXT and Ctrl+O reads it back, so the FILE menu is real
-// rather than decorative. Writes need a writable mount — /disk is read-only, so
-// the RAM disk is the default target. Built with bflat --stdlib:zero +
+// buffer to /disk/NOTE.TXT and Ctrl+O reads it back, so the FILE menu is real
+// rather than decorative. /disk is persistent (ATA writes + FAT16), so a saved
+// note survives a reboot. Built with bflat --stdlib:zero +
 // bzui/bzgfx/bzbcl.
 
 using System;
@@ -98,7 +98,7 @@ class EditorApp
 
     /// <summary>Default document path. /disk is read-only, so the editor saves
     /// to the writable FAT12 RAM disk.</summary>
-    const string DocPath = "/ram/NOTE.TXT";
+    const string DocPath = "/disk/NOTE.TXT";
 
     // Save the buffer with System.IO. Returns the byte count written (0 = failed).
     static int Save(TextArea ta)

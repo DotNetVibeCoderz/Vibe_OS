@@ -47,7 +47,9 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "help" => (help(), Effect::None),
         "ls" | "dir" => (list_dir(args.first().copied()), Effect::None),
         "cat" | "type" => (cat(args.first().copied()), Effect::None),
-        "echo" => (vec![args.join(" ")], Effect::None),
+        "echo" => (echo(&args), Effect::None),
+        "rm" | "del" => (rm(args.first().copied()), Effect::None),
+        "df" => (df(), Effect::None),
         "pwd" => (vec![cwd()], Effect::None),
         "cd" => (cd(args.first().copied()), Effect::None),
         "clear" | "cls" => (Vec::new(), Effect::Clear),
@@ -113,6 +115,9 @@ fn help() -> Vec<String> {
      "  ws [1-4]          pindah virtual desktop",
      "  run <app>         jalankan app sebagai proses (xox, paint, taskmgr)",
      "  ps                daftar proses (task kernel + app)",
+     "  echo <teks> > f   tulis teks ke file (>> = tambahkan); /disk persisten",
+     "  rm <file>         hapus file",
+     "  df                ruang kosong tiap mount",
      "  kill <pid>        hentikan proses app",
      "  ask <prompt>      AI: lengkapi teks (LLM lokal)",
      "  vm <sub>          virtualisasi (list/create/start/snapshot/restore)",
@@ -138,6 +143,50 @@ fn resolve(arg: Option<&str>) -> String {
         }
         None => cwd(),
     }
+}
+
+/// `echo text`, `echo text > FILE` (create/overwrite) and `echo text >> FILE`
+/// (append). Only echo redirects for now; general pipes/redirection are on the
+/// Developer Workstation roadmap.
+fn echo(args: &[&str]) -> Vec<String> {
+    let pos = args.iter().position(|a| *a == ">" || *a == ">>");
+    let Some(pos) = pos else {
+        return vec![args.join(" ")];
+    };
+    let append = args[pos] == ">>";
+    let Some(target) = args.get(pos + 1).copied() else {
+        return vec![String::from("echo: butuh nama file setelah >")];
+    };
+    let path = resolve(Some(target));
+    let mut data = if append { vfs::read(&path).unwrap_or_default() } else { Vec::new() };
+    data.extend_from_slice(args[..pos].join(" ").as_bytes());
+    data.push(b'\n');
+    match vfs::write(&path, &data) {
+        Ok(()) => vec![format!("{} byte ditulis ke {}", data.len(), path)],
+        Err(e) => vec![format!("echo: {}: {}", path, e)],
+    }
+}
+
+fn rm(arg: Option<&str>) -> Vec<String> {
+    let Some(_) = arg else {
+        return vec![String::from("rm: butuh nama file")];
+    };
+    let path = resolve(arg);
+    match vfs::remove(&path) {
+        Ok(()) => vec![format!("{} dihapus", path)],
+        Err(e) => vec![format!("rm: {}: {}", path, e)],
+    }
+}
+
+fn df() -> Vec<String> {
+    let mut out = vec![String::from("MOUNT    BEBAS      MODE")];
+    for m in vfs::mounts() {
+        match vfs::free_space(&m) {
+            Ok((free, ro)) => out.push(format!("{:<8} {:>6} KiB  {}", m, free / 1024, if ro { "ro" } else { "rw" })),
+            Err(e) => out.push(format!("{:<8} ?  ({})", m, e)),
+        }
+    }
+    out
 }
 
 fn list_dir(arg: Option<&str>) -> Vec<String> {
