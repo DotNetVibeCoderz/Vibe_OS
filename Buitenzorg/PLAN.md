@@ -29,16 +29,18 @@
 | AI/Power | v0.12 | Nalar | Subsistem AI-native + Hugging Face; power (shutdown/restart/sleep) | ✅ Selesai |
 | VM | v0.13 | Lapis | Virtualization (VMM tipe-2 + virtio + snapshot) | ✅ Selesai |
 | Polyglot | v0.14 | Babel | JS/TS + Python runtime (interpreter bersama) | ✅ Selesai |
-| **Runtime** | **v0.15** | **Matang** | **Managed runtime C# lengkap (GC + .NET BCL: LINQ/Regex/Tasks/…)** | 🔜 **Berikutnya** |
-| Rilis | v0.16 | Panen | Preloaded suite + optimization pass | ⏳ Rencana |
-| Rilis | v1.0 | Buitenzorg | Stable release x86-64 | ⏳ Rencana |
+| Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Sebagian (GC reklamasi, async/await, EH belum) |
+| Rilis | v0.16 | Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | ✅ Selesai |
+| **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | 🔜 **Sedang berjalan** |
+| DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
+| Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V | ⏳ Rencana |
 
-Legend: ✅ selesai · 🔜 sedang/berikutnya · ⏳ direncanakan
+Legend: ✅ selesai · 🟡 sebagian · 🔜 sedang/berikutnya · ⏳ direncanakan *(status dirapikan 2026-11-01)*
 
 ---
 
-## Sudah Tercapai (v0.1 – v0.14)
+## Sudah Tercapai (v0.1 – v0.16)
 
 Kernel Rust boot dari BIOS & UEFI di QEMU pada 4 media (IDE/AHCI/NVMe/USB),
 dengan: manajemen memori + paging + heap, scheduler kooperatif (preemptive
@@ -49,7 +51,10 @@ ring 3, desktop environment penuh (compositor, window manager, terminal +
 shell, tema dark/light, 4 virtual desktop), app framework, dan (v0.9)
 **keempat varian app** (console/desktop/web/widget), library grafik
 **`Buitenzorg.Drawing`** bergaya System.Drawing, serta **Task Manager**
-(daftar proses + sumber daya + kill). Detail per-fitur: [Progress.md](Progress.md).
+(daftar proses + sumber daya + kill). v0.15–v0.16 menambah heap managed +
+thread + futex + **Buitenzorg.Bcl**, renderer `Buitenzorg.Drawing`, toolkit
+`Buitenzorg.UI`, audio AC'97, desktop shell (Start menu/ikon/tray), dan suite 8
+app. Detail per-fitur: [Progress.md](Progress.md).
 
 ### Catatan v0.9 "Serbuk" (selesai)
 - **Buitenzorg.Drawing** (`bzdraw.cs`): `Graphics`/`Pen`/`Brush`/`Color`/`Point`/
@@ -60,9 +65,9 @@ shell, tema dark/light, 4 virtual desktop), app framework, dan (v0.9)
   uptime/heap/RAM + bar, dan kill task (demo: kill `idle-demo`).
 - **Varian app**: Widget (`widget.cs`, ter-dock di widget board) + WebView
   (`webview.cs`, mini renderer subset HTML) melengkapi console/desktop.
-- *Belum (backlog)*: engine HTML/CSS/JS penuh, `Bitmap`/`GraphicsPath`/`Font`
-  di Drawing, tab terpisah + Details di Task Manager, template SDK web/widget,
-  kill app lain (butuh multi-proses).
+- *Belum (backlog)*: engine HTML/CSS/JS penuh, tab terpisah + Details di Task
+  Manager, template SDK web/widget, kill app lain (butuh multi-proses).
+  *(`Bitmap`/`GraphicsPath`/`Font` sudah ada di `bzgfx.cs` sejak v0.16.)*
 
 ### Catatan v0.10 "Buah" (selesai)
 - **Theme engine** (`theme.rs`): design token warna + style (border thickness,
@@ -73,7 +78,7 @@ shell, tema dark/light, 4 virtual desktop), app framework, dan (v0.9)
 - **Package manager** (`pkg.rs`): registry paket + `bz install/remove/list/
   search`; `run` di-gate oleh status terpasang.
 - *Belum (backlog)*: `.theme` package + theme SDK, hot-reload dari file, icon
-  pack, sandbox/dependency, app store GUI, update paket.
+  pack, sandbox/dependency, update paket. *(App store GUI ✓ v0.16.)*
 
 ---
 
@@ -227,7 +232,11 @@ template app `sdk/templates/{js,ts,python}-app`. **Milestone tercapai:** program
 sama (fib) di JS/TS/Python jalan berdampingan app C# — semua cetak fib(10)=55.
 *(Engine V8/CPython penuh & app polyglot ring-3 native = backlog CoreCLR/GC.)*
 
-## 🧩 v0.15 — "Matang" · Managed Runtime C# Lengkap (GC + .NET BCL) — *sedang berjalan*
+## 🧩 v0.15 — "Matang" · Managed Runtime C# Lengkap (GC + .NET BCL) — *sebagian besar tercapai*
+> **Status 2026-11-01:** inc 1–7 + `bzbcl2.cs` (IO/Encoding/Regex/Globalization/
+> Diagnostics/Net-UDP/Tasks/Timers) selesai & terverifikasi. **Sisa:** GC yang
+> mereklamasi memori + GC statics, exception unwinding (try/catch), `async`/
+> `await`, thread pool, TimeSpan/Guid/Interlocked, LINQ OrderBy/GroupBy/Distinct.
 > **Increment 1 ✓:** fondasi **PAL memori** — syscall user `MMAP/MPROTECT/MUNMAP`
 > (ABI 13–15, arena `memory.rs`), diverifikasi dari C# ring-3 (`matang.cs`).
 >
@@ -312,7 +321,7 @@ yang "matang". Ini "make-or-break" Layer 4 dan **prasyarat** preloaded suite
 **Milestone:** app C# ber-GC memakai LINQ/Regex/StringBuilder/Base64/
 Collections/Tasks-async/Streams berjalan & terverifikasi di QEMU.
 
-## 🌾 v0.16 — "Panen" · Preloaded Suite & Optimization Pass
+## 🌾 v0.16 — "Panen" · Preloaded Suite & Optimization Pass ✅
 Dibangun **di atas BCL v0.15**. Utilities, multimedia, AI apps, games, themes,
 productivity, store bawaan; optimization pass (fast boot, fast I/O, startup,
 footprint, SIMD); benchmark regresi di CI. **Milestone:** OS ringan & cepat,
@@ -342,13 +351,12 @@ siap pakai.
 > path bar + navigasi) → `MILESTONE: FILES OK`, screenshot desktop-files.png.
 > **+ Text Editor** (`editor.cs`→EDITOR.ELF) editor multi-baris (`TextArea`
 > buffer+caret+wrap, Type/Newline/Backspace) + Menu → `MILESTONE: EDITOR OK`,
-> screenshot desktop-editor.png. **Suite kini 7 app** (semua kategori:
+> screenshot desktop-editor.png. **+ Image Viewer** (BMP/JPEG). **Suite kini 8 app** (semua kategori:
 > productivity/game/utilitas/multimedia/store). **+ Optimization pass:** pangkas Sleep
 > animasi demo → boot 69.8s→58.5s (~16%). **Fix penting:**
 > Heisenbug `from_raw_parts` atas memori user (laten, dipicu geser layout kernel
 > saat menambah suite demo) — di-harden dgn `copy_user_bytes` (read_volatile) di
 > semua syscall string. App `/disk` hanya jalan di media IDE (driver ATA-PIO).
-> Menyusul: File Manager, Editor, multimedia, store.
 
 ### 🎨 Framework grafis & UI (prasyarat suite)
 > **Progres ✓:** **renderer software client-side** (`bzgfx.cs`) + **kernel BLIT
@@ -584,6 +592,221 @@ ref field) sampai eksperimen `--stdlib:dotnet` pasca-v1.0 berhasil.
   (hanya masuk `.ps1`), dan README template SDK masih melarang `new T[]`
   padahal heap sudah jalan sejak v0.15. Smoke 4-media LOLOS, 0 fault.
 
+## 🛠️ Developer Workstation — IDE, Terminal, Package Manager, Debug & Deploy (permintaan 2026-11-01)
+Tujuan: developer bisa **menulis, menjalankan, men-debug, dan men-deploy app
+langsung dari dalam Buitenzorg OS**, maupun dari **mesin lain (remote)** — tanpa
+harus build ulang seluruh disk image tiap kali mengubah satu app.
+
+**Kondisi awal (jujur):** shell punya ~30 perintah tapi tanpa history/pipe/
+redirection/tab-completion; `bz` di OS hanya install/remove/list/search atas
+registry statis di `pkg.rs` (tak ada format/berkas paket); "deploy" di ekstensi
+VS Code = build ulang image + boot ulang QEMU; debugger hanya **level kernel**
+(GDB ke stub QEMU) — belum ada debugger app ring-3; tak ada jalur host↔OS selain
+serial log satu arah. Batas arsitektur yang menentukan urutan: **app ring-3 jalan
+satu per satu (run-to-completion)**, **belum ada NIC nyata & TCP**, dan **`/disk`
+belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
+
+### Prasyarat lintas-fitur
+- **Multi-proses ring-3 preemptif** — IDE + app yang dijalankan + debugger harus
+  hidup bersamaan; tanpa ini IDE tak bisa "Run" lalu tetap tampil.
+- **FS tulis persisten** — FAT16/32 write di `/disk` (atau FS journaled) agar app/
+  paket hasil deploy bertahan setelah reboot.
+- **Driver NIC** (virtio-net dulu — paling sederhana di QEMU — lalu e1000) +
+  **TCP** — untuk deploy/remote via jaringan. UDP sudah ada.
+- **Kernel log ring buffer** (`dmesg`) + saluran log per-app.
+
+### A. Terminal & Shell
+- **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
+  (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
+- **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment
+  (`export`, `env`, `$PATH`, `$?`), alias, **skrip shell** (`.bzsh`) + `source`.
+- **Coreutils**: `cp mv rm mkdir rmdir touch head tail wc grep find hexdump
+  which tee sort`; proses: `ps kill top`; sistem: `dmesg free uptime df`.
+- **App Terminal mandiri** (`terminal.cs`, Buitenzorg.UI): multi-tab, scrollback,
+  copy/paste, warna ANSI, ukuran font; job control (`&`, `jobs`, `fg`, Ctrl+C)
+  setelah multi-proses.
+
+### B. Package Manager (`bz`) untuk developer
+- **Format paket `.bzpkg`**: arsip berisi `app.manifest` + ELF/skrip + aset +
+  hash SHA-256 (tanda tangan menyusul). `bz install ./app.bzpkg` dari berkas.
+- **Host CLI**: `bz pack` (buat `.bzpkg` dari proyek), `bz publish` (ke repo).
+- **Repository index remote** + `bz update/upgrade/search` (butuh TCP/HTTP);
+  **versi + dependency resolution + rollback**; state terpasang **persisten**.
+- **Library SDK sebagai paket** ber-versi (`Buitenzorg.Drawing/UI/Audio/Bcl`).
+- **Izin dari manifest** (fs/net/audio/ai) ditegakkan permission broker.
+
+### C. IDE di dalam OS — "Buitenzorg Studio"
+- **Editor kode**: multi-tab, nomor baris, **syntax highlighting** (C#/JS/TS/
+  Python/manifest), find/replace, go-to-line, auto-indent, undo/redo.
+- **Explorer proyek** (pohon berkas + template "New Project"), **panel terminal
+  terintegrasi**, **panel Problems** (error parser dengan baris/kolom), **Output**.
+- **Run instan untuk JS/TS/Python** lewat `script.rs` (tanpa compiler — jalur
+  pertama yang realistis di dalam OS).
+- **C#**: fase awal = **remote build** (Studio kirim sumber ke host build server
+  `bz build-server` → bflat → ELF kembali ke OS); compiler C# di dalam OS
+  (Roslyn/ILC) jangka panjang, bergantung CoreCLR.
+- **Integrasi debugger** (breakpoint di gutter, panel variabel/call stack).
+
+### D. Debugging & Diagnostik
+- **Crash report app ring-3**: saat app fault, cetak register + **backtrace
+  ter-simbolisasi** (frame pointer + symtab ELF tak-strip) alih-alih hanya
+  "USER page fault"; simpan ke `/ram/crash/`.
+- **Debugger app ring-3**: breakpoint `int3` + single-step (TF/#DB) dirutekan ke
+  debugger, baca/tulis register & memori proses, syscall `DEBUG_ATTACH/...`;
+  perintah OS `bz debug <app>`.
+- **GDB remote stub di kernel** (lewat serial COM2, lalu TCP) — host GDB/VS Code
+  men-debug app & kernel **di hardware nyata**, bukan hanya stub QEMU.
+- **VS Code DAP adapter** di atas stub/GDB-MI: breakpoint, step, variabel, stack.
+- **Debugger skrip JS/TS/Python** di interpreter `script.rs` (breakpoint/step/
+  inspeksi variabel — murah karena tree-walking).
+- **Profiler app**: zona `profile.rs` lewat syscall + sampling RIP user dari IRQ
+  timer; `bz prof <app>`. **Log**: `bz logs [-f] [app]`.
+
+### E. Deploy & Run — lokal maupun remote
+- **Lokal**: `run <path>` menjalankan ELF/skrip dari path mana pun (bukan hanya
+  registry); "Run" dari Studio; hot-reload skrip.
+- **Agen `bzd` (bz-link) di OS + perintah host `bz remote`**: `bz device list/
+  pair`, `bz deploy <proyek> --target <qemu|serial:COM3|net:IP>`, `bz run`,
+  `bz logs -f`, `bz shell` (shell remote), `bz push/pull` (transfer berkas),
+  `bz debug --remote`. Deploy = kirim ELF/paket ke OS yang sedang berjalan →
+  **tanpa build ulang image, tanpa reboot**.
+- **Transport bertahap**: (1) **serial COM2** — jalan sekarang juga (QEMU
+  `-serial tcp::4555,server`; hardware via kabel USB-serial/null-modem);
+  (2) **UDP** setelah NIC; (3) **TCP** untuk throughput & banyak sesi.
+- **Keamanan**: agen **mati default**, aktif via "Developer Mode"; pairing dengan
+  token; tiap deploy diverifikasi hash; tercatat di log.
+- **Tooling host diperbarui**: ekstensi VS Code (Deploy/Run/Debug → bz-link),
+  MagicAppGen (Deploy ke perangkat), `bz` CLI host.
+
+### Urutan fase
+1. **Tanpa prasyarat baru:** shell line-editing/history/completion/pipes +
+   coreutils + `dmesg`; crash report ter-simbolisasi; `run <path>`; format
+   `.bzpkg` + `bz pack`/install dari berkas; Studio untuk JS/TS/Python;
+   **bz-link lewat serial** (deploy/run/logs/shell dari host).
+2. **Setelah multi-proses + FS persisten:** Studio + app berjalan bersamaan,
+   debugger app ring-3, GDB stub kernel, VS Code DAP, Terminal app multi-tab +
+   job control, paket persisten.
+3. **Setelah NIC + TCP:** bz-link via jaringan, repo paket remote, remote build
+   server C#, `BzHttp` jadi klien sungguhan.
+4. **Jangka panjang:** compiler C# di dalam OS (butuh CoreCLR/Roslyn).
+
+**Milestone:** dari VS Code di host, `bz deploy --target serial` mengirim app ke
+Buitenzorg yang sedang berjalan (QEMU) **tanpa build ulang image**, app jalan,
+log mengalir balik, dan breakpoint kena; di dalam OS, Studio mengedit & menjalankan
+skrip Python, dan app yang crash menampilkan backtrace ter-simbolisasi.
+
+## 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)
+Tujuan: Buitenzorg layak dipakai untuk **memutar musik/video, menjelajah
+internet, bermain game 2D dan 3D**, dan hiburan sehari-hari — bukan hanya demo.
+
+**Kondisi awal (jujur):** grafis = framebuffer + compositor software, frame app
+dikirim lewat `BLIT` yang menyalin **per piksel** (`read_volatile`) — cukup untuk
+UI, berat untuk game 60 fps; **tak ada driver GPU**. Audio = AC'97 playback PCM
+**tanpa IRQ** (polling), satu stream, tanpa mic. Input = PS/2, dan `KEY_READ`
+hanya mengembalikan **karakter** — tak ada event tekan/lepas atau status tombol
+yang dibutuhkan game; tak ada USB (gamepad/webcam). Jaringan = **UDP loopback**
+saja (tanpa NIC, TCP, DNS, TLS). Format: BMP + JPEG baseline. WebView = subset
+HTML mini. App ring-3 jalan **satu per satu**.
+
+### Prasyarat bersama (kernel & driver)
+- **Multi-proses preemptif** — musik tetap jalan saat bermain game/browsing.
+- **Surface shared-memory zero-copy** — app menggambar langsung ke buffer yang
+  dipetakan ke compositor (ganti salinan per-piksel `BLIT`) + **vsync/frame
+  pacing** + mode **fullscreen eksklusif**.
+- **Timer resolusi tinggi** (APIC timer/HPET) untuk frame pacing & A/V sync.
+- **Audio berbasis IRQ** + ring buffer latensi rendah + **driver Intel HDA**
+  (hampir semua PC modern) + capture mic.
+- **Input game**: syscall event keyboard **tekan/lepas + status tombol**, mouse
+  relatif/capture; **stack USB (xHCI) + HID** untuk gamepad, keyboard/mouse USB,
+  headset, webcam (UVC).
+- **Storage besar & cepat** (AHCI/NVMe + FS tulis persisten) untuk berkas media
+  dan aset game.
+- **Matematika float/SIMD di ring-3** yang teruji (SSE/AVX untuk decoder & 3D).
+
+### A. Multimedia — audio, gambar, video
+- **`Buitenzorg.Media`**: pipeline sumber → demux → decode → render, jam media
+  (A/V sync), `MediaPlayer` (play/pause/seek/volume/playlist), event media key.
+- **Audio**: mixer software multi-stream + volume per-app, resampling; codec
+  **WAV**, **FLAC**, **Ogg Vorbis/Opus**, **MP3**; synth **MIDI** (wavetable/FM)
+  untuk musik game; perekam suara.
+- **Gambar**: **PNG** (inflate/zlib), **GIF animasi**, JPEG progresif, thumbnail,
+  orientasi EXIF.
+- **Video**: **MJPEG** dulu (memakai ulang decoder JPEG — kemenangan cepat), lalu
+  container MP4/MKV/WebM + codec software (**VP8/VP9/AV1** lebih aman lisensinya
+  untuk OS MIT; H.264 perlu kajian paten), YUV→RGB SIMD, subtitle SRT; decode
+  hardware setelah driver GPU.
+- **App**: Media Player (audio+video), Music Player + perpustakaan musik, Photo
+  Viewer (slideshow/zoom/rotasi), Sound Recorder, Camera (UVC), screenshot &
+  perekam layar, widget "Now Playing" + OSD volume di tray.
+
+### B. Internet
+- **Stack jaringan**: driver **virtio-net** (QEMU) → **e1000** → Realtek;
+  **TCP** penuh (state machine, retransmit, window), **DHCP**, **DNS resolver**,
+  socket `STREAM` + `poll`, IPv6 menyusul; Wi-Fi jangka panjang.
+- **Kriptografi & TLS 1.3/1.2**: CSPRNG (RDRAND/RDSEED + jitter), SHA-2, AES-GCM,
+  ChaCha20-Poly1305, X25519, verifikasi RSA/ECDSA, **store sertifikat root**.
+- **`Buitenzorg.Net.Http`** jadi klien sungguhan (HTTP/1.1 + HTTPS, redirect,
+  chunked), **WebSocket**, download manager — dipakai juga repo paket `bz`.
+- **Browser**: tingkatkan WebView bertahap → parser HTML5, **CSS** (box model,
+  flexbox, font), layout + gambar, **JS** (perluas `script.rs` ke subset ES + DOM
+  binding), tab/bookmark/riwayat; mode "reader/teks dulu" sebagai langkah awal.
+- **App**: Web Browser, download manager, radio internet/podcast (streaming
+  HTTP), klien chat (WebSocket), app pengaturan jaringan + **firewall** dan
+  **izin jaringan per-app** (permission broker).
+
+### C. Game 2D
+- **`Buitenzorg.Game`**: game loop fixed-timestep + delta time, frame pacing,
+  input (keyboard state, mouse, gamepad dengan pemetaan standar), sprite + sprite
+  sheet + animasi, tilemap, kamera, collision (AABB/lingkaran), particle,
+  scene manager, SFX + musik lewat mixer, loader aset (PNG/WAV/OGG), bitmap font,
+  simpan progres ke disk.
+- **Performa**: blit SIMD, dirty-rect, surface zero-copy, fullscreen.
+- **Game bawaan**: Minesweeper, Solitaire, Snake, Tetris-like, Breakout,
+  platformer demo; template game di SDK + MagicAppGen; game JS/Python lewat
+  binding `Buitenzorg.Game`.
+
+### D. Game 3D
+- **Rasterizer software dulu** (`Buitenzorg.Graphics3D`): matematika vektor/
+  matriks (float SIMD), transform + proyeksi perspektif, clipping, z-buffer,
+  back-face culling, **texture mapping perspective-correct**, shading Gouraud/
+  Phong ringan, loader **OBJ/glTF**, kamera. Kemenangan cepat: **raycaster**
+  gaya Wolfenstein + kubus bertekstur berputar.
+- **Jalur GPU**: **virtio-gpu** 2D → 3D (virgl) di QEMU → API gaya
+  **Vulkan/WebGPU** `Buitenzorg.GPU` (command buffer, shader SPIR-V) yang juga
+  mengisi `compute.rs` `Backend::Gpu`; driver GPU nyata (Intel dulu — dokumentasi
+  terbuka) jangka panjang.
+- **Engine**: scene graph, animasi skeletal, fisika rigid body, **audio 3D
+  posisional**.
+- **Port game yang ada**: lapisan **libc (port musl/newlib) + subset SDL2** agar
+  game C/C++ open-source bisa di-port — target ikonik: **"Buitenzorg menjalankan
+  DOOM"**.
+
+### E. Hiburan & UX
+- **Mode game**: fullscreen, tunda notifikasi, prioritas penjadwalan.
+- Media key + OSD volume, hotkey screenshot, perpustakaan media lintas app,
+  kategori Game/Media di App Store.
+- **E-book & komik** (TXT/EPUB = zip + HTML; CBZ), emulator klasik sebagai
+  showcase (mis. NES/CHIP-8), launcher "big picture" ramah gamepad.
+- Integrasi AI lokal: generate gambar/musik (GenAI v0.12) untuk wallpaper,
+  aset game, dan playlist.
+
+### Urutan fase
+1. **Tanpa prasyarat baru:** decoder PNG/GIF/WAV/FLAC, synth MIDI, mixer
+   software multi-stream, event tekan/lepas keyboard, `Buitenzorg.Game` 2D +
+   Minesweeper/Snake/Breakout, rasterizer software + raycaster, player MJPEG,
+   Media Player (WAV/FLAC), pembaca e-book TXT.
+2. **Kernel & driver:** multi-proses, surface zero-copy + vsync, timer presisi,
+   audio IRQ + HDA + mic, USB xHCI + HID gamepad, storage AHCI/NVMe.
+3. **Jaringan:** virtio-net/e1000 → TCP/DHCP/DNS → TLS → HTTP/HTTPS → browser,
+   radio internet, unduhan.
+4. **GPU & ekosistem:** virtio-gpu → virgl 3D → API gaya Vulkan; codec video
+   modern; lapisan libc + SDL2 → port DOOM; driver GPU nyata.
+
+**Milestone:** musik Ogg/FLAC diputar di latar sambil memainkan game 2D 60 fps
+dengan gamepad USB; video diputar dengan A/V sync; browser membuka halaman
+HTTPS; adegan 3D bertekstur ≥30 fps lewat rasterizer software dan lewat
+virtio-gpu.
+
 ## 🏛️ v1.0 — "Buitenzorg" · Stable Release (x86-64) — *sedang berjalan*
 Stabilkan API & ABI, security hardening, dokumentasi + tutorial, debugger +
 profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBox.
@@ -658,15 +881,14 @@ Dijadwalkan **setelah v1.0** karena berisiko & tak boleh menghambat rilis stabil
 
 Item yang belum tuntas dan dijadwalkan menyusul (lihat anotasi di [Progress.md](Progress.md)):
 
-- **CoreCLR/JIT + GC + reflection** — runtime C# masih NativeAOT/bflat freestanding (tanpa GC/heap). Loncatan Layer-4 "Menengah" (§5.1).
+- **CoreCLR/JIT + GC + reflection** — runtime C# masih NativeAOT/bflat freestanding (heap bump tanpa kolektor sejak v0.15). Loncatan Layer-4 "Menengah" (§5.1).
 - **APIC** — masih PIC 8259 legacy; migrasi ke APIC untuk SMP.
 - **Driver native NVMe/AHCI/USB & e1000** — saat ini hanya IDE PIO + net loopback.
 - **Filesystem kustom journaled** — baru FAT12/16/32 read + FAT12 write.
-- **TCP/UDP** — baru Ethernet/ARP/IPv4/ICMP.
+- **TCP** — sudah Ethernet/ARP/IPv4/ICMP + **UDP** (loopback); TCP + driver NIC belum.
 - **Multi-proses preemptive di ring 3** — model saat ini satu app run-to-completion; task manager & multitasking penuh butuh ini.
-- **Tiling WM, launcher/tray/settings/notifikasi, pipes/redirection shell**.
-- **VS Code DAP debugging + debug bridge** — extension baru skeleton.
-- **Benchmark regresi di CI**.
+- **Tiling WM, settings/notifikasi, pipes/redirection shell** *(launcher Start menu + tray ✓ v0.16)*.
+- **VS Code DAP debugging + debug bridge** — extension punya new/build/deploy/GDB-kernel; DAP + bridge ke OS belum (lihat §Developer Workstation).
 
 ---
 

@@ -5,7 +5,7 @@
 > Roadmap ke depan: [PLAN.md](PLAN.md) · Desain teknis: [requirements.md](requirements.md).
 
 **Legend:** `[x]` selesai · `[~]` sebagian (lihat catatan) · `[ ]` belum.
-**Status keseluruhan:** v0.1 – v0.14 milestone **tercapai**; **v0.15 "Matang" sedang berjalan** (inc 1: PAL memori `MMAP/MPROTECT/MUNMAP` ✓; inc 2: thread ring-3 kooperatif `THREAD_CREATE/JOIN/EXIT` ✓; inc 3: sync `FUTEX_WAIT/WAKE`+mutex, `THREAD_SELF` (TLS), `CLOCK_MONO` ✓; inc 4: **managed heap** — `new`/array/generics jalan + `malloc/free/calloc/realloc` ✓; inc 5: **model memori GC** — mmap `PROT_NONE`=reserve lazy + mprotect=commit-on-demand ✓; inc 6: **Buitenzorg.Bcl** — List/Stack/Queue/Dictionary(int)/LINQ/StringBuilder/BitConverter/Base64 tulisan-sendiri di C# ✓ — semua terverifikasi dari C# ring-3, lolos 4-media).
+**Status keseluruhan (dirapikan 2026-11-01):** v0.1 – v0.14 milestone **tercapai**. **v0.15 "Matang" sebagian besar tercapai** — PAL (memori/thread/futex/TLS-dasar/clock), managed heap (`new`/array/generics), model memori GC (reserve/commit), dan **Buitenzorg.Bcl** (`bzbcl.cs` + `bzbcl2.cs`: collections, LINQ, StringBuilder, IO, Encoding UTF-8, Regex, Globalization/DateTime, Diagnostics, Net/UDP, Tasks, Timers) semua terverifikasi di ring-3; yang **belum**: GC yang mereklamasi memori + GC statics, exception unwinding, async/await, thread pool. **v0.16 "Panen" tercapai** (Drawing + UI + audio + suite 8 app + optimization pass). **v1.0 sedang berjalan** (sisa: validasi hardware nyata & Hyper-V, DAP). Rencana baru: **Developer Workstation** dan **Multimedia, Internet, Game & Hiburan** (lihat bawah).
 **Dibuat oleh:** Gravicode Studios — dipimpin oleh Kang Fadhil.
 
 ---
@@ -28,8 +28,9 @@
 | v0.12 Nalar | Subsistem AI-native + Hugging Face; power (shutdown/restart/sleep) | `AI/POWER/NALAR OK` | [x] |
 | v0.13 Lapis | Virtualization (VMM tipe-2 + virtio + snapshot; guest OS jalan) | `VMX/VM/VIRTIO/SNAPSHOT/LAPIS OK` | [x] |
 | v0.14 Babel | Polyglot runtime (JS/TS/Python, interpreter bersama) | `SCRIPT JS/TS/PY, POLYGLOT, BABEL OK` | [x] |
-| **v0.15 Matang** | **Managed runtime C# lengkap (GC + .NET BCL: LINQ/Regex/Tasks/…)** | — | **[ ] Berikutnya** |
-| v0.16 Panen | Preloaded suite + optimization pass (di atas BCL v0.15) | — | [ ] Rencana |
+| v0.15 Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl (GC reklamasi/async belum) | `MATANG/THREAD/SYNC/HEAP/GCMEM/BCL/BCL2 OK` | [~] |
+| v0.16 Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | `DRAW/UI/AUDIO/AUDIO PANEL/SUITE/CALC/GAME/CLOCK/PIANO/STORE/FILES/EDITOR/IMGVIEW/JPEG OK` | [x] |
+| v1.0 Buitenzorg | Stable release x86-64 | `SECURITY/PROFILER/DESKTOP SHELL OK` | [~] Berjalan |
 
 ---
 
@@ -39,7 +40,7 @@
 - [x] Repo + struktur monorepo (kernel, runtime, sdk, userland, ai, apps, docs)
 - [x] Toolchain build (cargo + .NET SDK + bflat + rust-lld)
 - [x] Pipeline boot QEMU otomatis (`bzimage` + scripts)
-- [~] CI (build + test + boot smoke test) — *benchmark performa belum*
+- [x] CI (build + test + boot smoke test + benchmark regresi `bench.sh`) — workflow di root repo Vibe_OS (`.github/workflows/ci.yml`, jalan dari subfolder `Buitenzorg/`)
 - [x] Coding standard & contribution guide
 
 ### 🔩 Bootloader & Boot Media
@@ -64,7 +65,7 @@
 - [x] Storage IDE/PATA (PIO LBA28)
 - [x] Keyboard PS/2 + Mouse PS/2
 - [x] Framebuffer graphics + direct pixel
-- [ ] Driver NVMe/AHCI/USB native · [ ] Network e1000 · [ ] WiFi · [ ] Audio · [ ] virtio
+- [ ] Driver NVMe/AHCI/USB native · [ ] Network e1000 · [ ] WiFi · [x] Audio (AC'97, v0.16) · [ ] virtio (net/blk/gpu)
 
 ### 🌉 Managed Runtime (C#)
 - [x] Port NativeAOT (via bflat + zerolib, freestanding)
@@ -72,9 +73,9 @@
 - [x] Syscall wrapper C# (`BzSys`) + kontrak ABI dua sisi teruji
 - [x] ELF64 loader + ring-3 user-space + lifecycle (load→run→unmap)
 - [x] "Hello from C#" di bare metal
-- [ ] **Integrasi GC ↔ memory manager + pinning** — *app tanpa GC (stackalloc)*
+- [~] **Integrasi GC ↔ memory manager + pinning** — *heap mmap + reserve/commit jalan (v0.15); kolektor & pinning belum*
 - [ ] **CoreCLR + JIT (fitur C# lengkap)** · [ ] reflection/dynamic loading
-- [ ] async/await + threading map ke scheduler · [ ] BCL penuh
+- [ ] async/await · [x] threading map ke scheduler (thread kooperatif + futex, v0.15) · [~] BCL (Buitenzorg.Bcl tulisan-sendiri; CoreLib resmi = eksperimen pasca-v1.0)
 
 ### 🗂️ System Services
 - [x] VFS (mount table `/disk` ro + `/ram` rw)
@@ -82,22 +83,22 @@
 - [x] Service/init manager (parallel, dependency-aware)
 - [~] Async I/O io_uring-style (SQ/CQ + benchmark) — *zero-copy & syscall submit belum*
 - [~] Networking (Ethernet/ARP/IPv4/ICMP loopback) — *TCP/UDP & driver NIC belum*
-- [ ] Filesystem kustom journaled · [ ] permission broker · [ ] package manager
+- [ ] Filesystem kustom journaled · [ ] permission broker · [x] package manager (`pkg.rs`, v0.10)
 
 ### 🖼️ Graphics & Window System
 - [x] Compositor (double-buffered, present)
 - [~] Window manager floating (title bar, z-order, move, resize) — *tiling belum*
 - [x] Event routing (mouse → window; keyboard → terminal)
-- [~] Rendering: rect/outline/gradient/alpha/teks — *blit gambar & path belum*
-- [ ] Animasi · [ ] compositor GPU (v0.11)
+- [x] Rendering: rect/outline/gradient/alpha/teks + blit gambar (`BLIT` op) + path (client-side di Buitenzorg.Drawing)
+- [~] Animasi (ripple/hover, v0.11; animasi window belum) · [ ] compositor GPU
 
 ### 🖥️ Desktop Environment
-- [~] Shell / taskbar — *workspace switcher + window buttons + theme label; launcher/tray belum*
+- [x] Shell / taskbar — workspace switcher + window buttons + **Start menu + ikon desktop + tray (tema + jam RTC)** (v0.16)
 - [x] Multi-desktop / workspaces (4) + wallpaper per-desktop
 - [x] Dark/Light system theme (toggle)
-- [x] Terminal + shell (ls/dir, cat/type, cd, pwd, echo, mounts, clear/cls, ver, theme, ws, run, bz)
+- [x] Terminal + shell (ls/dir, cat/type, cd, pwd, echo, mounts, clear/cls, ver, about, theme, ws, run, bz, settings/bg/saver/cursor/anim, ask, vm, script/js/ts/py, prof, shutdown/restart/sleep)
 - [ ] Notifikasi/action center · [ ] Settings app · [ ] Global search
-- [ ] Pipes/redirection/history/tab-completion · [ ] kompatibilitas `.sh`
+- [ ] Pipes/redirection/history/tab-completion · [ ] kompatibilitas `.sh` — *dijadwalkan di §Developer Workstation*
 
 ### 🧰 App Framework & SDK
 - [x] App manifest & lifecycle
@@ -105,10 +106,10 @@
 - [x] Window syscall ABI (WIN_CREATE/CMD/PRESENT + KEY_READ) + `DrawCmd`
 - [x] Template Console (console-csharp) + Desktop (desktop-csharp + `BzUi`)
 - [x] Template XOX (Tic-Tac-Toe) — desktop app menggambar via syscall
-- [~] VS Code extension — *skeleton (new/build-run/validate); preview/IntelliSense/DAP belum*
-- [ ] UI Toolkit XAML (binding/MVVM) · [ ] template Utilities/Calculator/Minesweeper
-- [ ] WebView + web app · [ ] widget host (v0.9)
-- [ ] Debug bridge + DAP debugging
+- [~] VS Code extension — new project (pemilih template)/build-run/deploy/GDB kernel/validasi manifest; IntelliSense/DAP belum
+- [~] UI toolkit (`Buitenzorg.UI`, v0.16; binding/MVVM/XAML belum) · [~] template utilitas (Kalkulator ada sbg app suite + template MagicAppGen; Minesweeper belum)
+- [~] WebView + web app (mini WebView, v0.9) · [x] widget host (v0.9)
+- [~] Debug bridge + DAP debugging — *GDB kernel via QEMU ✓ (v1.0); debug bridge & DAP dijadwalkan di §Developer Workstation*
 
 ---
 
@@ -124,7 +125,7 @@
 - [x] Tipe dasar: `Graphics`, `Color`, `Pen`, `Brush`, `Point`, `Rectangle`, `Size`
 - [x] Bentuk: `DrawLine`, `DrawRectangle`/`FillRectangle`, `DrawEllipse`/`FillEllipse`
 - [x] Teks: `DrawString` + `DrawChars` (tanpa heap)
-- [ ] Gambar: `Bitmap` + `DrawImage` (blit) · [ ] `GraphicsPath` + transform · [ ] `Font` custom
+- [x] Gambar: `Bitmap` + `DrawImage` (blit) · [x] `GraphicsPath` + transform · [~] `Font` (8×8 embedded; font-pack/TTF belum) — *di `bzgfx.cs`, v0.16*
 - [x] Primitif syscall tambahan (draw op: LINE, ELLIPSE, FILL_ELLIPSE, RECT) — append-only ABI
 - [x] Milestone: **app (Paint) menggambar dengan API bergaya System.Drawing** (`DRAWING OK`)
 
@@ -157,7 +158,7 @@
 - [x] Registry paket (nama, versi, deskripsi, ELF, kind) — `pkg.rs`
 - [x] `bz install`/`remove`/`list`/`search` — install/uninstall dari registry
 - [x] `run` di-gate oleh status terpasang (app registry harus di-install dulu)
-- [ ] Sandbox per-app · [ ] dependency resolution · [ ] app store GUI · [ ] update
+- [ ] Sandbox per-app · [ ] dependency resolution · [x] app store GUI (`store.cs`, v0.16) · [ ] update
 - [x] Milestone: **install app dari registry** (`PACKAGE OK`)
 
 ---
@@ -199,7 +200,7 @@
 - [x] State window: normal / minimized (ke taskbar) / maximized (isi workspace)
 - [x] Restore/focus dari taskbar (klik tombol window)
 - [x] **Sudut window membulat** (rounded corners, per-theme)
-- [ ] Double-click title bar → maximize · [ ] anti-alias sudut
+- [ ] Double-click title bar → maximize · [~] anti-alias sudut (AA di kontrol Buitenzorg.UI; sudut window WM belum)
 - [x] Milestone: **min/max/close + sudut membulat** (`WINDOWCTL OK`)
 
 > Bonus: memperbaiki bug laten sejak v0.4 — IF (interrupt flag) tetap mati
@@ -226,7 +227,7 @@
 - [x] **Restart** — ACPI reset register + reset keyboard-controller (0x64←0xFE) + triple-fault last resort
 - [x] **Sleep** — light sleep (blank + `hlt` sampai input mouse/keyboard)
 - [x] CLI: `shutdown`/`restart`/`sleep` + `bz power off|restart|sleep`
-- [ ] ACPI S3 (suspend-to-RAM) · flush VFS + app save-state · item power di taskbar/Start GUI + konfirmasi
+- [ ] ACPI S3 (suspend-to-RAM) · [ ] flush VFS + app save-state · [~] item power di Start menu GUI (v0.16; dialog konfirmasi belum)
 - [x] Milestone: **Shutdown, Restart, Sleep dari shell/`bz power`** (`POWER OK`; shutdown teruji QEMU)
 
 ---
@@ -259,7 +260,7 @@
 
 ---
 
-## ⏳ v0.15+ (Rencana — ringkas)
+## 🔄 v0.15 – v1.0 (Berjalan)
 
 ### 🧩 v0.15 "Matang" — Managed Runtime C# Lengkap (GC + .NET BCL)
 Prasyarat preloaded suite (v0.16). Jalur: **NativeAOT + BCL penuh dulu** (`bflat
@@ -272,14 +273,14 @@ GC/heap/BCL.)
 - [~] Primitif sync ring-3 — **increment 3 ✓:** futex (`FUTEX_WAIT/WAKE`, state Blocked) + mutex shim + `THREAD_SELF` + `CLOCK_MONO`, uji mutual-exclusion terverifikasi (`sync.cs`); condvar + **thread pool** preemptif menyusul
 - [~] **Generics · Collections** — inc 6 + v0.16: **Buitenzorg.Bcl** `BzList<T>`, `BzStack<T>`, `BzQueue<T>` (circular), `BzIntMap<V>`/`BzStrMap<V>` (Dictionary), `BzIntSet` (HashSet), **`BzRefList<T>`** (list linked-list untuk tipe REFERENSI — hindari fault `stelem.ref` object-array); Tuple + Dictionary<K,V> ref generik menyusul
 - [~] **LINQ** — inc 6 + v0.16: `BzLinq.Where/Select/Sum/Count/Any/All/Max/Min/Contains/IndexOf/Reverse` + **First/Last/Take/Skip/Average/Aggregate** (function-pointer, bukan delegate krn cache GC static); GroupBy/OrderBy/Distinct menyusul
-- [ ] **Regex** (System.Text.RegularExpressions)
+- [x] **Regex** — `BzRegex` (bzbcl2.cs): kelas/anchor/kuantifier/alternasi/grup + backtracking lintas grup; *belum: capture, `{n,m}`, lazy, backreference, lookaround*
 - [~] **StringBuilder + string/char/math/random** — inc 6 + v0.16: `BzStringBuilder` (Append string/int/long/char/hex + **Clear/AppendLine/AppendChars/CopyTo**); **`BzMath`** (Abs/Min/Max/Clamp/Sign/Pow/ISqrt/Gcd/Lcm); **`BzRandom`** (xorshift64* PRNG); **`BzStr`** (Equals/Compare/StartsWith/EndsWith/IndexOf/Count/Upper/Lower/IsDigit/IsAlpha — pakai `(object)` cast krn `string ==` tak ada); interpolation/ToString penuh menyusul
-- [~] **Encoding/konversi** — inc 6 + v0.16: **Base64** (`BzBase64`) + **BitConverter** (`BzBitConverter`) + **`BzHex`** (bytes→hex) + **`BzConvert`** (ParseInt/ParseLong/ParseHex + LongToChars) jalan; UTF8/Unicode penuh menyusul
-- [ ] **DateTime/TimeSpan · Guid** dan tipe .NET modern lain
-- [ ] **System.Threading**: Thread · ThreadPool · **Timer** · lock/Monitor · Interlocked · reset events
-- [ ] **Tasks & async/await (TPL)**: Task/Task<T> · `async`/`await` · SynchronizationContext
-- [ ] **Streams / System.IO**: MemoryStream · FileStream di atas VFS
-- [ ] Uji kontrak + sample C# (GC+LINQ+Regex+StringBuilder+Base64+Collections+Tasks+Streams) **terverifikasi di QEMU**
+- [~] **Encoding/konversi** — inc 6 + v0.16: **Base64** (`BzBase64`) + **BitConverter** (`BzBitConverter`) + **`BzHex`** (bytes→hex) + **`BzConvert`** (ParseInt/ParseLong/ParseHex + LongToChars) jalan; **UTF-8/ASCII ✓** (`BzEncoding`, bzbcl2.cs)
+- [~] **DateTime** ✓ (`BzDateTime` di atas CMOS RTC) · [ ] TimeSpan · [ ] Guid · [ ] Tuple
+- [~] **System.Threading**: Thread ✓ (`THREAD_CREATE`) · **Timer ✓** (`BzTimer`, polled) · mutex ✓ (`BzMutex`/futex) · [ ] ThreadPool · [ ] Monitor/condvar · [ ] Interlocked · [ ] reset events
+- [~] **Tasks**: `BzTask` Run/Wait/WhenAll ✓ · [ ] Task<T> · [ ] `async`/`await` · [ ] SynchronizationContext
+- [x] **Streams / System.IO**: `BzMemoryStream` + `BzFile` read/write + `BzDir`/`BzPath` di atas VFS (`FS_READ/FS_WRITE/FS_LIST`); *FileStream ber-seek di atas file belum*
+- [~] Sample C# terverifikasi di QEMU — `bcl.cs` + `bcl2.cs` (LINQ/Regex/StringBuilder/Base64/Collections/Tasks/Streams) → `BCL OK`/`BCL2 OK`; *tanpa GC reklamasi & async/await*
 - [ ] **(Menyusul) CoreCLR/JIT + reflection penuh + Reflection.Emit** (skenario dinamis di luar batas NativeAOT/trimming)
 
 ### 🌾 v0.16 "Panen" — Preloaded Suite & Optimasi
@@ -288,7 +289,7 @@ GC/heap/BCL.)
 🎨 `Buitenzorg.Drawing` selengkap `System.Drawing` — **renderer software (client-side) + BLIT** (`bzgfx.cs`, `draw.cs`)
 - [~] **Graphics ✓:** Clear, Fill/DrawRectangle(thick), DrawLine(+thick, Bresenham), Draw/FillCircle, Draw/FillEllipse, FillPolygon(scanline)/DrawPolygon, FillGradientV/**FillGradientH/FillGradient**, DrawImage/**DrawImageScaled**(nearest), **alpha blending**, **transform 2D (Matrix Translate/Scale/Rotate, sin/cos Bhaskara)**, **FillPath/DrawPath**, **SetClip/ResetClip**, **FillHatch** (6 pola), **DrawString + Font (8×8 embedded) + MeasureString**. **Enhance visual ✓:** **FillRoundedRectangle/DrawRoundedRectangle** (sudut AA), **FillRoundedGradientV** (tombol), **DrawShadow** (drop shadow lembut berlapis), **FillCircleAA** (lingkaran anti-alias), BlendCov (coverage AA). Menyusul: Region non-rect, PointF/RectangleF, texture brush, Pen dash/cap, AA garis/teks penuh
 - [~] **Bitmap ✓** (uint[] ARGB, Get/SetPixel, Clear) · **Color ✓** (ARGB, FromArgb/FromRgb, A/R/G/B, named) · **Point/Size/Rectangle ✓** · **Matrix ✓** · **GraphicsPath ✓** · **Font ✓** (8×8, ASCII subset) · **BMP 24-bit load/save ✓**. Menyusul: LockBits, PNG, HSL, Image crop/rotate, font-pack penuh
-- [ ] Pen (width/dash/cap/join) · Brush (solid/gradient/hatch) · GraphicsPath · Region · Matrix
+- [~] Pen width ✓ · [ ] dash/cap/join · Brush solid/gradient/hatch ✓ · [ ] texture brush · GraphicsPath ✓ · Matrix ✓ · [ ] Region
 - [x] **Kernel BLIT op** (ABI draw_op 7): app render ke Bitmap managed → 1 syscall blit ke window (model kompositor WPF/Avalonia). Verifikasi `MILESTONE: DRAW OK`/`DRAWING2 OK` (4-media) + screenshot `docs/img/desktop-drawing.png`
 
 🪟 `Buitenzorg.UI` — toolkit gaya WPF/Avalonia (ringan, performa tinggi, GPU) — `bzui.cs`
@@ -309,11 +310,11 @@ GC/heap/BCL.)
 - [x] Verifikasi: kernel bunyikan tone 440 Hz (DMA CIV maju) + `audio.cs` (`Mixer` round-trip volume 45→45, tone, PCM stream) → `MILESTONE: AUDIO OK`; `audiopanel.cs` (slider→device 35, mute→device 0, tes nada) → `MILESTONE: AUDIO PANEL OK` (semua 4-media)
 
 📦 Suite & optimasi
-- [~] **Preloaded suite ✓ (mulai, `panen_suite_demo`):** (1) **Kalkulator** (`calc.cs`→CALC.ELF) — `Buitenzorg.UI` Grid 4×4 tombol ter-tema (digit biru + operator oranye) di atas display numerik; klik via `Button.Tag`→engine `Calc`; `12+3=`→15 → `MILESTONE: CALC OK`; screenshot `docs/img/desktop-calc.png`. (2) **2048** (`game2048.cs`→G2048.ELF) — game geser-ubin: papan 4×4 `Board2048:UIElement` (ubin rounded berwarna per-nilai + angka via DrawChars), engine slide+merge per arah; `2+2`→4 & `4 4 8 8`→`8 16` → `MILESTONE: GAME OK`; screenshot `docs/img/desktop-2048.png`. (3) **Jam** (`clock.cs`→CLOCK.ELF) — jam analog: face AA + 12 tick + jarum jam/menit/detik (rotasi via `SinFx/CosFx`) + digital HH:MM:SS (DrawChars); verified geometri jarum + format waktu → `MILESTONE: CLOCK OK`; screenshot `docs/img/desktop-clock.png`. (4) **Piano** (`piano.cs`→PIANO.ELF) — keyboard 1 oktaf: `Piano:UIElement` tuts putih (rounded + label C-D-E-F-G-A-B-C) + tuts hitam, klik tuts → `Mixer.Beep(freq)` (Buitenzorg.Audio); verified arpeggio C-E-G-C (4 nada) → `MILESTONE: PIANO OK`; screenshot `docs/img/desktop-piano.png`. (5) **App Store** (`store.cs`→STORE.ELF) — store front **TERHUBUNG ke `pkg.rs`**: katalog dari syscall **`PKG_LIST`** (registry + status terpasang), install/hapus via **`PKG_SET`** (gating `run`); `StoreView:UIElement` (nama + kategori + badge TERPASANG/TERSEDIA) + tombol PASANG/HAPUS; verified: load katalog + install app + **baca ulang registry buktikan state kernel berubah** → `MILESTONE: STORE OK`; screenshot `docs/img/desktop-store.png`. ABI: `PKG_LIST`=27/`PKG_SET`=28 (+`PkgInfo` 48B, mirror C# + kontrak 9+4 lulus + `docs/abi.md`); registry (`pkg.rs`) diperluas + `category`. (6) **File Manager** (`filemgr.cs`→FILES.ELF) — jelajah VFS via syscall **`FS_LIST`** (path kosong=daftar mount, path mount=daftar file); `FileView:UIElement` (path bar + ikon folder/file + nama) + navigasi (klik folder / `..`); verified: daftar mount + masuk `/disk` + cek `CALC.ELF` ada → `MILESTONE: FILES OK`; screenshot `docs/img/desktop-files.png` (isi `/disk` NYATA dari FAT). ABI: `FS_LIST`=29 (+`FsEntry` 32B, mirror + kontrak lulus). (7) **Text Editor** (`editor.cs`→EDITOR.ELF) — editor multi-baris: `TextArea:UIElement` (buffer char growable, caret, wrap `\n`, Type/Newline/Backspace) di bawah `Menu` bar; verified ketik 2 baris + backspace → cek buffer → `MILESTONE: EDITOR OK`; screenshot `docs/img/desktop-editor.png`. **SUITE OK** (4-media, kernel-side).
+- [x] **Preloaded suite ✓ (`panen_suite_demo`):** (1) **Kalkulator** (`calc.cs`→CALC.ELF) — `Buitenzorg.UI` Grid 4×4 tombol ter-tema (digit biru + operator oranye) di atas display numerik; klik via `Button.Tag`→engine `Calc`; `12+3=`→15 → `MILESTONE: CALC OK`; screenshot `docs/img/desktop-calc.png`. (2) **2048** (`game2048.cs`→G2048.ELF) — game geser-ubin: papan 4×4 `Board2048:UIElement` (ubin rounded berwarna per-nilai + angka via DrawChars), engine slide+merge per arah; `2+2`→4 & `4 4 8 8`→`8 16` → `MILESTONE: GAME OK`; screenshot `docs/img/desktop-2048.png`. (3) **Jam** (`clock.cs`→CLOCK.ELF) — jam analog: face AA + 12 tick + jarum jam/menit/detik (rotasi via `SinFx/CosFx`) + digital HH:MM:SS (DrawChars); verified geometri jarum + format waktu → `MILESTONE: CLOCK OK`; screenshot `docs/img/desktop-clock.png`. (4) **Piano** (`piano.cs`→PIANO.ELF) — keyboard 1 oktaf: `Piano:UIElement` tuts putih (rounded + label C-D-E-F-G-A-B-C) + tuts hitam, klik tuts → `Mixer.Beep(freq)` (Buitenzorg.Audio); verified arpeggio C-E-G-C (4 nada) → `MILESTONE: PIANO OK`; screenshot `docs/img/desktop-piano.png`. (5) **App Store** (`store.cs`→STORE.ELF) — store front **TERHUBUNG ke `pkg.rs`**: katalog dari syscall **`PKG_LIST`** (registry + status terpasang), install/hapus via **`PKG_SET`** (gating `run`); `StoreView:UIElement` (nama + kategori + badge TERPASANG/TERSEDIA) + tombol PASANG/HAPUS; verified: load katalog + install app + **baca ulang registry buktikan state kernel berubah** → `MILESTONE: STORE OK`; screenshot `docs/img/desktop-store.png`. ABI: `PKG_LIST`=27/`PKG_SET`=28 (+`PkgInfo` 48B, mirror C# + kontrak 9+4 lulus + `docs/abi.md`); registry (`pkg.rs`) diperluas + `category`. (6) **File Manager** (`filemgr.cs`→FILES.ELF) — jelajah VFS via syscall **`FS_LIST`** (path kosong=daftar mount, path mount=daftar file); `FileView:UIElement` (path bar + ikon folder/file + nama) + navigasi (klik folder / `..`); verified: daftar mount + masuk `/disk` + cek `CALC.ELF` ada → `MILESTONE: FILES OK`; screenshot `docs/img/desktop-files.png` (isi `/disk` NYATA dari FAT). ABI: `FS_LIST`=29 (+`FsEntry` 32B, mirror + kontrak lulus). (7) **Text Editor** (`editor.cs`→EDITOR.ELF) — editor multi-baris: `TextArea:UIElement` (buffer char growable, caret, wrap `\n`, Type/Newline/Backspace) di bawah `Menu` bar; verified ketik 2 baris + backspace → cek buffer → `MILESTONE: EDITOR OK`; screenshot `docs/img/desktop-editor.png`. **SUITE OK** (4-media, kernel-side).
 - [x] **Suite bawaan (8 app, semua kategori):** productivity (Kalkulator, Editor), game (2048), utilitas (Jam, File Manager), multimedia (Piano, Image Viewer), store (App Store) — di atas BCL v0.15 + Drawing/UI/Audio; masing-masing verified + screenshot. Menyusul (opsional): AI app, themes bawaan tambahan
 - [x] **Image Viewer** (`imgview.cs`→IMGVIEW.ELF) — memuat `/disk/PHOTO.BMP` lewat syscall baru **`FS_READ`** (ABI 30: baca isi file VFS ke buffer klien — juga fondasi file-open untuk editor/apps lain), dekode via `Bmp.Load` (Buitenzorg.Drawing), tampil di `ImageView:UIElement` (fit-to-box + aspect ratio, backdrop papan-catur, caption nama+dimensi); verified dekode 320×200 + piksel non-trivial → `MILESTONE: IMGVIEW OK`; screenshot `docs/img/desktop-imgview.png`. ABI: `FS_READ`=30 (mirror C# + kontrak dua sisi + `docs/abi.md`).
 - [x] **Bugfix ABI syscall userland (ditemukan oleh Image Viewer):** inline-asm `syscall` di shim (`bzstart.rs`) mendeklarasikan rdi/rsi/rdx sebagai `in` (janji "tidak berubah") — padahal kernel entry memanggil dispatcher C dan hanya me-restore rcx/r11/rsp sebelum `sysretq`. LLVM menyimpan `chunk` di rdi melintasi syscall mmap di `SystemNative_Malloc`, `HEAP_CAP` terisi sampah, grow-check tidak pernah aktif lagi → alokasi besar KEDUA menabrak akhir chunk yang benar-benar termap (page fault USER). Fix: rdi/rsi/rdx dideklarasi clobbered (`inlateout => _`) — kelas bug yang sama dengan fix r8/r9/r10 sebelumnya. `heap.cs` kini menguji multi-growth (4×400 KiB) agar path ini tetap teruji; heap juga disederhanakan (mmap-first, tanpa arena .bss; kursor `AtomicUsize`).
-- [~] **Optimization pass (mulai):** fast boot — pangkas durasi `Sleep()` animasi demo app (xox/paint/taskmgr/widget/webview) dari ~12 s → ~3 s; boot **69.8 s → 58.5 s** (~16% lebih cepat), semua milestone tetap. Kernel cetak estimasi tick di akhir boot. **Catatan fast-I/O:** dicoba multi-sector IDE-PIO + in-memory FAT + contiguous-run batching di `read_file` — ternyata **2× lebih lambat** di QEMU (emulasi PIO per-sector QEMU sudah cepat; baca-seluruh-FAT per file + churn buffer justru menambah overhead) → **di-revert**. Menyusul: startup app, footprint, SIMD hot-path, benchmark regresi CI
+- [~] **Optimization pass (mulai):** fast boot — pangkas durasi `Sleep()` animasi demo app (xox/paint/taskmgr/widget/webview) dari ~12 s → ~3 s; boot **69.8 s → 58.5 s** (~16% lebih cepat), semua milestone tetap. Kernel cetak estimasi tick di akhir boot. **Catatan fast-I/O:** dicoba multi-sector IDE-PIO + in-memory FAT + contiguous-run batching di `read_file` — ternyata **2× lebih lambat** di QEMU (emulasi PIO per-sector QEMU sudah cepat; baca-seluruh-FAT per file + churn buffer justru menambah overhead) → **di-revert**. **Benchmark regresi CI ✓** (`bench.sh`, v1.0). Menyusul: startup app, footprint, SIMD hot-path
 
 ### 🧑‍💻 Developer Experience & Onboarding
 - [x] **Getting-started ramah pemula** (`docs/getting-started.md`): langkah dari nol (dependency → build → boot QEMU) + troubleshooting
@@ -368,6 +369,87 @@ oleh `bcl2.cs` di ring-3 QEMU -> **`MILESTONE: BCL2 OK`**, smoke 4-media LOLOS,
   - **Sengaja TIDAK diadopsi** (menautkan ~30 KB library hanya demi satu formatter angka = rugi; formatternya lokal, dipakai di dalam `UIElement` custom): `calc.cs`, `game2048.cs`, `piano.cs`, `paint.cs`, `webview.cs`, `xox.cs`, `audiopanel.cs`. `hello.cs`/`svc.cs` sengaja minimal (milestone v0.4/v0.5)
   - **2 bug ketemu saat audit:** (1) `scripts/build-hello-csharp.sh` (jalur Linux/CI) **tidak punya `imgview` & `jpgtest`** — hanya ditambahkan ke `.ps1`, jadi build Linux menghasilkan image tanpa IMGVIEW.ELF/JPGTEST.ELF dan smoke CI akan gagal di marker itu; kedua skrip kini sama-sama 27 program. (2) `sdk/templates/desktop-csharp/README.md` masih menulis "belum punya GC — **hindari `new T[]`**", padahal heap sudah jalan sejak v0.15 inc 4 — diganti dengan aturan zerolib yang benar + katalog library
   - **Tool host:** `MagicAppGen` — `GetApiReference("bcl")` diperluas jadi katalog tanda-tangan **lengkap** `bzbcl.cs`+`bzbcl2.cs` (12 namespace, termasuk batas jujur "UDP loopback saja / tak ada TCP" dan "`Collect()` = false"), dan system prompt di `app.config` menyebut `bzbcl2.cs` + menyuruh panggil `GetApiReference` dulu — tanpa ini AI menghasilkan kode yang tak tahu System.IO/Regex/dll ada. `docs/first-app.md` dapat tabel katalog namespace baru. `bz` CLI tak butuh perubahan (scaffolding manifest/template, tak menyentuh API app)
+
+### 🛠️ Developer Workstation — IDE, Terminal, Package Manager, Debug & Deploy (permintaan 2026-11-01)
+Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 1 tak butuh prasyarat baru.
+- **Prasyarat**
+  - [ ] Multi-proses ring-3 preemptif (IDE + app + debugger hidup bersamaan)
+  - [ ] FS tulis persisten di `/disk` (FAT16/32 write atau FS journaled)
+  - [ ] Driver NIC (virtio-net → e1000) + TCP
+  - [ ] Kernel log ring buffer (`dmesg`) + log per-app
+- **Terminal & Shell**
+  - [ ] Line editing (kursor, Home/End, Ctrl+A/E/U/K/W) + history (↑/↓, persist) + tab-completion perintah/path
+  - [ ] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`export`/`env`/`$PATH`/`$?`), alias, skrip `.bzsh` + `source`
+  - [ ] Coreutils: `cp mv rm mkdir rmdir touch head tail wc grep find hexdump which tee sort` + `ps kill top` + `dmesg free uptime df`
+  - [ ] App Terminal mandiri (multi-tab, scrollback, copy/paste, ANSI) · [ ] job control (`&`/`jobs`/`fg`/Ctrl+C) — butuh multi-proses
+- **Package Manager**
+  - [ ] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install ./x.bzpkg`
+  - [ ] Host `bz pack` / `bz publish`
+  - [ ] Repo index remote + `bz update/upgrade` + versi + dependency resolution + rollback — butuh TCP
+  - [ ] State terpasang persisten · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
+- **IDE "Buitenzorg Studio"**
+  - [ ] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/manifest) + find/replace + undo/redo
+  - [ ] Explorer proyek + New Project dari template + panel Terminal/Problems/Output
+  - [ ] Run instan JS/TS/Python via `script.rs`
+  - [ ] C# lewat remote build server (`bz build-server` di host) · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
+  - [ ] Integrasi debugger (breakpoint gutter, variabel, call stack)
+- **Debugging & Diagnostik**
+  - [ ] Crash report app ring-3: register + backtrace ter-simbolisasi (symtab ELF) → `/ram/crash/`
+  - [ ] Debugger app ring-3 (`int3` + single-step, baca/tulis reg/memori, `bz debug <app>`)
+  - [ ] GDB remote stub di kernel (serial COM2 → TCP) — debug di hardware nyata
+  - [ ] VS Code DAP adapter (breakpoint/step/variabel/stack)
+  - [ ] Debugger skrip JS/TS/Python di `script.rs`
+  - [ ] Profiler app (`bz prof <app>`: zona via syscall + sampling RIP user) · [ ] `bz logs [-f] [app]`
+- **Deploy & Run (lokal + remote)**
+  - [ ] `run <path>` untuk ELF/skrip di path mana pun + Run dari Studio + hot-reload skrip
+  - [ ] Agen `bzd` (bz-link) di OS + host `bz device/deploy/run/logs/shell/push/pull/debug --remote`
+  - [ ] Transport serial COM2 (QEMU `-serial tcp`, hardware via USB-serial) · [ ] UDP · [ ] TCP
+  - [ ] Developer Mode (agen mati default) + pairing token + verifikasi hash + audit log
+  - [ ] Ekstensi VS Code + MagicAppGen deploy lewat bz-link (bukan build ulang image)
+- [ ] **Milestone:** `bz deploy --target serial` dari host → app jalan di OS yang sedang berjalan tanpa build ulang image, log mengalir balik, breakpoint kena; Studio menjalankan skrip Python di dalam OS; crash app menampilkan backtrace ter-simbolisasi
+
+### 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)
+Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](PLAN.md). Fase 1 tak butuh prasyarat baru.
+- **Prasyarat (kernel & driver)**
+  - [ ] Multi-proses preemptif (musik di latar saat game/browsing)
+  - [ ] Surface shared-memory zero-copy (ganti salinan per-piksel `BLIT`) + vsync/frame pacing + fullscreen eksklusif
+  - [ ] Timer resolusi tinggi (APIC timer/HPET)
+  - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [ ] driver Intel HDA · [ ] capture mic
+  - [ ] Event keyboard tekan/lepas + status tombol (kini `KEY_READ` hanya karakter) · [ ] mouse relatif/capture
+  - [ ] Stack USB xHCI + HID (gamepad, keyboard/mouse USB) · [ ] UVC webcam · [ ] audio USB
+  - [ ] Storage AHCI/NVMe + FS tulis persisten untuk media & aset game
+  - [ ] Float/SIMD di ring-3 teruji (SSE/AVX untuk decoder & 3D)
+- **Multimedia**
+  - [ ] `Buitenzorg.Media`: pipeline demux→decode→render, jam media (A/V sync), `MediaPlayer`, media key
+  - [ ] Mixer software multi-stream + volume per-app + resampling
+  - [ ] Codec audio: WAV · FLAC · Ogg Vorbis/Opus · MP3 · [ ] synth MIDI (wavetable/FM)
+  - [ ] Gambar: PNG (inflate) · GIF animasi · JPEG progresif · thumbnail/EXIF
+  - [ ] Video: MJPEG · container MP4/MKV/WebM · VP8/VP9/AV1 software · YUV→RGB SIMD · subtitle SRT · decode hardware
+  - [ ] App: Media Player · Music Player + perpustakaan · Photo Viewer (slideshow/zoom) · Sound Recorder · Camera · screenshot/perekam layar · widget Now Playing + OSD volume
+- **Internet**
+  - [ ] Driver NIC: virtio-net → e1000 → Realtek · [ ] Wi-Fi (jangka panjang)
+  - [ ] TCP penuh · DHCP · DNS resolver · socket `STREAM` + `poll` · [ ] IPv6
+  - [ ] Kripto + TLS 1.3/1.2: CSPRNG, SHA-2, AES-GCM, ChaCha20-Poly1305, X25519, RSA/ECDSA, store sertifikat root
+  - [ ] `BzHttp` jadi klien nyata (HTTP/1.1 + HTTPS) · WebSocket · download manager
+  - [ ] Browser: parser HTML5 · CSS (box model/flexbox/font) · layout + gambar · JS (subset ES + DOM di `script.rs`) · tab/bookmark/riwayat
+  - [ ] App: Web Browser · radio internet/podcast · klien chat · pengaturan jaringan · firewall + izin jaringan per-app
+- **Game 2D**
+  - [ ] `Buitenzorg.Game`: game loop fixed-timestep, input (keyboard state/mouse/gamepad), sprite + animasi, tilemap, kamera, collision, particle, scene, SFX/musik, loader aset, save game
+  - [ ] Performa: blit SIMD · dirty-rect · surface zero-copy · fullscreen
+  - [ ] Game bawaan: Minesweeper · Solitaire · Snake · Tetris-like · Breakout · platformer demo
+  - [ ] Template game di SDK + MagicAppGen · binding game untuk JS/Python
+- **Game 3D**
+  - [ ] Rasterizer software `Buitenzorg.Graphics3D`: math vektor/matriks, perspektif, clipping, z-buffer, culling, texture mapping, shading, loader OBJ/glTF
+  - [ ] Demo: raycaster gaya Wolfenstein · kubus bertekstur berputar
+  - [ ] GPU: virtio-gpu 2D → virgl 3D → API gaya Vulkan/WebGPU `Buitenzorg.GPU` (+ `compute.rs` `Backend::Gpu`) · [ ] driver GPU nyata (Intel dulu)
+  - [ ] Engine: scene graph · animasi skeletal · fisika rigid body · audio 3D posisional
+  - [ ] Lapisan libc (musl/newlib) + subset SDL2 → **port DOOM**
+- **Hiburan & UX**
+  - [ ] Mode game (fullscreen, tunda notifikasi, prioritas) · media key + OSD · hotkey screenshot
+  - [ ] Kategori Game/Media di App Store · perpustakaan media lintas app
+  - [ ] Pembaca e-book (TXT/EPUB) + komik (CBZ) · emulator showcase (CHIP-8/NES) · launcher ramah gamepad
+  - [ ] Integrasi GenAI lokal (wallpaper, aset game, playlist)
+- [ ] **Milestone:** musik Ogg/FLAC di latar + game 2D 60 fps dengan gamepad USB; video dengan A/V sync; browser membuka halaman HTTPS; adegan 3D bertekstur ≥30 fps (software dan virtio-gpu)
 
 ### 🚀 Stabilisasi & Rilis (v1.0) — *sedang berjalan*
 - [x] **Security hardening: validasi pointer user di syscall ✓ (2026-07-24)** — **LUBANG NYATA ditutup.** Sebelumnya syscall menyalin lewat pointer mentah tanpa cek, jadi app ring-3 bisa: (a) `DEBUG_WRITE(alamat_kernel)` → kernel mencetak memorinya sendiri ke serial (**bocor info**); (b) `SYS_STAT`/`PROC_LIST`/`PKG_LIST`/`FS_READ`/`NET_RECV` dengan `out_ptr` = alamat kernel → kernel **menulis hasil ke memori kernel** (**tulis-sembarang = eskalasi privilege penuh**); (c) pointer tak-terpeta → kernel **page fault di dalam syscall lalu mati**. Fix: `memory::validate_user_range(ptr,len,need_write)` (tanpa wrap + seluruhnya < `USER_ADDR_MAX`=0x8000_0000 + **tiap halaman present & USER_ACCESSIBLE** + writable utk buffer keluaran) & `validate_user_cstr` (path NUL-term, dicek ulang tiap batas halaman). Dipasang di **SEMUA** syscall berpointer: DEBUG_WRITE/FB_INFO/WIN_CREATE/WIN_CMD (termasuk buffer BLIT & teks)/PROC_LIST/SYS_STAT/AUDIO_STAT/AUDIO_PLAY/FUTEX_WAIT/PKG_LIST/PKG_SET/FS_LIST/FS_READ/FS_WRITE/CLOCK_RTC/NET_SEND/NET_RECV/NET_INFO. Dua TODO lama di `sys_win_create`/`sys_debug_write` ("full address-space validation arrives with multi-process isolation") akhirnya ditepati. **Penting:** cek hanya di jalur ring-3 (`dispatch_from_user` dari entry SYSCALL); pemanggil kernel-internal (`dispatch`) kirim alamatnya sendiri & tetap dipercaya — ini ketahuan saat `syscall_smoke_test` kernel sendiri langsung ditolak validator (bukti validatornya bekerja). Verifikasi: `syscall::security_self_test()` menembak **14 probe bermusuhan** (alamat kernel, halaman tak-terpeta, rentang meluap, panjang wrap, null) — semua ditolak `INVAL` → **`MILESTONE: SECURITY OK`**; smoke 4-media LOLOS, 0 fault
