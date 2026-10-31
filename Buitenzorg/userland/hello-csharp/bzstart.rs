@@ -51,6 +51,9 @@ const SYS_NET_SEND: u64 = 36;
 const SYS_NET_RECV: u64 = 37;
 const SYS_NET_CLOSE: u64 = 38;
 const SYS_NET_INFO: u64 = 39;
+const SYS_PROC_SPAWN: u64 = 40;
+const SYS_PROC_WAIT: u64 = 41;
+const SYS_PROC_ARGS: u64 = 42;
 
 #[inline(always)]
 unsafe fn syscall3(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
@@ -573,6 +576,27 @@ pub unsafe extern "C" fn bz_net_send(handle: u64, buf: *const u8, len: u64) -> u
 pub unsafe extern "C" fn bz_net_recv(handle: u64, buf: *mut u8, max: u64) -> u64 {
     let r = syscall3(SYS_NET_RECV, handle, buf as u64, max);
     if r >= u64::MAX - 1 { 0 } else { r }
+}
+
+/// Start a program as its own process. `path` = NUL-terminated app name or
+/// VFS path, `args` = NUL-terminated argument string (null = none). Returns the
+/// pid (an error code >= 0xFFFF_FFFF_FFFF_FF00 on failure).
+#[no_mangle]
+pub unsafe extern "C" fn bz_proc_spawn(path: *const u8, args: *const u8) -> u64 {
+    syscall2(SYS_PROC_SPAWN, path as u64, args as u64)
+}
+
+/// Block until process `pid` exits; returns its exit code.
+#[no_mangle]
+pub unsafe extern "C" fn bz_proc_wait(pid: u64) -> u64 {
+    syscall2(SYS_PROC_WAIT, pid, 0)
+}
+
+/// Copy this process's argument string into `buf` (NUL-terminated, at most
+/// `max` bytes). Returns the full argument length.
+#[no_mangle]
+pub unsafe extern "C" fn bz_proc_args(buf: *mut u8, max: u64) -> u64 {
+    syscall2(SYS_PROC_ARGS, buf as u64, max)
 }
 
 /// Close a socket. Returns 0 on success.

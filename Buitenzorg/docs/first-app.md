@@ -157,7 +157,7 @@ Add **both `bzbcl.cs` and `bzbcl2.cs`** to the app's source list to use these.
 | `System.Text` | `BzEncoding` | `BzEncoding.Utf8GetBytes(chars, n, bytes)` |
 | `System.Text.RegularExpressions` | `BzRegex` | `new BzRegex("^[0-9]+$").IsMatch("123")` |
 | `System.Globalization` | `BzCulture`, `BzDateTime` | `BzCulture.FormatGrouped(1234567, buf)` · `BzDateTime.Now()` |
-| `System.Diagnostics` | `BzStopwatch`, `BzProcess`, `BzDebug` | `BzProcess.GetProcesses(64)` · `BzProcess.Kill(pid)` |
+| `System.Diagnostics` | `BzStopwatch`, `BzProcess`, `BzDebug` | `BzProcess.GetProcesses(64)` · `BzProcess.Kill(pid)` · `BzProcess.Start("calc", "")` · `BzProcess.WaitForExit(pid)` · `BzProcess.GetArgs(out args)` |
 | `System.Management` | `BzSystemInfo` | `BzSystemInfo.Query().UptimeSeconds` |
 | `System.Net(.Sockets)` | `BzIPAddress`, `BzSocket`, `BzNetInfo` | `sock.SendTo(ip, 7000, "hi")` (UDP, loopback) |
 | `System.Net.Http` | `BzHttp` | `BzHttp.BuildGet(host, path, buf)` — *message layer only, no TCP yet* |

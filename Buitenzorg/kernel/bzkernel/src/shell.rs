@@ -58,7 +58,7 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "mounts" => (vfs::mounts(), Effect::None),
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
-        "run" => run_cmd(args.first().copied()),
+        "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
         "ps" => (ps_cmd(), Effect::None),
         "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
@@ -113,7 +113,7 @@ fn help() -> Vec<String> {
      "  anim [on|off]               micro-interaction on/off",
      "  settings                    tampilkan pengaturan (personalization)",
      "  ws [1-4]          pindah virtual desktop",
-     "  run <app>         jalankan app sebagai proses (xox, paint, taskmgr)",
+     "  run <app> [arg..] jalankan app sebagai proses (xox, paint, taskmgr)",
      "  ps                daftar proses (task kernel + app)",
      "  echo <teks> > f   tulis teks ke file (>> = tambahkan); /disk persisten",
      "  rm <file>         hapus file",
@@ -265,7 +265,7 @@ fn ws_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     }
 }
 
-fn run_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
+fn run_cmd(arg: Option<&str>, app_args: &[&str]) -> (Vec<String>, Effect) {
     let Some(name) = arg else {
         return (vec![String::from("run: butuh nama app (mis. 'run xox')")], Effect::None);
     };
@@ -281,7 +281,7 @@ fn run_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     }
     // Start it as its own process: the desktop and shell stay responsive while
     // it runs, and several apps can run side by side.
-    match app::spawn_named(name) {
+    match app::spawn_with_args(name, &app_args.join(" ")) {
         Ok(pid) => (vec![format!("app '{}' berjalan (pid {})", name, pid)], Effect::Redraw),
         Err(e) => (vec![format!("run: {}: {}", name, e)], Effect::None),
     }
@@ -700,7 +700,7 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
         Some("list") | Some("search") => (pkg_list(args.get(1).copied()), Effect::None),
         Some("install") | Some("add") => (pkg_install(args.get(1).copied()), Effect::None),
         Some("remove") | Some("uninstall") => (pkg_remove(args.get(1).copied()), Effect::None),
-        Some("run") => run_cmd(args.get(1).copied()),
+        Some("run") => run_cmd(args.get(1).copied(), &args[args.len().min(2)..]),
         Some("model") => model_cmd(&args[1..]),
         Some("power") => power_cmd(&args[1..]),
         Some("vm") => vm_cmd(&args[1..]),

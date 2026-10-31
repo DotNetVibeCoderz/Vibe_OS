@@ -421,16 +421,57 @@ impl FatVolume {
         Ok(())
     }
 
+    /// Visit (cluster, value) for every data cluster in order until `f`
+    /// returns true. FAT16/32 read each FAT sector once (a per-cluster read
+    /// cost ~5000 PIO sector reads per scan of the 5 MiB /disk); FAT12's
+    /// 1.5-byte entries go through `fat_get`.
+    fn scan_fat(
+        &self,
+        dev: &mut dyn BlockDevice,
+        mut f: impl FnMut(u32, u32) -> bool,
+    ) -> Result<(), &'static str> {
+        let end = (self.cluster_count + 2) as u32;
+        if self.kind == FatKind::Fat12 {
+            for c in 2..end {
+                if f(c, self.fat_get(dev, c)?) {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+        let width = if self.kind == FatKind::Fat16 { 2 } else { 4 };
+        let per_sector = SECTOR_SIZE as u32 / width;
+        let mut sector = [0u8; SECTOR_SIZE];
+        let mut loaded = u64::MAX;
+        for c in 2..end {
+            let lba = self.fat_start + (c / per_sector) as u64;
+            if lba != loaded {
+                dev.read_sector(lba, &mut sector)?;
+                loaded = lba;
+            }
+            let idx = ((c % per_sector) * width) as usize;
+            let v = if width == 2 {
+                u16_at(&sector, idx) as u32
+            } else {
+                (u32_at(&sector, idx) & 0x0FFF_FFFF) as u32
+            };
+            if f(c, v) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Find `n` free clusters, lowest first.
     fn alloc_clusters(&self, dev: &mut dyn BlockDevice, n: u64) -> Result<Vec<u32>, &'static str> {
         let mut chain = Vec::new();
-        let end = (self.cluster_count + 2) as u32;
-        let mut c = 2u32;
-        while (chain.len() as u64) < n && c < end {
-            if self.fat_get(dev, c)? == 0 {
-                chain.push(c);
-            }
-            c += 1;
+        if n > 0 {
+            self.scan_fat(dev, |c, v| {
+                if v == 0 {
+                    chain.push(c);
+                }
+                chain.len() as u64 >= n
+            })?;
         }
         if (chain.len() as u64) < n {
             return Err("not enough free clusters");
@@ -614,11 +655,12 @@ impl FatVolume {
     /// (free data clusters, cluster size in bytes).
     pub fn free_space(&self, dev: &mut dyn BlockDevice) -> Result<(u64, u64), &'static str> {
         let mut free = 0;
-        for c in 2..(self.cluster_count + 2) as u32 {
-            if self.fat_get(dev, c)? == 0 {
+        self.scan_fat(dev, |_, v| {
+            if v == 0 {
                 free += 1;
             }
-        }
+            false
+        })?;
         Ok((free, self.sectors_per_cluster * self.bytes_per_sector))
     }
 }

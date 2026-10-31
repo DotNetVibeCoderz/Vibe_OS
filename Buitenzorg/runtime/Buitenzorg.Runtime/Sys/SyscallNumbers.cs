@@ -127,8 +127,17 @@ public static class SyscallNumbers
     /// <summary>Interface info and counters: a0 = out ptr to a <see cref="NetInfo"/>. Returns 0 on success.</summary>
     public const ulong NetInfo = 39;
 
+    /// <summary>Start a program as its own process: a0 = path (NUL-terminated app name or VFS path), a1 = arguments (NUL-terminated, 0 = none). Returns the pid.</summary>
+    public const ulong ProcSpawn = 40;
+
+    /// <summary>Block until process a0 = pid exits. Returns its exit code (INVAL if unknown).</summary>
+    public const ulong ProcWait = 41;
+
+    /// <summary>Copy the caller's argument string into a0 = buffer (max a1 bytes). Returns its full length.</summary>
+    public const ulong ProcArgs = 42;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 40;
+    public const ulong Count = 43;
 }
 
 /// <summary>Socket kinds for <see cref="SyscallNumbers.NetSocket"/>. Only UDP is implemented;

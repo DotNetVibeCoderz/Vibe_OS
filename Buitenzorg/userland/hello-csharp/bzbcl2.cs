@@ -765,6 +765,52 @@ namespace Buitenzorg
     {
         [DllImport("*")] static extern unsafe ulong bz_proc_list(byte* buf, ulong max);
         [DllImport("*")] static extern ulong bz_proc_kill(ulong pid);
+        [DllImport("*")] static extern unsafe ulong bz_proc_spawn(byte* path, byte* args);
+        [DllImport("*")] static extern ulong bz_proc_wait(ulong pid);
+        [DllImport("*")] static extern unsafe ulong bz_proc_args(byte* buf, ulong max);
+
+        /// <summary>Start <paramref name="target"/> (an app name like "calc" or a VFS
+        /// path like "/disk/MYAPP.ELF") as its own process with an argument string
+        /// (Process.Start). Returns the pid, or 0 on failure.</summary>
+        public static unsafe ulong Start(string target, string args)
+        {
+            byte* t = stackalloc byte[256];
+            byte* a = stackalloc byte[256];
+            if (!ToCStr(target, t, 256) || !ToCStr(args, a, 256)) return 0;
+            ulong pid = bz_proc_spawn(t, a);
+            return pid >= 0xFFFF_FFFF_FFFF_FF00UL ? 0 : pid;
+        }
+
+        /// <summary>Block until process <paramref name="pid"/> exits and return its
+        /// exit code (Process.WaitForExit + ExitCode). Unknown pid: an error code
+        /// >= 0xFFFF_FFFF_FFFF_FF00.</summary>
+        public static ulong WaitForExit(ulong pid) => bz_proc_wait(pid);
+
+        /// <summary>This process's argument string (Environment.GetCommandLineArgs,
+        /// unsplit). Returns its length; the chars land in <paramref name="args"/>.</summary>
+        public static unsafe int GetArgs(out char[] args)
+        {
+            byte* buf = stackalloc byte[256];
+            int n = (int)bz_proc_args(buf, 256);
+            if (n > 255) n = 255;
+            args = new char[n];
+            for (int i = 0; i < n; i++) args[i] = (char)buf[i];
+            return n;
+        }
+
+        static unsafe bool ToCStr(string s, byte* dst, int cap)
+        {
+            int n = (object)s == null ? 0 : s.Length;
+            if (n >= cap) return false;
+            for (int i = 0; i < n; i++)
+            {
+                char c = s[i];
+                if (c > 127) return false; // ASCII only (paths and simple args)
+                dst[i] = (byte)c;
+            }
+            dst[n] = 0;
+            return true;
+        }
 
         const int PROC_SIZE = 64;   // abi::ProcInfo
         const int NAME_OFF = 32;

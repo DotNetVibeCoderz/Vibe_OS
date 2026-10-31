@@ -564,6 +564,14 @@ fn multiproc_demo() {
     } else {
         println!("[kernel] multiproc self-test FAILED");
     }
+
+    // Process control from ring 3: PROCTEST.ELF spawns copies of itself with
+    // arguments (by path and by app name) and waits for their exit codes. Its
+    // own MILESTONE: PROCCTL OK line is the verdict.
+    match app::run_named("proctest") {
+        Ok(code) => println!("[kernel] proctest exited (code {})", code),
+        Err(e) => println!("[kernel] proctest not run: {}", e),
+    }
 }
 
 /// v0.14 "Babel": polyglot app support. Runs the same algorithm written in

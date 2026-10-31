@@ -28,6 +28,11 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Spawn + argv + wait from ring 3.** New syscalls `PROC_SPAWN` (40),
+  `PROC_WAIT` (41, a real blocking wait woken on exit) and `PROC_ARGS` (42);
+  `COUNT` = 43, both ABI mirrors + contract tests + `docs/abi.md` updated.
+  `BzProcess.Start/WaitForExit/GetArgs`; shell `run <app> <args>`.
+  `proctest.cs` → `MILESTONE: PROCCTL OK`.
 - **Persistent `/disk`.** ATA PIO sector writes + cache flush; generic FAT12/16/32
   writing (cluster allocation, every FAT copy, timestamps, old chain freed after
   the new entry is written, delete, free space, FAT32 FSInfo invalidated);

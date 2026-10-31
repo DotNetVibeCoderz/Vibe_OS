@@ -178,6 +178,9 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
             0
         }
         sysno::KEY_READ => sys_key_read(),
+        sysno::PROC_SPAWN => sys_proc_spawn(a0, a1),
+        sysno::PROC_WAIT => sys_proc_wait(a0),
+        sysno::PROC_ARGS => sys_proc_args(a0, a1),
         sysno::PROC_LIST => sys_proc_list(a0, a1),
         sysno::PROC_KILL => {
             if crate::process::kill(a0) {
@@ -569,6 +572,61 @@ fn sys_key_read() -> u64 {
         task::yield_now();
     }
     key
+}
+
+/// PROC_SPAWN: start `path` (app name or VFS path) with `args` as a new
+/// process. Strings are NUL-terminated user pointers (<= 255 bytes).
+fn sys_proc_spawn(path_ptr: u64, args_ptr: u64) -> u64 {
+    let Some(path) = read_user_path_checked(path_ptr) else {
+        return syserr::INVAL;
+    };
+    let args = if args_ptr == 0 {
+        alloc::string::String::new()
+    } else {
+        match read_user_path_checked(args_ptr) {
+            Some(a) => a,
+            None => return syserr::INVAL,
+        }
+    };
+    match crate::app::spawn_with_args(&path, &args) {
+        Ok(pid) => pid,
+        Err(_) => syserr::INVAL,
+    }
+}
+
+/// PROC_WAIT: sleep (Blocked state, woken by the exit in `process::app_exit`)
+/// until `pid` exits, then return its exit code.
+fn sys_proc_wait(pid: u64) -> u64 {
+    if pid == 0 || pid == crate::aspace::current_id() {
+        return syserr::INVAL; // waiting on yourself would never return
+    }
+    loop {
+        if !crate::process::is_alive(pid) {
+            return crate::process::exit_code(pid).unwrap_or(syserr::INVAL);
+        }
+        // No race between the check and the sleep: syscalls run with
+        // interrupts off and kernel code is never preempted, so the target can
+        // only exit after we have switched away.
+        task::futex_wait_block(crate::process::wait_key(pid));
+    }
+}
+
+/// PROC_ARGS: copy the caller's argument string (NUL-terminated if it fits).
+fn sys_proc_args(buf_ptr: u64, max: u64) -> u64 {
+    let args = crate::process::args(crate::aspace::current_id());
+    if max > 0 {
+        if !user_write(buf_ptr, max) {
+            return syserr::INVAL;
+        }
+        let bytes = args.as_bytes();
+        let n = bytes.len().min(max as usize - 1);
+        let dst = buf_ptr as *mut u8;
+        for (i, b) in bytes[..n].iter().enumerate() {
+            unsafe { core::ptr::write_volatile(dst.add(i), *b) };
+        }
+        unsafe { core::ptr::write_volatile(dst.add(n), 0) };
+    }
+    args.len() as u64
 }
 
 fn sys_thread_join(tid: u64) -> u64 {

@@ -90,7 +90,8 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: PIANO OK", "MILESTONE: STORE OK",
                      "MILESTONE: FILES OK", "MILESTONE: EDITOR OK",
                      "MILESTONE: IMGVIEW OK", "MILESTONE: JPEG OK",
-                     "MILESTONE: MULTIPROC OK", "MILESTONE: DISK WRITE OK")
+                     "MILESTONE: MULTIPROC OK", "MILESTONE: DISK WRITE OK",
+                     "MILESTONE: PROCCTL OK")
 }
 Assert-Markers -Log $ideLog -Markers $ideMarkers
 Write-Host "smoke [ide]: all milestones present"

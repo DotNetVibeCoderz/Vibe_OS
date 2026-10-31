@@ -123,6 +123,8 @@ public sealed class BuitenzorgPlugin
                 "                     IsValid/IsLeapYear/DaysInMonth/DayOfWeek/FormatDate/FormatTime/Format\n" +
                 "    Diagnostics    BzStopwatch.StartNew/Start/Stop/Restart/ElapsedTicks (TSC ticks)\n" +
                 "                   BzProcess.GetProcesses(max)/Count/FindByName/Kill -> BzProcessInfo list\n" +
+                "                   BzProcess.Start(target, args) -> pid (target = app name or /disk/X.ELF; ASCII, < 256 chars)\n" +
+                "                   BzProcess.WaitForExit(pid) -> exit code (blocks)  BzProcess.GetArgs(out char[] args) -> length\n" +
                 "                   BzDebug.Write/WriteLine/Assert(cond, msg)\n" +
                 "    Management     BzSystemInfo.Query() -> UptimeTicks/TickHz/UptimeSeconds/HeapUsed/\n" +
                 "                     HeapTotal/HeapPercent/TaskCount/MemTotalMib/Audio*\n" +

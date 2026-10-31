@@ -8,7 +8,7 @@
 //! boot demos via `app::run_named`, on the launching task) or *detached*
 //! (spawned as their own process via `app::spawn_named`).
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
@@ -20,6 +20,8 @@ struct App {
     cpu_ticks: u64,
     /// Spawned as its own process (killable); false for synchronous launches.
     detached: bool,
+    /// Argument string handed to PROC_SPAWN / `run <app> <args>`.
+    args: String,
 }
 
 static APPS: Mutex<Vec<App>> = Mutex::new(Vec::new());
@@ -43,8 +45,27 @@ pub fn app_start(name: &str, detached: bool) -> u64 {
         name: copy_name(name),
         cpu_ticks: 0,
         detached,
+        args: String::new(),
     });
     pid
+}
+
+/// Futex key a PROC_WAIT on `pid` sleeps on. Far above every user address
+/// (user memory ends at 0x8000_0000), so it can never collide with a real futex.
+pub fn wait_key(pid: u64) -> u64 {
+    0xB2_0000_0000_0000 | pid
+}
+
+/// Set the argument string of a just-started program.
+pub fn set_args(pid: u64, args: &str) {
+    if let Some(a) = APPS.lock().iter_mut().find(|a| a.pid == pid) {
+        a.args = String::from(args);
+    }
+}
+
+/// Argument string of program `pid` (empty if none / unknown).
+pub fn args(pid: u64) -> String {
+    APPS.lock().iter().find(|a| a.pid == pid).map(|a| a.args.clone()).unwrap_or_default()
 }
 
 /// Remove a program from the registry and remember its exit code.
@@ -55,6 +76,9 @@ pub fn app_exit(pid: u64, code: u64) {
         ex.remove(0);
     }
     ex.push((pid, code));
+    drop(ex);
+    // Wake every PROC_WAIT sleeping on this program.
+    crate::task::futex_wake(wait_key(pid), u64::MAX);
 }
 
 /// True while program `pid` is registered (running).

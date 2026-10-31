@@ -150,8 +150,18 @@ pub mod sysno {
     /// Interface information and counters: `a0 = out ptr` to a
     /// [`crate::NetInfo`]. Returns 0 on success.
     pub const NET_INFO: u64 = 39;
+    /// Start a program as its own process: `a0 = path` (NUL-terminated; an
+    /// app name like `"calc"` or a VFS path like `"/disk/X.ELF"`), `a1 =
+    /// arguments` (NUL-terminated, may be empty; 0 = none). Returns the pid.
+    pub const PROC_SPAWN: u64 = 40;
+    /// Block until process `a0 = pid` exits. Returns its exit code, or
+    /// `syserr::INVAL` if no such process ever ran (or it was forgotten).
+    pub const PROC_WAIT: u64 = 41;
+    /// Copy the calling process's argument string into `a0 = buffer` (at most
+    /// `a1 = max` bytes, NUL-terminated if it fits). Returns its full length.
+    pub const PROC_ARGS: u64 = 42;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 40;
+    pub const COUNT: u64 = 43;
 }
 
 /// Socket kinds for the [`sysno::NET_SOCKET`] syscall.
@@ -470,7 +480,10 @@ mod tests {
         assert_eq!(sysno::NET_RECV, 37);
         assert_eq!(sysno::NET_CLOSE, 38);
         assert_eq!(sysno::NET_INFO, 39);
-        assert_eq!(sysno::COUNT, 40);
+        assert_eq!(sysno::PROC_SPAWN, 40);
+        assert_eq!(sysno::PROC_WAIT, 41);
+        assert_eq!(sysno::PROC_ARGS, 42);
+        assert_eq!(sysno::COUNT, 43);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -486,7 +499,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 40, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 43, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

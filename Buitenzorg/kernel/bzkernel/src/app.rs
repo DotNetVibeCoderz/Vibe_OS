@@ -148,8 +148,24 @@ pub fn run_named(name: &str) -> Result<u64, &'static str> {
 
 /// Resolve an app name and start it as its own process. Returns its pid.
 pub fn spawn_named(name: &str) -> Result<u64, &'static str> {
-    let bytes = read_app(name)?;
-    spawn_image(name, &bytes)
+    spawn_with_args(name, "")
+}
+
+/// Start a program with an argument string. `target` is an app name
+/// (`"calc"`) or an absolute VFS path to an ELF (`"/disk/MYAPP.ELF"`).
+pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
+    let (name, bytes) = if target.starts_with('/') {
+        let file = target.rsplit('/').next().unwrap_or(target);
+        let name = file.split('.').next().unwrap_or(file);
+        (alloc::string::String::from(name).to_lowercase(), vfs::read(target).map_err(|_| "file not found")?)
+    } else {
+        (alloc::string::String::from(target), read_app(target)?)
+    };
+    // The child cannot run before this returns (kernel code is never preempted
+    // and spawning does not yield), so its first PROC_ARGS sees these args.
+    let pid = spawn_image(&name, &bytes)?;
+    process::set_args(pid, args);
+    Ok(pid)
 }
 
 /// Map a short app name to its 8.3 ELF filename.
@@ -183,6 +199,7 @@ fn app_file(name: &str) -> Option<&'static str> {
         "imgview" | "image" | "viewer" | "photo" => Some("IMGVIEW.ELF"),
         "jpgtest" | "jpg" | "jpeg" => Some("JPGTEST.ELF"),
         "mproc" => Some("MPROC.ELF"),
+        "proctest" => Some("PROCTEST.ELF"),
         // Generic slot for a user-authored app: the SDK/VS Code/MagicAppGen
         // template builds its ELF to userland/hello-csharp/userapp.elf, which
         // build.rs embeds as /disk/USERAPP.ELF. `run myapp` then launches it.
