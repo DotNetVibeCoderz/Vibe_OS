@@ -40,6 +40,7 @@ mod fat;
 mod framebuffer;
 mod gdt;
 mod gfx;
+mod icons;
 mod interrupts;
 mod ipc;
 mod keyboard;
@@ -1360,6 +1361,13 @@ fn dahan_demo(
     }
     println!("[vfs] mounts: {}", vfs::mounts().join(" "));
     disk_persist_demo();
+    // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).
+    let n_icons = icons::load();
+    if n_icons > 0 {
+        println!("[kernel] MILESTONE: ICONS OK ({} app icons loaded from /disk/ICONS.BIN)", n_icons);
+    } else {
+        println!("[kernel] no icon pack on this boot medium -- colored fallback icons");
+    }
 
     let payload = b"Dahan tumbuh: VFS + FAT write bekerja. Ditulis lalu dibaca kembali.\n";
     match vfs::write("/ram/DAHAN.TXT", payload) {

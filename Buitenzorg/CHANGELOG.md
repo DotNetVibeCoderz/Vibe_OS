@@ -28,6 +28,12 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **App icons.** Ten AI-generated icons in one style (files, editor, calc,
+  store, image viewer, clock, piano, 2048, task manager, paint) replace the
+  identical placeholder tiles on the desktop and in the start menu. `bzimage`
+  packs them (44 px + 18 px, anti-aliased rounded alpha) into
+  `/disk/ICONS.BIN`; without `/disk` each app gets its own colored tile.
+  `MILESTONE: ICONS OK`.
 - **Eight official wallpapers.** AI-generated artwork (nature — the default,
   Bogor Botanical Gardens at dawn — futuristic, city, art, surreal, imaginary,
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450

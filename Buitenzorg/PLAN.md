@@ -850,9 +850,52 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   Studios).
 - *Sisa:* validasi boot di hardware nyata & Hyper-V nyata (perkakas siap).
 
-## 🌍 v1.x — "Rimba" · Multi-Arch
-Port ARM64 lalu RISC-V (via HAL), optimasi per-arsitektur.
-**Milestone:** boot & jalan di ARM64 dan RISC-V.
+## 🌍 v1.x — "Rimba" · Multi-Arch (ARM64 + RISC-V)
+Port ARM64 lalu RISC-V lewat **HAL** yang dipisahkan dulu di x86-64, lalu
+optimasi per-arsitektur. **Milestone:** boot ke desktop & jalankan app di
+QEMU `-M virt` untuk ARM64 dan RISC-V.
+
+### Audit keterikatan arsitektur (2026-11-01)
+Dari 47 modul kernel, **24 sudah netral arsitektur** (WM/compositor, VFS, FAT,
+shell/terminal, interpreter JS/TS/Python, AI, VMM perangkat lunak, net, pkg,
+process, wallpaper/ikon, theme, …) — itu yang ikut pindah gratis. **23 modul
+terikat x86**, dalam tiga kelompok:
+
+| Kelompok | Modul | Pengganti di ARM64 / RISC-V |
+|---|---|---|
+| **Inti CPU** | `gdt` (GDT/TSS), `interrupts` (IDT), `usermode` (SYSCALL/SYSRET), `task` (asm context switch + FXSAVE), `smp` (LAPIC/INIT-SIPI), `memory`/`aspace`/`elf`/`allocator` (page table `x86_64::`), `profile`/`syscall` (RDTSC) | Vektor eksepsi EL1 + `SVC` / `stvec` + `ECALL`; tabel halaman TTBR0/TTBR1 (ARM) / Sv39–Sv48 (RISC-V); simpan-pulih FP/NEON / F-D; PSCI / SBI HSM untuk start core; counter `CNTVCT` / `rdtime` |
+| **Perangkat PC (I/O port)** | `serial` (16550), `ata` (IDE PIO), `mouse`/`keyboard` (PS/2), `pci` (CF8/CFC), `rtc` (CMOS), `power` (ACPI PM1 + port QEMU), `audio` (AC'97) | PL011 / 16550-MMIO; **virtio-mmio/PCIe ECAM**: virtio-blk, virtio-input, virtio-gpu, virtio-net, virtio-sound; PL031 / Goldfish RTC; PSCI / SBI SRST untuk shutdown |
+| **Boot** | `bootloader` 0.11 (BIOS/UEFI x86 saja), `BootInfo`, ACPI-only | Protokol boot multi-arch (**Limine**: x86-64/aarch64/riscv64) atau stub UEFI sendiri; penemuan platform **ACPI *atau* Device Tree** |
+
+Yang sudah netral: **ABI syscall** (`bz-abi`: nomor + struct `#[repr(C)]`,
+little-endian di ketiga arsitektur — hanya *instruksi* syscall yang beda),
+mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
+
+### Rencana bertahap
+1. **M0 — Ekstraksi HAL di x86-64 (tanpa ubah perilaku).** Modul `arch/`
+   dengan antarmuka: `cpu` (halt, irq on/off, relax, timestamp), `irq`
+   (controller + EOI + vektor), `timer`, `paging` (map/unmap/switch address
+   space — termasuk model PDPT-swap saat ini), `context` (switch + entri user +
+   entri syscall + simpan FPU), `smp` (start core, IPI), `console`. Driver port
+   I/O pindah ke `platform/pc`. Gerbang: kernel x86-64 identik perilakunya
+   (smoke 4-media + UEFI lolos), dan **CI cek bahwa modul generik tak lagi
+   memakai `x86_64::`/`asm!`/port I/O**.
+2. **M1 — Boot & penemuan platform multi-arch.** Abstraksi `BootInfo` (peta
+   memori, framebuffer, RSDP/DTB, offset peta fisik); dukungan Limine; parser
+   Device Tree kecil di samping ACPI.
+3. **M2 — Driver virtio** (blk, input, gpu, net, sound) — juga mempercepat x86
+   di QEMU dan menggantikan IDE PIO/PS/2/AC'97 di semua arsitektur.
+4. **M3 — ARM64 (`aarch64-unknown-none`, QEMU `virt`).** PL011, GICv3,
+   generic timer, MMU 4K (TTBR0 = user, TTBR1 = kernel: address space per
+   proses jadi lebih alami), EL0/EL1 + `SVC`, PSCI. Userland C#: bflat
+   `linux-arm64` + shim `bzstart.rs` versi aarch64 (`svc #0`).
+5. **M4 — RISC-V (`riscv64gc-unknown-none-elf`, QEMU `virt` + OpenSBI).**
+   16550-MMIO, PLIC + timer SBI, Sv39/Sv48, U/S-mode + `ECALL`, SBI HSM.
+   **Batas jujur:** .NET NativeAOT untuk RISC-V belum didukung resmi — app
+   pertama di RISC-V berjalan lewat runtime JS/TS/Python (netral arsitektur);
+   C# menyusul saat toolchain-nya siap.
+6. **M5 — CI matrix** `qemu-system-{x86_64,aarch64,riscv64}` dengan smoke
+   test yang sama (marker MILESTONE) per arsitektur.
 
 ## 🔮 Pasca-1.x (jangka panjang)
 SMP/NUMA matang · driver GPU modern + NPU · WiFi/Bluetooth/USB luas ·

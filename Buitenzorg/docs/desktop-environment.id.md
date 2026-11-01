@@ -53,7 +53,18 @@ mewajibkan marker itu; verifikasi visual di `docs/img/desktop-kanopi.png`.
 Environment v0.7 tumbuh jadi desktop shell penuh di v0.16 — tombol Start dan
 menu, ikon desktop, dan tray taskbar dengan jam RTC live:
 
-![Desktop shell v0.16](img/desktop-shell.png)
+![Desktop shell dengan ikon app dan start menu](img/desktop-start-menu.jpg)
+
+**Ikon app.** Setiap entri launcher punya ikon sendiri — karya seni AI dengan
+satu gaya yang konsisten (`assets/icons/*.jpg`). `bzimage/build.rs`
+mengecilkannya ke 44 px (desktop) dan 18 px (start menu), memotong siluet
+rounded-square beranti-alias yang sama ke kanal alpha, lalu mengemasnya ke
+`/disk/ICONS.BIN`; `icons.rs` memuat paketnya dan `wm.rs` mem-blend ikon di
+atas wallpaper (`MILESTONE: ICONS OK`). Di media boot tanpa driver `/disk`,
+setiap app memakai tile berwarna sendiri dengan inisialnya, jadi tidak ada dua
+launcher yang terlihat sama.
+
+![Ikon desktop di atas wallpaper resmi nature](img/desktop-icons.jpg)
 
 ## Catatan scheduler
 

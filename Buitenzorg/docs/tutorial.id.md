@@ -59,7 +59,7 @@ Setelah `READY`, desktop hidup (mouse & keyboard berfungsi di QEMU):
 - **Suite bawaan** (8 app): Kalkulator, Text Editor, 2048, Jam, File Manager,
   Piano, Image Viewer, App Store.
 
-![Desktop Buitenzorg](img/desktop-shell.png)
+![Desktop Buitenzorg](img/desktop-start-menu.jpg)
 
 ➡️ Konsep desktop (compositor, window manager, tema, workspace):
 **[Desktop Environment](desktop-environment.id.md)** · **[Window System](window-system.id.md)**.

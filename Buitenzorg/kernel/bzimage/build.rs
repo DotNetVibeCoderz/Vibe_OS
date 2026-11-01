@@ -78,15 +78,101 @@ const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
     ("minimal", "WPMINIMA.BMP"),
 ];
 
-/// Decode a JPEG and box-filter it down to `tw` x `th` as a 24-bit BMP.
-fn jpeg_to_bmp(jpeg: &[u8], tw: usize, th: usize) -> Option<Vec<u8>> {
+/// App icons, in launcher order: (asset name in assets/icons, launch name used
+/// by the kernel's `icons.rs` / `wm.rs` LAUNCH list).
+const APP_ICONS: [&str; 10] =
+    ["files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint"];
+/// Icon sizes in ICONS.BIN: desktop tile and start-menu row.
+const ICON_BIG: usize = 44;
+const ICON_SMALL: usize = 18;
+
+/// Decode a baseline JPEG to (width, height, RGB24 pixels).
+fn decode_jpeg(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     let mut dec = jpeg_decoder::Decoder::new(jpeg);
     let rgb = dec.decode().ok()?;
     let info = dec.info()?;
     if info.pixel_format != jpeg_decoder::PixelFormat::RGB24 {
         return None;
     }
-    let (sw, sh) = (info.width as usize, info.height as usize);
+    Some((info.width as usize, info.height as usize, rgb))
+}
+
+/// Box-filter RGB24 `src` (sw x sh) down to tw x th; returns RGB24.
+fn box_downscale(src: &[u8], sw: usize, sh: usize, tw: usize, th: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tw * th * 3);
+    for y in 0..th {
+        let (y0, y1) = (y * sh / th, ((y + 1) * sh / th).max(y * sh / th + 1));
+        for x in 0..tw {
+            let (x0, x1) = (x * sw / tw, ((x + 1) * sw / tw).max(x * sw / tw + 1));
+            let mut acc = [0u32; 3];
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let p = (sy * sw + sx) * 3;
+                    for c in 0..3 {
+                        acc[c] += src[p + c] as u32;
+                    }
+                }
+            }
+            let n = ((y1 - y0) * (x1 - x0)) as u32;
+            out.extend_from_slice(&[(acc[0] / n) as u8, (acc[1] / n) as u8, (acc[2] / n) as u8]);
+        }
+    }
+    out
+}
+
+/// Coverage (0..=255) of a rounded square of side `size` and corner radius `r`
+/// at pixel (x, y), 4x4 supersampled — gives every icon the same anti-aliased
+/// squircle silhouette regardless of what the artwork's edges look like.
+fn rounded_alpha(x: usize, y: usize, size: usize, r: f32) -> u8 {
+    let mut inside = 0;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            let px = x as f32 + (sx as f32 + 0.5) / 4.0;
+            let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+            let s = size as f32;
+            let cx = px.clamp(r, s - r);
+            let cy = py.clamp(r, s - r);
+            let (dx, dy) = (px - cx, py - cy);
+            if dx * dx + dy * dy <= r * r {
+                inside += 1;
+            }
+        }
+    }
+    (inside * 255 / 16) as u8
+}
+
+/// ICONS.BIN: "BZIC", version 1, count, big size, small size, then per icon a
+/// 12-byte NUL-padded name, the big and the small icon as little-endian
+/// 0xAARRGGBB words. Read by the kernel's icons.rs.
+fn build_icon_pack(dir: &std::path::Path) -> Option<Vec<u8>> {
+    let mut pack = Vec::new();
+    pack.extend_from_slice(b"BZIC");
+    pack.extend_from_slice(&[1, APP_ICONS.len() as u8, ICON_BIG as u8, ICON_SMALL as u8]);
+    for name in APP_ICONS {
+        let path = dir.join(format!("{name}.jpg"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        let (w, h, rgb) = decode_jpeg(&std::fs::read(&path).ok()?)?;
+        let mut tag = [0u8; 12];
+        tag[..name.len()].copy_from_slice(name.as_bytes());
+        pack.extend_from_slice(&tag);
+        for (size, radius) in [(ICON_BIG, 10.0), (ICON_SMALL, 4.5)] {
+            let px = box_downscale(&rgb, w, h, size, size);
+            for y in 0..size {
+                for x in 0..size {
+                    let p = (y * size + x) * 3;
+                    let a = rounded_alpha(x, y, size, radius) as u32;
+                    let argb = a << 24 | (px[p] as u32) << 16 | (px[p + 1] as u32) << 8 | px[p + 2] as u32;
+                    pack.extend_from_slice(&argb.to_le_bytes());
+                }
+            }
+        }
+    }
+    Some(pack)
+}
+
+/// Decode a JPEG and box-filter it down to `tw` x `th` as a 24-bit BMP.
+fn jpeg_to_bmp(jpeg: &[u8], tw: usize, th: usize) -> Option<Vec<u8>> {
+    let (sw, sh, rgb) = decode_jpeg(jpeg)?;
     let row_stride = (tw * 3 + 3) & !3;
     let data_len = row_stride * th;
     let mut bmp = Vec::with_capacity(54 + data_len);
@@ -196,6 +282,13 @@ fn main() {
         if let Some(bmp) = std::fs::read(&path).ok().and_then(|j| jpeg_to_bmp(&j, 800, 450)) {
             builder.set_file_contents(dest.to_lowercase().into(), bmp);
         }
+    }
+
+    // App icons for the desktop and the start menu (assets/icons/*.jpg ->
+    // anti-aliased rounded ARGB icons packed into /disk/ICONS.BIN).
+    let icon_dir = manifest_dir().join("..").join("..").join("assets").join("icons");
+    if let Some(pack) = build_icon_pack(&icon_dir) {
+        builder.set_file_contents("icons.bin".into(), pack);
     }
 
     // v0.11: a generated 24-bit BMP so the kernel can demo loading a user

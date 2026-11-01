@@ -57,7 +57,7 @@
 - [x] Scheduler preemptive + context switch (preemption opsional)
 - [x] Syscall ABI (v1 + window ABI v0.8) + entry ring-3 SYSCALL/SYSRET
 - [x] IPC (message passing, kernel-space)
-- [~] HAL — *implisit x86-64; abstraksi multi-arch belum*
+- [~] HAL — *implisit x86-64; audit keterikatan selesai 2026-11-01 (24/47 modul netral), ekstraksi `arch/` = M0 di §Multi-Arch*
 - [~] SMP multi-core — **increment 1 ✓ (2026-11-01):** CPU ditemukan dari ACPI MADT, Local APIC BSP diaktifkan, AP dibangunkan INIT-SIPI-SIPI lewat trampolin real-mode→long-mode di 0x8000 (page table sementara dengan identity map; memori < 1 MiB tak pernah dialokasikan) lalu **diparkir** — `MILESTONE: SMP OK` (QEMU `-smp 4`: 3 AP online; smoke AHCI + UEFI `-smp 2`). Scheduler tetap single-core: state SYSCALL per-CPU (GS/swapgs), root page table per-CPU, lock pengganti `without_interrupts`, dan TLB shootdown belum · [~] APIC (LAPIC BSP mode virtual-wire + IPI; IRQ masih lewat PIC 8259, IOAPIC/timer LAPIC belum) · [ ] ekstensi virtualization
 
 ### 🔌 Drivers
@@ -182,6 +182,7 @@
 ### 🖼️ Personalization & Display Settings
 - [~] Antarmuka Personalization via shell (`settings`, `bg`, `saver`, `cursor`, `anim`, `theme`) — *app GUI belum*
 - [x] Desktop background: **wallpaper bawaan** (theme, waves, grid, dots, aurora)
+- [x] **Ikon app unik ✓ (2026-11-01)** — 10 ikon AI (Rodin / Nano Banana 2) satu gaya: files, editor, calc, store, imgview, clock, piano, 2048, taskmgr, paint (`assets/icons/`). `build.rs` → 44 px + 18 px + siluet rounded-square beranti-alias (alpha) → `/disk/ICONS.BIN`; `icons.rs` + `wm.rs` blend di desktop & Start menu; fallback tile berwarna + inisial per app di media tanpa `/disk` (diverifikasi screenshot AHCI). `MILESTONE: ICONS OK`; README hero kini screenshot Start menu baru
 - [x] **8 wallpaper resmi Buitenzorg OS ✓ (2026-11-01)** — karya seni AI (Rodin / Nano Banana 2): nature (default, Kebun Raya Bogor), futuristic, city, art (batik), surreal, imaginary, space, minimal. JPEG di `assets/wallpapers/` → `bzimage/build.rs` decode + box-filter 800×450 → BMP di `/disk`; kernel resample bilinear sekali ke ukuran layar + cache (frame = 1 salinan, bukan stretch per piksel). Shell `bg list` / `bg <nama>`; `MILESTONE: WALLPAPERS OK`; galeri di README + `docs/window-system.md`
 - [x] Desktop background: **file gambar milik user** (BMP 24-bit dari VFS, mis. `/disk/PHOTO.BMP`)
 - [x] Pilih screensaver · [x] pilih theme (8 tema + dark/light) · [x] kursor (normal/besar)
@@ -466,8 +467,15 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 - [~] **Boot hardware nyata — perkakas & dokumentasi SIAP ✓ (2026-07-24), validasi mesin fisik menyusul.** Image build (`buitenzorg-bios.img` MBR / `buitenzorg-uefi.img` GPT+ESP) memang raw & langsung ditulis ke USB. Skrip flash **`scripts/flash-usb.ps1`** (Windows, akses disk mentah via PhysicalDrive) + **`.sh`** (Linux/macOS `dd`): pengaman berlapis (hanya disk USB/removable ditawarkan, target eksplisit bukan ditebak, disk sistem/boot DITOLAK mentah, konfirmasi ketik ERASE, **verifikasi baca-ulang** byte-per-byte) + mode `-List`/`--list`. Panduan **`docs/install-hardware.md`**: pilih firmware (bios↔Legacy/CSM, uefi↔UEFI, Secure Boot OFF), jalur GUI (Etcher/Rufus DD-mode) sbg alternatif, boot menu, **checklist verifikasi HW jujur** (PS/2 vs USB-HID, IDE-PIO vs NVMe, PIC/PIT vs APIC, ACPI shutdown) + tabel kompatibilitas + troubleshooting. Di-cross-link dari README + getting-started. `.ps1` parse-clean, `.sh` `bash -n` OK, enumerasi disk diuji (disk sistem SATA ke-0 benar ter-flag `IsSystem/IsBoot` → ditolak guard). **Belum: boot di mesin fisik nyata** (tak bisa dari lingkungan ini) — ditandai eksperimental
 - [x] **Image resmi Hyper-V (VHDX) ✓ (2026-07-24)** — `make-vm-images.ps1`/`.sh` kini juga emit `dist/buitenzorg.vhdx` untuk Hyper-V. **Gotcha nyata ditangani:** konversi `qemu-img -O vhdx` telanjang menghasilkan virtual-size 5,47 MiB ganjil (bisa ditolak Hyper-V), DAN qemu build ini tak bisa `resize` vhdx ("format driver does not support resize") → solusi: **pre-create VHDX 64 MiB lalu `convert -n`** (stream raw ke disk yang sudah berukuran). Verified: virtual-size 67108864 B (64 MiB, 1MiB-aligned), dinamis 7 MiB di disk, konten prefix identik dgn source (convert-back + cmp). Helper baru **`scripts/make-hyperv-vm.ps1`** membuat VM **Generation 1** (BIOS/MBR — Gen 2 UEFI tak cocok disk MBR unsigned) dari VHDX; guarded (cek modul Hyper-V + admin), fallback cetak langkah manual kalau Hyper-V mati (diverifikasi: New-VM absen di lingkungan dev → fallback jalan bersih). Docs `run-in-vm.md` dapat bagian Hyper-V + troubleshooting. **Belum: boot di Hyper-V nyata** (feature tak aktif di lingkungan dev) — konversi VHDX + pembuatan VM terverifikasi, boot aktual menyusul spt VMware/VBox
 
-### 🌍 Multi-Arch (v1.x)
-- [ ] Port ARM64 · Port RISC-V · SMP/NUMA · marketplace · container lanjut
+### 🌍 Multi-Arch (v1.x) — rencana lengkap: [PLAN.md §v1.x](PLAN.md)
+- [x] **Audit keterikatan arsitektur (2026-11-01):** 24/47 modul kernel netral (WM, VFS, FAT, shell, interpreter, AI, VMM, net, pkg, process, wallpaper/ikon, …); 23 terikat x86 — inti CPU (gdt, interrupts, usermode, task asm, smp, paging di memory/aspace/elf/allocator, RDTSC), perangkat PC berbasis port I/O (serial, ata, ps/2, pci CF8, rtc CMOS, power, ac97), boot (`bootloader` 0.11 x86-only). ABI syscall + mirror C# + format disk/aset sudah netral (little-endian)
+- [ ] **M0 — Ekstraksi HAL** (`arch/` cpu/irq/timer/paging/context/smp/console + `platform/pc` untuk driver port I/O) tanpa ubah perilaku x86; CI menolak `x86_64::`/`asm!`/port I/O di modul generik
+- [ ] **M1 — Boot multi-arch:** abstraksi `BootInfo`, protokol Limine (x86-64/aarch64/riscv64), parser Device Tree di samping ACPI
+- [ ] **M2 — Driver virtio:** blk, input, gpu, net, sound (menggantikan IDE PIO / PS/2 / AC'97 di semua arsitektur)
+- [ ] **M3 — Port ARM64** (QEMU `virt`): PL011, GICv3, generic timer, MMU TTBR0/TTBR1, EL0/EL1 + SVC, PSCI; C# via bflat `linux-arm64` + shim aarch64
+- [ ] **M4 — Port RISC-V** (QEMU `virt` + OpenSBI): 16550-MMIO, PLIC + timer SBI, Sv39/48, ECALL, SBI HSM; app awal lewat JS/TS/Python (NativeAOT RISC-V belum resmi di .NET)
+- [ ] **M5 — CI matrix** x86_64 / aarch64 / riscv64 dengan smoke test marker yang sama
+- [ ] SMP/NUMA matang · marketplace · container lanjut
 
 ### 🧪 Eksperimen pasca-v1.0 — link CoreLib .NET ASLI (`--stdlib:dotnet`)
 Proyek riset tersendiri (multi-sesi, hasil tak pasti); ganti Buitenzorg.Bcl

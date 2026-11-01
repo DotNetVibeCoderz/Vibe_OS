@@ -59,7 +59,7 @@ After `READY`, the desktop is live (mouse and keyboard work in QEMU):
 - **Preloaded suite** (8 apps): Calculator, Text Editor, 2048, Clock, File
   Manager, Piano, Image Viewer, App Store.
 
-![The Buitenzorg desktop](img/desktop-shell.png)
+![The Buitenzorg desktop](img/desktop-start-menu.jpg)
 
 ➡️ Desktop concepts (compositor, window manager, themes, workspaces):
 **[Desktop Environment](desktop-environment.md)** · **[Window System](window-system.md)**.

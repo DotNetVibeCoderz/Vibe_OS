@@ -57,7 +57,18 @@ smoke test requires those markers; visual verification in
 The v0.7 environment grew into a full desktop shell in v0.16 — a Start button
 and menu, desktop icons, and a taskbar tray with a live RTC clock:
 
-![The v0.16 desktop shell](img/desktop-shell.png)
+![The desktop shell with app icons and the start menu](img/desktop-start-menu.jpg)
+
+**App icons.** Every launcher entry has its own icon — AI-generated artwork in
+one consistent style (`assets/icons/*.jpg`). `bzimage/build.rs` downsamples
+each to 44 px (desktop) and 18 px (start menu), cuts the same anti-aliased
+rounded-square silhouette into the alpha channel and packs them into
+`/disk/ICONS.BIN`; `icons.rs` loads the pack and `wm.rs` alpha-blends the
+icons over the wallpaper (`MILESTONE: ICONS OK`). On boot media without a
+`/disk` driver each app falls back to its own colored tile with an initial,
+so no two launchers look the same.
+
+![Desktop icons on the official nature wallpaper](img/desktop-icons.jpg)
 
 ## Scheduler note
 

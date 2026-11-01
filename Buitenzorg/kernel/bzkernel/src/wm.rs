@@ -27,7 +27,7 @@ const START_W: i32 = 76; // Start button width on the taskbar
 const SM_W: i32 = 244; // start-menu width
 const SM_ROW: i32 = 26; // start-menu / icon row height
 const ICON_W: i32 = 72; // desktop icon cell width
-const ICON_H: i32 = 62; // desktop icon cell height
+const ICON_H: i32 = 70; // desktop icon cell height (44 px icon + label)
 
 /// Apps that appear on the desktop / start menu, as (launch-name, label). The
 /// launch-name must match `app::app_file`. The first `DESKTOP_ICONS` are also
@@ -45,6 +45,35 @@ const LAUNCH: &[(&str, &str)] = &[
     ("paint", "Paint"),
 ];
 const DESKTOP_ICONS: usize = 4;
+
+/// Fallback icon colors (one per LAUNCH entry) when the icon pack is not
+/// available — every app still gets a distinct tile, not one shared glyph.
+const FALLBACK_COLORS: [Color; 10] = [
+    gfx::rgb(0xF5, 0x8A, 0x1F), // files: amber
+    gfx::rgb(0x2F, 0x7B, 0xE8), // editor: blue
+    gfx::rgb(0x3A, 0x3F, 0x47), // calc: slate
+    gfx::rgb(0x12, 0x9E, 0x6E), // store: emerald
+    gfx::rgb(0xC8, 0x34, 0xB4), // imgview: magenta
+    gfx::rgb(0x34, 0x2E, 0x8C), // clock: indigo
+    gfx::rgb(0xB8, 0x1E, 0x2E), // piano: crimson
+    gfx::rgb(0xD9, 0xB0, 0x6A), // 2048: gold
+    gfx::rgb(0x0F, 0x3B, 0x52), // taskmgr: navy
+    gfx::rgb(0x1C, 0xC8, 0xC8), // paint: cyan
+];
+
+/// Draw app `i`'s icon (from the icon pack, or a colored initial tile).
+fn draw_app_icon(canvas: &mut Canvas, i: usize, x: i32, y: i32, big: bool) {
+    let (name, label) = LAUNCH[i];
+    if crate::icons::draw(canvas, name, x, y, big) {
+        return;
+    }
+    let sz = crate::icons::size(big);
+    let c = FALLBACK_COLORS[i % FALLBACK_COLORS.len()];
+    fill_rounded_gradient(canvas, x, y, sz, sz, if big { 10 } else { 4 }, shift(c, 30), c);
+    let initial = &label[..1];
+    let gw = gfx::glyph_width() as i32;
+    canvas.draw_text(x + (sz - gw) / 2, y + (sz - 16) / 2, initial, gfx::rgb(0xFF, 0xFF, 0xFF), x + sz);
+}
 
 /// Read wall-clock (hour, minute) from the CMOS RTC (see `rtc.rs`).
 fn read_clock() -> (u8, u8) {
@@ -1014,16 +1043,16 @@ impl Wm {
         // App rows.
         let (mx, my) = self.cursor;
         let mut ry = y + 40;
-        for (_, label) in LAUNCH {
+        for (i, (_, label)) in LAUNCH.iter().enumerate() {
             let hot = mx >= x + 4 && mx < x + SM_W - 4 && my >= ry && my < ry + SM_ROW;
             if hot {
                 fill_rounded(canvas, x + 4, ry, SM_W - 8, SM_ROW - 2, 4, darken(th.win_title_active, 10));
             }
-            // Little app glyph.
-            canvas.fill_rect(x + 12, ry + 6, 12, 12, th.accent);
-            canvas.fill_rect(x + 14, ry + 8, 8, 8, shift(th.win_body, 10));
+            // The app's own icon.
+            let isz = crate::icons::size(false);
+            draw_app_icon(canvas, i, x + 10, ry + (SM_ROW - 2 - isz) / 2, false);
             let tc = if hot { th.title_text } else { th.text };
-            canvas.draw_text(x + 32, ry + 6, label, tc, x + SM_W - 8);
+            canvas.draw_text(x + 36, ry + 5, label, tc, x + SM_W - 8);
             ry += SM_ROW;
         }
         // Power row (shutdown / restart).
@@ -1046,15 +1075,15 @@ impl Wm {
             if hot {
                 fill_rounded(canvas, ix, iy, ICON_W, ICON_H, 6, shift(th.desktop_top, 30));
             }
-            // Rounded gradient tile with a glyph mark.
-            let tx = ix + (ICON_W - 40) / 2;
-            fill_rounded_gradient(canvas, tx, iy + 6, 40, 34, 7, shift(th.win_title_active, 30), th.win_title_active);
-            canvas.fill_rect(tx + 10, iy + 15, 20, 4, th.title_text);
-            canvas.fill_rect(tx + 10, iy + 22, 14, 4, darken(th.title_text, 30));
-            // Label centered-ish under the tile.
+            // The app's own icon, with a soft shadow under it.
+            let isz = crate::icons::size(true);
+            let tx = ix + (ICON_W - isz) / 2;
+            fill_rounded(canvas, tx + 2, iy + 5, isz, isz, 10, th.shadow);
+            draw_app_icon(canvas, i, tx, iy + 3, true);
+            // Label centered under the icon.
             let label = LAUNCH[i].1;
             let lw = label.len() as i32 * gfx::glyph_width() as i32;
-            canvas.draw_text(ix + (ICON_W - lw) / 2, iy + 46, label, th.title_text, ix + ICON_W);
+            canvas.draw_text(ix + (ICON_W - lw) / 2, iy + 3 + isz + 4, label, th.title_text, ix + ICON_W);
         }
     }
 
