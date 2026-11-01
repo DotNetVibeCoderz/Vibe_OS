@@ -35,6 +35,12 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M4 (increment 3): programs and processes on RISC-V.** RISC-V
+  user programs (written in Rust for now -- the C# compiler has no RISC-V
+  target yet) run as real processes under the same scheduler as on the PC and
+  ARM64: two programs share the CPU through timer preemption, a program can
+  start threads, and threads can wait on each other with a mutex. Every
+  program's memory is returned when it exits.
 - **Multi-arch M4 (increments 1-2): the RISC-V port starts.** The same
   kernel source now also builds for 64-bit RISC-V and boots on QEMU `virt`
   (OpenSBI, edk2, Limine): serial console, Device Tree, paging with an address

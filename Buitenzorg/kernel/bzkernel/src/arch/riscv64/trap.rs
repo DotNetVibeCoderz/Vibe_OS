@@ -11,7 +11,8 @@
 //! owns `tp`). Returning to U-mode re-arms `sscratch` and that slot.
 //!
 //! `sepc`/`sstatus` live in the frame because handlers may enable interrupts
-//! or switch tasks; a nested trap overwrites the CSRs.
+//! or switch tasks (syscalls run with interrupts on; a timer tick preempts
+//! U-mode code); a nested trap overwrites the CSRs.
 
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -69,7 +70,11 @@ bz_trap_return:
     addi t0, sp, 288             // the kernel stack top for the next trap
     sd tp, 0(t0)
     csrw sscratch, t0
-3:
+    j 4f
+3:  // Back to kernel code: keep this hart's tp (the CPU index), not the one
+    // saved when the trap was taken -- the task may have moved to another hart.
+    sd tp, 32(sp)
+4:
     .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     ld x\n, (\n*8)(sp)
     .endr
@@ -166,7 +171,16 @@ extern "C" fn bz_trap(f: &mut TrapFrame) {
             c.fetch_add(1, Ordering::Relaxed);
         }
         match cause & !INTERRUPT {
-            IRQ_S_TIMER => super::timer::on_tick(),
+            IRQ_S_TIMER => {
+                super::timer::on_tick();
+                // A tick may switch tasks (ring-3 code is always preemptible,
+                // kernel code only in the scheduler demo) -- as on x86/ARM64.
+                if super::cpu::id() == 0 {
+                    crate::task::preempt(from_user);
+                } else {
+                    crate::task::ap_timer(from_user);
+                }
+            }
             IRQ_S_SOFT => unsafe { asm!("csrci sip, 2", options(nomem, nostack)) },
             IRQ_S_EXT => {}
             other => crate::println!("[riscv] unexpected interrupt {}", other),

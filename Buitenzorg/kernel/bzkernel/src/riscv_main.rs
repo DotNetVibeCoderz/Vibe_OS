@@ -7,7 +7,10 @@
 // `allocator.rs`) over the RISC-V paging HAL, per-process address spaces,
 // and the SBI timer as the periodic tick. Increment 2: kernel-thread context
 // switch (with per-task F/D state) and user mode -- U-mode programs in their
-// own address space calling the kernel with `ECALL`, faults contained. The rest of the shared kernel joins
+// own address space calling the kernel with `ECALL`, faults contained.
+// Increment 3: ELF programs (Rust, `userland/riscv`; Limine boot modules) run
+// as processes of the shared scheduler (`task.rs`, `process.rs`) --
+// preemptive, with ring-3 threads and futexes. The rest of the shared kernel joins
 // as subsystems gain an `arch/riscv64` backend -- the path the ARM64 port
 // (M3) took.
 
@@ -15,13 +18,16 @@ mod allocator;
 mod arch;
 mod boot;
 mod dtb;
+mod elf;
 mod framebuffer;
 mod limine;
 mod logo;
 mod memory;
 mod platform;
+mod process;
+mod task;
 
-pub(crate) use arch::riscv64::{aspace, interrupts};
+pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode};
 pub(crate) use platform::virt::uart16550 as serial;
 
 /// Set once the interactive desktop owns the screen (as on the PC).
@@ -150,6 +156,10 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
 
     umode_self_test();
+    // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
+    // task joins, and programs run as preemptively scheduled processes.
+    task::init();
+    run_boot_programs(info);
 
     if timer_ok && uart.is_some() && info.loader == "limine" {
         println!(
@@ -159,9 +169,9 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG RISCV READY -- increments 1-2 (boot, traps, memory, address spaces, timer, context switch, U-mode + ECALL); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG RISCV READY -- increments 1-3 (boot, traps, memory, address spaces, timer, context switch, U-mode + ECALL, ELF programs, scheduler + processes + threads); the rest of the kernel follows");
     loop {
-        cpu::halt();
+        cpu::enable_and_halt();
     }
 }
 
@@ -371,48 +381,89 @@ fn context_self_test() {
 /// Exit code of a user program ended by a fault (as on x86 / ARM64).
 const FAULT_EXIT_CODE: u64 = 0xDEAD;
 
-/// The kernel stack pointer a running U-mode program returns to (boot-flow
-/// programs; the scheduler keeps one per task once it joins).
-static mut USER_KCTX: u64 = 0;
-static USER_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static USER_FAULT_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-
-fn exit_user(code: u64) -> ! {
-    USER_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
-    let kctx = unsafe { core::ptr::addr_of!(USER_KCTX).read() };
-    arch::riscv64::usermode::return_to_kernel(code, kctx)
-}
+/// What user programs wrote (DEBUG_WRITE), for the self-tests.
+static USER_OUTPUT: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
 
 /// `ECALL` from U-mode (a7 = number, a0..a2 = arguments; the result goes to
-/// a0). A minimal table until the shared `syscall.rs` joins: ABI_VERSION,
-/// DEBUG_WRITE (pointer validated like every ring-3 pointer), EXIT, TICKS,
-/// CLOCK_MONO.
-pub(crate) fn user_syscall(nr: u64, a0: u64, a1: u64, _a2: u64) -> u64 {
-    use bz_abi::sysno as n;
+/// a0; bz-abi numbers, the same table as on x86). Like x86's
+/// `syscall_dispatch_c`: clock reads take no lock; everything else runs under
+/// the Big Kernel Lock with interrupts enabled (the trap frame holds
+/// `sepc`/`sstatus`, so a nested interrupt or a task switch inside the
+/// syscall is safe). The shared `syscall.rs` replaces this table when the
+/// rest of the kernel joins.
+pub(crate) fn user_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::sysno;
     match nr {
-        n::ABI_VERSION => bz_abi::ABI_VERSION as u64,
-        n::DEBUG_WRITE => {
+        sysno::TICKS => return interrupts::ticks(),
+        sysno::CLOCK_MONO => return arch::cpu::timestamp(),
+        _ => {}
+    }
+    task::kernel_enter();
+    arch::cpu::enable_interrupts();
+    let r = user_dispatch(nr, a0, a1, a2);
+    arch::cpu::disable_interrupts();
+    task::kernel_exit();
+    r
+}
+
+fn user_dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::{syserr, sysno};
+    match nr {
+        sysno::ABI_VERSION => bz_abi::ABI_VERSION,
+        sysno::DEBUG_WRITE => {
             if a1 > 4096 || !memory::validate_user_range(a0, a1, false) {
-                return u64::MAX;
+                return syserr::INVAL;
             }
-            let mut buf = alloc::vec::Vec::with_capacity(a1 as usize);
-            for i in 0..a1 {
-                buf.push(unsafe { ((a0 + i) as *const u8).read_volatile() });
+            let bytes: alloc::vec::Vec<u8> = (0..a1).map(|i| unsafe { ((a0 + i) as *const u8).read_volatile() }).collect();
+            let text = core::str::from_utf8(&bytes).unwrap_or("<not UTF-8>");
+            print!("{}", text);
+            let mut out = USER_OUTPUT.lock();
+            if out.len() < 4096 {
+                out.push_str(text);
             }
-            print!("{}", core::str::from_utf8(&buf).unwrap_or("<non-UTF-8>"));
             a1
         }
-        n::EXIT => exit_user(a0),
-        n::TICKS => interrupts::ticks(),
-        n::CLOCK_MONO => arch::cpu::timestamp(),
-        _ => u64::MAX,
+        sysno::EXIT | sysno::THREAD_EXIT => usermode::exit_user(a0),
+        sysno::YIELD => {
+            task::yield_now();
+            0
+        }
+        // The generic user-memory PAL: same code as x86 and ARM64.
+        sysno::MMAP => memory::user_mmap(a0, a1),
+        sysno::MPROTECT => memory::user_mprotect(a0, a1, a2),
+        sysno::MUNMAP => memory::user_munmap(a0, a1),
+        // Threads + futexes: the shared scheduler.
+        sysno::THREAD_CREATE => {
+            if a0 == 0 || a2 == 0 {
+                return syserr::INVAL;
+            }
+            task::ensure_main_user_thread();
+            task::spawn_user_thread(a0, a1, a2)
+        }
+        sysno::THREAD_JOIN => {
+            while !task::is_finished(a0) {
+                task::yield_now();
+            }
+            0
+        }
+        sysno::THREAD_SELF => task::current_id(),
+        sysno::FUTEX_WAIT => {
+            if a0 % 4 != 0 || !memory::validate_user_range(a0, 4, false) {
+                return syserr::INVAL;
+            }
+            while task::futex_wait_if(a0, a1 as u32) {}
+            0
+        }
+        sysno::FUTEX_WAKE => task::futex_wake(a0, a1),
+        _ => syserr::NOSYS,
     }
 }
 
 /// A fatal exception in U-mode code: end that program (exit code 0xDEAD),
 /// like the x86 ring-3 #PF/#GP containment.
 pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64) -> ! {
-    if !USER_ACTIVE.load(core::sync::atomic::Ordering::SeqCst) {
+    if !usermode::user_active() {
         panic!("U-mode fault outside a user program: scause={} stval={:#x} sepc={:#x}", cause, addr, pc);
     }
     println!(
@@ -423,12 +474,14 @@ pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64) -> ! {
         addr
     );
     USER_FAULT_ADDR.store(addr, core::sync::atomic::Ordering::SeqCst);
-    exit_user(FAULT_EXIT_CODE)
+    task::kernel_enter();
+    usermode::exit_user(FAULT_EXIT_CODE)
 }
 
-/// Run `code` as a U-mode program on the boot flow, in a fresh address space:
-/// code page at 0x40_0000 (user, read-only, executable), one stack page
-/// below 0x7000_0000. Returns (exit code, frames leaked by the space).
+/// Run `code` as a U-mode program on the boot flow itself (before the
+/// scheduler starts), in a fresh address space: code page at 0x40_0000
+/// (user, read-only, executable), one stack page below 0x7000_0000. Returns
+/// (exit code, frames leaked by the space).
 fn run_umode(id: u64, code: &[u8]) -> Option<(u64, i64)> {
     use arch::paging::{self, Flags};
     const ENTRY: u64 = 0x40_0000;
@@ -448,10 +501,8 @@ fn run_umode(id: u64, code: &[u8]) -> Option<(u64, i64)> {
         unsafe { core::ptr::write_bytes(memory::phys_to_virt(st) as *mut u8, 0, 4096) };
         paging::map(&mut ctx.mapper, &mut ctx.frames, STACK_TOP - 4096, st, Flags { write: true, user: true, exec: false }).ok()
     })?;
-    arch::riscv64::usermode::sync_icache();
-    USER_ACTIVE.store(true, core::sync::atomic::Ordering::SeqCst);
-    let code = arch::riscv64::usermode::enter_user_with(ENTRY, STACK_TOP, 0, core::ptr::addr_of_mut!(USER_KCTX));
-    arch::cpu::enable_interrupts();
+    usermode::sync_icache();
+    let code = usermode::enter_user(ENTRY, STACK_TOP);
     aspace::install(aspace::kernel());
     aspace::destroy(space);
     Some((code, memory::frames_in_use() as i64 - before))
@@ -464,12 +515,12 @@ fn run_umode(id: u64, code: &[u8]) -> Option<(u64, i64)> {
 /// fault, not crash the kernel.
 fn umode_self_test() {
     use arch::riscv64::trap;
-    let (demo, fault) = arch::riscv64::usermode::demo_programs();
+    let (demo, fault) = usermode::demo_programs();
     let (irq0, ecalls0) = trap::user_stats();
     let r1 = run_umode(3000, demo);
     let (irq1, ecalls1) = trap::user_stats();
     let r2 = run_umode(3001, fault);
-    let want = ((bz_abi::ABI_VERSION as u64) << 16) + 5050;
+    let want = (bz_abi::ABI_VERSION << 16) + 5050;
     let addr = USER_FAULT_ADDR.load(core::sync::atomic::Ordering::SeqCst);
     println!(
         "[riscv] U-mode program 1: exit {:#x} (want {:#x}), {} ECALLs, {} timer interrupts taken in U-mode, leaked {:?} frames; program 2: exit {:#x}, fault address {:#x}, leaked {:?}",
@@ -489,6 +540,166 @@ fn umode_self_test() {
         && addr == 0xFFFF_D000_0000_0000;
     if ok {
         println!("[kernel] MILESTONE: RISCV UMODE OK (user mode in its own address space: ECALL syscalls, timer interrupts from U-mode, FP in U-mode, EXIT back to the kernel, a kernel-address read terminates only the program)");
+    }
+}
+
+// ---- Processes (the shared scheduler) -----------------------------------------
+
+/// The PC kernel's `app.rs` launches programs from /disk with the window
+/// system around them; until those reach RISC-V this is its core (as ARM64's
+/// was at the same stage): start an ELF image as its own preemptively
+/// scheduled process, wait for it, clean up.
+mod app {
+    use crate::{aspace, elf, memory, process, task};
+
+    const USER_STACK_BASE: u64 = 0x7000_0000 - USER_STACK_PAGES * 4096;
+    const USER_STACK_PAGES: u64 = 32; // 128 KiB
+    const KILLED_EXIT_CODE: u64 = 0xDEAD;
+
+    /// Start `image` as a process named `name`; returns its pid (= its space id).
+    pub fn spawn_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
+        let pid = process::app_start(name);
+        let space = match aspace::create(pid) {
+            Ok(s) => s,
+            Err(e) => {
+                process::app_exit(pid, u64::MAX);
+                return Err(e);
+            }
+        };
+        let prev = task::current_space();
+        aspace::install(space);
+        let loaded = memory::with_ctx(|ctx| {
+            let program = elf::load(image, ctx)?;
+            let (stack_top, _) = memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
+            Ok::<_, &'static str>((program.entry, stack_top))
+        });
+        aspace::install(prev);
+        crate::usermode::sync_icache();
+        match loaded {
+            Ok((entry, stack_top)) => {
+                task::spawn_process(entry, stack_top, space);
+                Ok(pid)
+            }
+            Err(e) => {
+                aspace::destroy(space);
+                process::app_exit(pid, u64::MAX);
+                Err(e)
+            }
+        }
+    }
+
+    /// Block until process `pid` exits; its exit code.
+    pub fn wait(pid: u64) -> u64 {
+        while task::block_while(process::wait_key(pid), || process::is_alive(pid)) {}
+        process::exit_code(pid).unwrap_or(u64::MAX)
+    }
+
+    fn destroy_when_home(space: aspace::Space) {
+        if task::wait_space_stopped(space.id) {
+            aspace::destroy(space);
+        }
+    }
+
+    /// On the process's own task once its program exited (scheduler hook).
+    pub fn process_exited(pid: u64, code: u64) {
+        let space = task::current_space();
+        task::detach_current_from_space(pid);
+        destroy_when_home(space);
+        process::app_exit(pid, code);
+    }
+
+    /// PROC_KILL.
+    pub fn kill(pid: u64) -> bool {
+        let Some(space) = task::kill_space(pid) else { return false };
+        destroy_when_home(space);
+        process::app_exit(pid, KILLED_EXIT_CODE);
+        true
+    }
+}
+
+/// Run one program as a process and wait for it: (exit code, its output).
+fn run_program(name: &str, image: &[u8]) -> Option<(u64, alloc::string::String)> {
+    USER_OUTPUT.lock().clear();
+    println!("[riscv] --- program '{}' ({} bytes, ELF from a Limine module) ---", name, image.len());
+    match app::spawn_image(name, image) {
+        Ok(pid) => {
+            let code = app::wait(pid);
+            println!("[riscv] --- '{}' (pid {}) exited with code {:#x} ---", name, pid, code);
+            Some((code, USER_OUTPUT.lock().clone()))
+        }
+        Err(e) => {
+            println!("[riscv] '{}': {}", name, e);
+            None
+        }
+    }
+}
+
+/// Run the RISC-V ELF programs (`userland/riscv`, Rust) Limine handed over as
+/// modules, as processes of the shared scheduler (`task.rs` + `process.rs`,
+/// the same code as on x86 and ARM64):
+/// - `hello` (the generic ELF loader + a process of its own), `mem` (the
+///   mmap / mprotect / munmap PAL incl. reserve + commit on demand);
+/// - **two copies of `mproc` at once**: each spins ~1.5 s without yielding,
+///   keeps a running sum in an FP register and stamps its own mmap page at
+///   the same virtual address -- they can only both finish with exact
+///   results if the timer preempts U-mode and every switch saves FP state
+///   and swaps `satp`;
+/// - `thread` (ring-3 threads + join) and `sync` (futex-backed mutex);
+/// - every frame the processes used comes back.
+fn run_boot_programs(info: &boot::BootInfo) {
+    let find = |name: &str| info.modules().iter().find(|m| m.name() == name).map(|m| m.bytes());
+    if find("hello").is_none() {
+        println!("[riscv] no RISC-V user programs among the boot modules");
+        return;
+    }
+    let frames0 = memory::frames_in_use();
+    let mut all_ok = true;
+
+    if let Some(image) = find("hello") {
+        let r = run_program("hello", image);
+        let ok = matches!(&r, Some((0, out)) if out.contains("Hello from Rust on RISC-V"));
+        all_ok &= ok;
+        if ok {
+            println!("[kernel] MILESTONE: RISCV ELF OK (a RISC-V ELF loaded by the generic elf.rs, run in U-mode as a process of the shared scheduler)");
+        }
+    }
+    if let Some(image) = find("mem") {
+        let ok = matches!(run_program("mem", image), Some((0, _)));
+        all_ok &= ok;
+        if ok {
+            println!("[kernel] MILESTONE: RISCV USERMEM OK (MMAP/MPROTECT/MUNMAP from U-mode: rw region, read-only, unmap, 64 MiB reserve + commit on demand)");
+        }
+    }
+    if let Some(image) = find("mproc") {
+        let p0 = task::user_preemptions();
+        let t0 = arch::cpu::timestamp();
+        let pids: alloc::vec::Vec<u64> =
+            ["mproc-a", "mproc-b"].iter().filter_map(|n| app::spawn_image(n, image).ok()).collect();
+        let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| app::wait(p)).collect();
+        let preempts = task::user_preemptions() - p0;
+        let ms = (arch::cpu::timestamp() - t0) * 1000 / arch::riscv64::cpu::counter_hz().max(1);
+        println!("[riscv] mproc x2: exit codes {:?}, {} timer preemptions of U-mode code, {} ms", codes, preempts, ms);
+        let ok = pids.len() == 2 && codes.iter().all(|&c| c == 0) && preempts >= 10;
+        all_ok &= ok;
+        if ok {
+            println!("[kernel] MILESTONE: RISCV MULTIPROC OK (shared scheduler on RISC-V: two processes preempted by the timer in U-mode, each in its own satp space with its own FP state)");
+        }
+    }
+    for (name, milestone) in [
+        ("thread", "RISCV THREAD OK (two ring-3 threads of one process share its address space; THREAD_CREATE/JOIN/EXIT)"),
+        ("sync", "RISCV SYNC OK (futex-backed mutex under contention: FUTEX_WAIT blocks, FUTEX_WAKE resumes, mutual exclusion held)"),
+    ] {
+        let Some(image) = find(name) else { continue };
+        let ok = matches!(run_program(name, image), Some((0, _)));
+        all_ok &= ok;
+        if ok {
+            println!("[kernel] MILESTONE: {}", milestone);
+        }
+    }
+    let leaked = memory::frames_in_use() as i64 - frames0 as i64;
+    println!("[riscv] programs done; frames leaked: {}", leaked);
+    if all_ok && leaked == 0 {
+        println!("[kernel] MILESTONE: RISCV PROCESSES OK (every program exited 0, every frame returned)");
     }
 }
 

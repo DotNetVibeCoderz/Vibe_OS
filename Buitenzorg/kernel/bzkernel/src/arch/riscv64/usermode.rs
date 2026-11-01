@@ -1,14 +1,17 @@
 //! U-mode (user mode) on RISC-V -- the counterpart of x86 `usermode.rs` and
-//! the ARM64 EL0 code:
+//! the ARM64 EL0 code, with the same API for the scheduler (`task.rs`):
 //!
-//! - [`enter_user_with`] pushes the kernel's callee-saved registers on the
-//!   current kernel stack and records that stack pointer in `kctx`; the 16
-//!   bytes just below it become the **trap stack top** (`sscratch`, holding
-//!   the CPU index for `tp`), so traps from this program land right under the
-//!   saved frame. Then `sepc` = entry, `sstatus.SPP` = U, `SPIE` = 1, every
+//! - [`enter_user_thread`] pushes the kernel's callee-saved registers on the
+//!   task's own kernel stack and records that stack pointer in the task's
+//!   `kctx` (`task::current_kctx_ptr`); the 16 bytes just below it become the
+//!   **trap stack top** (`sscratch`, holding the CPU index for `tp`), so traps
+//!   from this program land right under the saved frame -- every task takes
+//!   its syscalls and interrupts on its own kernel stack, which x86 must
+//!   arrange through TSS rsp0 ([`set_syscall_kstack`] is a no-op here). Then
+//!   `sepc` = entry, `sstatus.SPP` = U, `SPIE` = 1, a0 = the argument, every
 //!   other register cleared, `sret`;
-//! - [`return_to_kernel`] (EXIT, or a fatal fault) jumps back to that saved
-//!   stack, so `enter_user_with` returns the exit code.
+//! - [`exit_user`] (EXIT / THREAD_EXIT, or a fatal fault) jumps back to that
+//!   saved stack, so `enter_user_thread` returns the exit code.
 //!
 //! Syscalls: `ECALL`, a7 = number, a0..a2 = arguments, result in a0 (the
 //! Linux RISC-V convention, bz-abi numbers).
@@ -165,15 +168,38 @@ extern "C" {
     static bz_user_fault_end: u8;
 }
 
-/// Run user code at `entry(arg)` on `user_stack_top` until it exits; `kctx`
-/// receives the kernel stack pointer [`return_to_kernel`] resumes. Returns the
-/// exit code (interrupts are left disabled).
-pub fn enter_user_with(entry: u64, user_stack_top: u64, arg: u64, kctx: *mut u64) -> u64 {
-    unsafe { bz_enter_user(entry, user_stack_top, arg, kctx) }
+/// Nothing per CPU to program: `sscratch` already points at the task's
+/// kernel stack while it runs U-mode.
+pub fn set_syscall_kstack(_cpu: usize, _top: u64) {}
+
+/// True while the current task's U-mode program is alive (routes EXIT).
+pub fn user_active() -> bool {
+    crate::task::user_active()
 }
 
-/// Resume the kernel where `enter_user_with` saved `kctx`, returning `code`.
-pub fn return_to_kernel(code: u64, kctx: u64) -> ! {
+/// Run user code (the current task's program) until it exits; interrupts
+/// are enabled again afterwards (the boot flow's direct use).
+pub fn enter_user(entry: u64, user_stack_top: u64) -> u64 {
+    let code = enter_user_thread(entry, user_stack_top, 0);
+    super::cpu::enable_interrupts();
+    code
+}
+
+/// Run a user thread at `entry(arg)` on `user_stack_top`; returns its exit
+/// code. Inside the scheduler (which manages the interrupt mask).
+pub fn enter_user_thread(entry: u64, user_stack_top: u64, arg: u64) -> u64 {
+    crate::task::set_user_active(true);
+    let kctx = crate::task::current_kctx_ptr();
+    crate::task::kernel_exit(); // U-mode runs without the Big Kernel Lock
+    let code = unsafe { bz_enter_user(entry, user_stack_top, arg, kctx) };
+    crate::task::set_user_active(false);
+    code
+}
+
+/// End the current U-mode program with `code` (EXIT / THREAD_EXIT / a fault):
+/// resume the kernel where `enter_user_thread` was called.
+pub fn exit_user(code: u64) -> ! {
+    let kctx = unsafe { crate::task::current_kctx_ptr().read() };
     unsafe { bz_return_to_kernel(code, kctx) }
 }
 

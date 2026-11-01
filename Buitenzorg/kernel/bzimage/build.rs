@@ -438,16 +438,64 @@ fn main() {
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
 
     // Multi-arch M4: the RISC-V kernel (riscv64imac-unknown-none-elf) on a
-    // Limine image for QEMU `virt` + OpenSBI + edk2. Optional. No RISC-V user
-    // programs yet: the /disk files without the x86 ELFs.
+    // Limine image for QEMU `virt` + OpenSBI + edk2. Optional. The /disk
+    // files without the x86 ELFs, plus the RISC-V user programs
+    // (userland/riscv, Rust -- bflat has no RISC-V target), each also handed
+    // over by Limine as a module.
     let rv_kernel = manifest_dir().join("..").join("target").join("riscv64imac-unknown-none-elf").join("release").join("bzkernel");
     println!("cargo:rerun-if-changed={}", rv_kernel.display());
     let rv_path = out_dir.join("buitenzorg-riscv64.img");
-    let rv_files: Vec<(String, Vec<u8>)> = files.iter().filter(|(n, _)| !n.to_lowercase().ends_with(".elf")).cloned().collect();
+    let mut rv_files: Vec<(String, Vec<u8>)> = files.iter().filter(|(n, _)| !n.to_lowercase().ends_with(".elf")).cloned().collect();
+    let mut rv_modules = String::new();
+    for (stem, bytes) in build_riscv_programs(&out_dir) {
+        let file = format!("{}.ELF", stem.to_uppercase());
+        rv_modules.push_str(&format!("    module_path: boot():/{file}
+    module_string: {stem}
+"));
+        rv_files.push((file, bytes));
+    }
     let rv_ok = rv_kernel.exists()
-        && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, "", &rv_path).unwrap_or(false);
+        && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, &rv_modules, &rv_path).unwrap_or(false);
     println!("cargo:rustc-env=RISCV64_IMAGE={}", if rv_ok { rv_path.display().to_string() } else { String::new() });
 
     println!("cargo:rustc-env=UEFI_IMAGE={}", uefi_path.display());
     println!("cargo:rustc-env=BIOS_IMAGE={}", bios_path.display());
+}
+
+/// The RISC-V user programs (`userland/riscv/*.rs`, sharing `rt.rs`): each is
+/// compiled by this toolchain's rustc for riscv64imac-unknown-none-elf and
+/// linked by rust-lld at 0x400000 (`user.ld`). Returns (name, ELF bytes);
+/// a program that fails to build is skipped with a warning.
+fn build_riscv_programs(out_dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let dir = manifest_dir().join("..").join("..").join("userland").join("riscv");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
+    let ld = dir.join("user.ld");
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(&dir) else { return out };
+    let mut srcs: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().map_or(false, |x| x == "rs")).collect();
+    srcs.sort();
+    for src in srcs {
+        println!("cargo:rerun-if-changed={}", src.display());
+        let stem = src.file_stem().unwrap().to_string_lossy().to_string();
+        if stem == "rt" {
+            continue;
+        }
+        let elf = out_dir.join(format!("riscv-{stem}.elf"));
+        let status = std::process::Command::new(&rustc)
+            .args(["--edition", "2021", "--target", "riscv64imac-unknown-none-elf", "-C", "opt-level=2", "-C", "panic=abort"])
+            .args(["-C", "relocation-model=static", "-C", "strip=symbols", "-C", "link-arg=--no-relax"])
+            .arg("-C")
+            .arg(format!("link-arg=-T{}", ld.display()))
+            .arg("-o")
+            .arg(&elf)
+            .arg(&src)
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .status();
+        match status.ok().filter(|s| s.success()).and_then(|_| std::fs::read(&elf).ok()) {
+            Some(bytes) => out.push((stem, bytes)),
+            None => println!("cargo:warning=RISC-V user program {stem} failed to build"),
+        }
+    }
+    out
 }

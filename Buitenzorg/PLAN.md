@@ -891,7 +891,7 @@ mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
    `linux-arm64` + shim `bzstart.rs` versi aarch64 (`svc #0`).
 5. **M4 — RISC-V (`riscv64gc-unknown-none-elf`, QEMU `virt` + OpenSBI).**
    16550-MMIO, PLIC + timer SBI, Sv39/Sv48, U/S-mode + `ECALL`, SBI HSM.
-   *(Increment 1 ✓ 2026-11-02: boot OpenSBI → edk2 → Limine → S-mode, NS16550 dari DTB, trap `stvec`, memori + heap di atas Sv48, address space per proses, timer SBI — `RISCV BOOT OK`. Increment 2 ✓: context switch + U-mode + `ECALL`, fault terisolasi — `RISCV UMODE OK`. Berikutnya: ELF + program, scheduler bersama, virtio-mmio + PLIC, kernel generik + desktop, SMP lewat SBI HSM.)*
+   *(Increment 1 ✓ 2026-11-02: boot OpenSBI → edk2 → Limine → S-mode, NS16550 dari DTB, trap `stvec`, memori + heap di atas Sv48, address space per proses, timer SBI — `RISCV BOOT OK`. Increment 2 ✓: context switch + U-mode + `ECALL`, fault terisolasi — `RISCV UMODE OK`. Increment 3 ✓: program ELF (Rust) sebagai proses preemptif di scheduler bersama, thread + futex — `RISCV MULTIPROC OK`, `RISCV PROCESSES OK`. Berikutnya: virtio-mmio + PLIC, kernel generik + desktop, SMP lewat SBI HSM.)*
    **Batas jujur:** .NET NativeAOT untuk RISC-V belum didukung resmi — app
    pertama di RISC-V berjalan lewat runtime JS/TS/Python (netral arsitektur);
    C# menyusul saat toolchain-nya siap.
