@@ -117,6 +117,11 @@ struct KernelAddressResponse {
     virtual_base: u64,
 }
 
+/// RISC-V: the hart id of the bootstrap hart (`limine_riscv_bsp_hartid_request`).
+#[cfg(target_arch = "riscv64")]
+#[used]
+static mut BSP_HARTID: Request<AddrResponse> = req(0x1369359f025525f9, 0x2ff2a56178391bb6, ());
+
 #[used]
 static mut MODULES: Request<ModuleResponse> = req(0x3e7e279702be32af, 0xca1c4f3bd1280cee, ());
 
@@ -194,6 +199,10 @@ extern "C" fn limine_entry() -> ! {
     // Base revision >= 4: the RSDP is an HHDM virtual address.
     info.firmware.rsdp = response(addr_of!(RSDP)).map(|r| r.address - hhdm);
     info.firmware.dtb = response(addr_of!(DTB)).filter(|r| r.address != 0).map(|r| r.address - hhdm);
+    #[cfg(target_arch = "riscv64")]
+    {
+        info.bsp_hartid = response(addr_of!(BSP_HARTID)).map(|r| r.address);
+    }
     info.kernel_base = response(addr_of!(KERNEL_ADDRESS)).map(|r| (r.physical_base, r.virtual_base));
     // Modules (`module_path` in limine.conf), named by their `module_string`
     // or else by the file name.

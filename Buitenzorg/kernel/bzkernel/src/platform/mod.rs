@@ -6,5 +6,5 @@
 pub mod pc;
 
 /// QEMU `virt` / Device-Tree boards (ARM64 port): MMIO devices found via the DTB.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 pub mod virt;

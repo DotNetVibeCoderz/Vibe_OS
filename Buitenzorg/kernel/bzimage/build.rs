@@ -437,6 +437,17 @@ fn main() {
         && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &arm_path).unwrap_or(false);
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
 
+    // Multi-arch M4: the RISC-V kernel (riscv64imac-unknown-none-elf) on a
+    // Limine image for QEMU `virt` + OpenSBI + edk2. Optional. No RISC-V user
+    // programs yet: the /disk files without the x86 ELFs.
+    let rv_kernel = manifest_dir().join("..").join("target").join("riscv64imac-unknown-none-elf").join("release").join("bzkernel");
+    println!("cargo:rerun-if-changed={}", rv_kernel.display());
+    let rv_path = out_dir.join("buitenzorg-riscv64.img");
+    let rv_files: Vec<(String, Vec<u8>)> = files.iter().filter(|(n, _)| !n.to_lowercase().ends_with(".elf")).cloned().collect();
+    let rv_ok = rv_kernel.exists()
+        && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, "", &rv_path).unwrap_or(false);
+    println!("cargo:rustc-env=RISCV64_IMAGE={}", if rv_ok { rv_path.display().to_string() } else { String::new() });
+
     println!("cargo:rustc-env=UEFI_IMAGE={}", uefi_path.display());
     println!("cargo:rustc-env=BIOS_IMAGE={}", bios_path.display());
 }

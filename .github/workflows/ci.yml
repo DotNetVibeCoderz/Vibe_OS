@@ -22,6 +22,11 @@ jobs:
       - name: Install QEMU
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-efi-aarch64
 
+      # Multi-arch M4: RISC-V QEMU + edk2 (optional -- the [riscv64] smoke
+      # step skips itself when the firmware is missing).
+      - name: Install QEMU (RISC-V)
+        run: sudo apt-get install -y qemu-system-misc qemu-efi-riscv64 || echo "RISC-V firmware not available"
+
       - name: Install Rust toolchain (pinned by kernel/rust-toolchain.toml)
         working-directory: Buitenzorg/kernel
         run: rustup show
@@ -48,6 +53,11 @@ jobs:
       - name: Build ARM64 kernel
         working-directory: Buitenzorg/kernel
         run: cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat
+
+      # Multi-arch M4: the RISC-V kernel (dist/buitenzorg-riscv64.img).
+      - name: Build RISC-V kernel
+        working-directory: Buitenzorg/kernel
+        run: cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf
 
       - name: Build kernel + boot images
         working-directory: Buitenzorg/kernel

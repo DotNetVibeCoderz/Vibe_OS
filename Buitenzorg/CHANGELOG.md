@@ -35,6 +35,12 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M4 (increments 1-2): the RISC-V port starts.** The same
+  kernel source now also builds for 64-bit RISC-V and boots on QEMU `virt`
+  (OpenSBI, edk2, Limine): serial console, Device Tree, paging with an address
+  space per process, the timer, kernel-thread switching, and user-mode
+  programs calling the kernel with `ECALL` -- a faulting program is ended
+  without taking the kernel down.
 - **Multi-arch M3 (increment 9): SMP on ARM64 — the ARM64 port is complete.**
   Secondary CPUs start through PSCI and join the shared scheduler; processes
   run in parallel on all cores (4 copies of a CPU-bound program on 4 CPUs at

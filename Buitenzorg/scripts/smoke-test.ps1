@@ -272,4 +272,34 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
     Write-Host "smoke [arm64]: skipped (needs qemu-system-aarch64, edk2-aarch64-code.fd and dist\buitenzorg-arm64.img)"
 }
 
+# RISC-V (multi-arch M4): the RISC-V kernel through Limine on QEMU `virt`
+# (OpenSBI -> edk2 in pflash -> Limine; acpi=off so the DTB is handed over).
+# Needs qemu-system-riscv64 + share\edk2-riscv-code.fd next to the x86 QEMU.
+$qemuRv = Join-Path (Split-Path -Parent $qemu) "qemu-system-riscv64.exe"
+$rvFw = Join-Path (Split-Path -Parent $qemu) "share\edk2-riscv-code.fd"
+$rvVarsSrc = Join-Path (Split-Path -Parent $qemu) "share\edk2-riscv-vars.fd"
+$rvImage = Join-Path $root "dist\buitenzorg-riscv64.img"
+if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and (Test-Path $rvImage)) {
+    $log = Join-Path $root "dist\boot-riscv64.log"
+    $rvVars = Join-Path $root "dist\riscv64-vars.fd"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    Copy-Item $rvVarsSrc $rvVars -Force
+    $qargs = @('-M', 'virt,acpi=off', '-cpu', 'rv64', '-m', '512M',
+               '-drive', "`"if=pflash,format=raw,unit=0,file=$rvFw,readonly=on`"",
+               '-drive', "`"if=pflash,format=raw,unit=1,file=$rvVars`"",
+               '-global', 'virtio-mmio.force-legacy=false',
+               '-drive', "`"id=d0,format=raw,file=$rvImage,if=none`"", '-device', 'virtio-blk-device,drive=d0',
+               '-device', 'ramfb', '-display', 'none', '-serial', "file:$log", '-no-reboot')
+    $p = Start-Process -FilePath $qemuRv -ArgumentList $qargs -PassThru
+    foreach ($i in 1..90) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "RISCV READY" -Quiet)) { break }
+    }
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
+    Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL"
+} else {
+    Write-Host "smoke [riscv64]: skipped (needs qemu-system-riscv64, edk2-riscv-code.fd/-vars.fd and dist\buitenzorg-riscv64.img)"
+}
+
 Write-Host "SMOKE TEST PASSED: ide/ahci/nvme/usb" -ForegroundColor Green

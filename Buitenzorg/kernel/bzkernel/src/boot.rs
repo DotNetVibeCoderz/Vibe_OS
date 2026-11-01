@@ -105,6 +105,9 @@ pub struct BootInfo {
     /// says (Limine): code that runs with the MMU off (an AP trampoline)
     /// needs physical addresses.
     pub kernel_base: Option<(u64, u64)>,
+    /// RISC-V: hart id of the bootstrap hart (Limine's BSP-hartid response).
+    #[cfg_attr(not(target_arch = "riscv64"), allow(dead_code))]
+    pub bsp_hartid: Option<u64>,
     modules: [Module; MAX_MODULES],
     module_count: usize,
 }
@@ -120,6 +123,7 @@ impl BootInfo {
             framebuffer: None,
             firmware: Firmware { rsdp: None, dtb: None },
             kernel_base: None,
+            bsp_hartid: None,
             modules: [Module { name: [0; 32], name_len: 0, addr: 0, size: 0 }; MAX_MODULES],
             module_count: 0,
         }

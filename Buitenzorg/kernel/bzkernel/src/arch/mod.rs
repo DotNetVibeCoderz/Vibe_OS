@@ -19,6 +19,9 @@ pub mod x86;
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
 
+#[cfg(target_arch = "riscv64")]
+pub mod riscv64;
+
 /// Kernel-thread context switching: per-task FPU state, the initial frame of
 /// a new task, and the stack switch itself.
 pub mod context {
@@ -26,6 +29,8 @@ pub mod context {
     pub use super::x86::context::{prepare_stack, switch, FpuState};
     #[cfg(target_arch = "aarch64")]
     pub use super::aarch64::context::{prepare_stack, switch, FpuState};
+    #[cfg(target_arch = "riscv64")]
+    pub use super::riscv64::context::{prepare_stack, switch, FpuState};
 }
 
 /// Page tables: map / unmap / protect 4 KiB pages with neutral `Flags`, the
@@ -38,6 +43,11 @@ pub mod paging {
     };
     #[cfg(target_arch = "aarch64")]
     pub use super::aarch64::paging::{
+        init, init_user_half, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
+        KERNEL_HEAP_BASE, MMIO_BASE,
+    };
+    #[cfg(target_arch = "riscv64")]
+    pub use super::riscv64::paging::{
         init, init_user_half, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
         KERNEL_HEAP_BASE, MMIO_BASE,
     };
@@ -64,6 +74,8 @@ pub mod cpu {
         x86_64::instructions::hlt();
         #[cfg(target_arch = "aarch64")]
         super::aarch64::cpu::halt();
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::cpu::halt();
     }
 
     /// Enable interrupts and halt as one step (no interrupt can slip in
@@ -74,6 +86,8 @@ pub mod cpu {
         x86_64::instructions::interrupts::enable_and_hlt();
         #[cfg(target_arch = "aarch64")]
         super::aarch64::cpu::enable_and_halt();
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::cpu::enable_and_halt();
     }
 
     /// True if maskable interrupts are enabled on this CPU.
@@ -83,6 +97,8 @@ pub mod cpu {
         return x86_64::instructions::interrupts::are_enabled();
         #[cfg(target_arch = "aarch64")]
         return super::aarch64::cpu::interrupts_enabled();
+        #[cfg(target_arch = "riscv64")]
+        return super::riscv64::cpu::interrupts_enabled();
     }
 
     /// Enable maskable interrupts on this CPU.
@@ -92,6 +108,8 @@ pub mod cpu {
         x86_64::instructions::interrupts::enable();
         #[cfg(target_arch = "aarch64")]
         super::aarch64::cpu::enable_interrupts();
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::cpu::enable_interrupts();
     }
 
     /// Disable maskable interrupts on this CPU.
@@ -101,6 +119,8 @@ pub mod cpu {
         x86_64::instructions::interrupts::disable();
         #[cfg(target_arch = "aarch64")]
         super::aarch64::cpu::disable_interrupts();
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::cpu::disable_interrupts();
     }
 
     /// Run `f` with interrupts disabled, restoring the previous state after.
@@ -110,6 +130,8 @@ pub mod cpu {
         return x86_64::instructions::interrupts::without_interrupts(f);
         #[cfg(target_arch = "aarch64")]
         return super::aarch64::cpu::without_interrupts(f);
+        #[cfg(target_arch = "riscv64")]
+        return super::riscv64::cpu::without_interrupts(f);
     }
 
     /// A monotonic, high-resolution cycle counter (TSC on x86; CNTVCT on
@@ -120,6 +142,8 @@ pub mod cpu {
         return unsafe { core::arch::x86_64::_rdtsc() };
         #[cfg(target_arch = "aarch64")]
         return super::aarch64::cpu::timestamp();
+        #[cfg(target_arch = "riscv64")]
+        return super::riscv64::cpu::timestamp();
     }
 
     /// Index of the CPU running this code (0 = the bootstrap CPU).
@@ -129,6 +153,8 @@ pub mod cpu {
         return super::x86::smp::cpu_index();
         #[cfg(target_arch = "aarch64")]
         return super::aarch64::cpu::id();
+        #[cfg(target_arch = "riscv64")]
+        return super::riscv64::cpu::id();
     }
 
     /// Invalidate every non-global TLB entry on this CPU.
@@ -138,5 +164,7 @@ pub mod cpu {
         x86_64::instructions::tlb::flush_all();
         #[cfg(target_arch = "aarch64")]
         super::aarch64::cpu::flush_tlb();
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::cpu::flush_tlb();
     }
 }

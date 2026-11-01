@@ -17,6 +17,8 @@ const BIOS_IMAGE: &str = env!("BIOS_IMAGE");
 const LIMINE_IMAGE: &str = env!("LIMINE_IMAGE");
 /// The ARM64 kernel on a Limine UEFI image (empty unless it was built).
 const ARM64_IMAGE: &str = env!("ARM64_IMAGE");
+/// The RISC-V kernel on a Limine UEFI image (empty unless it was built).
+const RISCV64_IMAGE: &str = env!("RISCV64_IMAGE");
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +42,11 @@ fn main() {
             let arm = dir.join("buitenzorg-arm64.img");
             std::fs::copy(ARM64_IMAGE, &arm).expect("copy arm64 image");
             println!("ARM64 (Limine, UEFI) image: {}", arm.display());
+        }
+        if !RISCV64_IMAGE.is_empty() {
+            let rv = dir.join("buitenzorg-riscv64.img");
+            std::fs::copy(RISCV64_IMAGE, &rv).expect("copy riscv64 image");
+            println!("RISC-V (Limine, UEFI) image: {}", rv.display());
         }
         return;
     }

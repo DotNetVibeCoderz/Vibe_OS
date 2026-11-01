@@ -225,4 +225,32 @@ else
   echo "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
 fi
 
+# RISC-V (multi-arch M4): the RISC-V kernel through Limine on QEMU `virt`
+# (OpenSBI -> edk2 in pflash -> Limine; acpi=off so the DTB is handed over).
+qemu_rv="$(command -v qemu-system-riscv64 || true)"
+rv_code=""; rv_vars=""
+for d in /usr/share/qemu-efi-riscv64 /usr/share/qemu; do
+  if [ -f "$d/RISCV_VIRT_CODE.fd" ] && [ -f "$d/RISCV_VIRT_VARS.fd" ]; then rv_code="$d/RISCV_VIRT_CODE.fd"; rv_vars="$d/RISCV_VIRT_VARS.fd"; break; fi
+  if [ -f "$d/edk2-riscv-code.fd" ] && [ -f "$d/edk2-riscv-vars.fd" ]; then rv_code="$d/edk2-riscv-code.fd"; rv_vars="$d/edk2-riscv-vars.fd"; break; fi
+done
+if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64.img" ]; then
+  log="$root/dist/boot-riscv64.log"
+  rm -f "$log"
+  cp "$rv_vars" "$root/dist/riscv64-vars.fd"
+  timeout --foreground 120 "$qemu_rv" -M virt,acpi=off -cpu rv64 -m 512M \
+    -drive "if=pflash,format=raw,unit=0,file=$rv_code,readonly=on" -drive "if=pflash,format=raw,unit=1,file=$root/dist/riscv64-vars.fd" \
+    -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-riscv64.img,if=none" \
+    -device virtio-blk-device,drive=d0 -device ramfb -display none -serial "file:$log" -no-reboot &
+  qpid=$!
+  for _ in $(seq 90); do
+    sleep 1
+    grep -q "RISCV READY" "$log" 2>/dev/null && break
+  done
+  kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
+  require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" "MILESTONE: RISCV MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: RISCV ASPACE OK" "MILESTONE: RISCV CONTEXT OK" "MILESTONE: RISCV TIMER OK" "Hello from U-mode" "MILESTONE: RISCV UMODE OK" "MILESTONE: RISCV BOOT OK" "BUITENZORG RISCV READY"
+  echo "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL"
+else
+  echo "smoke [riscv64]: skipped (needs qemu-system-riscv64, RISC-V edk2 firmware (qemu-efi-riscv64) and dist/buitenzorg-riscv64.img)"
+fi
+
 echo "SMOKE TEST PASSED: ide/ahci/nvme/usb"

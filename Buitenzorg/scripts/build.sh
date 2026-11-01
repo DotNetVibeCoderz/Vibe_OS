@@ -21,6 +21,9 @@ echo "==> kernel (Rust)"
 # dist/buitenzorg-arm64.img when it exists). Non-fatal.
 (cd "$root/kernel" && cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat) \
   || echo "==> ARM64 kernel build failed; no ARM64 image"
+# Multi-arch M4: the RISC-V kernel (-> dist/buitenzorg-riscv64.img). Non-fatal.
+(cd "$root/kernel" && cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf) \
+  || echo "==> RISC-V kernel build failed; no RISC-V image"
 (cd "$root/kernel" && cargo build --release && cargo run --release -p bzimage -- --out "$root/dist")
 
 echo "==> runtime + sdk (.NET)"

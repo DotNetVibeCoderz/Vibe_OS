@@ -27,6 +27,9 @@ try {
     # dist/buitenzorg-arm64.img when it exists). Non-fatal.
     cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat
     if ($LASTEXITCODE -ne 0) { Write-Host "==> ARM64 kernel build failed; no ARM64 image" -ForegroundColor Yellow }
+    # Multi-arch M4: the RISC-V kernel (-> dist/buitenzorg-riscv64.img). Non-fatal.
+    cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf
+    if ($LASTEXITCODE -ne 0) { Write-Host "==> RISC-V kernel build failed; no RISC-V image" -ForegroundColor Yellow }
     cargo build --release
     if ($LASTEXITCODE -ne 0) { throw "kernel build failed" }
     cargo run --release -p bzimage -- --out (Join-Path $root "dist")
