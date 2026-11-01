@@ -698,6 +698,55 @@ fn smp_sched_demo(image: &[u8]) {
         println!("[kernel] smp scheduling self-test FAILED");
     }
     smp_kernel_demo(aps, ap_syscalls);
+    smp_finelock_demo(aps);
+}
+
+/// Fine-grained locking (SMP increment 5): run one SMPSYS copy per CPU twice
+/// — first with every syscall behind the Big Kernel Lock, then with the
+/// fine-grained path (memory, scheduler and console syscalls take only their
+/// own locks). Every copy must finish with its pages intact both times; with
+/// fine-grained locking, syscalls must actually execute in the kernel on
+/// several CPUs at once and the BKL must stop being contended.
+fn smp_finelock_demo(aps: usize) {
+    let Ok(image) = vfs::read("/disk/SMPSYS.ELF") else {
+        println!("[kernel] smp: SMPSYS.ELF not on /disk (fine-grained locking test skipped)");
+        return;
+    };
+    let copies = aps + 1;
+    let run = |fine: bool| {
+        let prev = syscall::set_fine_locking(fine);
+        let waits0 = task::bkl_waits();
+        let (calls0, _) = task::fine_stats(true);
+        let t0 = interrupts::ticks();
+        let pids: alloc::vec::Vec<u64> = (0..copies)
+            .filter_map(|i| app::spawn_image(&alloc::format!("smpsys-{}", i), &image).ok())
+            .collect();
+        while pids.iter().any(|&p| process::is_alive(p)) && interrupts::ticks() - t0 < 18 * 30 {
+            task::yield_now();
+        }
+        let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| process::exit_code(p).unwrap_or(0)).collect();
+        let ok = pids.len() == copies && codes.iter().all(|&c| c >= 100);
+        let rounds: u64 = codes.iter().map(|&c| c.saturating_sub(100)).sum();
+        let (calls1, peak) = task::fine_stats(false);
+        syscall::set_fine_locking(prev);
+        (ok, rounds, task::bkl_waits() - waits0, calls1 - calls0, peak)
+    };
+    let (a_ok, a_rounds, a_waits, a_fine, _) = run(false);
+    let (b_ok, b_rounds, b_waits, b_fine, b_peak) = run(true);
+    println!(
+        "[kernel] smp: {} SMPSYS copies -- BKL only: ok={} rounds={} BKL waits={} | fine-grained: ok={} rounds={} BKL waits={} BKL-free syscalls={} most in the kernel at once={} (throughput x{}.{:02})",
+        copies, a_ok, a_rounds, a_waits, b_ok, b_rounds, b_waits, b_fine, b_peak,
+        b_rounds / a_rounds.max(1), (b_rounds * 100 / a_rounds.max(1)) % 100
+    );
+    let parallel = b_peak >= 2;
+    if a_ok && b_ok && a_fine == 0 && b_fine > 0 && parallel && b_waits < a_waits {
+        println!(
+            "[kernel] MILESTONE: SMP FINELOCK OK (memory/scheduler/console syscalls run without the BKL: {} in the kernel at once, BKL waits {} -> {}, throughput x{}.{:02})",
+            b_peak, a_waits, b_waits, b_rounds / a_rounds.max(1), (b_rounds * 100 / a_rounds.max(1)) % 100
+        );
+    } else {
+        println!("[kernel] smp fine-grained locking self-test FAILED");
+    }
 }
 
 /// Symmetric SMP kernel: kernel code runs on every CPU (serialized by the Big
@@ -1426,10 +1475,12 @@ fn run_user_elf(image: &[u8]) -> Result<u64, &'static str> {
 
     let code = usermode::enter_user(program.entry, stack_top);
 
-    memory::with_ctx(|ctx| {
-        memory::unmap_user_pages(&program.pages, ctx);
-        memory::unmap_user_pages(&stack_pages, ctx);
+    let frames = memory::with_ctx(|ctx| {
+        let mut f = memory::unmap_user_pages(&program.pages, ctx);
+        f.extend(memory::unmap_user_pages(&stack_pages, ctx));
+        f
     });
+    memory::release_frames(frames);
     Ok(code)
 }
 

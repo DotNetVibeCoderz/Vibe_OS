@@ -147,9 +147,11 @@ kooperatif (yield lewat `YIELD`). Tiap thread punya SYSCALL kernel stack sendiri
 satu proses tidak pernah berjalan bersamaan (runtime ring-3, mis. `malloc`
 bump-heap di `bzstart.rs`, belum aman-SMP). Thread tetap bisa di-preempt timer
 di antara dua instruksi mana pun, jadi data bersama perlu mutex futex
-(`bz_mutex_lock`). `TICKS` dan `CLOCK_MONO` dijawab tanpa lock kernel; syscall
-lain dijalankan di CPU pemanggil di bawah Big Kernel Lock (kode kernel tidak
-pernah berjalan di dua CPU sekaligus).
+(`bz_mutex_lock`). `TICKS` dan `CLOCK_MONO` dijawab tanpa lock kernel. Syscall
+lain dijalankan di CPU pemanggil: syscall memori (`MMAP`/`MPROTECT`/`MUNMAP`),
+scheduler (`YIELD`, `THREAD_SELF`, `FUTEX_*`) dan konsol (`DEBUG_WRITE`) hanya
+memakai lock subsistemnya sendiri sehingga berjalan paralel antar-CPU; sisanya
+di bawah Big Kernel Lock.
 
 > **Catatan register (penting):** syscall meng-clobber `rcx` + `r11` (instruksi
 > `syscall`) **dan** `r8`/`r9`/`r10` plus register caller-saved lain (marshaling

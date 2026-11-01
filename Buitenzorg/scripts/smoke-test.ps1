@@ -96,7 +96,7 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: IMGVIEW OK", "MILESTONE: JPEG OK",
                      "MILESTONE: MULTIPROC OK", "MILESTONE: DISK WRITE OK",
                      "MILESTONE: PROCCTL OK", "MILESTONE: WALLPAPERS OK", "MILESTONE: ICONS OK",
-                     "MILESTONE: SMP SCHED OK", "MILESTONE: SMP KERNEL OK")
+                     "MILESTONE: SMP SCHED OK", "MILESTONE: SMP KERNEL OK", "MILESTONE: SMP FINELOCK OK")
 }
 $ideMarkers += @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK")
 Assert-Markers -Log $ideLog -Markers $ideMarkers

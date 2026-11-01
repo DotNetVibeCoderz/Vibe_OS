@@ -113,12 +113,24 @@ extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         n::CLOCK_MONO => return crate::arch::cpu::timestamp(),
         _ => {}
     }
-    crate::task::kernel_enter();
-    crate::task::note_syscall();
+    let fine = crate::syscall::bkl_free(nr);
+    if !fine {
+        crate::task::kernel_enter();
+    }
+    crate::task::note_syscall(fine);
+    // Concurrency statistic, for the BKL-free syscalls that never block.
+    let track = fine && matches!(nr, n::MMAP | n::MPROTECT | n::MUNMAP | n::THREAD_SELF | n::DEBUG_WRITE);
+    if track {
+        crate::task::fine_enter();
+    }
     // Everything arriving here came from ring 3, so its pointer arguments are
     // untrusted and must be validated (v1.0 hardening). Kernel-internal callers
     // of `dispatch` pass their own addresses and are trusted.
     let r = crate::syscall::dispatch_from_user(nr, a0, a1, a2);
+    if track {
+        crate::task::fine_leave();
+    }
+    // Drops the BKL if this syscall took it; a killed task ends here.
     crate::task::kernel_exit();
     r
 }

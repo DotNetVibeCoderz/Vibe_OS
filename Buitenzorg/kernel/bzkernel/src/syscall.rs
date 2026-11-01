@@ -29,30 +29,69 @@ fn copy_user_bytes(ptr: u64, len: usize) -> alloc::vec::Vec<u8> {
     v
 }
 
-/// True while a syscall issued from ring 3 is being serviced. Pointer arguments
-/// are only untrusted on that path: the kernel also calls [`dispatch`] directly
-/// (boot self-tests, the shell) and legitimately passes its own addresses.
-///
-/// Single-core and cooperative, so a plain atomic flag is enough — a syscall is
-/// never preempted by another syscall on this scheduler.
-static IN_USER_SYSCALL: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
 /// Entry point for ring-3 syscalls: marks the call as untrusted, so the
 /// pointer-validating helpers below actually check.
+///
+/// "Servicing a ring-3 syscall" is per-*task* state (task.rs carries it across
+/// context switches): a syscall can yield and resume on another CPU, and with
+/// fine-grained locking several CPUs serve syscalls at the same time — a global
+/// flag would let one CPU's kernel-internal call disable another's pointer
+/// validation (or the reverse).
 pub fn dispatch_from_user(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
-    use core::sync::atomic::Ordering;
     // Profiler zone: total time spent servicing ring-3 syscalls. Inert unless
     // profiling is enabled.
     let _z = crate::profile::Guard::new("syscall");
-    let prev = IN_USER_SYSCALL.swap(true, Ordering::SeqCst);
+    let prev = task::set_in_user_syscall(true);
     let r = dispatch(nr, a0, a1, a2);
-    IN_USER_SYSCALL.store(prev, Ordering::SeqCst);
+    task::set_in_user_syscall(prev);
     r
 }
 
 fn from_user() -> bool {
-    IN_USER_SYSCALL.load(core::sync::atomic::Ordering::SeqCst)
+    task::in_user_syscall()
+}
+
+// --- Fine-grained locking (SMP increment 5) -----------------------------------
+//
+// These syscalls touch only state behind its own lock, so they run WITHOUT the
+// Big Kernel Lock and may execute on several CPUs at the same time:
+//   - memory management (MMAP/MPROTECT/MUNMAP): the paging context `memory::CTX`
+//     (page tables + frame allocator) and `memory::ARENAS`, always taken in that
+//     order; TLB shootdowns happen with neither held;
+//   - scheduler (YIELD, THREAD_SELF, FUTEX_WAIT/WAKE): the scheduler lock; the
+//     futex value check and the block are one step under it (`futex_wait_if`),
+//     so no wake-up is lost;
+//   - console (DEBUG_WRITE): the serial and framebuffer-console locks;
+//   - constants/atomics (ABI_VERSION, IS_INTERACTIVE).
+// Pointer validation walks the calling CPU's own page tables. Everything else
+// still takes the BKL.
+
+static FINE_LOCKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// Turn the fine-grained path on/off (off = every syscall takes the BKL, the
+/// increment-4 behavior). Returns the previous setting.
+pub fn set_fine_locking(on: bool) -> bool {
+    FINE_LOCKING.swap(on, core::sync::atomic::Ordering::SeqCst)
+}
+
+/// True if syscall `nr` runs without the Big Kernel Lock.
+pub fn bkl_free(nr: u64) -> bool {
+    if !FINE_LOCKING.load(core::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    matches!(
+        nr,
+        sysno::ABI_VERSION
+            | sysno::DEBUG_WRITE
+            | sysno::YIELD
+            | sysno::MMAP
+            | sysno::MPROTECT
+            | sysno::MUNMAP
+            | sysno::FUTEX_WAIT
+            | sysno::FUTEX_WAKE
+            | sysno::THREAD_SELF
+            | sysno::IS_INTERACTIVE
+    )
 }
 
 /// A user buffer the kernel will only read. Returns false when the app passed
@@ -525,14 +564,14 @@ fn sys_futex_wait(addr: u64, expected: u64) -> u64 {
     if addr % 4 != 0 || !user_read(addr, 4) {
         return syserr::INVAL;
     }
-    // Cooperative wait: while the word still holds the expected value, block.
+    // While the word still holds the expected value, block. The check and the
+    // block are one step under the scheduler lock (no lost wake-up even
+    // without the BKL).
     let mut spins: u64 = 0;
     loop {
-        let val = unsafe { core::ptr::read_volatile(addr as *const u32) } as u64;
-        if val != expected {
+        if !task::futex_wait_if(addr, expected as u32) {
             return 0;
         }
-        task::futex_wait_block(addr);
         spins += 1;
         if spins > 500_000_000 {
             return syserr::INVAL; // safety valve

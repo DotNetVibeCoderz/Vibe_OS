@@ -198,6 +198,7 @@ fn app_file(name: &str) -> Option<&'static str> {
         "imgview" | "image" | "viewer" | "photo" => Some("IMGVIEW.ELF"),
         "jpgtest" | "jpg" | "jpeg" => Some("JPGTEST.ELF"),
         "mproc" => Some("MPROC.ELF"),
+        "smpsys" => Some("SMPSYS.ELF"),
         "proctest" => Some("PROCTEST.ELF"),
         // Generic slot for a user-authored app: the SDK/VS Code/MagicAppGen
         // template builds its ELF to userland/hello-csharp/userapp.elf, which

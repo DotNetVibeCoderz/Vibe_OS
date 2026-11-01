@@ -67,6 +67,20 @@ static BKL_SERVING: AtomicU32 = AtomicU32::new(0);
 static BKL_WAITS: AtomicU64 = AtomicU64::new(0);
 /// Whether the task running on each CPU holds the BKL.
 static CPU_BKL: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
+/// Whether the task running on each CPU is servicing a ring-3 syscall
+/// (mirrors `Task::in_user_syscall`, saved/restored on every switch).
+static CPU_USER_SYSCALL: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
+
+/// Mark the current task as servicing (or not) a ring-3 syscall; returns the
+/// previous value.
+pub fn set_in_user_syscall(v: bool) -> bool {
+    CPU_USER_SYSCALL[cpu()].swap(v, Ordering::Relaxed)
+}
+
+/// True while the current task services a ring-3 syscall.
+pub fn in_user_syscall() -> bool {
+    CPU_USER_SYSCALL[cpu()].load(Ordering::Relaxed)
+}
 
 /// Take the BKL (FIFO ticket lock). Interrupts are enabled while waiting so
 /// IPIs (TLB shootdown acknowledgements) keep being served, and restored after.
@@ -207,6 +221,8 @@ struct Task {
     bkl: bool,
     /// CPU that last ran the task.
     last_cpu: usize,
+    /// Servicing a syscall from ring 3 (pointer arguments are untrusted).
+    in_user_syscall: bool,
 }
 
 impl Task {
@@ -229,6 +245,7 @@ impl Task {
             idle: false,
             bkl: true,
             last_cpu: 0,
+            in_user_syscall: false,
         }
     }
 }
@@ -708,6 +725,26 @@ pub fn futex_wait_block(key: u64) {
     yield_now();
 }
 
+/// FUTEX_WAIT core: if the user word at `addr` (validated by the caller) still
+/// holds `expected`, block on it and yield. The comparison and the block are
+/// one step under the scheduler lock, and `futex_wake` takes the same lock, so
+/// a wake-up between them cannot be lost. Returns false if the value differed.
+pub fn futex_wait_if(addr: u64, expected: u32) -> bool {
+    let blocked = with_current(|t| {
+        let val = unsafe { core::ptr::read_volatile(addr as *const u32) };
+        if val != expected {
+            return false;
+        }
+        t.state = State::Blocked;
+        t.wait_key = addr;
+        true
+    });
+    if blocked {
+        yield_now();
+    }
+    blocked
+}
+
 /// Futex wake: make up to `count` threads blocked on `key` runnable. Returns
 /// the number woken.
 pub fn futex_wake(key: u64, count: u64) -> u64 {
@@ -856,9 +893,38 @@ pub fn ap_timer(from_user: bool) {
     preempt(from_user);
 }
 
-/// Count a syscall served on this CPU.
-pub fn note_syscall() {
-    SYSCALLS[cpu()].fetch_add(1, Ordering::Relaxed);
+/// Count a syscall served on this CPU (`fine` = without the BKL), and track how
+/// many BKL-free syscalls are in flight on different CPUs at once.
+pub fn note_syscall(fine: bool) {
+    let c = cpu();
+    SYSCALLS[c].fetch_add(1, Ordering::Relaxed);
+    if fine {
+        FINE_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Syscalls served without the BKL since boot.
+static FINE_CALLS: AtomicU64 = AtomicU64::new(0);
+/// BKL-free syscalls currently executing / the most ever executing at once.
+static FINE_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+static FINE_MAX_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+
+/// Enter / leave a BKL-free syscall (for the concurrency statistic).
+pub fn fine_enter() {
+    let now = FINE_IN_FLIGHT.fetch_add(1, Ordering::AcqRel) + 1;
+    FINE_MAX_IN_FLIGHT.fetch_max(now, Ordering::AcqRel);
+}
+pub fn fine_leave() {
+    FINE_IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// (BKL-free syscalls served, most executing at once); `reset` clears the peak.
+pub fn fine_stats(reset: bool) -> (u64, u64) {
+    let r = (FINE_CALLS.load(Ordering::Relaxed), FINE_MAX_IN_FLIGHT.load(Ordering::Relaxed));
+    if reset {
+        FINE_MAX_IN_FLIGHT.store(0, Ordering::Relaxed);
+    }
+    r
 }
 
 /// Number of times the timer took the CPU away from ring-3 code and gave it to
@@ -956,6 +1022,7 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
                     None
                 } else {
                     sched.tasks[cur].bkl = held;
+                    sched.tasks[cur].in_user_syscall = CPU_USER_SYSCALL[c].load(Ordering::Relaxed);
                     let n = &mut sched.tasks[next];
                     n.running = true;
                     if n.last_cpu != c && !n.idle {
@@ -971,6 +1038,7 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
                     gdt::set_rsp0_on(c, n.ctx.sys_kstack_top);
                     aspace::install(n.space);
                     CPU_BKL[c].store(n.bkl, Ordering::Relaxed);
+                    CPU_USER_SYSCALL[c].store(n.in_user_syscall, Ordering::Relaxed);
                     IDLE[c].store(n.idle, Ordering::Relaxed);
                     RUNNING_USER[c].store(n.user.is_some(), Ordering::Relaxed);
                     if !n.idle && n.user.is_none() {

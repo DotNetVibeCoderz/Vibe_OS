@@ -138,15 +138,35 @@ pub fn map_user_region(
     Ok((base + count * 4096, pages))
 }
 
-/// Unmap a set of user pages and return their frames to the allocator.
-pub fn unmap_user_pages(pages: &[u64], ctx: &mut MemCtx) {
+/// Unmap a set of user pages (this CPU's TLB is flushed); returns their
+/// frames, which the caller hands to [`release_frames`] once it has let go of
+/// the paging context.
+pub fn unmap_user_pages(pages: &[u64], ctx: &mut MemCtx) -> alloc::vec::Vec<u64> {
+    let mut frames = alloc::vec::Vec::new();
     for &addr in pages {
         if let Some(phys) = paging::unmap(&mut ctx.mapper, addr) {
-            ctx.frames.free(phys);
+            frames.push(phys);
         }
     }
-    // Another thread of this process may run on an AP with these pages cached.
+    crate::arch::cpu::flush_tlb();
+    frames
+}
+
+/// Free frames that were just unmapped: first make every other CPU drop stale
+/// translations (TLB shootdown), then give the frames back — never the other
+/// way round, or a CPU could still reach a frame that was handed out again.
+/// Must be called with no lock held: the shootdown waits for other CPUs, and
+/// one of them may be spinning on that lock with interrupts off.
+pub fn release_frames(frames: alloc::vec::Vec<u64>) {
+    if frames.is_empty() {
+        return;
+    }
     crate::arch::cpu::flush_tlb_everywhere();
+    with_ctx(|ctx| {
+        for f in frames {
+            ctx.frames.free(f);
+        }
+    });
 }
 
 // --- User-space anonymous mmap arena (v0.15 "Matang" managed-runtime PAL) ----
@@ -261,7 +281,7 @@ pub fn user_mprotect(addr: u64, size: u64, prot: u64) -> u64 {
     let count = (size + 4095) / 4096;
     let flags = flags_from_prot(prot);
     let has_access = prot_has_access(prot);
-    with_ctx(|ctx| {
+    let r = with_ctx(|ctx| {
         for i in 0..count {
             let va = addr + i * 4096;
             if paging::is_mapped(&mut ctx.mapper, va) {
@@ -280,10 +300,12 @@ pub fn user_mprotect(addr: u64, size: u64, prot: u64) -> u64 {
             }
             // else: prot NONE on an uncommitted page — nothing to do.
         }
-        // Downgraded permissions must not survive in another CPU's TLB.
-        crate::arch::cpu::flush_tlb_everywhere();
         0
-    })
+    });
+    // Downgraded permissions must not survive in another CPU's TLB (shootdown
+    // with the paging context released, see `release_frames`).
+    crate::arch::cpu::flush_tlb_everywhere();
+    r
 }
 
 /// SYS_MUNMAP handler: unmap pages in `[addr, addr+size)`.
@@ -296,8 +318,9 @@ pub fn user_munmap(addr: u64, size: u64) -> u64 {
     for i in 0..count {
         pages.push(addr + i * 4096);
     }
-    with_ctx(|ctx| unmap_user_pages(&pages, ctx));
+    let frames = with_ctx(|ctx| unmap_user_pages(&pages, ctx));
     with_arena(|a| a.pages.retain(|p| !pages.contains(p)));
+    release_frames(frames);
     0
 }
 

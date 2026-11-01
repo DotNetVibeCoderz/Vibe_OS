@@ -63,6 +63,14 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **SMP increment 5: fine-grained locking.** Memory-management, scheduler
+  and console syscalls run without the Big Kernel Lock, in parallel on all
+  CPUs. The "from ring 3" pointer-validation flag became per-task (it was
+  global); TLB shootdowns no longer happen under a lock and frames are freed
+  only after every CPU acknowledged; futex check-and-block is atomic under the
+  scheduler lock. New test program SMPSYS: `MILESTONE: SMP FINELOCK OK`
+  (4 syscalls in the kernel at once with `-smp 4`, BKL waits ~4000 -> ~8,
+  throughput x2.25).
 - **SMP increment 4: symmetric SMP kernel.** Every CPU runs the same
   scheduler and executes kernel code: syscalls are served on the CPU that made
   them and kernel tasks run on any core, serialized by a Big Kernel Lock (FIFO

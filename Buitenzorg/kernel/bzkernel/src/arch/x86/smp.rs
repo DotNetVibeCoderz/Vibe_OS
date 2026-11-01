@@ -203,15 +203,24 @@ pub fn tlb_shootdown() -> bool {
     }
     let before: Vec<u64> = others.iter().map(|&i| CPUS[i].tlb_flushes.load(Ordering::Acquire)).collect();
     broadcast_ipi(IPI_TLB_VECTOR);
-    // Spin budget, not PIT ticks: callers (syscalls) run with interrupts off,
-    // so the tick count does not advance while we wait.
+    // Wait with interrupts enabled: two CPUs may shoot down at the same time
+    // (fine-grained syscalls run without the BKL), and each must still answer
+    // the other's IPI. Spin budget, not PIT ticks: the tick count may not
+    // advance while a syscall waits.
+    let was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::enable();
+    let mut done = false;
     for _ in 0..50_000_000u64 {
         if others.iter().zip(&before).all(|(&i, &b)| CPUS[i].tlb_flushes.load(Ordering::Acquire) > b) {
-            return true;
+            done = true;
+            break;
         }
         core::hint::spin_loop();
     }
-    false
+    if !was_on {
+        x86_64::instructions::interrupts::disable();
+    }
+    done
 }
 
 /// Measure the Local APIC timer against the PIT (on the BSP, timer masked) and
