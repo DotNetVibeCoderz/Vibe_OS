@@ -63,6 +63,14 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **SMP increment 4: symmetric SMP kernel.** Every CPU runs the same
+  scheduler and executes kernel code: syscalls are served on the CPU that made
+  them and kernel tasks run on any core, serialized by a Big Kernel Lock (FIFO
+  ticket lock, dropped in ring 3, while idle and across context switches).
+  Each CPU has an idle task; user-space mappings go through the running CPU's
+  page tables; the exit context lives in the task. `MILESTONE: SMP KERNEL OK`
+  (kernel tasks on all 4 CPUs with `-smp 4`, syscalls served on the APs).
+  Replaces the asymmetric design of increment 3.
 - **SMP increment 3: ring-3 processes run on every core.** Asymmetric
   multiprocessing: the kernel stays on the boot CPU, user programs run in
   parallel on the APs. Tasks move to an idle AP when they return to ring 3 and

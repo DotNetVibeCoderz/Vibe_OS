@@ -47,7 +47,7 @@ pub struct Space {
 static PDPT_VIRT: AtomicU64 = AtomicU64::new(0);
 /// The kernel's own PDPT[0]/[1] entries, restored for space 0.
 static BASE_PD: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
-/// Id of the space currently installed in the PDPT.
+/// Id of the space installed in the master PDPT (CPU 0).
 static CURRENT: AtomicU64 = AtomicU64::new(0);
 
 const MAX_CPUS: usize = crate::arch::cpu::MAX_CPUS;
@@ -112,7 +112,7 @@ fn install_slots(cpu: usize, space: Space) {
 /// Install `space` on application processor `cpu` (called on that CPU, with
 /// interrupts disabled): refresh the kernel half from the master, set the two
 /// user slots, flush this CPU's TLB.
-pub fn install_on_ap(cpu: usize, space: Space) {
+fn install_on_ap(cpu: usize, space: Space) {
     if AP_PML4[cpu].load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -132,6 +132,10 @@ fn installed_on_an_ap(space_id: u64) -> bool {
     AP_SPACE.iter().any(|s| s.load(Ordering::SeqCst) == space_id)
 }
 
+fn this_cpu() -> usize {
+    crate::smp::cpu_index()
+}
+
 /// The kernel's base space.
 pub fn kernel() -> Space {
     Space {
@@ -145,7 +149,10 @@ pub fn kernel() -> Space {
 
 /// Id of the space currently installed.
 pub fn current_id() -> u64 {
-    CURRENT.load(Ordering::SeqCst)
+    match this_cpu() {
+        0 => CURRENT.load(Ordering::SeqCst),
+        c => AP_SPACE[c].load(Ordering::SeqCst),
+    }
 }
 
 fn ready() -> bool {
@@ -273,6 +280,14 @@ pub fn destroy(space: Space) -> u64 {
 /// Install `space` into the shared PDPT (no-op if already current) and flush
 /// the TLB. Call with interrupts disabled.
 pub fn install(space: Space) {
+    let c = this_cpu();
+    if c != 0 {
+        // An application processor: its own root.
+        if AP_SPACE[c].load(Ordering::SeqCst) != space.id {
+            install_on_ap(c, space);
+        }
+        return;
+    }
     if !ready() || CURRENT.load(Ordering::SeqCst) == space.id {
         return;
     }

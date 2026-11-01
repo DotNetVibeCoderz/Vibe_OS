@@ -141,7 +141,7 @@ fn kill_faulting_program(what: &str, frame: &InterruptStackFrame) -> ! {
 
 extern "x86-interrupt" fn general_protection_handler(frame: InterruptStackFrame, code: u64) {
     if from_user(&frame) {
-        crate::task::ensure_on_bsp(); // ending a program is kernel work
+        crate::task::kernel_enter(); // ending a program is kernel work
         kill_faulting_program("general protection fault", &frame);
     }
     panic!(
@@ -154,7 +154,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     use x86_64::registers::control::Cr2;
     if from_user(&frame) {
         let addr = Cr2::read().ok(); // read on the faulting CPU, before moving
-        crate::task::ensure_on_bsp(); // ending a program is kernel work
+        crate::task::kernel_enter(); // ending a program is kernel work
         println!("[kernel] page fault address {:?} ({:?})", addr, code);
         kill_faulting_program("page fault", &frame);
     }

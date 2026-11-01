@@ -60,6 +60,13 @@ pub mod cpu {
         x86_64::instructions::interrupts::enable_and_hlt();
     }
 
+    /// True if maskable interrupts are enabled on this CPU.
+    #[inline]
+    pub fn interrupts_enabled() -> bool {
+        #[cfg(target_arch = "x86_64")]
+        return x86_64::instructions::interrupts::are_enabled();
+    }
+
     /// Enable maskable interrupts on this CPU.
     #[inline]
     pub fn enable_interrupts() {

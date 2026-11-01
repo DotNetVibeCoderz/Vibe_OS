@@ -85,10 +85,32 @@ pub unsafe fn init(phys_offset: u64) -> PageMap {
     unsafe { OffsetPageTable::new(&mut *table, VirtAddr::new(phys_offset)) }
 }
 
+/// Ring-3 addresses (the per-process half below 2 GiB) are mapped through the
+/// page tables *this CPU* is running on: each CPU installs the running
+/// process's directories in its own root, so the kernel's stored master
+/// `PageMap` would reach the wrong process on an application processor.
+/// Kernel addresses always go through the master, whose upper levels every
+/// CPU shares.
+const USER_TOP: u64 = 0x8000_0000;
+
+fn active() -> PageMap {
+    let (l4, _) = Cr3::read();
+    let offset = phys_to_virt(0);
+    let table = (offset + l4.start_address().as_u64()) as *mut PageTable;
+    unsafe { OffsetPageTable::new(&mut *table, VirtAddr::new(offset)) }
+}
+
 /// Map the 4 KiB page at `va` to the frame at `pa`. Intermediate tables are
 /// created as needed; for user pages every level of the walk is opened to
 /// ring 3 (see [`make_user_path`]).
 pub fn map(map: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: u64, f: Flags) -> Result<(), &'static str> {
+    let mut local;
+    let map = if va < USER_TOP {
+        local = active();
+        &mut local
+    } else {
+        map
+    };
     let flags = pte_flags(f);
     let result = if f.user {
         let parent = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
@@ -105,6 +127,13 @@ pub fn map(map: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: 
 
 /// Unmap the page at `va`; returns the frame it pointed at.
 pub fn unmap(map: &mut PageMap, va: u64) -> Option<u64> {
+    let mut local;
+    let map = if va < USER_TOP {
+        local = active();
+        &mut local
+    } else {
+        map
+    };
     let (f, flush) = map.unmap(page(va)).ok()?;
     flush.flush();
     Some(f.start_address().as_u64())
@@ -112,11 +141,21 @@ pub fn unmap(map: &mut PageMap, va: u64) -> Option<u64> {
 
 /// True if `va` is mapped.
 pub fn is_mapped(map: &mut PageMap, va: u64) -> bool {
+    if va < USER_TOP {
+        return active().translate_page(page(va)).is_ok();
+    }
     map.translate_page(page(va)).is_ok()
 }
 
 /// Change the protection of the mapped page at `va`.
 pub fn protect(map: &mut PageMap, va: u64, f: Flags) -> bool {
+    let mut local;
+    let map = if va < USER_TOP {
+        local = active();
+        &mut local
+    } else {
+        map
+    };
     match unsafe { map.update_flags(page(va), pte_flags(f)) } {
         Ok(flush) => {
             flush.flush();

@@ -126,7 +126,7 @@ extern "x86-interrupt" fn lapic_timer_handler(frame: InterruptStackFrame) {
     this_cpu().timer_ticks.fetch_add(1, Ordering::Relaxed);
     eoi();
     // After EOI, interrupts still off: the AP scheduler may switch tasks here.
-    crate::task::ap_tick(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
+    crate::task::ap_timer(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
 }
 
 extern "x86-interrupt" fn ping_handler(_frame: InterruptStackFrame) {
@@ -245,26 +245,31 @@ pub fn report() -> Vec<String> {
     let n = CPU_COUNT.load(Ordering::Acquire);
     let mut out = Vec::new();
     out.push(alloc::format!(
-        "{} CPU, timer LAPIC {} MHz (AP: {} Hz); CPU ini: #{}",
+        "{} CPU, scheduler simetris + Big Kernel Lock (tunggu {}x, migrasi {}); timer LAPIC {} MHz; CPU ini: #{}",
         n.max(1),
+        crate::task::bkl_waits(),
+        crate::task::migrations(),
         TIMER_HZ.load(Ordering::Relaxed) / 1_000_000,
-        AP_TIMER_HZ,
         cpu_index()
     ));
     for (i, c) in CPUS[..n].iter().enumerate() {
-        let role = if i == 0 {
-            "BSP (scheduler)"
-        } else if c.online.load(Ordering::Relaxed) {
-            if crate::task::ap_running(i) { "AP  (ring 3)   " } else { "AP  (idle)     " }
+        let state = if !c.online.load(Ordering::Relaxed) {
+            "offline"
+        } else if crate::task::cpu_runs_user(i) {
+            "ring 3 "
+        } else if crate::task::ap_running(i) {
+            "kernel "
         } else {
-            "AP  (offline)  "
+            "idle   "
         };
         out.push(alloc::format!(
-            "  #{} lapic {:>2}  {}  timer {:>6}  ring-3 {:>6}  ipi {:>4}  tlb {:>4}",
+            "  #{} lapic {:>2} {} {}  syscalls {:>6}  kernel-tasks {:>5}  ring-3 {:>5}  ipi {:>4}  tlb {:>3}",
             i,
             c.lapic_id.load(Ordering::Relaxed),
-            role,
-            c.timer_ticks.load(Ordering::Relaxed),
+            if i == 0 { "BSP" } else { "AP " },
+            state,
+            crate::task::syscalls_on(i),
+            crate::task::kernel_runs_on(i),
             crate::task::ap_user_ticks(i),
             c.pings.load(Ordering::Relaxed),
             c.tlb_flushes.load(Ordering::Relaxed)
@@ -674,8 +679,8 @@ extern "C" fn ap_main(_lapic_id: u64) -> ! {
     CPUS[me].seen_index.store(me, Ordering::Release);
     CPUS[me].online.store(true, Ordering::Release);
     ONLINE.fetch_add(1, Ordering::SeqCst);
-    // Run ring-3 tasks handed over by the BSP (task.rs); idles in sti;hlt.
-    crate::task::ap_idle_loop(me)
+    // Join the (symmetric) scheduler: this context becomes the CPU's idle task.
+    crate::task::ap_start(me)
 }
 
 /// Number of application processors online.
@@ -683,18 +688,10 @@ pub fn aps_online() -> usize {
     ONLINE.load(Ordering::Acquire) as usize
 }
 
-/// Wake the bootstrap CPU (a ping IPI) — e.g. when a task came home from an
-/// AP for a syscall while the BSP sleeps in `hlt`.
-pub fn wake_bsp() {
-    if cpu_index() != 0 && CPU_COUNT.load(Ordering::Acquire) > 0 {
-        send_ipi(CPUS[0].lapic_id.load(Ordering::Relaxed), IPI_PING_VECTOR);
-    }
-}
-
-/// Wake idle application processors (a ping IPI to all but this CPU), e.g.
-/// after queueing work for them.
-pub fn wake_aps() {
-    if aps_online() > 0 {
+/// Wake every other CPU (a ping IPI to all but this one) so an idle one
+/// re-runs its scheduler — e.g. after a task became runnable.
+pub fn wake_others() {
+    if aps_online() > 0 && LAPIC_READY.load(Ordering::Acquire) {
         broadcast_ipi(IPI_PING_VECTOR);
     }
 }

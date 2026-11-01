@@ -153,8 +153,9 @@ one process never run at the same time (the ring-3 runtime, e.g. the bump-heap
 `malloc` in `bzstart.rs`, is not SMP-safe). Threads may still be preempted by
 the timer between any two instructions, so shared data needs the futex mutex
 (`bz_mutex_lock`), not an assumption of cooperative switching. `TICKS` and
-`CLOCK_MONO` are answered on the CPU that issued them; every other syscall
-runs on CPU 0.
+`CLOCK_MONO` are answered without taking any kernel lock; every other syscall
+runs on the CPU that issued it, under the kernel's Big Kernel Lock (kernel code
+never runs on two CPUs at once).
 
 > **Register note (important):** a syscall clobbers `rcx` + `r11` (the `syscall`
 > instruction) **and** `r8`/`r9`/`r10` plus other caller-saved registers (kernel

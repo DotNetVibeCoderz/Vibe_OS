@@ -647,7 +647,8 @@ fn smp_sched_demo(image: &[u8]) {
         return;
     }
     let frames_start = memory::frames_in_use();
-    let (ticks0, offloads0, pre0) = (task::ap_user_ticks_total(), task::offloads(), task::user_preemptions());
+    let (ticks0, mig0, pre0) = (task::ap_user_ticks_total(), task::migrations(), task::user_preemptions());
+    let ap_sys0: u64 = (1..=aps).map(task::syscalls_on).sum();
     let copies = (aps + 1).min(8);
     let mut pids = alloc::vec::Vec::new();
     for i in 0..copies {
@@ -660,7 +661,7 @@ fn smp_sched_demo(image: &[u8]) {
     let mut max_parallel = 0;
     let mut killed = false;
     loop {
-        let running = (1..=aps).filter(|&c| task::ap_running(c)).count();
+        let running = (1..=aps).filter(|&c| task::cpu_runs_user(c)).count();
         max_parallel = max_parallel.max(running);
         if let Some(v) = victim {
             if !killed && process::cpu_ticks(v) >= 3 {
@@ -680,23 +681,76 @@ fn smp_sched_demo(image: &[u8]) {
     let exact = pids.len() == copies && pids.iter().all(|&p| process::exit_code(p) == Some(0));
     let leaked = memory::frames_in_use() as i64 - frames_start as i64;
     let ticks = task::ap_user_ticks_total() - ticks0;
-    let offloads = task::offloads() - offloads0;
+    let migrations = task::migrations() - mig0;
     let preempts = task::user_preemptions() - pre0;
+    let ap_syscalls = (1..=aps).map(task::syscalls_on).sum::<u64>() - ap_sys0;
     let want_parallel = aps.min(copies);
     println!(
-        "[kernel] smp: {} copies on {} AP(s): exact={} killed={} leaked={} frames; AP ring-3 ticks={} hand-offs={} preemptions={} max APs busy at once={}",
-        pids.len(), aps, exact, killed, leaked, ticks, offloads, preempts, max_parallel
+        "[kernel] smp: {} copies on {} AP(s): exact={} killed={} leaked={} frames; AP ring-3 ticks={} syscalls served on APs={} migrations={} preemptions={} max APs in ring 3 at once={}",
+        pids.len(), aps, exact, killed, leaked, ticks, ap_syscalls, migrations, preempts, max_parallel
+    );
+    if exact && killed && leaked == 0 && ticks >= 20 && max_parallel >= want_parallel {
+        println!(
+            "[kernel] MILESTONE: SMP SCHED OK (ring-3 processes ran in parallel on {} AP(s) at once; {} AP ticks, {} migrations)",
+            max_parallel, ticks, migrations
+        );
+    } else {
+        println!("[kernel] smp scheduling self-test FAILED");
+    }
+    smp_kernel_demo(aps, ap_syscalls);
+}
+
+/// Symmetric SMP kernel: kernel code runs on every CPU (serialized by the Big
+/// Kernel Lock). Requires that (1) ring-3 syscalls were served on the APs
+/// themselves — counted during `smp_sched_demo` — and (2) kernel tasks ran on
+/// an AP: several kernel tasks each do real kernel work (heap, VFS) between
+/// yields and record which CPU executed them.
+fn smp_kernel_demo(aps: usize, ap_syscalls: u64) {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    static CPUS_SEEN: AtomicU64 = AtomicU64::new(0);
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    static ERRORS: AtomicUsize = AtomicUsize::new(0);
+    fn worker() {
+        for round in 0..40u64 {
+            CPUS_SEEN.fetch_or(1 << arch::cpu::id(), Ordering::Relaxed);
+            // Kernel work under the BKL: allocate, fill, check, and read a file.
+            let v: alloc::vec::Vec<u64> = (0..256).map(|i| i * round).collect();
+            if v.iter().enumerate().any(|(i, &x)| x != i as u64 * round) {
+                ERRORS.fetch_add(1, Ordering::Relaxed);
+            }
+            if round % 10 == 0 && vfs::read("/ram/DAHAN.TXT").is_err() && vfs::read("/disk/BATANG.TXT").is_err() {
+                // Neither file present on this medium: not an error.
+            }
+            task::yield_now();
+        }
+        DONE.fetch_add(1, Ordering::Relaxed);
+    }
+    const WORKERS: usize = 6;
+    let k0: alloc::vec::Vec<u64> = (0..=aps).map(task::kernel_runs_on).collect();
+    for _ in 0..WORKERS {
+        task::spawn_named("smp-kwork", worker);
+    }
+    let start = interrupts::ticks();
+    while DONE.load(Ordering::Relaxed) < WORKERS && interrupts::ticks() - start < 18 * 20 {
+        task::yield_now();
+    }
+    let seen = CPUS_SEEN.load(Ordering::Relaxed);
+    let on_aps = (seen >> 1).count_ones();
+    let kruns: alloc::vec::Vec<u64> = (0..=aps).map(|c| task::kernel_runs_on(c) - k0[c]).collect();
+    println!(
+        "[kernel] smp: kernel workers done={}/{} errors={} ran on CPUs mask={:#b} (kernel-task switches per CPU {:?}); syscalls served on APs={}; BKL waits={}",
+        DONE.load(Ordering::Relaxed), WORKERS, ERRORS.load(Ordering::Relaxed), seen, kruns, ap_syscalls, task::bkl_waits()
     );
     for line in smp::report() {
         println!("[smp] {}", line);
     }
-    if exact && killed && leaked == 0 && offloads > 0 && ticks >= 20 && max_parallel >= want_parallel {
+    if DONE.load(Ordering::Relaxed) == WORKERS && ERRORS.load(Ordering::Relaxed) == 0 && on_aps >= 1 && ap_syscalls > 0 {
         println!(
-            "[kernel] MILESTONE: SMP SCHED OK (ring-3 processes ran in parallel on {} AP(s) at once; {} AP ticks, {} hand-offs; kernel stays on the BSP)",
-            max_parallel, ticks, offloads
+            "[kernel] MILESTONE: SMP KERNEL OK (symmetric scheduler + Big Kernel Lock: kernel tasks ran on {} AP(s), {} syscalls served on APs)",
+            on_aps, ap_syscalls
         );
     } else {
-        println!("[kernel] smp scheduling self-test FAILED");
+        println!("[kernel] smp kernel self-test FAILED");
     }
 }
 
@@ -1123,7 +1177,7 @@ fn desktop_loop() -> ! {
         if task::user_work_pending() {
             task::yield_now();
         } else {
-            arch::cpu::halt();
+            task::idle_halt(); // drops the Big Kernel Lock while asleep
         }
         if w == 0 {
             continue;

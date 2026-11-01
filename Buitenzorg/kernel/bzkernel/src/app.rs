@@ -97,15 +97,15 @@ pub fn process_exited(pid: u64, code: u64) {
     crate::println!("[app] process {} exited with code {:#x}", pid, code);
 }
 
-/// Free a dead process's address space once none of its threads is still on an
-/// application processor (they were marked finished; an AP sends a running one
-/// home within a tick). On timeout the space is leaked, never freed under an
-/// AP's feet.
+/// Free a dead process's address space once no other CPU still runs one of
+/// its threads (they were marked finished; a CPU drops a running one within a
+/// tick, or at the end of its syscall). On timeout the space is leaked, never
+/// freed under another CPU's feet.
 fn destroy_when_home(space: aspace::Space) {
-    if task::wait_home(space.id) {
+    if task::wait_space_stopped(space.id) {
         aspace::destroy(space);
     } else {
-        crate::println!("[app] process {}: a thread did not leave its AP -- address space leaked", space.id);
+        crate::println!("[app] process {}: a thread did not stop on another CPU -- address space leaked", space.id);
     }
 }
 
