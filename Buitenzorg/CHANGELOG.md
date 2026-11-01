@@ -35,6 +35,14 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M2: virtio drivers — blk, input, net, gpu, sound.** A generic
+  virtio core (split virtqueues, feature negotiation) over the modern
+  virtio-PCI transport. The whole OS boots from a virtio-blk disk; virtio
+  keyboard and tablet drive the desktop; virtio-net replaces the loopback
+  device (ARP + ping of QEMU's gateway, local traffic still works); virtio-gpu
+  mirrors the desktop pixel for pixel; virtio-snd plays a test tone. New smoke
+  step `[virtio]` with all five devices. Fixed on the way: the AC'97 driver
+  claimed a virtio sound card (same PCI class).
 - **Multi-arch M1 (increment 2): Limine boot — M1 complete.** The same
   kernel ELF boots through the Limine protocol (base revision 6, requests
   declared in `arch/x86/limine.rs`): higher-half load, no identity map,

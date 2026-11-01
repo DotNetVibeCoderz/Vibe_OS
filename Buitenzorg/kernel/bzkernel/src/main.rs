@@ -64,6 +64,7 @@ mod task;
 mod terminal;
 mod theme;
 mod vfs;
+mod virtio;
 mod vmm;
 mod wallpaper;
 mod wm;
@@ -1282,6 +1283,8 @@ fn desktop_loop() -> ! {
         if w == 0 {
             continue;
         }
+        // virtio keyboards / mice / tablets (multi-arch M2) are polled here.
+        virtio::input::poll();
         let now = interrupts::ticks();
         let mut input = false;
 
@@ -1464,9 +1467,11 @@ fn batang_demo() {
     }
     println!("[kernel] MILESTONE: PCI OK ({} devices enumerated)", devices.len());
 
-    let disks = ata::init();
+    // Legacy IDE first (it is the boot disk on the IDE media), then virtio-blk
+    // (multi-arch M2: the disk interface every architecture shares).
+    let disks = ata::init() + virtio::init_block();
     if disks == 0 {
-        println!("[kernel] storage: no IDE/ATA disk on legacy channels (boot media may be NVMe/AHCI/USB)");
+        println!("[kernel] storage: no IDE/ATA or virtio disk (boot media may be NVMe/AHCI/USB)");
     } else {
         println!(
             "[kernel] driver framework: {} block device(s) online",
@@ -1492,13 +1497,22 @@ fn batang_demo() {
         });
         match result {
             Some(Ok(())) => {
-                println!("[kernel] MILESTONE: STORAGE OK (file read from disk via IDE PIO + FAT)")
+                let dev = driver::with_boot_block_device(|d| d.name()).unwrap_or_default();
+                println!("[kernel] MILESTONE: STORAGE OK (file read from disk via {} + FAT)", dev)
             }
             Some(Err(e)) => println!("[kernel] storage: FAT read failed: {}", e),
             None => println!("[kernel] storage: no block device registered"),
         }
     }
 
+    // virtio input devices (keyboard, mouse, tablet), if the machine has any.
+    virtio::input::init();
+    // A virtio GPU mirrors the desktop (the boot framebuffer stays the console).
+    if let Some((w, h)) = framebuffer::dimensions() {
+        virtio::gpu::init(w, h);
+    }
+    // virtio sound: PCM output, verified with a short test tone.
+    virtio::snd::init();
     if mouse::init() {
         let (_, _, _, packets) = mouse::state();
         println!("[kernel] PS/2 mouse streaming enabled ({} packets so far)", packets);
@@ -1536,6 +1550,40 @@ fn run_user_elf(image: &[u8]) -> Result<u64, &'static str> {
     });
     memory::release_frames(frames);
     Ok(code)
+}
+
+/// Multi-arch M2: a virtio NIC replaces the loopback device. QEMU's user-mode
+/// network (slirp) is 10.0.2.0/24 with the gateway at 10.0.2.2; we resolve the
+/// gateway with ARP and ping it — a real frame round trip through the NIC.
+/// Traffic to our own address keeps working (delivered locally by the stack).
+fn virtio_net_demo() {
+    let Some(nic) = virtio::net::probe() else { return };
+    const ME: [u8; 4] = [10, 0, 2, 15];
+    const GW: [u8; 4] = [10, 0, 2, 2];
+    net::attach(alloc::boxed::Box::new(nic), ME);
+    let (icmp0, _) = net::counters();
+    let wait = |done: &dyn Fn() -> bool| {
+        let t0 = interrupts::ticks();
+        while !done() && interrupts::ticks() - t0 < 36 {
+            net::poll();
+            task::yield_now();
+        }
+        done()
+    };
+    net::arp_request(GW);
+    let Some(mac) = (if wait(&|| net::resolve(GW).is_some()) { net::resolve(GW) } else { None }) else {
+        println!("[net] virtio: no ARP reply from the gateway 10.0.2.2");
+        return;
+    };
+    net::send_ping(GW, 0xB2, 1);
+    if wait(&|| net::counters().0 > icmp0) {
+        println!(
+            "[kernel] MILESTONE: VIRTIO NET OK (NIC up as 10.0.2.15; ARP: gateway 10.0.2.2 is {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}; ICMP echo reply received over the wire)",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+        );
+    } else {
+        println!("[net] virtio: gateway resolved but no ICMP echo reply");
+    }
 }
 
 /// v0.4 "Tunas": load a NativeAOT-compiled C# program (HELLO.ELF) from disk
@@ -1712,6 +1760,7 @@ fn dahan_demo() {
     } else {
         println!("[net] no ICMP reply (stack error)");
     }
+    virtio_net_demo();
 
     // --- C# service running as a ring-3 process ---------------------------
     // Drain any still-finishing service/aio tasks so that, once we are in

@@ -150,6 +150,30 @@ pub fn handle_byte(byte: u8) {
     }
 }
 
+/// Pointer motion from another device (virtio mouse): relative move plus
+/// button state (bit 0 left, 1 right, 2 middle), counted as one packet.
+pub fn inject_relative(dx: i64, dy: i64, buttons: u8) {
+    move_axis(&X, dx, &MAX_X);
+    move_axis(&Y, dy, &MAX_Y);
+    BUTTONS.store(buttons & 0x07, Ordering::Relaxed);
+    PACKETS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Absolute pointer position from a tablet (virtio tablet): `x`/`y` within
+/// `0..=max`, scaled to the screen.
+pub fn inject_absolute(x: i64, y: i64, max_x: i64, max_y: i64, buttons: u8) {
+    let sx = MAX_X.load(Ordering::Relaxed);
+    let sy = MAX_Y.load(Ordering::Relaxed);
+    if max_x > 0 && sx > 0 {
+        X.store((x.clamp(0, max_x) * sx) / max_x, Ordering::Relaxed);
+    }
+    if max_y > 0 && sy > 0 {
+        Y.store((y.clamp(0, max_y) * sy) / max_y, Ordering::Relaxed);
+    }
+    BUTTONS.store(buttons & 0x07, Ordering::Relaxed);
+    PACKETS.fetch_add(1, Ordering::Relaxed);
+}
+
 /// (x, y, buttons, packet count) — for diagnostics and the future compositor.
 pub fn state() -> (i64, i64, u8, u64) {
     (

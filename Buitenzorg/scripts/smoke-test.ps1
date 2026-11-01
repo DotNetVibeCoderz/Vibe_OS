@@ -27,6 +27,15 @@ function Invoke-Boot {
                    '-device', 'nvme,drive=bzdisk,serial=bz0001') }
         "usb"  { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
                    '-usb', '-device', 'usb-storage,drive=bzdisk') }
+        # Multi-arch M2: the boot disk on virtio-blk (2 CPUs).
+        # Multi-arch M2: the boot disk on virtio-blk, a virtio keyboard + tablet,
+        # and a QEMU monitor to type/move through them once the desktop is up.
+        "virtio" { @('-smp', '2', '-drive', "id=bzdisk,format=raw,file=$image,if=none",
+                     '-device', 'virtio-blk-pci,drive=bzdisk,bootindex=0,disable-legacy=on',
+                     '-device', 'virtio-keyboard-pci', '-device', 'virtio-tablet-pci',
+                     '-netdev', 'user,id=n0', '-device', 'virtio-net-pci,netdev=n0,disable-legacy=on',
+                     '-device', 'virtio-gpu-pci', '-audiodev', 'none,id=vsnd', '-device', 'virtio-sound-pci,audiodev=vsnd',
+                     '-monitor', 'tcp:127.0.0.1:4481,server,nowait') }
     }
     $qargs += @('-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                 '-display', 'none', '-serial', "file:$Log", '-no-reboot')
@@ -35,7 +44,28 @@ function Invoke-Boot {
         Start-Sleep -Seconds 1
         if ((Test-Path $Log) -and (Select-String -Path $Log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
+    if ($Media -eq "virtio") { Send-VirtioInput -Log $Log }
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+# Type a few keys and move/click the pointer through the QEMU monitor; the
+# events reach the guest through the virtio keyboard/tablet (QEMU routes input
+# to the virtio devices once their driver is active).
+function Send-VirtioInput {
+    param([string]$Log)
+    try {
+        $c = New-Object System.Net.Sockets.TcpClient("127.0.0.1", 4481)
+        $w = New-Object System.IO.StreamWriter($c.GetStream())
+        $w.AutoFlush = $true
+        foreach ($cmd in @("sendkey l", "sendkey s", "sendkey ret", "mouse_move 200 150", "mouse_button 1", "mouse_button 0")) {
+            $w.WriteLine($cmd); Start-Sleep -Milliseconds 700
+        }
+        foreach ($i in 1..20) {
+            Start-Sleep -Seconds 1
+            if (Select-String -Path $Log -Pattern "VIRTIO INPUT OK" -Quiet) { break }
+        }
+        $c.Close()
+    } catch { Write-Host "smoke [virtio]: monitor not reachable ($_)" }
 }
 
 function Assert-Markers {
@@ -122,6 +152,23 @@ if (Select-String -Path $ide1Log -Pattern "Hello from C#" -Quiet) {
 }
 Assert-Markers -Log $ide1Log -Markers $ide1Markers
 Write-Host "smoke [ide1]: process tests pass on a single CPU"
+
+# virtio-blk boot disk (multi-arch M2): the kernel's own virtio driver must
+# carry /disk -- every app, the process tests, and a write that reaches the
+# image file on the host.
+$vioLog = Join-Path $root "dist\boot-virtio.log"
+Invoke-Boot -Media virtio -Log $vioLog
+$vioMarkers = $basic + @("MILESTONE: VIRTIO BLK OK", "via virtio-blk", "MILESTONE: DISK WRITE OK", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: VIRTIO GPU OK", "MILESTONE: VIRTIO SND OK")
+if (Select-String -Path $vioLog -Pattern "Hello from C#" -Quiet) {
+    $vioMarkers += @("MILESTONE: MULTIPROC OK", "MILESTONE: PROCCTL OK", "MILESTONE: EDITOR OK", "MILESTONE: SMP FINELOCK OK")
+}
+Assert-Markers -Log $vioLog -Markers $vioMarkers
+$persist = Select-String -Path $vioLog -Pattern 'BOOTCNT\.TXT = (BZPERSIST[^\r\n]*)' | Select-Object -First 1
+if (-not $persist) { Write-Error "SMOKE TEST FAILED: virtio boot did not report BOOTCNT.TXT"; exit 1 }
+$needle = $persist.Matches[0].Groups[1].Value
+$diskText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($image))
+if (-not $diskText.Contains($needle)) { Write-Error "SMOKE TEST FAILED: '$needle' (virtio write) not found in $image"; exit 1 }
+Write-Host "smoke [virtio]: /disk on virtio-blk, apps + processes, write persisted ($needle); keyboard + tablet via virtio-input, ARP + ping over virtio-net, desktop on virtio-gpu, tone via virtio-snd"
 
 foreach ($media in @("ahci", "nvme", "usb")) {
     $log = Join-Path $root "dist\boot-$media.log"

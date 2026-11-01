@@ -883,7 +883,7 @@ mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
 2. **M1 — Boot & penemuan platform multi-arch.** *(✓ 2026-11-01: increment 1 `boot::BootInfo` + `dtb.rs` (`DTB OK`); increment 2 boot lewat Limine (UEFI) sampai READY dengan set milestone yang sama — smoke `[limine]`)* Abstraksi `BootInfo` (peta
    memori, framebuffer, RSDP/DTB, offset peta fisik); dukungan Limine; parser
    Device Tree kecil di samping ACPI.
-3. **M2 — Driver virtio** (blk, input, gpu, net, sound) — juga mempercepat x86
+3. **M2 — Driver virtio** *(✓ 2026-11-01: blk/input/net/gpu/snd di atas virtio-PCI modern, smoke `[virtio]`; polling, virtio-mmio menyusul di M3)* (blk, input, gpu, net, sound) — juga mempercepat x86
    di QEMU dan menggantikan IDE PIO/PS/2/AC'97 di semua arsitektur.
 4. **M3 — ARM64 (`aarch64-unknown-none`, QEMU `virt`).** PL011, GICv3,
    generic timer, MMU 4K (TTBR0 = user, TTBR1 = kernel: address space per

@@ -96,7 +96,9 @@ pub fn init() -> bool {
     // AC'97: class 0x04 (multimedia), subclass 0x01 (audio device). QEMU's model
     // is Intel 82801AA (vendor 0x8086, device 0x2415).
     let dev = devices.into_iter().find(|d| {
-        (d.class == 0x04 && d.subclass == 0x01)
+        // Not a virtio sound card: it shares class 04/01 but is driven by
+        // virtio::snd (found when both were attached).
+        (d.class == 0x04 && d.subclass == 0x01 && d.vendor_id != 0x1AF4)
             || (d.vendor_id == 0x8086 && d.device_id == 0x2415)
     });
     let Some(dev) = dev else {

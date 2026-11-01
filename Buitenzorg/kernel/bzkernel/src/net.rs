@@ -67,7 +67,10 @@ struct UdpSocket {
 }
 
 struct Stack {
-    device: Loopback,
+    device: alloc::boxed::Box<dyn NetDevice>,
+    /// Frames addressed to our own MAC never leave the machine: with a real
+    /// NIC attached, traffic to our own IP is still delivered locally here.
+    local: VecDeque<Vec<u8>>,
     ip: Ipv4Addr,
     arp: Vec<(Ipv4Addr, MacAddr)>,
     icmp_replies: u64,
@@ -80,12 +83,67 @@ struct Stack {
 
 static STACK: Mutex<Option<Stack>> = Mutex::new(None);
 
+impl Stack {
+    /// Send a frame: to ourselves through the local queue, otherwise out of
+    /// the device.
+    fn tx(&mut self, frame: &[u8]) {
+        if frame.len() >= 6 && frame[..6] == self.device.mac() {
+            self.local.push_back(frame.to_vec());
+        } else {
+            self.device.transmit(frame);
+        }
+    }
+
+    /// Learn (or refresh) an IPv4 -> MAC mapping.
+    fn learn(&mut self, ip: Ipv4Addr, mac: MacAddr) {
+        if let Some(e) = self.arp.iter_mut().find(|(i, _)| *i == ip) {
+            e.1 = mac;
+        } else {
+            self.arp.push((ip, mac));
+        }
+    }
+}
+
+/// Replace the loopback device with a real NIC and take address `ip` (multi-
+/// arch M2: virtio-net). Sockets and counters are kept.
+pub fn attach(device: alloc::boxed::Box<dyn NetDevice>, ip: Ipv4Addr) {
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return };
+    let mac = device.mac();
+    stack.device = device;
+    stack.ip = ip;
+    stack.arp = vec![(ip, mac)];
+}
+
+/// Broadcast an ARP request for `target`.
+pub fn arp_request(target: Ipv4Addr) {
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return };
+    let mac = stack.device.mac();
+    let mut f = Vec::with_capacity(42);
+    f.extend_from_slice(&[0xFF; ETH_ALEN]);
+    f.extend_from_slice(&mac);
+    f.extend_from_slice(&ETHERTYPE_ARP.to_be_bytes());
+    f.extend_from_slice(&[0, 1, 0x08, 0, 6, 4, 0, 1]); // request
+    f.extend_from_slice(&mac);
+    f.extend_from_slice(&stack.ip.clone());
+    f.extend_from_slice(&[0; ETH_ALEN]);
+    f.extend_from_slice(&target);
+    stack.tx(&f);
+}
+
+/// The MAC learned for `ip`, if any.
+pub fn resolve(ip: Ipv4Addr) -> Option<MacAddr> {
+    STACK.lock().as_ref()?.arp.iter().find(|(i, _)| *i == ip).map(|(_, m)| *m)
+}
+
 /// Bring up the loopback interface with the given IPv4 address.
 pub fn init(ip: Ipv4Addr) {
     let device = Loopback::new();
     let mac = device.mac();
     *STACK.lock() = Some(Stack {
-        device,
+        device: alloc::boxed::Box::new(device),
+        local: VecDeque::new(),
         ip,
         arp: vec![(ip, mac)], // self entry
         icmp_replies: 0,
@@ -178,7 +236,7 @@ pub fn udp_send(handle: u64, dest: Ipv4Addr, dest_port: u16, payload: &[u8]) -> 
 
     let udp = build_udp(src_ip, dest, src_port, dest_port, payload);
     let frame = build_ipv4_frame(src_mac, dst_mac, src_ip, dest, IPPROTO_UDP, &udp);
-    stack.device.transmit(&frame);
+    stack.tx(&frame);
     stack.udp_tx += 1;
     Ok(payload.len())
 }
@@ -301,7 +359,7 @@ pub fn send_ping(dest: Ipv4Addr, ident: u16, seq: u16) {
     icmp[3] = csum as u8;
 
     let frame = build_ipv4_frame(src_mac, dst_mac, stack.ip, dest, IPPROTO_ICMP, &icmp);
-    stack.device.transmit(&frame);
+    stack.tx(&frame);
 }
 
 fn build_ipv4_frame(
@@ -340,7 +398,10 @@ pub fn poll() -> usize {
         let frame = {
             let mut guard = STACK.lock();
             let Some(stack) = guard.as_mut() else { return handled };
-            stack.device.receive()
+            match stack.local.pop_front() {
+                Some(f) => Some(f),
+                None => stack.device.receive(),
+            }
         };
         let Some(frame) = frame else { break };
         handle_frame(&frame);
@@ -366,14 +427,15 @@ fn handle_arp(arp: &[u8]) {
         return;
     }
     let oper = be16(arp, 6);
-    if oper != 1 {
-        return; // only replies to requests
-    }
     let mut guard = STACK.lock();
     let Some(stack) = guard.as_mut() else { return };
+    // Learn the sender of every request / reply aimed at us.
     let target_ip: Ipv4Addr = [arp[24], arp[25], arp[26], arp[27]];
-    if target_ip != stack.ip {
-        return;
+    if target_ip == stack.ip {
+        stack.learn([arp[14], arp[15], arp[16], arp[17]], [arp[8], arp[9], arp[10], arp[11], arp[12], arp[13]]);
+    }
+    if oper != 1 || target_ip != stack.ip {
+        return; // only requests for our address get a reply
     }
     // Build ARP reply (sender/target swapped, our MAC as sender hw).
     let sender_mac: MacAddr = [arp[8], arp[9], arp[10], arp[11], arp[12], arp[13]];
@@ -389,7 +451,7 @@ fn handle_arp(arp: &[u8]) {
     reply.extend_from_slice(&stack.ip);
     reply.extend_from_slice(&sender_mac);
     reply.extend_from_slice(&sender_ip);
-    stack.device.transmit(&reply);
+    stack.tx(&reply);
     stack.arp_replies += 1;
 }
 
@@ -446,5 +508,5 @@ fn reply_echo(frame: &[u8], src_ip: Ipv4Addr, dst_ip: Ipv4Addr, icmp_req: &[u8])
     icmp[3] = csum as u8;
 
     let reply = build_ipv4_frame(our_mac, src_mac, dst_ip, src_ip, IPPROTO_ICMP, &icmp);
-    stack.device.transmit(&reply);
+    stack.tx(&reply);
 }

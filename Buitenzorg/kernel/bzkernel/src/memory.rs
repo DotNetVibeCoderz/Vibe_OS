@@ -345,6 +345,51 @@ pub fn with_ctx<R>(f: impl FnOnce(&mut MemCtx) -> R) -> R {
     f(guard.as_mut().expect("memory context not installed"))
 }
 
+/// Kernel virtual window for device registers (MMIO BARs of PCI devices,
+/// virtio-mmio slots, ...): above the user half and the heap, below the
+/// higher half; handed out bottom-up and never reused.
+const MMIO_WINDOW: u64 = 0x5555_0000_0000;
+const MMIO_WINDOW_SIZE: u64 = 1 << 32;
+static MMIO_NEXT: AtomicU64 = AtomicU64::new(MMIO_WINDOW);
+
+/// Map `len` bytes of device memory at physical `phys` (uncached) and return
+/// the kernel virtual address of `phys` itself. Mappings live forever.
+pub fn map_mmio(phys: u64, len: u64) -> Option<u64> {
+    let first = phys & !0xFFF;
+    let pages = ((phys + len.max(1) + 0xFFF) & !0xFFF).saturating_sub(first) / 4096;
+    let va = MMIO_NEXT.fetch_add(pages * 4096, Ordering::SeqCst);
+    if va + pages * 4096 > MMIO_WINDOW + MMIO_WINDOW_SIZE {
+        return None;
+    }
+    with_ctx(|ctx| {
+        for i in 0..pages {
+            crate::arch::paging::map_device(&mut ctx.mapper, &mut ctx.frames, va + i * 4096, first + i * 4096).ok()?;
+        }
+        Some(va + (phys - first))
+    })
+}
+
+/// Physically contiguous zeroed DMA frames (`pages` of them), for buffers a
+/// device reads as one block. Taken from the allocator's fresh cursor, so they
+/// are contiguous unless a region boundary intervenes (then None).
+pub fn alloc_dma_contiguous(pages: usize) -> Option<(u64, *mut u8)> {
+    with_ctx(|ctx| {
+        let mut frames = alloc::vec::Vec::with_capacity(pages);
+        for _ in 0..pages {
+            frames.push(ctx.frames.alloc_fresh()?);
+        }
+        if frames.windows(2).any(|w| w[1] != w[0] + 4096) {
+            for f in frames {
+                ctx.frames.free(f);
+            }
+            return None;
+        }
+        let virt = phys_to_virt(frames[0]) as *mut u8;
+        unsafe { core::ptr::write_bytes(virt, 0, pages * 4096) };
+        Some((frames[0], virt))
+    })
+}
+
 /// Allocate one zeroed 4 KiB physical frame for device DMA, returning
 /// `(physical_address, kernel_virtual_pointer)`. The physical address is what a
 /// bus-master device (e.g. the AC'97 sound card) programs into its descriptors;
@@ -432,6 +477,16 @@ impl BootInfoFrameAllocator {
             self.region += 1;
             self.addr = 0;
         }
+    }
+
+    /// A frame from the memory-map cursor only (skips the recycled free
+    /// list), so consecutive calls return ascending, usually adjacent frames.
+    pub fn alloc_fresh(&mut self) -> Option<u64> {
+        let saved = self.free_head;
+        self.free_head = FREE_END;
+        let f = self.alloc();
+        self.free_head = saved;
+        f
     }
 
     /// Return the frame at `phys` to the free list. The caller guarantees

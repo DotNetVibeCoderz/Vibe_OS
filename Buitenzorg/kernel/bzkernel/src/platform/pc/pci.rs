@@ -68,6 +68,55 @@ fn write_config_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
 }
 
 impl PciDevice {
+    /// Read a 32-bit config-space register (offset 4-byte aligned).
+    pub fn read32(&self, offset: u8) -> u32 {
+        read_config_u32(self.bus, self.slot, self.function, offset)
+    }
+
+    /// Read one byte of config space.
+    pub fn read8(&self, offset: u8) -> u8 {
+        (self.read32(offset & !3) >> ((offset & 3) * 8)) as u8
+    }
+
+    /// Read 16 bits of config space (offset 2-byte aligned).
+    pub fn read16(&self, offset: u8) -> u16 {
+        (self.read32(offset & !3) >> ((offset & 2) * 8)) as u16
+    }
+
+    /// Physical address of memory BAR `index` (64-bit BARs span index and
+    /// index+1). None for an I/O BAR or an unassigned one.
+    pub fn mem_bar(&self, index: u8) -> Option<u64> {
+        let lo = self.bar(index);
+        if lo & 1 != 0 {
+            return None;
+        }
+        let mut addr = (lo & !0xF) as u64;
+        if (lo >> 1) & 3 == 2 && index < 5 {
+            addr |= (self.bar(index + 1) as u64) << 32;
+        }
+        (addr != 0).then_some(addr)
+    }
+
+    /// Enable memory-space decoding and bus-master DMA.
+    pub fn enable_mem_and_bus_master(&self) {
+        let cmd = read_config_u32(self.bus, self.slot, self.function, 0x04);
+        write_config_u32(self.bus, self.slot, self.function, 0x04, cmd | 0x0006);
+    }
+
+    /// Walk the capability list: (capability id, config offset) pairs.
+    pub fn capabilities(&self) -> Vec<(u8, u8)> {
+        let mut out = Vec::new();
+        if self.read16(0x06) & 0x10 == 0 {
+            return out; // no capability list
+        }
+        let mut ptr = self.read8(0x34) & !3;
+        while ptr != 0 && out.len() < 48 {
+            out.push((self.read8(ptr), ptr));
+            ptr = self.read8(ptr + 1) & !3;
+        }
+        out
+    }
+
     /// Read a base address register (0..=5) as its raw 32-bit value.
     pub fn bar(&self, index: u8) -> u32 {
         read_config_u32(self.bus, self.slot, self.function, 0x10 + index * 4)

@@ -2,13 +2,12 @@
 //! (v0.2 "Akar": interrupt + timer; APIC migration is tracked in §17).
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 use pic8259::ChainedPics;
 use spin::{Mutex, Once};
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
-use crate::{gdt, print, println};
+use crate::{gdt, println};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -190,38 +189,10 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     crate::task::preempt(from_user(&frame));
 }
 
-static KEYBOARD: Once<Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Once::new();
-
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
-    let keyboard = KEYBOARD.call_once(|| {
-        Mutex::new(Keyboard::new(
-            ScancodeSet1::new(),
-            layouts::Us104Key,
-            HandleControl::Ignore,
-        ))
-    });
-
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
-
-    let mut kb = keyboard.lock();
-    if let Ok(Some(event)) = kb.add_byte(scancode) {
-        if let Some(key) = kb.process_keyevent(event) {
-            match key {
-                // Queue for the terminal once the desktop is up; otherwise
-                // echo to the console (early boot).
-                DecodedKey::Unicode(c) => {
-                    if crate::terminal::is_active() {
-                        crate::keyboard::push(c);
-                    } else {
-                        print!("{}", c);
-                    }
-                }
-                DecodedKey::RawKey(_) => {}
-            }
-        }
-    }
-
+    crate::keyboard::feed_scancode(scancode);
     crate::ioapic::note_irq(1);
     end_of_interrupt(InterruptIndex::Keyboard.as_u8());
 }

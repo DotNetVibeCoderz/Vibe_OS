@@ -268,6 +268,8 @@ pub fn present(back: &[u32]) {
             console.lock().present(back);
         });
     }
+    // Mirror to a virtio GPU, if one is up (multi-arch M2).
+    crate::virtio::gpu::present(back);
 }
 
 #[doc(hidden)]

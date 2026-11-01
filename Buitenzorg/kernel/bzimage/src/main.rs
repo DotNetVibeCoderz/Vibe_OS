@@ -4,7 +4,7 @@
 //! bzimage --out <dir>            copy UEFI+BIOS (+ Limine UEFI) images to <dir>
 //! bzimage --run [--uefi]         boot the image in QEMU (BIOS default)
 //! bzimage --smoke [--uefi]       headless boot, serial to stdout (for CI grep)
-//!         --media ide|ahci|nvme|usb   controller the boot disk is attached to
+//!         --media ide|ahci|nvme|usb|virtio   controller the boot disk is attached to
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ fn main() {
 
     println!("UEFI image: {UEFI_IMAGE}");
     println!("BIOS image: {BIOS_IMAGE}");
-    println!("usage: bzimage [--out <dir>] [--run|--smoke] [--uefi] [--media ide|ahci|nvme|usb]");
+    println!("usage: bzimage [--out <dir>] [--run|--smoke] [--uefi] [--media ide|ahci|nvme|usb|virtio]");
 }
 
 fn qemu_binary() -> PathBuf {
@@ -115,8 +115,13 @@ fn run_qemu(uefi: bool, smoke: bool, media: &str) {
                 .arg(format!("id=bzdisk,format=raw,file={image},if=none"));
             cmd.args(["-usb", "-device", "usb-storage,drive=bzdisk"]);
         }
+        "virtio" => {
+            cmd.arg("-drive")
+                .arg(format!("id=bzdisk,format=raw,file={image},if=none"));
+            cmd.args(["-device", "virtio-blk-pci,drive=bzdisk,bootindex=0,disable-legacy=on"]);
+        }
         other => {
-            eprintln!("unknown --media '{other}' (expected ide|ahci|nvme|usb)");
+            eprintln!("unknown --media '{other}' (expected ide|ahci|nvme|usb|virtio)");
             std::process::exit(1);
         }
     }

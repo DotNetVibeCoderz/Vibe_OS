@@ -24,8 +24,17 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
                  -device nvme,drive=bzdisk,serial=bz0001) ;;
     usb)  drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
                  -usb -device usb-storage,drive=bzdisk) ;;
+    # Multi-arch M2: the boot disk on virtio-blk (2 CPUs).
+    # Multi-arch M2: the boot disk on virtio-blk, a virtio keyboard + tablet,
+    # and a QEMU monitor to type/move through them once the desktop is up.
+    virtio) drive=(-smp 2 -drive "id=bzdisk,format=raw,file=$img,if=none"
+                 -device virtio-blk-pci,drive=bzdisk,bootindex=0,disable-legacy=on
+                 -device virtio-keyboard-pci -device virtio-tablet-pci
+                 -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-legacy=on
+                 -device virtio-gpu-pci -audiodev none,id=vsnd -device virtio-sound-pci,audiodev=vsnd
+                 -monitor tcp:127.0.0.1:4481,server,nowait) ;;
   esac
-  timeout --foreground 150 "$qemu" "${drive[@]}" \
+  timeout --foreground 190 "$qemu" "${drive[@]}" \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
   local pid=$!
@@ -34,8 +43,25 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     sleep 1
     grep -qF "BUITENZORG READY" "$log" 2>/dev/null && break
   done
+  if [ "$media" = virtio ]; then virtio_input "$log"; fi
   kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
+}
+
+# Type a few keys and move/click the pointer through the QEMU monitor; the
+# events reach the guest through the virtio keyboard/tablet.
+virtio_input() {
+  local log="$1"
+  if exec 3<>/dev/tcp/127.0.0.1/4481; then
+    for cmd in "sendkey l" "sendkey s" "sendkey ret" "mouse_move 200 150" "mouse_button 1" "mouse_button 0"; do
+      printf '%s\n' "$cmd" >&3; sleep 0.7
+    done
+    for _ in $(seq 20); do
+      sleep 1
+      grep -qF "VIRTIO INPUT OK" "$log" && break
+    done
+    exec 3>&-
+  fi
 }
 
 require() { # require <log> <marker>...
@@ -87,6 +113,20 @@ if grep -qF "Hello from C#" "$root/dist/boot-ide1.log"; then
   require "$root/dist/boot-ide1.log" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: MULTIPROC OK" "MILESTONE: PROCCTL OK"
 fi
 echo "smoke [ide1]: process tests pass on a single CPU"
+
+# virtio-blk boot disk (multi-arch M2): the kernel's own virtio driver must
+# carry /disk -- every app, the process tests, and a write that reaches the
+# image file on the host.
+boot virtio "$root/dist/boot-virtio.log"
+require "$root/dist/boot-virtio.log" "${basic[@]}" "MILESTONE: VIRTIO BLK OK" "via virtio-blk" "MILESTONE: DISK WRITE OK" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: VIRTIO GPU OK" "MILESTONE: VIRTIO SND OK"
+if grep -qF "Hello from C#" "$root/dist/boot-virtio.log"; then
+  require "$root/dist/boot-virtio.log" "MILESTONE: MULTIPROC OK" "MILESTONE: PROCCTL OK" "MILESTONE: EDITOR OK" "MILESTONE: SMP FINELOCK OK"
+fi
+needle="$(grep -a -o 'BOOTCNT.TXT = BZPERSIST[^[:cntrl:]]*' "$root/dist/boot-virtio.log" | head -1 | sed 's/^BOOTCNT.TXT = //')"
+if [ -z "$needle" ] || ! grep -a -q -F "$needle" "$img"; then
+  echo "SMOKE TEST FAILED: virtio /disk write not found in the image ('$needle')"; exit 1
+fi
+echo "smoke [virtio]: /disk on virtio-blk, apps + processes, write persisted ($needle)"
 
 # Boot-media matrix: kernel must come up when the disk hangs off other
 # controllers (their native drivers are later roadmap work).

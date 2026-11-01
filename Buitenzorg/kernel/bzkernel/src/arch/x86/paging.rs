@@ -125,6 +125,21 @@ pub fn map(map: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: 
     Ok(())
 }
 
+/// Map the kernel page at `va` to device memory (MMIO) at `pa`: writable,
+/// never executable, uncached (PCD + PWT), so register reads and writes reach
+/// the device in program order.
+pub fn map_device(map: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: u64) -> Result<(), &'static str> {
+    let flags = PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_CACHE
+        | PageTableFlags::WRITE_THROUGH
+        | PageTableFlags::NO_EXECUTE;
+    unsafe { map.map_to(page(va), frame(pa), flags, frames) }
+        .map_err(|_| "device mapping failed")?
+        .flush();
+    Ok(())
+}
+
 /// Unmap the page at `va`; returns the frame it pointed at.
 pub fn unmap(map: &mut PageMap, va: u64) -> Option<u64> {
     let mut local;

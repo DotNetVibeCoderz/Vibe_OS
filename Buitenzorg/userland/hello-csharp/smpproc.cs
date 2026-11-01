@@ -25,6 +25,7 @@ unsafe class SmpProc
     [DllImport("*")] static extern ulong bz_net_send(ulong handle, byte* buf, ulong len);
     [DllImport("*")] static extern ulong bz_net_recv(ulong handle, byte* buf, ulong max);
     [DllImport("*")] static extern ulong bz_net_close(ulong handle);
+    [DllImport("*")] static extern ulong bz_net_info(byte* outInfo);
     [DllImport("*")] static extern ulong bz_pkg_list(byte* buf, ulong max);
     [DllImport("*")] static extern ulong bz_audio_stat(byte* buf);
     [DllImport("*")] static extern ulong bz_thread_self();
@@ -59,6 +60,10 @@ unsafe class SmpProc
         ulong port = 7100 + (ulong)(digit - (byte)'0');
         if (sock == 0 || sock == ERR || bz_net_bind(sock, port) != 0)
             return 2;
+        // Our own address (10.0.0.1 on loopback, 10.0.2.15 with a NIC).
+        byte* ni = stackalloc byte[64];
+        if (bz_net_info(ni) != 0)
+            return 2;
         byte* pkt = stackalloc byte[16 + LEN];
         byte* back = stackalloc byte[16 + LEN];
         byte* pkgs = stackalloc byte[64 * 48];
@@ -74,8 +79,8 @@ unsafe class SmpProc
             if (pid == 0 || pid == ERR) { result = 2; break; }
             if (bz_proc_wait(pid) != 42) { result = 1; break; }
 
-            // Datagram to ourselves: header (10.0.0.1, port) + payload.
-            pkt[0] = 10; pkt[1] = 0; pkt[2] = 0; pkt[3] = 1;
+            // Datagram to ourselves: header (own address, port) + payload.
+            pkt[0] = ni[0]; pkt[1] = ni[1]; pkt[2] = ni[2]; pkt[3] = ni[3];
             pkt[4] = (byte)port; pkt[5] = (byte)(port >> 8); pkt[6] = 0; pkt[7] = 0;
             for (int i = 8; i < 16; i++) pkt[i] = 0;
             for (int i = 0; i < LEN; i++)

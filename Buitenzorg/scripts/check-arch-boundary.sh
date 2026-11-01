@@ -22,7 +22,8 @@ pattern='x86_64::|asm!|core::arch::x86_64|\bPort(::|<)|\bMsr\b|bootloader_api'
 declare -A ALLOWED=()
 
 fail=0
-for f in "$src"/*.rs; do
+# Generic code: the top-level modules and the virtio drivers (M2).
+for f in "$src"/*.rs "$src"/virtio/*.rs; do
   name="$(basename "$f")"
   if grep -Eq "$pattern" "$f"; then
     if [ -z "${ALLOWED[$name]+x}" ]; then
