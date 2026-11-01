@@ -93,6 +93,20 @@ pub fn set_rsp0(top: u64) {
     }
 }
 
+/// Load the kernel GDT on an application processor and reload its segment
+/// registers. The TSS is not loaded: it is marked busy by the BSP, and a parked
+/// AP (interrupts off) never needs a privilege-level stack switch.
+pub fn load_on_ap() {
+    let (gdt, selectors) = GDT.get().expect("gdt not initialized");
+    gdt.load();
+    unsafe {
+        CS::set_reg(selectors.kernel_code);
+        SS::set_reg(selectors.kernel_data);
+        DS::set_reg(selectors.kernel_data);
+        ES::set_reg(selectors.kernel_data);
+    }
+}
+
 pub fn init() {
     let tss: &'static TaskStateSegment = unsafe {
         let tss = &mut *core::ptr::addr_of_mut!(TSS);

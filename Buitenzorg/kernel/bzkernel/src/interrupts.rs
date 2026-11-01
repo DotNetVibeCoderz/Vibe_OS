@@ -83,8 +83,24 @@ pub fn init() {
     });
     idt.load();
 
-    unsafe { PICS.lock().initialize() };
+    // `initialize` restores the masks the firmware left behind. Legacy BIOS
+    // leaves the PIC lines open; UEFI firmware (OVMF) drives its own LAPIC
+    // timer and masks the whole 8259, so on a UEFI boot no timer IRQ ever
+    // arrived and the first timer wait hung forever. Unmask the lines the
+    // kernel uses: timer (0), keyboard (1), cascade (2) and PS/2 mouse (12).
+    let (fw_master, fw_slave) = unsafe {
+        let mut pics = PICS.lock();
+        let [m, s] = pics.read_masks();
+        pics.initialize();
+        let [m2, s2] = pics.read_masks();
+        pics.write_masks(m2 & !0b0000_0111, s2 & !0b0001_0000);
+        (m, s)
+    };
     x86_64::instructions::interrupts::enable();
+    crate::serial::_print(format_args!(
+        "[kernel] PIC masks left by firmware: master {:#04x} slave {:#04x} (timer/kbd/cascade/mouse unmasked)\n",
+        fw_master, fw_slave
+    ));
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {

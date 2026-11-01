@@ -58,7 +58,7 @@
 - [x] Syscall ABI (v1 + window ABI v0.8) + entry ring-3 SYSCALL/SYSRET
 - [x] IPC (message passing, kernel-space)
 - [~] HAL — *implisit x86-64; abstraksi multi-arch belum*
-- [ ] SMP multi-core · [ ] APIC · [ ] ekstensi virtualization
+- [~] SMP multi-core — **increment 1 ✓ (2026-11-01):** CPU ditemukan dari ACPI MADT, Local APIC BSP diaktifkan, AP dibangunkan INIT-SIPI-SIPI lewat trampolin real-mode→long-mode di 0x8000 (page table sementara dengan identity map; memori < 1 MiB tak pernah dialokasikan) lalu **diparkir** — `MILESTONE: SMP OK` (QEMU `-smp 4`: 3 AP online; smoke AHCI + UEFI `-smp 2`). Scheduler tetap single-core: state SYSCALL per-CPU (GS/swapgs), root page table per-CPU, lock pengganti `without_interrupts`, dan TLB shootdown belum · [~] APIC (LAPIC BSP mode virtual-wire + IPI; IRQ masih lewat PIC 8259, IOAPIC/timer LAPIC belum) · [ ] ekstensi virtualization
 
 ### 🔌 Drivers
 - [x] PCI enumeration + block-device registry

@@ -14,7 +14,8 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
   local -a drive
   case "$media" in
     ide)  drive=(-drive "format=raw,file=$img") ;;
-    ahci) drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
+    # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
+    ahci) drive=(-smp 2 -drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device ahci,id=ahci0 -device ide-hd,drive=bzdisk,bus=ahci0.0) ;;
     nvme) drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device nvme,drive=bzdisk,serial=bz0001) ;;
@@ -79,7 +80,36 @@ echo "smoke [ide]: all milestones present"
 for media in ahci nvme usb; do
   boot "$media" "$root/dist/boot-$media.log"
   require "$root/dist/boot-$media.log" "${basic[@]}"
+  if [ "$media" = ahci ]; then
+    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)"
+    echo "smoke [ahci]: second CPU started (SMP)"
+  fi
   echo "smoke [$media]: boots to READY"
 done
+
+# UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked —
+# that once hung every UEFI boot at the first timer wait while the BIOS-only
+# smoke test stayed green. Needs the OVMF files `bzimage --run --uefi` downloads.
+ovmf="$root/kernel/target/ovmf/x64"
+if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
+  log="$root/dist/boot-uefi.log"
+  rm -f "$log"
+  timeout --foreground 150 "$qemu" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/code.fd" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/vars.fd" \
+    -drive "format=raw,file=$root/dist/buitenzorg-uefi.img" -smp 2 \
+    -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
+    -display none -serial "file:$log" -no-reboot &
+  qpid=$!
+  for _ in $(seq 130); do
+    sleep 1
+    grep -q "BUITENZORG READY" "$log" 2>/dev/null && break
+  done
+  kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
+  require "$log" "${basic[@]}" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)"
+  echo "smoke [uefi]: boots to READY on 2 CPUs"
+else
+  echo "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
+fi
 
 echo "SMOKE TEST PASSED: ide/ahci/nvme/usb"

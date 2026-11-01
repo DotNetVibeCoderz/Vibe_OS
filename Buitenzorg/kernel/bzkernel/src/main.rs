@@ -60,6 +60,7 @@ mod script;
 mod serial;
 mod service;
 mod shell;
+mod smp;
 mod syscall;
 mod task;
 mod terminal;
@@ -141,6 +142,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     power::init(rsdp);
 
     allocator::init(&mut mapper, &mut frame_allocator).expect("heap init failed");
+    // Route the legacy PIC's IRQs through the Local APIC (virtual wire). BIOS
+    // firmware leaves it like this; UEFI firmware does not, and without it no
+    // timer interrupt ever arrives on a UEFI boot.
+    if !smp::enable_bsp_lapic(&mut mapper, &mut frame_allocator) {
+        println!("[kernel] warning: could not set up the Local APIC (virtual wire)");
+    }
     heap_smoke_test();
     println!("[kernel] paging + {} MiB kernel heap online", allocator::HEAP_SIZE / (1024 * 1024));
     println!("[kernel] MILESTONE: MEMORY OK");
@@ -158,6 +165,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     memory::install_ctx(mapper, frame_allocator);
     // Per-process user address spaces (multi-process increment 1).
     aspace::init();
+    // SMP increment 1: discover CPUs (MADT) and start + park the APs.
+    smp::record_kernel_cr3();
+    let (cpus, aps) = smp::init();
+    if aps + 1 == cpus {
+        println!("[kernel] MILESTONE: SMP OK ({} CPU(s): {} AP(s) started via INIT-SIPI-SIPI, parked)", cpus, aps);
+    } else {
+        println!("[kernel] smp: only {} of {} application processors came online", aps, cpus - 1);
+    }
 
     // Pre-install the base app set so `run`/`bz` work out of the box.
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);

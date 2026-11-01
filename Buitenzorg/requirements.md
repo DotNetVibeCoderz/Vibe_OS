@@ -545,7 +545,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] Syscall ABI v1 — *tabel v1 + dispatcher + kontrak `bz-abi`↔C# + entry ring-3 SYSCALL/SYSRET (dipakai C# di ring 3)*
 - [ ] IPC (message passing) — *channel antar-task kernel-space (send/recv, teruji di boot); IPC antar-proses user-space belum*
 - [ ] HAL (abstraksi arsitektur)
-- [ ] SMP multi-core
+- [~] SMP multi-core — **increment 1 ✓ (2026-11-01):** CPU ditemukan dari ACPI MADT, Local APIC BSP diaktifkan, AP dibangunkan INIT-SIPI-SIPI lewat trampolin real-mode→long-mode di 0x8000 (page table sementara dengan identity map; memori < 1 MiB tak pernah dialokasikan) lalu **diparkir** — `MILESTONE: SMP OK` (QEMU `-smp 4`: 3 AP online; smoke AHCI + UEFI `-smp 2`). Scheduler tetap single-core: state SYSCALL per-CPU (GS/swapgs), root page table per-CPU, lock pengganti `without_interrupts`, dan TLB shootdown belum
 - [~] Ekstensi virtualization (VT-x/AMD-V) — dideteksi (CPUID/MSR, `vmx.rs`); driver native belum, VMM software dipakai
 
 ### 🔌 Drivers (v0.3, v0.11)

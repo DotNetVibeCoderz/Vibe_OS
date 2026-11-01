@@ -28,6 +28,12 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **SMP increment 1.** CPUs discovered from the ACPI MADT; the BSP's Local
+  APIC enabled; every AP started with INIT-SIPI-SIPI through a real-mode ->
+  long-mode trampoline at 0x8000 (temporary page tables with an identity map;
+  memory below 1 MiB is never allocated) and parked → `MILESTONE: SMP OK`
+  (3 APs online with `-smp 4`; smoke boots AHCI and UEFI with 2 CPUs). The
+  scheduler is still single-core.
 - **Every app is a process.** `app::run_named` (the boot demos) is now spawn +
   blocking wait instead of running the app on the launching task, so no app
   shares the boot task's privilege stack any more and every app can be killed;
@@ -49,6 +55,11 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **UEFI boots hung at the first timer wait** (pre-existing; the BIOS-only
+  smoke test never saw it). `pic8259::initialize` restores the firmware's IRQ
+  masks, and UEFI firmware (OVMF) leaves the 8259 fully masked (0xff/0xff), so
+  no timer interrupt ever arrived. The kernel now unmasks the lines it uses
+  (and puts the BSP LAPIC in virtual-wire mode); the smoke tests boot UEFI too.
 - **FAT12 writer corrupted the `/ram` root directory** — it located the second
   FAT copy at `(data_start - fat_start) / 2`, which includes the root directory
   sectors, so FAT entries were written into directory entries 64+. Overwriting a

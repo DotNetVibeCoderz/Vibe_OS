@@ -73,6 +73,34 @@ pub fn init(rsdp_addr: u64) -> bool {
     parse_fadt(fadt)
 }
 
+/// Physical address of the ACPI table with signature `sig` (e.g. `b"APIC"` for
+/// the MADT), found through the RSDP recorded by [`init`].
+pub fn find_table(sig: &[u8; 4]) -> Option<u64> {
+    let rsdp_addr = RSDP.load(Ordering::SeqCst);
+    if rsdp_addr == 0 {
+        return None;
+    }
+    let revision = unsafe { *(phys_to_virt(rsdp_addr + 15) as *const u8) };
+    let (sdt, entry_size) = if revision >= 2 {
+        (read_u64(rsdp_addr, 24), 8u64)
+    } else {
+        (read_u32(rsdp_addr, 16) as u64, 4u64)
+    };
+    if sdt == 0 {
+        return None;
+    }
+    let count = (read_u32(sdt, 4) as u64).saturating_sub(36) / entry_size;
+    (0..count)
+        .map(|i| {
+            if entry_size == 8 {
+                read_u64(sdt, 36 + i * 8)
+            } else {
+                read_u32(sdt, 36 + i * 4) as u64
+            }
+        })
+        .find(|&t| &signature(t) == sig)
+}
+
 fn parse_fadt(fadt: u64) -> bool {
     // FADT fields (ACPI): DSDT u32 @ +40, PM1a_CNT_BLK u32 @ +64,
     // PM1b_CNT_BLK u32 @ +68, RESET_REG (GAS, 12 bytes) @ +116,

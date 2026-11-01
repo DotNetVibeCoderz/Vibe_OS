@@ -470,6 +470,9 @@ pub struct BootInfoFrameAllocator {
     freed: u64,
 }
 
+/// Physical memory below this is never allocated (see `allocate_frame`).
+const LOW_MEMORY_END: u64 = 0x10_0000;
+
 /// End of the free list (phys 0 can be a usable frame, so it is no sentinel).
 const FREE_END: u64 = u64::MAX;
 
@@ -509,8 +512,11 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
         loop {
             let r = self.regions.get(self.region)?;
             if r.kind == MemoryRegionKind::Usable {
-                if self.addr < r.start {
-                    self.addr = r.start;
+                // Never hand out memory below 1 MiB: it holds the SMP
+                // trampoline (0x8000, smp.rs) and must stay free for it.
+                let floor = r.start.max(LOW_MEMORY_END);
+                if self.addr < floor {
+                    self.addr = floor;
                 }
                 if self.addr < r.end {
                     let frame = PhysFrame::containing_address(PhysAddr::new(self.addr));
@@ -534,6 +540,17 @@ impl x86_64::structures::paging::FrameDeallocator<Size4KiB> for BootInfoFrameAll
         self.free_head = phys;
         self.freed += 1;
     }
+}
+
+/// True if the 4 KiB page at `phys` lies inside a region the firmware reported
+/// as usable RAM (so the kernel may write to it, e.g. the SMP trampoline).
+pub fn is_usable_ram(phys: u64) -> bool {
+    with_ctx(|ctx| {
+        ctx.frames
+            .regions
+            .iter()
+            .any(|r| r.kind == MemoryRegionKind::Usable && r.start <= phys && phys + 4096 <= r.end)
+    })
 }
 
 /// (frames handed out, frames returned) since boot; in use = the difference.

@@ -17,7 +17,8 @@ function Invoke-Boot {
     if (Test-Path $Log) { Remove-Item $Log -Force -Confirm:$false }
     $qargs = switch ($Media) {
         "ide"  { @('-drive', "format=raw,file=$image") }
-        "ahci" { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
+        # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
+        "ahci" { @('-smp', '2', '-drive', "id=bzdisk,format=raw,file=$image,if=none",
                    '-device', 'ahci,id=ahci0', '-device', 'ide-hd,drive=bzdisk,bus=ahci0.0') }
         "nvme" { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
                    '-device', 'nvme,drive=bzdisk,serial=bz0001') }
@@ -110,7 +111,36 @@ foreach ($media in @("ahci", "nvme", "usb")) {
     $log = Join-Path $root "dist\boot-$media.log"
     Invoke-Boot -Media $media -Log $log
     Assert-Markers -Log $log -Markers $basic
+    if ($media -eq "ahci") {
+        Assert-Markers -Log $log -Markers @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)")
+        Write-Host "smoke [ahci]: second CPU started (SMP)"
+    }
     Write-Host "smoke [$media]: boots to READY"
+}
+
+# UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked —
+# that once hung every UEFI boot at the first timer wait while the BIOS-only
+# smoke test stayed green. Needs the OVMF files `bzimage --run --uefi` downloads.
+$ovmf = Join-Path $root "kernel\target\ovmf\x64"
+$uefiImage = Join-Path $root "dist\buitenzorg-uefi.img"
+if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
+    $log = Join-Path $root "dist\boot-uefi.log"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    $qargs = @('-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'code.fd')",
+               '-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'vars.fd')",
+               '-drive', "format=raw,file=$uefiImage", '-smp', '2',
+               '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
+               '-display', 'none', '-serial', "file:$log", '-no-reboot')
+    $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
+    foreach ($i in 1..130) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
+    }
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Assert-Markers -Log $log -Markers ($basic + @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)"))
+    Write-Host "smoke [uefi]: boots to READY on 2 CPUs"
+} else {
+    Write-Host "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
 }
 
 Write-Host "SMOKE TEST PASSED: ide/ahci/nvme/usb" -ForegroundColor Green
