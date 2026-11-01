@@ -1,6 +1,7 @@
 //! Glue for the **Limine boot protocol** (multi-arch M1, increment 2) — the
-//! loader the ARM64 and RISC-V ports will use, booting the very same kernel
-//! ELF on x86-64 today.
+//! same requests on every architecture: on x86-64 the kernel ELF also boots
+//! through the `bootloader` crate; the ARM64 port (M3) boots only through
+//! Limine. Architecture-neutral (no asm, no CPU registers).
 //!
 //! The kernel image carries both hand-offs: `_start` for the `bootloader`
 //! crate (`boot.rs`), and the Limine *requests* below, which Limine finds by

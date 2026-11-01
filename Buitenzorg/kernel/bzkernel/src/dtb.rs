@@ -173,7 +173,7 @@ impl<'a> Fdt<'a> {
     /// # Safety
     /// `phys` must point at a DTB in mapped, unchanging memory.
     pub unsafe fn from_phys(phys: u64) -> Result<Fdt<'static>, &'static str> {
-        let base = crate::memory::phys_to_virt(phys) as *const u8;
+        let base = (crate::boot::info().phys_offset + phys) as *const u8;
         let head = unsafe { core::slice::from_raw_parts(base, 8) };
         if be32(head, 0) != MAGIC {
             return Err("dtb: bad magic");
@@ -337,11 +337,16 @@ impl Platform {
 
     pub fn summary(&self) -> alloc::string::String {
         let ram: u64 = self.memory.iter().map(|m| m.1).sum();
+        // UEFI firmware removes /memory nodes (its memory map is authoritative).
+        let ram = if self.memory.is_empty() {
+            alloc::string::String::from("RAM per firmware memory map")
+        } else {
+            alloc::format!("{} MiB RAM at {:#x}", ram / (1024 * 1024), self.memory[0].0)
+        };
         alloc::format!(
-            "{}: {} MiB RAM at {:#x}, {} CPU(s), console {} @ {:#x}, irq {} @ {:#x}, timer {}, {} virtio-mmio slot(s), power {}",
+            "{}: {}, {} CPU(s), console {} @ {:#x}, irq {} @ {:#x}, timer {}, {} virtio-mmio slot(s), power {}",
             self.model,
-            ram / (1024 * 1024),
-            self.memory.first().map(|m| m.0).unwrap_or(0),
+            ram,
             self.cpus,
             self.uart.as_ref().map(|u| u.0.as_str()).unwrap_or("-"),
             self.uart.as_ref().map(|u| u.1).unwrap_or(0),

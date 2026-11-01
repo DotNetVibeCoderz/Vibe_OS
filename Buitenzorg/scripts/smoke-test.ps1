@@ -230,4 +230,29 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
     Write-Host "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.ps1 before the build)"
 }
 
+# ARM64 (multi-arch M3): the ARM64 kernel through Limine on QEMU `virt`
+# (GICv3, Cortex-A72, edk2 firmware, Device Tree: acpi=off -- with ACPI on,
+# edk2 hides the DTB). Needs qemu-system-aarch64 next to qemu-system-x86_64.
+$qemuArm = Join-Path (Split-Path -Parent $qemu) "qemu-system-aarch64.exe"
+$armFw = Join-Path (Split-Path -Parent $qemu) "share\edk2-aarch64-code.fd"
+$armImage = Join-Path $root "dist\buitenzorg-arm64.img"
+if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
+    $log = Join-Path $root "dist\boot-arm64.log"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    $qargs = @('-M', 'virt,gic-version=3,acpi=off', '-cpu', 'cortex-a72', '-m', '512M', '-bios', "`"$armFw`"",
+               '-drive', "`"id=d0,format=raw,file=$armImage,if=none`"", '-device', 'virtio-blk-pci,drive=d0',
+               '-device', 'ramfb', '-display', 'none', '-serial', "file:$log", '-no-reboot')
+    $p = Start-Process -FilePath $qemuArm -ArgumentList $qargs -PassThru
+    foreach ($i in 1..90) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "ARM64 READY" -Quiet)) { break }
+    }
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed",
+        "MILESTONE: DTB OK", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY")
+    Write-Host "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer"
+} else {
+    Write-Host "smoke [arm64]: skipped (needs qemu-system-aarch64, edk2-aarch64-code.fd and dist\buitenzorg-arm64.img)"
+}
+
 Write-Host "SMOKE TEST PASSED: ide/ahci/nvme/usb" -ForegroundColor Green

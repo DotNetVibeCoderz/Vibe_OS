@@ -35,6 +35,18 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 1): the ARM64 kernel boots.** The kernel crate
+  builds for `aarch64-unknown-none-softfloat`; Limine loads it on QEMU `virt`
+  (UEFI). It installs its exception vectors, reads the live Device Tree,
+  maps the PL011 console and the GICv3 into the MMU, and takes timer
+  interrupts at 100 Hz (`MILESTONE: ARM64 BOOT OK`, smoke step `[arm64]`).
+  The x86 kernel moved to `pc_main.rs`; `main.rs` picks the architecture.
+- **Desktop: `tile` / `tutup` shell commands; console no longer scrolls the
+  desktop.** `tile` arranges the current workspace's windows side by side,
+  `tutup` closes them (except the terminal). Kernel log lines printed after the
+  desktop came up used to scroll the framebuffer, shifting the desktop up and
+  leaving log text under the taskbar; they now go to serial only. The
+  wallpaper screenshots were retaken with different apps open on each.
 - **Multi-arch M2: virtio drivers — blk, input, net, gpu, sound.** A generic
   virtio core (split virtqueues, feature negotiation) over the modern
   virtio-PCI transport. The whole OS boots from a virtio-blk disk; virtio

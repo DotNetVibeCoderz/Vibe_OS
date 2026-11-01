@@ -222,8 +222,14 @@ fn add_file(builder: &mut bootloader::DiskImageBuilder, files: &mut Vec<(String,
 /// /disk works exactly as on the other images). Returns Ok(false) when the
 /// Limine binaries are absent.
 fn limine_image(limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
+    limine_image_for("BOOTX64.EFI", limine, kernel, files, out)
+}
+
+/// [`limine_image`] for any architecture: `efi_name` is the removable-media
+/// loader name (BOOTX64.EFI, BOOTAA64.EFI, BOOTRISCV64.EFI).
+fn limine_image_for(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
     use std::io::{Read, Seek, SeekFrom, Write};
-    let Ok(efi) = std::fs::read(limine.join("BOOTX64.EFI")) else { return Ok(false) };
+    let Ok(efi) = std::fs::read(limine.join(efi_name)) else { return Ok(false) };
     let kernel_elf = std::fs::read(kernel)?;
     const START_LBA: u64 = 2048;
     const PART_MIB: u64 = 64;
@@ -241,7 +247,7 @@ fn limine_image(limine: &std::path::Path, kernel: &std::path::Path, files: &[(St
             file.write_all(bytes)
         };
         let boot = root.create_dir("EFI")?.create_dir("BOOT")?;
-        put(&boot, "BOOTX64.EFI", &efi)?;
+        put(&boot, efi_name, &efi)?;
         put(
             &boot,
             "limine.conf",
@@ -395,6 +401,16 @@ fn main() {
         }
         Err(e) => panic!("limine image: {e}"),
     }
+
+    // Multi-arch M3: the ARM64 kernel (built separately for
+    // aarch64-unknown-none-softfloat by scripts/build-arm64.*) on a Limine
+    // image for QEMU `virt` + UEFI (AAVMF/edk2). Optional.
+    let arm_kernel = manifest_dir().join("..").join("target").join("aarch64-unknown-none-softfloat").join("release").join("bzkernel");
+    println!("cargo:rerun-if-changed={}", arm_kernel.display());
+    let arm_path = out_dir.join("buitenzorg-arm64.img");
+    let arm_ok = arm_kernel.exists()
+        && limine_image_for("BOOTAA64.EFI", &limine_dir, &arm_kernel, &files, &arm_path).unwrap_or(false);
+    println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
 
     println!("cargo:rustc-env=UEFI_IMAGE={}", uefi_path.display());
     println!("cargo:rustc-env=BIOS_IMAGE={}", bios_path.display());

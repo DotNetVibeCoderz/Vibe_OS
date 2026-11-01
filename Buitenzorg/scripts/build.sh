@@ -15,6 +15,10 @@ fi
 "$root/scripts/fetch-limine.sh" || echo "==> Limine not fetched; no Limine image"
 
 echo "==> kernel (Rust)"
+# Multi-arch M3: the ARM64 kernel first (bzimage packs it into
+# dist/buitenzorg-arm64.img when it exists). Non-fatal.
+(cd "$root/kernel" && cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat) \
+  || echo "==> ARM64 kernel build failed; no ARM64 image"
 (cd "$root/kernel" && cargo build --release && cargo run --release -p bzimage -- --out "$root/dist")
 
 echo "==> runtime + sdk (.NET)"

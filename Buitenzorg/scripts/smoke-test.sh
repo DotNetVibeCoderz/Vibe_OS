@@ -189,4 +189,31 @@ else
   echo "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.sh before the build)"
 fi
 
+# ARM64 (multi-arch M3): the ARM64 kernel through Limine on QEMU `virt`
+# (GICv3, Cortex-A72, edk2 firmware, Device Tree: acpi=off -- with ACPI on,
+# edk2 hides the DTB).
+qemu_arm="$(command -v qemu-system-aarch64 || true)"
+arm_fw=""
+for f in /usr/share/qemu-efi-aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/qemu/edk2-aarch64-code.fd; do
+  [ -f "$f" ] && { arm_fw="$f"; break; }
+done
+if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.img" ]; then
+  log="$root/dist/boot-arm64.log"
+  rm -f "$log"
+  timeout --foreground 100 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -m 512M \
+    -bios "$arm_fw" -drive "id=d0,format=raw,file=$root/dist/buitenzorg-arm64.img,if=none" \
+    -device virtio-blk-pci,drive=d0 -device ramfb -display none -serial "file:$log" -no-reboot &
+  qpid=$!
+  for _ in $(seq 90); do
+    sleep 1
+    grep -q "ARM64 READY" "$log" 2>/dev/null && break
+  done
+  kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
+  require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" \
+    "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY"
+  echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer"
+else
+  echo "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
+fi
+
 echo "SMOKE TEST PASSED: ide/ahci/nvme/usb"

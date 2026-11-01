@@ -9,7 +9,6 @@ pub mod context;
 pub mod gdt;
 pub mod interrupts;
 pub mod ioapic;
-pub mod limine;
 pub mod paging;
 pub mod smp;
 pub mod usermode;

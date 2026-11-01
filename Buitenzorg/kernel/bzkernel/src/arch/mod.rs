@@ -16,6 +16,9 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86;
 
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
+
 /// Kernel-thread context switching: per-task FPU state, the initial frame of
 /// a new task, and the stack switch itself.
 pub mod context {
@@ -50,6 +53,8 @@ pub mod cpu {
     pub fn halt() {
         #[cfg(target_arch = "x86_64")]
         x86_64::instructions::hlt();
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::halt();
     }
 
     /// Enable interrupts and halt as one step (no interrupt can slip in
@@ -58,6 +63,8 @@ pub mod cpu {
     pub fn enable_and_halt() {
         #[cfg(target_arch = "x86_64")]
         x86_64::instructions::interrupts::enable_and_hlt();
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::enable_and_halt();
     }
 
     /// True if maskable interrupts are enabled on this CPU.
@@ -65,6 +72,8 @@ pub mod cpu {
     pub fn interrupts_enabled() -> bool {
         #[cfg(target_arch = "x86_64")]
         return x86_64::instructions::interrupts::are_enabled();
+        #[cfg(target_arch = "aarch64")]
+        return super::aarch64::cpu::interrupts_enabled();
     }
 
     /// Enable maskable interrupts on this CPU.
@@ -72,6 +81,8 @@ pub mod cpu {
     pub fn enable_interrupts() {
         #[cfg(target_arch = "x86_64")]
         x86_64::instructions::interrupts::enable();
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::enable_interrupts();
     }
 
     /// Disable maskable interrupts on this CPU.
@@ -79,6 +90,8 @@ pub mod cpu {
     pub fn disable_interrupts() {
         #[cfg(target_arch = "x86_64")]
         x86_64::instructions::interrupts::disable();
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::disable_interrupts();
     }
 
     /// Run `f` with interrupts disabled, restoring the previous state after.
@@ -86,6 +99,8 @@ pub mod cpu {
     pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
         #[cfg(target_arch = "x86_64")]
         return x86_64::instructions::interrupts::without_interrupts(f);
+        #[cfg(target_arch = "aarch64")]
+        return super::aarch64::cpu::without_interrupts(f);
     }
 
     /// A monotonic, high-resolution cycle counter (TSC on x86; CNTVCT on
@@ -94,6 +109,8 @@ pub mod cpu {
     pub fn timestamp() -> u64 {
         #[cfg(target_arch = "x86_64")]
         return unsafe { core::arch::x86_64::_rdtsc() };
+        #[cfg(target_arch = "aarch64")]
+        return super::aarch64::cpu::timestamp();
     }
 
     /// Index of the CPU running this code (0 = the bootstrap CPU).
@@ -101,6 +118,8 @@ pub mod cpu {
     pub fn id() -> usize {
         #[cfg(target_arch = "x86_64")]
         return super::x86::smp::cpu_index();
+        #[cfg(target_arch = "aarch64")]
+        return 0; // single core until the ARM64 SMP increment (PSCI)
     }
 
     /// Invalidate every non-global TLB entry on this CPU.
@@ -108,5 +127,7 @@ pub mod cpu {
     pub fn flush_tlb() {
         #[cfg(target_arch = "x86_64")]
         x86_64::instructions::tlb::flush_all();
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::flush_tlb();
     }
 }

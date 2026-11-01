@@ -15,6 +15,8 @@ const BIOS_IMAGE: &str = env!("BIOS_IMAGE");
 /// The same kernel booted by Limine under UEFI; empty when the Limine
 /// binaries were not fetched at build time (scripts/fetch-limine.*).
 const LIMINE_IMAGE: &str = env!("LIMINE_IMAGE");
+/// The ARM64 kernel on a Limine UEFI image (empty unless it was built).
+const ARM64_IMAGE: &str = env!("ARM64_IMAGE");
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +35,11 @@ fn main() {
             let limine = dir.join("buitenzorg-limine-uefi.img");
             std::fs::copy(LIMINE_IMAGE, &limine).expect("copy limine image");
             println!("Limine (UEFI) image: {}", limine.display());
+        }
+        if !ARM64_IMAGE.is_empty() {
+            let arm = dir.join("buitenzorg-arm64.img");
+            std::fs::copy(ARM64_IMAGE, &arm).expect("copy arm64 image");
+            println!("ARM64 (Limine, UEFI) image: {}", arm.display());
         }
         return;
     }

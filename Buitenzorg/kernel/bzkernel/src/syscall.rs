@@ -7,7 +7,7 @@
 
 use bz_abi::{pixel_format, syserr, sysno, FramebufferInfo, ABI_VERSION};
 
-use crate::{framebuffer, interrupts, print, task};
+use crate::{framebuffer, interrupts, task};
 
 /// Copy `len` bytes from a user pointer into a kernel `Vec` using volatile
 /// reads. Never build a `&[u8]`/`&[u32]` slice directly over a user-space

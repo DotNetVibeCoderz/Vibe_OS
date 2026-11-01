@@ -60,6 +60,14 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
         "ps" => (ps_cmd(), Effect::None),
+        "tutup" | "closeall" => {
+            let n = crate::wm::close_workspace_windows();
+            (vec![format!("{} jendela ditutup", n)], Effect::Redraw)
+        }
+        "tile" | "susun" => {
+            let n = crate::wm::tile();
+            (vec![format!("{} jendela disusun", n)], Effect::Redraw)
+        }
         "cpu" | "cpus" => (cpu_cmd(args.first().copied()), Effect::None),
         "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
@@ -114,6 +122,8 @@ fn help() -> Vec<String> {
      "  anim [on|off]               micro-interaction on/off",
      "  settings                    tampilkan pengaturan (personalization)",
      "  ws [1-4]          pindah virtual desktop",
+     "  tile|susun        susun jendela desktop ini berdampingan",
+     "  tutup|closeall    tutup semua jendela desktop ini (kecuali terminal)",
      "  run <app> [arg..] jalankan app sebagai proses (xox, paint, taskmgr)",
      "  ps                daftar proses (task kernel + app)",
      "  cpu [on|off]      daftar CPU; on/off = proses ring-3 boleh jalan di AP",

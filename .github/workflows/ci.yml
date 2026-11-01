@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-efi-aarch64
 
       - name: Install Rust toolchain (pinned by kernel/rust-toolchain.toml)
         working-directory: Buitenzorg/kernel
@@ -43,6 +43,11 @@ jobs:
       # Limine-protocol UEFI image (multi-arch M1).
       - name: Fetch Limine
         run: bash scripts/fetch-limine.sh
+
+      # Multi-arch M3: the ARM64 kernel (bzimage packs it into an image).
+      - name: Build ARM64 kernel
+        working-directory: Buitenzorg/kernel
+        run: cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat
 
       - name: Build kernel + boot images
         working-directory: Buitenzorg/kernel

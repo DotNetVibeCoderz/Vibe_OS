@@ -324,6 +324,58 @@ pub fn close_orphan_windows() -> usize {
     before - wm.windows.len()
 }
 
+/// Close every window of the current workspace except the terminal, as if
+/// its close button was pressed (a live owner left without windows is ended
+/// by `app::reap_closed_windows`). Returns how many were closed.
+pub fn close_workspace_windows() -> usize {
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return 0 };
+    let ws = wm.workspace;
+    let ids: Vec<u32> = wm
+        .windows
+        .iter()
+        .filter(|w| w.workspace == ws && w.title != "Terminal" && !w.title.starts_with("widget:"))
+        .map(|w| w.id)
+        .collect();
+    for &id in &ids {
+        wm.press_button(id, TitleButton::Close);
+    }
+    ids.len()
+}
+
+/// Arrange the windows of the current workspace side by side (shelf packing,
+/// left to right, wrapping into rows) right of the desktop icons and above the
+/// taskbar, keeping each window's size; z-order is unchanged. Maximized and
+/// minimized windows and widget-board windows are left alone. Returns how
+/// many windows were moved.
+pub fn tile() -> usize {
+    const GAP: i32 = 12;
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return 0 };
+    let ws = wm.workspace;
+    let (left, top) = (ICON_W + 2 * GAP, GAP);
+    let right = wm.width - GAP;
+    let bottom = wm.height - TASKBAR_H - GAP;
+    let (mut x, mut y, mut row_h, mut moved) = (left, top, 0, 0);
+    for win in wm.windows.iter_mut() {
+        if win.workspace != ws || win.state != WinState::Normal || win.title.starts_with("widget:") {
+            continue;
+        }
+        if x > left && x + win.w > right {
+            x = left;
+            y += row_h + GAP;
+            row_h = 0;
+        }
+        let ny = y.min((bottom - win.h).max(top));
+        (win.x, win.y) = (x, ny);
+        win.saved = (win.x, win.y, win.w, win.h);
+        x += win.w + GAP;
+        row_h = row_h.max(win.h);
+        moved += 1;
+    }
+    moved
+}
+
 /// Place the first window titled `title` (current workspace) at x, y with
 /// size w x h, restoring it if minimized/maximized. Returns true if found.
 pub fn place_window(title: &str, x: i32, y: i32, w: i32, h: i32) -> bool {
