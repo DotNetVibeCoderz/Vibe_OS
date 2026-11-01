@@ -63,6 +63,11 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **I/O APIC.** Device interrupts are routed through the I/O APIC (MADT +
+  ISA overrides) instead of the 8259, which is now masked; handlers EOI the
+  Local APIC. The PIT stays on CPU 0, keyboard and mouse go to another CPU.
+  Self-test raises real keyboard/mouse IRQs through the 8042 (0xD2/0xD3) and
+  checks the CPU that handled them: `MILESTONE: IOAPIC OK`.
 - **SMP increment 5: fine-grained locking.** Memory-management, scheduler
   and console syscalls run without the Big Kernel Lock, in parallel on all
   CPUs. The "from ring 3" pointer-validation flag became per-task (it was
