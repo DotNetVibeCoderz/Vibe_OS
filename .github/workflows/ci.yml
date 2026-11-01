@@ -9,8 +9,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  kernel:
-    name: Kernel (Rust) — build, test, boot smoke test
+  # Multi-arch M5: one job builds the kernels for all three architectures and
+  # every boot image; a matrix then boots them, one leg per architecture, each
+  # with the same milestone-marker smoke test (scripts/smoke-test.sh) in
+  # strict mode -- a leg whose QEMU / firmware / image is missing fails
+  # instead of skipping its boots.
+  build:
+    name: Kernel (Rust) — build x86-64 / ARM64 / RISC-V + images
     runs-on: ubuntu-latest
     # Buitenzorg lives in a subfolder of the Vibe_OS repo.
     defaults:
@@ -18,14 +23,6 @@ jobs:
         working-directory: Buitenzorg
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-efi-aarch64
-
-      # Multi-arch M4: RISC-V QEMU + edk2 (optional -- the [riscv64] smoke
-      # step skips itself when the firmware is missing).
-      - name: Install QEMU (RISC-V)
-        run: sudo apt-get install -y qemu-system-misc qemu-efi-riscv64 || echo "RISC-V firmware not available"
 
       - name: Install Rust toolchain (pinned by kernel/rust-toolchain.toml)
         working-directory: Buitenzorg/kernel
@@ -45,32 +42,85 @@ jobs:
         run: cargo test -p bz-abi
 
       # Limine binaries (pinned + SHA-256): bzimage then also builds the
-      # Limine-protocol UEFI image (multi-arch M1).
+      # Limine images (x86-64 UEFI, ARM64, RISC-V).
       - name: Fetch Limine
         run: bash scripts/fetch-limine.sh
 
-      # Multi-arch M3: the ARM64 kernel (bzimage packs it into an image).
       - name: Build ARM64 kernel
         working-directory: Buitenzorg/kernel
         run: cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat
 
-      # Multi-arch M4: the RISC-V kernel (dist/buitenzorg-riscv64.img).
       - name: Build RISC-V kernel
         working-directory: Buitenzorg/kernel
         run: cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf
 
-      - name: Build kernel + boot images
+      # The x86-64 kernel + every image (bzimage also compiles the RISC-V
+      # user programs in userland/riscv) -> dist/.
+      - name: Build x86-64 kernel + boot images
         working-directory: Buitenzorg/kernel
-        run: cargo build --release
+        run: cargo run --release -p bzimage -- --out ../dist
 
-      - name: Boot smoke test (QEMU, BIOS)
+      - name: Upload boot images
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-images
+          path: Buitenzorg/dist/*.img
+          if-no-files-found: error
+          retention-days: 3
+
+  smoke:
+    name: Boot smoke test — ${{ matrix.arch }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            packages: qemu-system-x86 ovmf
+          - arch: aarch64
+            packages: qemu-system-arm qemu-efi-aarch64
+          - arch: riscv64
+            packages: qemu-system-misc qemu-efi-riscv64
+    defaults:
+      run:
+        working-directory: Buitenzorg
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + firmware (${{ matrix.arch }})
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Download boot images
+        uses: actions/download-artifact@v4
+        with:
+          name: boot-images
+          path: Buitenzorg/dist
+
+      - name: Boot smoke test (${{ matrix.arch }})
+        env:
+          SMOKE_ARCH: ${{ matrix.arch }}
+          SMOKE_STRICT: "1"
+          SMOKE_NO_BUILD: "1"
         run: bash scripts/smoke-test.sh
 
       # Performance regression gate (requirements.md: "benchmark regression
       # checks in CI"). Budgets are loose on purpose — this catches a real
       # regression, not runner-to-runner jitter.
       - name: Performance benchmark
+        if: matrix.arch == 'x86_64'
         run: bash scripts/bench.sh
+
+      # The serial logs of every boot, pass or fail -- what to read when a leg
+      # goes red.
+      - name: Upload boot logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-logs-${{ matrix.arch }}
+          path: Buitenzorg/dist/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   managed:
     name: Runtime + SDK (.NET) — build, test

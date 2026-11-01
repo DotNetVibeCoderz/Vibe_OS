@@ -103,15 +103,18 @@ bz_return_to_kernel:
     addi sp, sp, 112
     ret
 
-// ---- U-mode demo program 1: print, query the ABI, spin (timer interrupts
-// arrive in U-mode), compute 1+..+100 (passed through the FP unit), exit
-// with (abi << 16) + 5050. Position-independent: copied to a user page.
+// ---- U-mode demo program 1: print, query the ABI, spin for a0 `time`
+// ticks (timer interrupts arrive in U-mode; timed with `rdtime`, not an
+// iteration count, so a fast host cannot finish before the ticks come),
+// compute 1+..+100 (passed through the FP unit), exit with
+// (abi << 16) + 5050. Position-independent: copied to a user page.
 .option push
 .option norelax
 .option arch, +f, +d
 .balign 16
 .global bz_user_demo_start
 bz_user_demo_start:
+    mv s1, a0                    // spin length in `time` ticks
     lla a0, 1f
     lla a1, 2f
     sub a1, a1, a0
@@ -120,9 +123,10 @@ bz_user_demo_start:
     li a7, 0                     // ABI_VERSION
     ecall
     mv s0, a0
-    li t0, 0x2000000             // ~32M iterations of busy work
-3:  addi t0, t0, -1
-    bnez t0, 3b
+    rdtime t1                    // busy-wait s1 ticks (U-mode may read
+    add t2, t1, s1               // `time`: scounteren.TM, trap::init)
+3:  rdtime t0
+    bltu t0, t2, 3b
     li t1, 0
     li t2, 100
 4:  add t1, t1, t2

@@ -127,6 +127,8 @@ pub fn init() {
         asm!(
             "csrw sscratch, zero",
             "csrw stvec, {}",
+            // scounteren.TM: U-mode may read the `time` counter (rdtime).
+            "csrsi scounteren, 2",
             in(reg) bz_trap_entry as *const () as u64,
             options(nostack)
         );

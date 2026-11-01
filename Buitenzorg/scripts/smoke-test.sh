@@ -1,13 +1,38 @@
 #!/usr/bin/env bash
-# CI boot smoke test (requirements.md Â§17 + Â§18): build the images, boot the
-# BIOS image in QEMU on all four storage controllers (IDE/AHCI/NVMe/USB), and
-# require the milestone markers on the serial console.
+# CI boot smoke test (requirements.md §17 + §18): build the images, boot them
+# in QEMU -- x86-64 on every boot medium (IDE/AHCI/NVMe/USB/virtio, UEFI,
+# Limine), ARM64 and RISC-V on QEMU `virt` -- and require the milestone
+# markers on the serial console.
+#
+# Multi-arch M5 (the CI matrix):
+#   SMOKE_ARCH=x86_64|aarch64|riscv64|all   which architecture(s) to boot
+#                                            (default: all)
+#   SMOKE_STRICT=1   a step of a selected architecture that would be skipped
+#                    (missing QEMU, firmware or image) FAILS instead -- a CI
+#                    leg must not go green by skipping its own boots
+#   SMOKE_NO_BUILD=1 boot the images already in dist/ (CI builds them once, in
+#                    a separate job, and hands them to every leg)
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 img="$root/dist/buitenzorg-bios.img"
 qemu="${QEMU:-qemu-system-x86_64}"
+arch="${SMOKE_ARCH:-all}"
+case "$arch" in
+  all|x86_64|aarch64|riscv64) ;;
+  *) echo "smoke: unknown SMOKE_ARCH '$arch' (x86_64, aarch64, riscv64, all)" >&2; exit 2 ;;
+esac
+want() { [ "$arch" = all ] || [ "$arch" = "$1" ]; }
+skip() { # skip <message>: report a skipped step; fatal in strict mode
+  echo "$1"
+  if [ "${SMOKE_STRICT:-0}" = 1 ]; then
+    echo "SMOKE TEST FAILED: step skipped in strict mode (SMOKE_STRICT=1)" >&2
+    exit 1
+  fi
+}
 
-(cd "$root/kernel" && cargo run --release -p bzimage -- --out "$root/dist") || exit 1
+if [ "${SMOKE_NO_BUILD:-0}" != 1 ]; then
+  (cd "$root/kernel" && cargo run --release -p bzimage -- --out "$root/dist") || exit 1
+fi
 
 boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
   local media="$1" log="$2"
@@ -76,6 +101,8 @@ require() { # require <log> <marker>...
 
 basic=("MILESTONE: HELLO KERNEL OK" "MILESTONE: SCHEDULER OK" "MILESTONE: IPC OK" "MILESTONE: WINDOWS OK" "MILESTONE: THEMES OK" "MILESTONE: BUAH OK" "MILESTONE: COMPUTE OK" "MILESTONE: WINDOWCTL OK" "MILESTONE: SAVER OK" "MILESTONE: CAHAYA OK" "MILESTONE: AI OK" "MILESTONE: POWER OK" "MILESTONE: NALAR OK" "MILESTONE: VMX OK" "MILESTONE: VM OK" "MILESTONE: VIRTIO OK" "MILESTONE: SNAPSHOT OK" "MILESTONE: LAPIS OK" "MILESTONE: SCRIPT JS OK" "MILESTONE: SCRIPT TS OK" "MILESTONE: SCRIPT PY OK" "MILESTONE: POLYGLOT OK" "MILESTONE: BABEL OK" "MILESTONE: PAL MEM OK" "MILESTONE: THREADS OK" "MILESTONE: SYNC PAL OK" "MILESTONE: HEAP PAL OK" "MILESTONE: GCMEM PAL OK" "MILESTONE: BCL PAL OK" "MILESTONE: BCL2 PAL OK" "MILESTONE: DRAWING2 OK" "MILESTONE: UI TOOLKIT OK" "MILESTONE: AUDIO OK" "MILESTONE: AUDIO PANEL OK" "MILESTONE: SUITE OK" "MILESTONE: DESKTOP SHELL OK" "MILESTONE: SECURITY OK" "MILESTONE: PROFILER OK" "MILESTONE: IOAPIC OK" "MILESTONE: DTB OK" "BUITENZORG READY")
 
+if want x86_64; then
+[ -f "$img" ] || skip "smoke [x86_64]: skipped ($img not built)"
 # Full run on IDE: storage milestones must pass (file read via own driver).
 boot ide "$root/dist/boot-ide.log"
 require "$root/dist/boot-ide.log" "${basic[@]}" \
@@ -143,13 +170,21 @@ done
 # UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked â€”
 # that once hung every UEFI boot at the first timer wait while the BIOS-only
 # smoke test stayed green. Needs the OVMF files `bzimage --run --uefi` downloads.
-ovmf="$root/kernel/target/ovmf/x64"
-if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
+# OVMF: the copy `bzimage --run --uefi` downloads, else the distribution's
+# (Ubuntu `ovmf`: OVMF_CODE_4M.fd / OVMF_VARS_4M.fd) -- what CI uses.
+ovmf_code=""; ovmf_vars=""
+for pair in "$root/kernel/target/ovmf/x64/code.fd:$root/kernel/target/ovmf/x64/vars.fd" \
+            "/usr/share/OVMF/OVMF_CODE_4M.fd:/usr/share/OVMF/OVMF_VARS_4M.fd" \
+            "/usr/share/OVMF/OVMF_CODE.fd:/usr/share/OVMF/OVMF_VARS.fd" \
+            "/usr/share/qemu/edk2-x86_64-code.fd:/usr/share/qemu/edk2-i386-vars.fd"; do
+  if [ -f "${pair%%:*}" ] && [ -f "${pair#*:}" ]; then ovmf_code="${pair%%:*}"; ovmf_vars="${pair#*:}"; break; fi
+done
+if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   log="$root/dist/boot-uefi.log"
   rm -f "$log"
   timeout --foreground 150 "$qemu" \
-    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/code.fd" \
-    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/vars.fd" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
     -drive "format=raw,file=$root/dist/buitenzorg-uefi.img" -smp 2 \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
@@ -162,18 +197,18 @@ if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   require "$log" "${basic[@]}" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"
   echo "smoke [uefi]: boots to READY on 2 CPUs"
 else
-  echo "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
+  skip "smoke [uefi]: skipped (no OVMF: run 'cargo run -p bzimage -- --run --uefi' once, or install the ovmf package)"
 fi
 
 # Limine boot (multi-arch M1): the same kernel through the Limine protocol,
 # UEFI, 2 CPUs, /disk on an MBR FAT partition. Needs OVMF + the Limine
 # binaries (scripts/fetch-limine.sh) so bzimage built the image.
-if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
+if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
   log="$root/dist/boot-limine.log"
   rm -f "$log"
   timeout --foreground 170 "$qemu" \
-    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/code.fd" \
-    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/vars.fd" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
     -drive "format=raw,file=$root/dist/buitenzorg-limine-uefi.img" -smp 2 \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
@@ -186,9 +221,11 @@ if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; the
   require "$log" "${basic[@]}" "[boot] loader=limine" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: DISK WRITE OK" "MILESTONE: MULTIPROC OK"
   echo "smoke [limine]: Limine protocol boot (UEFI) to READY on 2 CPUs, /disk + processes"
 else
-  echo "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.sh before the build)"
+  skip "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.sh before the build)"
 fi
+fi # x86_64
 
+if want aarch64; then
 # ARM64 (multi-arch M3): the ARM64 kernel through Limine on QEMU `virt`
 # (GICv3, Cortex-A72, edk2 firmware, Device Tree: acpi=off -- with ACPI on,
 # edk2 hides the DTB).
@@ -200,13 +237,13 @@ done
 if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.img" ]; then
   log="$root/dist/boot-arm64.log"
   rm -f "$log"
-  timeout --foreground 150 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -smp 2 -m 512M \
+  timeout --foreground 200 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -smp 2 -m 512M \
     -bios "$arm_fw" -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-arm64.img,if=none" \
     -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device ramfb     -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
     -device virtio-keyboard-device -device virtio-tablet-device \
     -monitor tcp:127.0.0.1:4482,server,nowait -display none -serial "file:$log" -no-reboot &
   qpid=$!
-  for _ in $(seq 90); do
+  for _ in $(seq 140); do
     sleep 1
     grep -q "ARM64 READY" "$log" 2>/dev/null && break
   done
@@ -222,9 +259,11 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
   fi
   echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + interactive desktop, 2 CPUs (PSCI)"
 else
-  echo "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
+  skip "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
 fi
+fi # aarch64
 
+if want riscv64; then
 # RISC-V (multi-arch M4): the RISC-V kernel through Limine on QEMU `virt`
 # (OpenSBI -> edk2 in pflash -> Limine; acpi=off so the DTB is handed over).
 qemu_rv="$(command -v qemu-system-riscv64 || true)"
@@ -260,7 +299,8 @@ if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64
   fi
   echo "smoke [riscv64]: /disk write persisted to the image ($needle)"
 else
-  echo "smoke [riscv64]: skipped (needs qemu-system-riscv64, RISC-V edk2 firmware (qemu-efi-riscv64) and dist/buitenzorg-riscv64.img)"
+  skip "smoke [riscv64]: skipped (needs qemu-system-riscv64, RISC-V edk2 firmware (qemu-efi-riscv64) and dist/buitenzorg-riscv64.img)"
 fi
+fi # riscv64
 
-echo "SMOKE TEST PASSED: ide/ahci/nvme/usb"
+echo "SMOKE TEST PASSED ($arch)"

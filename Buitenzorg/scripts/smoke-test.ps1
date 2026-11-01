@@ -1,10 +1,27 @@
-# Boot smoke test (Windows): boot the BIOS image on all four storage
-# controllers (IDE/AHCI/NVMe/USB) and require the milestone markers.
+# Boot smoke test (Windows): boot the images in dist/ -- x86-64 on every boot
+# medium (IDE/AHCI/NVMe/USB/virtio, UEFI, Limine), ARM64 and RISC-V on QEMU
+# `virt` -- and require the milestone markers.
+#
+# Multi-arch M5 (same switches as smoke-test.sh's SMOKE_ARCH / SMOKE_STRICT):
+#   -Arch x86_64|aarch64|riscv64|all   which architecture(s) to boot
+#   -Strict                            a skipped step of a selected
+#                                      architecture fails the run
+param(
+    [ValidateSet("all", "x86_64", "aarch64", "riscv64")]
+    [string]$Arch = "all",
+    [switch]$Strict
+)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $image = Join-Path $root "dist\buitenzorg-bios.img"
 
 if (-not (Test-Path $image)) { & (Join-Path $PSScriptRoot "build.ps1") }
+
+function Test-Arch([string]$Name) { return ($Arch -eq "all") -or ($Arch -eq $Name) }
+function Skip-Step([string]$Message) {
+    Write-Host $Message
+    if ($Strict) { Write-Error "SMOKE TEST FAILED: step skipped in strict mode (-Strict)"; exit 1 }
+}
 
 $qemu = $env:QEMU
 if (-not $qemu) {
@@ -98,6 +115,7 @@ $basic = @("MILESTONE: HELLO KERNEL OK", "MILESTONE: SCHEDULER OK",
            "MILESTONE: SECURITY OK", "MILESTONE: PROFILER OK", "MILESTONE: IOAPIC OK", "MILESTONE: DTB OK",
            "BUITENZORG READY")
 
+if (Test-Arch "x86_64") {
 $ideLog = Join-Path $root "dist\boot-ide.log"
 Invoke-Boot -Media ide -Log $ideLog
 $ideMarkers = $basic + @(
@@ -203,7 +221,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
     Assert-Markers -Log $log -Markers ($basic + @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK"))
     Write-Host "smoke [uefi]: boots to READY on 2 CPUs"
 } else {
-    Write-Host "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
+    Skip-Step "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
 }
 
 # Limine boot (multi-arch M1): the same kernel through the Limine protocol,
@@ -227,9 +245,11 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
     Assert-Markers -Log $log -Markers ($basic + @("[boot] loader=limine", "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: DISK WRITE OK", "MILESTONE: MULTIPROC OK"))
     Write-Host "smoke [limine]: Limine protocol boot (UEFI) to READY on 2 CPUs, /disk + processes"
 } else {
-    Write-Host "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.ps1 before the build)"
+    Skip-Step "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.ps1 before the build)"
 }
+} # x86_64
 
+if (Test-Arch "aarch64") {
 # ARM64 (multi-arch M3): the ARM64 kernel through Limine on QEMU `virt`
 # (GICv3, Cortex-A72, edk2 firmware, Device Tree: acpi=off -- with ACPI on,
 # edk2 hides the DTB). Needs qemu-system-aarch64 next to qemu-system-x86_64.
@@ -269,9 +289,11 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
     }
     Write-Host "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + interactive desktop, 2 CPUs (PSCI)"
 } else {
-    Write-Host "smoke [arm64]: skipped (needs qemu-system-aarch64, edk2-aarch64-code.fd and dist\buitenzorg-arm64.img)"
+    Skip-Step "smoke [arm64]: skipped (needs qemu-system-aarch64, edk2-aarch64-code.fd and dist\buitenzorg-arm64.img)"
 }
+} # aarch64
 
+if (Test-Arch "riscv64") {
 # RISC-V (multi-arch M4): the RISC-V kernel through Limine on QEMU `virt`
 # (OpenSBI -> edk2 in pflash -> Limine; acpi=off so the DTB is handed over).
 # Needs qemu-system-riscv64 + share\edk2-riscv-code.fd next to the x86 QEMU.
@@ -313,7 +335,8 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     if (-not [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($rvImage)).Contains($needle)) { Write-Error "SMOKE TEST FAILED: '$needle' not found in $rvImage"; exit 1 }
     Write-Host "smoke [riscv64]: /disk write persisted to the image ($needle)"
 } else {
-    Write-Host "smoke [riscv64]: skipped (needs qemu-system-riscv64, edk2-riscv-code.fd/-vars.fd and dist\buitenzorg-riscv64.img)"
+    Skip-Step "smoke [riscv64]: skipped (needs qemu-system-riscv64, edk2-riscv-code.fd/-vars.fd and dist\buitenzorg-riscv64.img)"
 }
+} # riscv64
 
-Write-Host "SMOKE TEST PASSED: ide/ahci/nvme/usb" -ForegroundColor Green
+Write-Host "SMOKE TEST PASSED ($Arch)" -ForegroundColor Green

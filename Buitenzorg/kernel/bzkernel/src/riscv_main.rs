@@ -506,7 +506,10 @@ fn run_umode(id: u64, code: &[u8]) -> Option<(u64, i64)> {
         paging::map(&mut ctx.mapper, &mut ctx.frames, STACK_TOP - 4096, st, Flags { write: true, user: true, exec: false }).ok()
     })?;
     usermode::sync_icache();
-    let code = usermode::enter_user(ENTRY, STACK_TOP);
+    // The demo program spins this long (300 ms of `time`) in U-mode.
+    let spin = arch::riscv64::cpu::counter_hz() * 3 / 10;
+    let code = usermode::enter_user_thread(ENTRY, STACK_TOP, spin);
+    arch::cpu::enable_interrupts();
     aspace::install(aspace::kernel());
     aspace::destroy(space);
     Some((code, memory::frames_in_use() as i64 - before))
