@@ -32,6 +32,9 @@ Hardening toward a stable x86-64 release.
   `src/arch/x86/`, PC port-I/O devices to `src/platform/pc/`; generic code uses
   the `arch::cpu` facade; `scripts/check-arch-boundary.sh` enforces it in CI
   (paging, context switch and boot glue are the remaining allowlisted files).
+- **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
+  (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
+  assembly; the scheduler (`task.rs`) is now architecture-neutral.
 - **Desktop UI/UX overhaul.** New default theme "kebun" (from the lotus-pond
   wallpaper: moss glass panels, mist text, a single lotus-pink accent, pollen
   time). The start menu is organised by category (Kantor, Multimedia,

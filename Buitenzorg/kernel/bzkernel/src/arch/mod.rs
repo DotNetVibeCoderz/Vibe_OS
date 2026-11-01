@@ -15,6 +15,13 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86;
 
+/// Kernel-thread context switching: per-task FPU state, the initial frame of
+/// a new task, and the stack switch itself.
+pub mod context {
+    #[cfg(target_arch = "x86_64")]
+    pub use super::x86::context::{prepare_stack, switch, FpuState};
+}
+
 /// CPU primitives every architecture provides.
 pub mod cpu {
     /// Stop the CPU until the next interrupt.

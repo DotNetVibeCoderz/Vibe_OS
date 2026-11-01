@@ -3,6 +3,7 @@
 //! path (`usermode`), Local APIC + AP bring-up (`smp`), and VT-x/AMD-V
 //! detection (`vmx`).
 
+pub mod context;
 pub mod gdt;
 pub mod interrupts;
 pub mod smp;

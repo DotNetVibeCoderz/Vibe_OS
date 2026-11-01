@@ -24,6 +24,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
+use crate::arch::context::{self, FpuState};
 use crate::arch::cpu as interrupts;
 
 use crate::{aspace, gdt, usermode};
@@ -33,24 +34,6 @@ const STACK_SIZE: usize = 32 * 1024;
 /// Sized like the boot task's privilege stack (gdt.rs): a WIN_PRESENT syscall
 /// composites every window on it, which needs real headroom.
 const SYS_STACK_SIZE: usize = 64 * 1024;
-
-/// FXSAVE/FXRSTOR area (x87 + SSE state). The kernel itself is built without
-/// SSE, so only ring-3 code ever dirties these registers.
-#[repr(C, align(16))]
-struct FxArea([u8; 512]);
-
-impl FxArea {
-    /// Default state for a fresh thread: x87 control word 0x037F, MXCSR 0x1F80
-    /// (all exceptions masked), everything else zero — no state leaks in from
-    /// whatever ran before.
-    fn clean() -> Box<FxArea> {
-        let mut a = Box::new(FxArea([0; 512]));
-        a.0[0] = 0x7F;
-        a.0[1] = 0x03;
-        a.0[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
-        a
-    }
-}
 
 /// Per-task copy of the SYSCALL-path globals in `usermode.rs`.
 #[derive(Clone, Copy)]
@@ -110,7 +93,7 @@ struct Task {
     /// Saved SYSCALL-path state while switched out.
     ctx: CpuCtx,
     /// Saved x87/SSE registers while switched out.
-    fpu: Box<FxArea>,
+    fpu: Box<FpuState>,
     /// User address space this task runs in (`aspace::kernel()` for kernel
     /// tasks); its id is the owning process id.
     space: aspace::Space,
@@ -231,7 +214,7 @@ pub fn init() {
                 user: None,
                 wait_key: 0,
                 ctx: CpuCtx::kernel(),
-                fpu: FxArea::clean(),
+                fpu: FpuState::clean(),
                 space: aspace::kernel(),
             }],
             current: 0,
@@ -249,7 +232,7 @@ pub fn spawn(entry: fn()) {
 /// Spawn a named kernel task (name appears in the process listing).
 pub fn spawn_named(name: &'static str, entry: fn()) {
     let stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
-    let fpu = FxArea::clean();
+    let fpu = FpuState::clean();
     interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         let sched = guard.as_mut().expect("scheduler not initialized");
@@ -260,7 +243,7 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
                 t.user = None;
             }
         }
-        let rsp = prepare_stack(&stack);
+        let rsp = context::prepare_stack(&stack, task_trampoline);
         let id = sched.next_id;
         sched.next_id += 1;
         sched.tasks.push(Task {
@@ -347,7 +330,7 @@ fn spawn_ring3(
     let kstack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
     let sys_stack = alloc::vec![0u8; SYS_STACK_SIZE].into_boxed_slice();
     let sys_top = (sys_stack.as_ptr() as u64 + sys_stack.len() as u64) & !0xF;
-    let fpu = FxArea::clean();
+    let fpu = FpuState::clean();
     interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         let sched = guard.as_mut().expect("scheduler not initialized");
@@ -357,7 +340,7 @@ fn spawn_ring3(
                 t.user = None;
             }
         }
-        let rsp = prepare_stack(&kstack);
+        let rsp = context::prepare_stack(&kstack, task_trampoline);
         let id = sched.next_id;
         sched.next_id += 1;
         sched.tasks.push(Task {
@@ -549,31 +532,6 @@ pub fn is_finished(id: u64) -> bool {
     })
 }
 
-/// Build the initial stack frame consumed by [`context_switch`]'s restore
-/// path: saved rflags + 6 callee-saved registers, then the trampoline as
-/// return address, then a 0 sentinel so `rsp % 16 == 8` at trampoline entry
-/// (SysV ABI) and backtraces terminate.
-fn prepare_stack(stack: &[u8]) -> u64 {
-    let top = (stack.as_ptr() as u64 + stack.len() as u64) & !0xF;
-    unsafe {
-        let mut sp = top as *mut u64;
-        let mut push = |val: u64| {
-            sp = sp.sub(1);
-            sp.write(val);
-        };
-        push(0); // sentinel return address
-        push(task_trampoline as *const () as u64); // `ret` target
-        push(0); // rbp
-        push(0); // rbx
-        push(0); // r12
-        push(0); // r13
-        push(0); // r14
-        push(0); // r15
-        push(0x202); // rflags: IF=1 so fresh tasks run with interrupts enabled
-        sp as u64
-    }
-}
-
 extern "C" fn task_trampoline() -> ! {
     let entry = interrupts::without_interrupts(|| {
         let guard = SCHEDULER.lock();
@@ -644,7 +602,7 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
         c.user_rsp = usermode::get_user_rsp();
         c.user_active = usermode::user_active();
         let prev: *mut u64 = &mut sched.tasks[cur].rsp;
-        let prev_fx: *mut FxArea = &mut *sched.tasks[cur].fpu;
+        let prev_fx: *mut FpuState = &mut *sched.tasks[cur].fpu;
         sched.current = next;
         // ...and load the incoming one's: its own SYSCALL + ring-0 interrupt
         // stack (so two ring-3 tasks never share one), its longjmp context, and
@@ -656,40 +614,11 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
         usermode::set_user_rsp(n.user_rsp);
         usermode::set_user_active(n.user_active);
         aspace::install(sched.tasks[next].space);
-        let next_fx: *const FxArea = &*sched.tasks[next].fpu;
+        let next_fx: *const FpuState = &*sched.tasks[next].fpu;
         (prev, sched.tasks[next].rsp, prev_fx, next_fx)
         // Lock is dropped here; no allocation happens before the switch, so the
         // pointers stay valid (single core, interrupts off; boxed areas never move).
     };
-    unsafe {
-        core::arch::asm!("fxsave64 [{}]", in(reg) prev_fx, options(nostack, preserves_flags));
-        core::arch::asm!("fxrstor64 [{}]", in(reg) next_fx, options(nostack, preserves_flags));
-        context_switch(prev_rsp_ptr, next_rsp)
-    };
+    unsafe { context::switch(prev_rsp_ptr, next_rsp, prev_fx, next_fx) };
     true
-}
-
-/// Save callee-saved state + rflags on the current stack, store rsp through
-/// `prev_rsp`, load `next_rsp`, restore, and return on the new stack.
-#[unsafe(naked)]
-unsafe extern "C" fn context_switch(prev_rsp: *mut u64, next_rsp: u64) {
-    core::arch::naked_asm!(
-        "push rbp",
-        "push rbx",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "pushfq",
-        "mov [rdi], rsp",
-        "mov rsp, rsi",
-        "popfq",
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbx",
-        "pop rbp",
-        "ret",
-    )
 }

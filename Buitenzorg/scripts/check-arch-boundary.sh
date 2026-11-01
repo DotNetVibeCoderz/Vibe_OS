@@ -20,7 +20,6 @@ declare -A ALLOWED=(
   [aspace.rs]="paging HAL (per-process user roots)"
   [elf.rs]="paging HAL (mapping program segments)"
   [allocator.rs]="paging HAL (mapping the kernel heap)"
-  [task.rs]="context HAL (context switch + FXSAVE assembly)"
   [main.rs]="boot HAL (BootInfo + mapper set-up)"
 )
 
