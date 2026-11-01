@@ -9,12 +9,15 @@
 // they get an `arch/aarch64` backend (virtio-mmio, the scheduler, the
 // desktop). Increment 3: kernel-thread context switch (with per-task FP/SIMD
 // state) and user mode -- EL0 programs in their own address space calling the
-// kernel with `SVC #0`, faults contained.
+// kernel with `SVC #0`, faults contained. Increment 4: real ELF programs
+// (`elf.rs`), handed over by Limine as boot modules -- the first C# app built
+// for ARM64 (bflat linux-arm64 + the aarch64 `bzstart.rs` shim).
 
 mod allocator;
 mod arch;
 mod boot;
 mod dtb;
+mod elf;
 mod framebuffer;
 mod limine;
 mod logo;
@@ -132,6 +135,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
 
     el0_self_test();
+    run_boot_programs(info);
 
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();
     if timer_ok && !uart.is_empty() && info.loader == "limine" {
@@ -142,7 +146,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-3 (boot, interrupts, memory, threads + EL0); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-4 (boot, interrupts, memory, threads + EL0, ELF + C# programs); the rest of the kernel follows");
     loop {
         cpu::enable_and_halt();
     }
@@ -349,6 +353,8 @@ static USER_CTX: core::sync::atomic::AtomicPtr<arch::aarch64::user::KernelCtx> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 static USER_WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static USER_FAULT_FAR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// What user programs wrote (DEBUG_WRITE), for the self-tests.
+static USER_OUTPUT: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
 
 /// Exit code of a user program ended by a fault (as on x86).
 const FAULT_EXIT_CODE: u64 = 0xDEAD;
@@ -365,7 +371,12 @@ pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, _a2: u64) -> u64 {
             }
             let bytes: alloc::vec::Vec<u8> =
                 (0..a1).map(|i| unsafe { ((a0 + i) as *const u8).read_volatile() }).collect();
-            print!("[el0] {}", core::str::from_utf8(&bytes).unwrap_or("<not UTF-8>"));
+            let text = core::str::from_utf8(&bytes).unwrap_or("<not UTF-8>");
+            print!("{}", text);
+            let mut out = USER_OUTPUT.lock();
+            if out.len() < 4096 {
+                out.push_str(text);
+            }
             USER_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             a1
         }
@@ -377,6 +388,10 @@ pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, _a2: u64) -> u64 {
             arch::aarch64::user::return_to_kernel(unsafe { &*ctx }, a0)
         }
         sysno::TICKS => arch::aarch64::timer::ticks(),
+        // The generic user-memory PAL (the C# runtime's heap): same code as x86.
+        sysno::MMAP => memory::user_mmap(a0, a1),
+        sysno::MPROTECT => memory::user_mprotect(a0, a1, _a2),
+        sysno::MUNMAP => memory::user_munmap(a0, a1),
         sysno::CLOCK_MONO => arch::cpu::timestamp(),
         _ => syserr::NOSYS,
     }
@@ -463,6 +478,67 @@ fn el0_self_test() {
         && far == 0xFFFF_D000_0000_0000;
     if ok {
         println!("[kernel] MILESTONE: ARM64 EL0 OK (user mode in its own TTBR0 space: SVC syscalls, timer IRQs from EL0, EXIT back to the kernel, a kernel-address read terminates only the program)");
+    }
+}
+
+// ---- ELF programs from boot modules ---------------------------------------
+
+/// Load an ELF program into a fresh address space with the generic loader
+/// (`elf.rs`, the same as on x86 -- it checks `e_machine` = EM_AARCH64 here),
+/// give it a 128 KiB stack below 0x7000_0000, run it in EL0, tear it down.
+/// Returns (exit code, frames leaked).
+fn run_elf(id: u64, image: &[u8]) -> Result<(u64, i64), &'static str> {
+    use arch::aarch64::user;
+    const STACK_BASE: u64 = 0x7000_0000 - 32 * 4096;
+    let before = memory::frames_in_use() as i64;
+    let space = aspace::create(id)?;
+    aspace::install(space);
+    let loaded = memory::with_ctx(|ctx| {
+        let program = elf::load(image, ctx)?;
+        let (stack_top, _) = memory::map_user_region(STACK_BASE, 32, ctx)?;
+        Ok::<_, &'static str>((program.entry, stack_top))
+    });
+    let (entry, stack_top) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            aspace::install(aspace::kernel());
+            aspace::destroy(space);
+            return Err(e);
+        }
+    };
+    user::sync_icache();
+    let mut kctx = user::KernelCtx::new();
+    USER_CTX.store(&mut kctx, core::sync::atomic::Ordering::SeqCst);
+    let code = user::enter_user(entry, stack_top, &mut kctx);
+    USER_CTX.store(core::ptr::null_mut(), core::sync::atomic::Ordering::SeqCst);
+    aspace::install(aspace::kernel());
+    aspace::destroy(space);
+    Ok((code, memory::frames_in_use() as i64 - before))
+}
+
+/// Run every ELF the loader handed over as a module (`module_path` in
+/// limine.conf). `hello` is the v0.4 milestone program: C# compiled by bflat
+/// for linux-arm64 with zerolib, linked with the aarch64 shim.
+fn run_boot_programs(info: &boot::BootInfo) {
+    let mut id = 4000;
+    for m in info.modules() {
+        let image = m.bytes();
+        if image.len() < 4 || &image[..4] != b"\x7fELF" {
+            continue;
+        }
+        println!("[arm64] --- program '{}' ({} bytes, from a Limine module) ---", m.name(), image.len());
+        USER_OUTPUT.lock().clear();
+        let r = run_elf(id, image);
+        id += 1;
+        match r {
+            Ok((code, leaked)) => {
+                println!("[arm64] --- '{}' exited with code {:#x}, {} frames leaked ---", m.name(), code, leaked);
+                if m.name() == "hello" && code == 0 && leaked == 0 && USER_OUTPUT.lock().contains("Hello from C#!") {
+                    println!("[kernel] MILESTONE: ARM64 CSHARP OK (C# compiled for linux-arm64 by bflat, loaded by the generic ELF loader, ran in EL0: Hello from C#!)");
+                }
+            }
+            Err(e) => println!("[arm64] '{}': {}", m.name(), e),
+        }
     }
 }
 

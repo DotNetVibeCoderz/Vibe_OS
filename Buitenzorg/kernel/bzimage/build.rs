@@ -228,6 +228,12 @@ fn limine_image(limine: &std::path::Path, kernel: &std::path::Path, files: &[(St
 /// [`limine_image`] for any architecture: `efi_name` is the removable-media
 /// loader name (BOOTX64.EFI, BOOTAA64.EFI, BOOTRISCV64.EFI).
 fn limine_image_for(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
+    limine_image_with(efi_name, limine, kernel, files, "", out)
+}
+
+/// The general form: `extra_conf` is appended to the boot entry (e.g.
+/// `module_path:` lines).
+fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], extra_conf: &str, out: &std::path::Path) -> std::io::Result<bool> {
     use std::io::{Read, Seek, SeekFrom, Write};
     let Ok(efi) = std::fs::read(limine.join(efi_name)) else { return Ok(false) };
     let kernel_elf = std::fs::read(kernel)?;
@@ -248,11 +254,10 @@ fn limine_image_for(efi_name: &str, limine: &std::path::Path, kernel: &std::path
         };
         let boot = root.create_dir("EFI")?.create_dir("BOOT")?;
         put(&boot, efi_name, &efi)?;
-        put(
-            &boot,
-            "limine.conf",
-            b"# Buitenzorg OS -- Limine boot (multi-arch M1)\ntimeout: 0\nserial: yes\n\n/Buitenzorg OS\n    protocol: limine\n    path: boot():/boot/bzkernel\n",
-        )?;
+        let conf = format!(
+            "# Buitenzorg OS -- Limine boot (multi-arch M1)\ntimeout: 0\nserial: yes\n\n/Buitenzorg OS\n    protocol: limine\n    path: boot():/boot/bzkernel\n{extra_conf}"
+        );
+        put(&boot, "limine.conf", conf.as_bytes())?;
         put(&root.create_dir("boot")?, "bzkernel", &kernel_elf)?;
         for (name, bytes) in files {
             put(&root, &name.to_uppercase(), bytes)?;
@@ -408,8 +413,28 @@ fn main() {
     let arm_kernel = manifest_dir().join("..").join("target").join("aarch64-unknown-none-softfloat").join("release").join("bzkernel");
     println!("cargo:rerun-if-changed={}", arm_kernel.display());
     let arm_path = out_dir.join("buitenzorg-arm64.img");
+    // ARM64 user programs (scripts/build-hello-csharp-arm64.*): the x86 ELFs
+    // are swapped for their AArch64 builds, and each is also loaded by Limine
+    // as a module (the ARM64 kernel has no disk driver yet).
+    let arm_progs = manifest_dir().join("..").join("..").join("userland").join("hello-csharp").join("arm64");
+    let mut arm_files: Vec<(String, Vec<u8>)> = files.iter().filter(|(n, _)| !n.to_lowercase().ends_with(".elf")).cloned().collect();
+    let mut modules = String::new();
+    if let Ok(dir) = std::fs::read_dir(&arm_progs) {
+        let mut elfs: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().map_or(false, |x| x == "elf")).collect();
+        elfs.sort();
+        for path in elfs {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            if let Ok(bytes) = std::fs::read(&path) {
+                let file = format!("{}.ELF", stem.to_uppercase());
+                modules.push_str(&format!("    module_path: boot():/{file}\n    module_string: {stem}\n"));
+                arm_files.push((file, bytes));
+            }
+        }
+    }
+    println!("cargo:rerun-if-changed={}", arm_progs.display());
     let arm_ok = arm_kernel.exists()
-        && limine_image_for("BOOTAA64.EFI", &limine_dir, &arm_kernel, &files, &arm_path).unwrap_or(false);
+        && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &arm_path).unwrap_or(false);
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
 
     println!("cargo:rustc-env=UEFI_IMAGE={}", uefi_path.display());

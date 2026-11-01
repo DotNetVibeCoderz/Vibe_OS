@@ -55,6 +55,26 @@ const SYS_PROC_SPAWN: u64 = 40;
 const SYS_PROC_WAIT: u64 = 41;
 const SYS_PROC_ARGS: u64 = 42;
 
+/// ARM64 (multi-arch M3): `SVC #0` with the number in x8 and the arguments in
+/// x0..x2, result in x0 (the Linux arm64 convention; the same bz-abi numbers
+/// as on x86). The kernel restores every other register; x1/x2 are declared
+/// clobbered anyway (cheap insurance against the rdi/rsi/rdx lesson below).
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn syscall3(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+    let ret: u64;
+    core::arch::asm!(
+        "svc #0",
+        inlateout("x0") a0 => ret,
+        inlateout("x1") a1 => _,
+        inlateout("x2") a2 => _,
+        in("x8") nr,
+        options(nostack),
+    );
+    ret
+}
+
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn syscall3(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     let ret: u64;
@@ -406,6 +426,25 @@ extern "C" fn bz_thread_body(ctx: *const u64) -> ! {
 
 /// Ring-3 entry stub the kernel jumps to for a new thread (rdi = ctx). Aligns
 /// the stack, runs the body, and exits the thread if the body ever returns.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[unsafe(naked)]
+pub unsafe extern "C" fn bz_thread_trampoline() -> ! {
+    core::arch::naked_asm!(
+        "mov x9, sp",
+        "and x9, x9, #-16",
+        "mov sp, x9",
+        "bl {body}",             // body(ctx) -- x0 already holds ctx
+        "mov x0, #0",
+        "mov x8, #{texit}",
+        "svc #0",
+        "2: b 2b",
+        body = sym bz_thread_body,
+        texit = const SYS_THREAD_EXIT,
+    )
+}
+
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn bz_thread_trampoline() -> ! {
@@ -745,6 +784,29 @@ pub unsafe extern "C" fn bz_thread_exit(code: u64) -> ! {
 
 /// ELF entry point. zerolib's Main needs no OS-level init, so we call the
 /// managed entry directly with a minimal argv, then exit with its return code.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[unsafe(naked)]
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "mov x29, #0",
+        "adrp x1, PROG_NAME",
+        "add x1, x1, :lo12:PROG_NAME", // argv[0]
+        "sub sp, sp, #16",
+        "stp x1, xzr, [sp]",           // argv = { argv0, NULL }
+        "mov x1, sp",
+        "mov w0, #1",                  // argc = 1
+        "bl {main}",
+        "mov x1, #0",
+        "mov x8, #{exit}",             // exit code already in x0
+        "svc #0",
+        "2: b 2b",
+        main = sym __managed__Main,
+        exit = const SYS_EXIT,
+    )
+}
+
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn _start() -> ! {
@@ -767,6 +829,26 @@ pub unsafe extern "C" fn _start() -> ! {
         exit = const SYS_EXIT,
     )
 }
+
+// NativeAOT arm64 write-barrier helpers (zerolib on linux-arm64 calls them for
+// every reference store). Special convention: x14 = destination, x15 = the
+// reference (x13 = source for the by-ref copy); x14 (and x13) advance by 8 on
+// exit, x16/x17 may be trashed. With no GC there is no card table to mark,
+// so they are plain stores.
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".global RhpCheckedAssignRefArm64",
+    ".global RhpAssignRefArm64",
+    ".global RhpByRefAssignRefArm64",
+    "RhpCheckedAssignRefArm64:",
+    "RhpAssignRefArm64:",
+    "    str x15, [x14], #8",
+    "    ret",
+    "RhpByRefAssignRefArm64:",
+    "    ldr x15, [x13], #8",
+    "    str x15, [x14], #8",
+    "    ret",
+);
 
 #[no_mangle]
 static PROG_NAME: [u8; 6] = *b"hello\0";

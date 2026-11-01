@@ -35,6 +35,11 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 4): C# apps on ARM64.** The C# programs are
+  compiled by bflat for linux-arm64 and linked with an ARM64 build of the
+  runtime shim; Limine hands them to the kernel as boot modules and the
+  generic ELF loader runs them in user mode. `Hello from C#!` and the C#
+  runtime tests (mmap, managed heap growth, reserve/commit) pass on ARM64.
 - **Multi-arch M3 (increment 3): threads and user mode on ARM64.** Kernel
   threads switch with their own FP/SIMD state, and programs run in EL0 in
   their own address space, calling the kernel with `SVC` and exiting back to

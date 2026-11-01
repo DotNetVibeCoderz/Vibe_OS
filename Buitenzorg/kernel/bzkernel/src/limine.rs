@@ -107,6 +107,37 @@ static mut FRAMEBUFFER: Request<FramebufferResponse> = req(0x9d5827dcd881dd75, 0
 static mut RSDP: Request<AddrResponse> = req(0xc5e77b6b397e7b43, 0x27637845accdcf3c, ());
 #[used]
 static mut DTB: Request<AddrResponse> = req(0xb40ddb48fb54bac7, 0x545081493f81ffb7, ());
+#[used]
+static mut MODULES: Request<ModuleResponse> = req(0x3e7e279702be32af, 0xca1c4f3bd1280cee, ());
+
+/// `struct limine_file` (the fields used here).
+#[repr(C)]
+struct LimineFile {
+    revision: u64,
+    address: u64,
+    size: u64,
+    path: *const u8,
+    string: *const u8,
+}
+
+#[repr(C)]
+struct ModuleResponse {
+    revision: u64,
+    count: u64,
+    modules: *const *const LimineFile,
+}
+
+/// A NUL-terminated C string from the loader.
+fn cstr(p: *const u8) -> &'static str {
+    if p.is_null() {
+        return "";
+    }
+    let mut n = 0;
+    while n < 256 && unsafe { p.add(n).read() } != 0 {
+        n += 1;
+    }
+    core::str::from_utf8(unsafe { core::slice::from_raw_parts(p, n) }).unwrap_or("")
+}
 
 fn response<R, X>(r: *const Request<R, X>) -> Option<&'static R> {
     let p = unsafe { read_volatile(addr_of!((*r).response)) };
@@ -153,5 +184,17 @@ extern "C" fn limine_entry() -> ! {
     // Base revision >= 4: the RSDP is an HHDM virtual address.
     info.firmware.rsdp = response(addr_of!(RSDP)).map(|r| r.address - hhdm);
     info.firmware.dtb = response(addr_of!(DTB)).filter(|r| r.address != 0).map(|r| r.address - hhdm);
+    // Modules (`module_path` in limine.conf), named by their `module_string`
+    // or else by the file name.
+    if let Some(mr) = response(addr_of!(MODULES)) {
+        for i in 0..mr.count as usize {
+            let f = unsafe { &**mr.modules.add(i) };
+            let name = match cstr(f.string) {
+                "" => cstr(f.path).rsplit('/').next().unwrap_or(""),
+                s => s,
+            };
+            info.add_module(name, f.address, f.size);
+        }
+    }
     crate::kernel_main(boot::install(info))
 }

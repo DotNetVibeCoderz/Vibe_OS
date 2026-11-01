@@ -9,6 +9,9 @@ if (Test-Path (Join-Path $root "tools\bflat\bflat.exe")) {
     Write-Host "==> user program (C# -> ELF)" -ForegroundColor Green
     & (Join-Path $PSScriptRoot "build-hello-csharp.ps1")
     if ($LASTEXITCODE -ne 0) { throw "hello-csharp build failed" }
+    # The same C# programs for ARM64 (packed into dist/buitenzorg-arm64.img).
+    & (Join-Path $PSScriptRoot "build-hello-csharp-arm64.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "ARM64 C# build failed" }
 } else {
     Write-Host "==> skipping C# user program (tools/bflat not installed)" -ForegroundColor Yellow
 }

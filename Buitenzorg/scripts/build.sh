@@ -6,6 +6,8 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -x "$root/tools/bflat/bflat" ]; then
     echo "==> user program (C# -> ELF)"
     "$root/scripts/build-hello-csharp.sh"
+    # The same C# programs for ARM64 (packed into dist/buitenzorg-arm64.img).
+    "$root/scripts/build-hello-csharp-arm64.sh"
 else
     echo "==> skipping C# user program (tools/bflat not installed)"
 fi

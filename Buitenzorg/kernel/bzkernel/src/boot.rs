@@ -63,6 +63,32 @@ pub struct Firmware {
     pub dtb: Option<u64>,
 }
 
+/// Most boot modules kept.
+pub const MAX_MODULES: usize = 16;
+
+/// A file the loader placed in memory for the kernel (Limine modules): the
+/// ARM64 port loads its first programs this way, before it has a disk driver.
+#[derive(Clone, Copy)]
+#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+pub struct Module {
+    name: [u8; 32],
+    name_len: usize,
+    /// Virtual address (direct map) and size of the contents.
+    pub addr: u64,
+    pub size: u64,
+}
+
+#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+impl Module {
+    pub fn name(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?")
+    }
+    /// The module's bytes.
+    pub fn bytes(&self) -> &'static [u8] {
+        unsafe { core::slice::from_raw_parts(self.addr as *const u8, self.size as usize) }
+    }
+}
+
 pub struct BootInfo {
     /// Which loader / protocol handed over (for logs and tests).
     pub loader: &'static str,
@@ -75,6 +101,8 @@ pub struct BootInfo {
     pub regions_dropped: usize,
     pub framebuffer: Option<Framebuffer>,
     pub firmware: Firmware,
+    modules: [Module; MAX_MODULES],
+    module_count: usize,
 }
 
 impl BootInfo {
@@ -87,7 +115,26 @@ impl BootInfo {
             regions_dropped: 0,
             framebuffer: None,
             firmware: Firmware { rsdp: None, dtb: None },
+            modules: [Module { name: [0; 32], name_len: 0, addr: 0, size: 0 }; MAX_MODULES],
+            module_count: 0,
         }
+    }
+
+    /// Record a loader module (`name` truncated to 32 bytes).
+    pub fn add_module(&mut self, name: &str, addr: u64, size: u64) {
+        if self.module_count == MAX_MODULES {
+            return;
+        }
+        let mut m = Module { name: [0; 32], name_len: name.len().min(32), addr, size };
+        m.name[..m.name_len].copy_from_slice(&name.as_bytes()[..m.name_len]);
+        self.modules[self.module_count] = m;
+        self.module_count += 1;
+    }
+
+    /// Files the loader handed over.
+    #[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+    pub fn modules(&self) -> &[Module] {
+        &self.modules[..self.module_count]
     }
 
     /// Append a memory range (loaders report them in ascending order; an entry
