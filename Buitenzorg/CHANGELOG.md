@@ -35,6 +35,11 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M5: CI matrix.** Every push now builds the kernels for
+  x86-64, ARM64 and RISC-V once and boots each architecture in its own CI job
+  with the same milestone checks; a job fails if it would have skipped one of
+  its own boots, and every boot log is kept for download. The x86-64 UEFI and
+  Limine boots run in CI for the first time.
 - **Multi-arch M4 (increment 6): SMP on RISC-V -- the RISC-V port is
   complete.** Secondary harts start through the SBI firmware and join the
   shared scheduler; processes run in parallel on every core (4 copies of a
@@ -257,6 +262,13 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **The RISC-V user-mode self-test failed on fast machines.** It counted loop
+  iterations instead of time, so a fast CI runner finished before enough timer
+  interrupts arrived; it now waits a fixed 300 ms.
+- **The I/O APIC self-test could miss a mouse interrupt on a busy host.** It
+  injected the next test byte before the previous one had been read and gave
+  the interrupts a fixed 0.1 s; it now waits for each byte to be consumed and
+  up to a second for all of them.
 - **virtio: the device could overwrite 4 bytes of an unrelated page.** A
   virtqueue's used ring was 6 bytes too small for 256 entries; once a queue
   wrapped (after 255 disk reads, for example), the device wrote past the end

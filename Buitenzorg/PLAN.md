@@ -896,7 +896,9 @@ mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
    pertama di RISC-V berjalan lewat runtime JS/TS/Python (netral arsitektur);
    C# menyusul saat toolchain-nya siap.
 6. **M5 — CI matrix** `qemu-system-{x86_64,aarch64,riscv64}` dengan smoke
-   test yang sama (marker MILESTONE) per arsitektur.
+   test yang sama (marker MILESTONE) per arsitektur. *(✓ 2026-11-02: job
+   build + matrix smoke per arsitektur, mode strict, log sebagai artifact.
+   Roadmap multi-arsitektur M0–M5 selesai.)*
 
 ## 🔮 Pasca-1.x (jangka panjang)
 SMP/NUMA matang · driver GPU modern + NPU · WiFi/Bluetooth/USB luas ·
