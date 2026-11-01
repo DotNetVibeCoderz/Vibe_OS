@@ -213,7 +213,7 @@ pub fn map_user_region(
         make_user_path(addr);
         pages.push(addr);
     }
-    x86_64::instructions::tlb::flush_all();
+    crate::arch::cpu::flush_tlb();
     Ok((base + count * 4096, pages))
 }
 
@@ -231,7 +231,7 @@ pub fn unmap_user_pages(
             unsafe { frames.deallocate_frame(frame) };
         }
     }
-    x86_64::instructions::tlb::flush_all();
+    crate::arch::cpu::flush_tlb();
 }
 
 // --- User-space anonymous mmap arena (v0.15 "Matang" managed-runtime PAL) ----
@@ -307,7 +307,7 @@ fn map_user_region_flags(
         make_user_path(addr);
         pages.push(addr);
     }
-    x86_64::instructions::tlb::flush_all();
+    crate::arch::cpu::flush_tlb();
     Ok(pages)
 }
 

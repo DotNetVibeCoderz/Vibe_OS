@@ -199,5 +199,5 @@ pub fn install(space: Space) {
         unsafe { core::ptr::write_volatile(pdpt.add(slot), entry) };
     }
     CURRENT.store(space.id, Ordering::SeqCst);
-    x86_64::instructions::tlb::flush_all();
+    crate::arch::cpu::flush_tlb();
 }

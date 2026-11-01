@@ -28,6 +28,10 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Multi-arch M0 (increment 1): HAL boundary.** x86 CPU code moved to
+  `src/arch/x86/`, PC port-I/O devices to `src/platform/pc/`; generic code uses
+  the `arch::cpu` facade; `scripts/check-arch-boundary.sh` enforces it in CI
+  (paging, context switch and boot glue are the remaining allowlisted files).
 - **Desktop UI/UX overhaul.** New default theme "kebun" (from the lotus-pond
   wallpaper: moss glass panels, mist text, a single lotus-pink accent, pollen
   time). The start menu is organised by category (Kantor, Multimedia,

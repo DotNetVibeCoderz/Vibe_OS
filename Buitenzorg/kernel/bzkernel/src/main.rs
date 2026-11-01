@@ -14,6 +14,12 @@ mod ai;
 mod aio;
 mod allocator;
 mod app;
+mod arch;
+mod platform;
+// Architecture- and platform-specific modules keep their short crate paths
+// (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
+pub(crate) use arch::x86::{gdt, interrupts, smp, usermode, vmx};
+pub(crate) use platform::pc::{ata, audio, mouse, pci, power, rtc, serial};
 mod aspace;
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
@@ -31,45 +37,33 @@ mod interactive {
         ACTIVE.load(Ordering::SeqCst)
     }
 }
-mod ata;
-mod audio;
 mod compute;
 mod driver;
 mod elf;
 mod fat;
 mod framebuffer;
-mod gdt;
 mod gfx;
 mod icons;
-mod interrupts;
 mod ipc;
 mod keyboard;
 mod logo;
 mod memory;
 mod model;
-mod mouse;
 mod net;
-mod pci;
 mod pkg;
-mod power;
 mod process;
 mod profile;
 mod ramdisk;
-mod rtc;
 mod screensaver;
 mod script;
-mod serial;
 mod service;
 mod shell;
-mod smp;
 mod syscall;
 mod task;
 mod terminal;
 mod theme;
-mod usermode;
 mod vfs;
 mod vmm;
-mod vmx;
 mod wallpaper;
 mod wm;
 
@@ -1041,7 +1035,7 @@ fn desktop_loop() -> ! {
         if task::user_work_pending() {
             task::yield_now();
         } else {
-            x86_64::instructions::hlt();
+            arch::cpu::halt();
         }
         if w == 0 {
             continue;
@@ -1740,6 +1734,6 @@ fn syscall_smoke_test() {
 fn panic(info: &PanicInfo) -> ! {
     println!("\n[kernel] PANIC: {}", info);
     loop {
-        x86_64::instructions::hlt();
+        arch::cpu::halt();
     }
 }

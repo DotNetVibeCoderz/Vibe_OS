@@ -3,7 +3,7 @@
 
 use alloc::collections::VecDeque;
 use spin::Mutex;
-use x86_64::instructions::interrupts;
+use crate::arch::cpu as interrupts;
 
 use crate::task;
 

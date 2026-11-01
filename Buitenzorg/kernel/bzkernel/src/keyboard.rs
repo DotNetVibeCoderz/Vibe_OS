@@ -20,5 +20,5 @@ pub fn push(c: char) {
 /// taken: the keyboard IRQ pushes under the same spin lock, so an IRQ landing
 /// while the desktop loop holds it would deadlock.
 pub fn pop() -> Option<char> {
-    x86_64::instructions::interrupts::without_interrupts(|| QUEUE.lock().pop_front())
+    crate::arch::cpu::without_interrupts(|| QUEUE.lock().pop_front())
 }

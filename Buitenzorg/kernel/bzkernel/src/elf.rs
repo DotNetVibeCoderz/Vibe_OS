@@ -148,6 +148,6 @@ fn map_segment(
         pages.push(page_addr);
         page_addr += 4096;
     }
-    x86_64::instructions::tlb::flush_all();
+    crate::arch::cpu::flush_tlb();
     Ok(())
 }

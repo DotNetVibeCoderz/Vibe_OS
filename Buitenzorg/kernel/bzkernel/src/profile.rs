@@ -22,7 +22,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
-use x86_64::instructions::interrupts::without_interrupts;
+use crate::arch::cpu::without_interrupts;
 
 /// Maximum number of distinct zone names tracked. Extra names past this are
 /// counted in `overflow` and reported once, so the profiler degrades loudly
@@ -54,7 +54,7 @@ static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
 
 #[inline(always)]
 fn rdtsc() -> u64 {
-    unsafe { core::arch::x86_64::_rdtsc() }
+    crate::arch::cpu::timestamp()
 }
 
 /// Start profiling. Cheap; existing accumulations are kept (call [`reset`] for

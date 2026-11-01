@@ -30,6 +30,11 @@ jobs:
         with:
           workspaces: Buitenzorg/kernel
 
+      # Multi-arch boundary (PLAN.md v1.x, M0): generic kernel modules may not
+      # use the x86_64 crate, inline asm or port I/O outside arch/ + platform/.
+      - name: Arch boundary check
+        run: bash scripts/check-arch-boundary.sh
+
       - name: ABI contract tests
         working-directory: Buitenzorg/kernel
         run: cargo test -p bz-abi

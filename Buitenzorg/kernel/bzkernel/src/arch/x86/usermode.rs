@@ -95,7 +95,7 @@ pub fn enter_user(entry: u64, user_stack_top: u64) -> u64 {
     // The app exits via the EXIT syscall, whose entry cleared IF (SFMASK) and
     // whose return path (return_to_kernel) longjmps back here without restoring
     // it. Re-enable interrupts so the kernel keeps receiving the timer/IRQs.
-    x86_64::instructions::interrupts::enable();
+    crate::arch::cpu::enable_interrupts();
     code
 }
 

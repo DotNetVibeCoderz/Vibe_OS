@@ -187,7 +187,7 @@ impl Console {
 /// Draw the direct-pixel demo; returns false when no framebuffer exists.
 pub fn draw_pixel_demo() -> bool {
     if let Some(console) = CONSOLE.get() {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        crate::arch::cpu::without_interrupts(|| {
             console.lock().draw_pixel_demo();
         });
         true
@@ -240,7 +240,7 @@ pub fn dimensions() -> Option<(usize, usize)> {
 /// Present a `0x00RRGGBB` back buffer (width*height) to the screen.
 pub fn present(back: &[u32]) {
     if let Some(console) = CONSOLE.get() {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        crate::arch::cpu::without_interrupts(|| {
             console.lock().present(back);
         });
     }
@@ -250,7 +250,7 @@ pub fn present(back: &[u32]) {
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
     if let Some(console) = CONSOLE.get() {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        crate::arch::cpu::without_interrupts(|| {
             console.lock().write_fmt(args).ok();
         });
     }

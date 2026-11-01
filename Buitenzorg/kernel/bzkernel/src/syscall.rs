@@ -199,7 +199,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FUTEX_WAIT => sys_futex_wait(a0, a1),
         sysno::FUTEX_WAKE => task::futex_wake(a0, a1),
         sysno::THREAD_SELF => task::current_id(),
-        sysno::CLOCK_MONO => unsafe { core::arch::x86_64::_rdtsc() },
+        sysno::CLOCK_MONO => crate::arch::cpu::timestamp(),
         sysno::AUDIO_STAT => sys_audio_stat(a0),
         sysno::AUDIO_SET_VOLUME => {
             if crate::audio::set_volume(a0 as u32) {

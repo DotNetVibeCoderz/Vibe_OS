@@ -24,7 +24,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
-use x86_64::instructions::interrupts;
+use crate::arch::cpu as interrupts;
 
 use crate::{aspace, gdt, usermode};
 
@@ -586,7 +586,7 @@ extern "C" fn task_trampoline() -> ! {
 
 /// Mark the current task finished and switch away for good.
 pub fn exit_current() -> ! {
-    interrupts::disable();
+    interrupts::disable_interrupts();
     switch_with(|sched| {
         let cur = sched.current;
         sched.tasks[cur].state = State::Finished;
