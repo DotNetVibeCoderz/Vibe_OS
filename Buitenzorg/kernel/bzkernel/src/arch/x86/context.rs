@@ -46,7 +46,10 @@ pub fn prepare_stack(stack: &[u8], entry: extern "C" fn() -> !) -> u64 {
         push(0); // r13
         push(0); // r14
         push(0); // r15
-        push(0x202); // rflags: IF=1 so fresh tasks run with interrupts enabled
+        // rflags: IF=0. The task's first code (the scheduler's trampoline)
+        // finishes the switch — scheduler lock, BKL ticket — and must not be
+        // interrupted half-way; it enables interrupts itself afterwards.
+        push(0x2);
         sp as u64
     }
 }

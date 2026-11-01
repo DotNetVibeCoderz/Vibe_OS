@@ -86,6 +86,10 @@ pub fn in_user_syscall() -> bool {
 /// Take the BKL (FIFO ticket lock). Interrupts are enabled while waiting so
 /// IPIs (TLB shootdown acknowledgements) keep being served, and restored after.
 fn bkl_lock() {
+    let c = cpu();
+    // While acquiring, a timer tick must not switch tasks (kernel preemption):
+    // `switch_with` would release a BKL this CPU only has a ticket for.
+    BKL_ACQUIRING[c].store(true, Ordering::Relaxed);
     let ticket = BKL_NEXT.fetch_add(1, Ordering::Relaxed);
     if BKL_SERVING.load(Ordering::Acquire) != ticket {
         BKL_WAITS.fetch_add(1, Ordering::Relaxed);
@@ -98,7 +102,12 @@ fn bkl_lock() {
             interrupts::disable_interrupts();
         }
     }
+    BKL_ACQUIRING[c].store(false, Ordering::Relaxed);
 }
+
+/// Per CPU: inside `bkl_lock` (holding a ticket, maybe waiting with
+/// interrupts on). `preempt` leaves such a CPU alone.
+static BKL_ACQUIRING: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
 fn bkl_unlock() {
     BKL_SERVING.fetch_add(1, Ordering::Release);
@@ -745,15 +754,6 @@ pub fn set_user_active(v: bool) {
     with_current(|t| t.ctx.user_active = v);
 }
 
-/// Futex wait: block the current thread on `key`, then yield. Every CPU has an
-/// idle task to switch to, so the block always takes effect.
-pub fn futex_wait_block(key: u64) {
-    with_current(|t| {
-        t.state = State::Blocked;
-        t.wait_key = key;
-    });
-    yield_now();
-}
 
 /// FUTEX_WAIT core: if the user word at `addr` (validated by the caller) still
 /// holds `expected`, block on it and yield. The comparison and the block are
@@ -767,6 +767,27 @@ pub fn futex_wait_if(addr: u64, expected: u32) -> bool {
         }
         t.state = State::Blocked;
         t.wait_key = addr;
+        true
+    });
+    if blocked {
+        yield_now();
+    }
+    blocked
+}
+
+/// Block on `key` if `still()` holds, deciding under the scheduler lock, then
+/// yield. A waker that first makes `still()` false and then calls
+/// [`futex_wake`] (which takes the same lock) can therefore never be missed:
+/// either the condition is already false here, or we are Blocked before the
+/// wake looks. `still` must not take the scheduler lock. Returns whether it
+/// blocked.
+pub fn block_while(key: u64, still: impl FnOnce() -> bool) -> bool {
+    let blocked = with_current(|t| {
+        if !still() {
+            return false;
+        }
+        t.state = State::Blocked;
+        t.wait_key = key;
         true
     });
     if blocked {
@@ -855,9 +876,16 @@ pub fn kill(id: u64) -> bool {
     })
 }
 
+/// First code of every new task. It starts with interrupts OFF (see
+/// `context::prepare_stack`): finishing the switch takes the scheduler lock
+/// and the BKL ticket, and a timer tick in between (kernel preemption in the
+/// v0.2 demo) used to switch away while holding the scheduler lock (deadlock)
+/// or release a BKL this task only had a ticket for — the rare UEFI boot
+/// hang/fault in `scheduler_demo`.
 extern "C" fn task_trampoline() -> ! {
     finish_switch();
     resume_bkl();
+    interrupts::enable_interrupts();
     let entry = with_current(|t| t.entry);
     entry();
     exit_current()
@@ -888,7 +916,7 @@ pub fn preempt(from_user: bool) {
     if !STARTED.load(Ordering::SeqCst) {
         return;
     }
-    if from_user || PREEMPT_ENABLED.load(Ordering::SeqCst) {
+    if from_user || (PREEMPT_ENABLED.load(Ordering::SeqCst) && !BKL_ACQUIRING[cpu()].load(Ordering::Relaxed)) {
         if switch_with(|_| ()) && from_user {
             USER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
         }

@@ -47,17 +47,20 @@ fn load_program(pid: u64, image: &[u8]) -> Result<(aspace::Space, u64, u64), &'s
     }
 }
 
-/// Block the calling (kernel) task until process `pid` exits; return its exit
-/// code. Sleeps in the scheduler's Blocked state, woken by `process::app_exit`
-/// — no race, since kernel code is not preempted between the check and the
-/// sleep and the child can only exit after we switch away.
+/// Block the calling task until process `pid` exits; return its exit code
+/// (`None` if it is unknown). Sleeps in the scheduler's Blocked state, woken
+/// by `process::app_exit`. The "still alive?" check and the block are one step
+/// under the scheduler lock (`task::block_while`), and `app_exit` unregisters
+/// the child *before* its wake-up takes that lock — so on SMP, with the child
+/// exiting on another CPU at the same moment, the wake-up cannot be lost.
+pub fn wait_exit(pid: u64) -> Option<u64> {
+    while task::block_while(process::wait_key(pid), || process::is_alive(pid)) {}
+    process::exit_code(pid)
+}
+
+/// [`wait_exit`] for kernel callers (boot demos): `u64::MAX` if unknown.
 pub fn wait(pid: u64) -> u64 {
-    loop {
-        if !process::is_alive(pid) {
-            return process::exit_code(pid).unwrap_or(u64::MAX);
-        }
-        task::futex_wait_block(process::wait_key(pid));
-    }
+    wait_exit(pid).unwrap_or(u64::MAX)
 }
 
 /// Start `image` as its own preemptively scheduled process. Returns its pid.
@@ -218,6 +221,7 @@ fn app_file(name: &str) -> Option<&'static str> {
         "smpgui" => Some("SMPGUI.ELF"),
         "pthread" => Some("PTHREAD.ELF"),
         "smpfs" => Some("SMPFS.ELF"),
+        "smpproc" => Some("SMPPROC.ELF"),
         "proctest" => Some("PROCTEST.ELF"),
         // Generic slot for a user-authored app: the SDK/VS Code/MagicAppGen
         // template builds its ELF to userland/hello-csharp/userapp.elf, which

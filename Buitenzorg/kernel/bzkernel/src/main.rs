@@ -763,10 +763,11 @@ fn smp_finelock_demo(aps: usize) {
     println!("[kernel] smp: window draws that ran during a compose on another CPU: {}", overlap);
     let gui = gui.filter(|_| overlap > 0);
     let fs = smp_finelock_run(aps, "SMPFS", "files (VFS + FAT + ATA)");
-    match (mem, gui, fs) {
-        (Some((mp, mw0, mw1, mx)), Some((gp, gw0, gw1, gx)), Some((fp, fw0, fw1, fx))) => println!(
-            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02}; {} draws during another CPU's compose; files: {} at once, BKL waits {} -> {}, x{}.{:02})",
-            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100, overlap, fp, fw0, fw1, fx / 100, fx % 100
+    let pr = smp_finelock_run(aps, "SMPPROC", "spawn/wait, network, packages, audio");
+    match (mem, gui, fs, pr) {
+        (Some((mp, mw0, mw1, mx)), Some((gp, gw0, gw1, gx)), Some((fp, fw0, fw1, fx)), Some((pp, pw0, pw1, px))) => println!(
+            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02}; {} draws during another CPU's compose; files: {} at once, BKL waits {} -> {}, x{}.{:02}; processes/network/packages/audio: {} at once, BKL waits {} -> {}, x{}.{:02})",
+            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100, overlap, fp, fw0, fw1, fx / 100, fx % 100, pp, pw0, pw1, px / 100, px % 100
         ),
         _ => println!("[kernel] smp fine-grained locking self-test FAILED"),
     }

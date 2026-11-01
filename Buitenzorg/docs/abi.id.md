@@ -148,9 +148,13 @@ Memori yang dibagi antar-thread harus diakses dengan atomik shim (`bz_atomic_add
 `bz_atomic_add32`, `bz_atomic_cas32`) atau di bawah mutex futex (`bz_mutex_lock`
 / `BzMutex`); heap runtime (`new`, array) aman-thread. `TICKS` dan `CLOCK_MONO` dijawab tanpa lock kernel. Syscall
 lain dijalankan di CPU pemanggil: syscall memori (`MMAP`/`MPROTECT`/`MUNMAP`),
-scheduler (`YIELD`, `THREAD_SELF`, `FUTEX_*`) dan konsol (`DEBUG_WRITE`) hanya
-memakai lock subsistemnya sendiri sehingga berjalan paralel antar-CPU; sisanya
-di bawah Big Kernel Lock.
+scheduler (`YIELD`, `THREAD_SELF`, `FUTEX_*`), konsol (`DEBUG_WRITE`), sistem
+jendela (`WIN_*`, `FB_INFO`, `KEY_READ`), file (`FS_*`), registry dan kontrol
+proses (`PROC_LIST`, `PROC_ARGS`, `PROC_SPAWN`, `PROC_WAIT`, `SYS_STAT`), jam
+(`CLOCK_RTC`), jaringan (`NET_*`), paket (`PKG_*`) dan audio (`AUDIO_*`) hanya
+memakai lock subsistemnya sendiri sehingga berjalan paralel antar-CPU;
+`EXIT`, `THREAD_EXIT`, `PROC_KILL`, `THREAD_CREATE` dan `THREAD_JOIN` di bawah
+Big Kernel Lock.
 
 > **Catatan register (penting):** syscall meng-clobber `rcx` + `r11` (instruksi
 > `syscall`) **dan** `r8`/`r9`/`r10` plus register caller-saved lain (marshaling

@@ -59,4 +59,5 @@ build_prog smpsys smpsys.cs
 build_prog smpgui smpgui.cs
 build_prog pthread pthread.cs
 build_prog smpfs smpfs.cs
+build_prog smpproc smpproc.cs
 build_prog proctest proctest.cs bzbcl.cs bzbcl2.cs

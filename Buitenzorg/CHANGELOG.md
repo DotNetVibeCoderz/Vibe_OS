@@ -63,6 +63,15 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **Processes, network, packages and audio without the BKL.** PROC_SPAWN,
+  PROC_WAIT, NET_*, PKG_* and AUDIO_* run under their subsystems' own locks.
+  PROC_WAIT decides "child still alive?" and blocks in one step under the
+  scheduler lock, so a child exiting on another CPU cannot be missed (SMPPROC
+  workload; a deliberately racy variant hangs and fails the test).
+- **Fixed: rare UEFI hang/fault in the scheduler demo.** New tasks started with
+  interrupts enabled while still finishing the context switch; a timer tick
+  there (kernel preemption, demo only) could switch away holding the scheduler
+  lock or corrupt the BKL ticket order. Tasks now start with interrupts off.
 - **Syscalls with interrupts on; files without the BKL.** A 4-CPU livelock
   (CPU 0 spinning with interrupts off froze the PIT tick count) led to serving
   every syscall with interrupts enabled and to coalescing presents. FS_LIST /

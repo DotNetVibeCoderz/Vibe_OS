@@ -155,9 +155,13 @@ mutex (`bz_mutex_lock` / `BzMutex`); the runtime heap (`new`, arrays) is
 thread-safe. `TICKS` and
 `CLOCK_MONO` are answered without taking any kernel lock. Every other syscall
 runs on the CPU that issued it: memory (`MMAP`/`MPROTECT`/`MUNMAP`), scheduler
-(`YIELD`, `THREAD_SELF`, `FUTEX_*`) and console (`DEBUG_WRITE`) syscalls take
-only their own subsystem's lock and run in parallel across CPUs; the rest run
-under the kernel's Big Kernel Lock.
+(`YIELD`, `THREAD_SELF`, `FUTEX_*`), console (`DEBUG_WRITE`), window system
+(`WIN_*`, `FB_INFO`, `KEY_READ`), files (`FS_*`), process registry and control
+(`PROC_LIST`, `PROC_ARGS`, `PROC_SPAWN`, `PROC_WAIT`, `SYS_STAT`), clock
+(`CLOCK_RTC`), network (`NET_*`), packages (`PKG_*`) and audio (`AUDIO_*`)
+syscalls take only their own subsystem's lock and run in parallel across CPUs;
+`EXIT`, `THREAD_EXIT`, `PROC_KILL`, `THREAD_CREATE` and `THREAD_JOIN` run under
+the kernel's Big Kernel Lock.
 
 > **Register note (important):** a syscall clobbers `rcx` + `r11` (the `syscall`
 > instruction) **and** `r8`/`r9`/`r10` plus other caller-saved registers (kernel

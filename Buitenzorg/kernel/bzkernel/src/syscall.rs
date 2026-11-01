@@ -71,9 +71,21 @@ fn from_user() -> bool {
 //   - files (FS_LIST/FS_READ/FS_WRITE): `vfs::MOUNTS`, held for the whole
 //     operation — it also serializes the FAT code and the block devices
 //     (ATA port I/O), which are only reachable through a mount;
+//   - processes (PROC_SPAWN, PROC_WAIT): spawning takes the VFS lock to read
+//     the image, the paging context to build the new space (installed only on
+//     the calling CPU while loading), the process registry and the scheduler;
+//     PROC_WAIT's "still alive?" check and its block are one step under the
+//     scheduler lock (`task::block_while`), and the exiting child unregisters
+//     before its wake-up takes that lock, so no wake-up is lost;
+//   - network (NET_*): `net::STACK` (the loopback device, sockets and
+//     counters live behind it; `poll` takes it per frame);
+//   - packages (PKG_LIST/PKG_SET): `pkg::INSTALLED` (installing checks the
+//     payload through the VFS first, without holding it);
+//   - audio (AUDIO_*): the AC'97 `DEVICE` lock, held across the port I/O and
+//     the DMA buffer fill;
 //   - constants/atomics (ABI_VERSION, IS_INTERACTIVE).
-// PROC_WAIT stays under the BKL: its "still alive?" check and its block must
-// be one step against the exiting child's wake-up.
+// Still under the BKL: EXIT / THREAD_EXIT / PROC_KILL (they tear processes
+// down) and THREAD_CREATE / THREAD_JOIN.
 // Pointer validation walks the calling CPU's own page tables. Everything else
 // still takes the BKL.
 
@@ -114,6 +126,20 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FS_LIST
             | sysno::FS_READ
             | sysno::FS_WRITE
+            | sysno::PROC_SPAWN
+            | sysno::PROC_WAIT
+            | sysno::NET_SOCKET
+            | sysno::NET_BIND
+            | sysno::NET_SEND
+            | sysno::NET_RECV
+            | sysno::NET_CLOSE
+            | sysno::NET_INFO
+            | sysno::PKG_LIST
+            | sysno::PKG_SET
+            | sysno::AUDIO_STAT
+            | sysno::AUDIO_SET_VOLUME
+            | sysno::AUDIO_TONE
+            | sysno::AUDIO_PLAY
     )
 }
 
@@ -657,15 +683,7 @@ fn sys_proc_wait(pid: u64) -> u64 {
     if pid == 0 || pid == crate::aspace::current_id() {
         return syserr::INVAL; // waiting on yourself would never return
     }
-    loop {
-        if !crate::process::is_alive(pid) {
-            return crate::process::exit_code(pid).unwrap_or(syserr::INVAL);
-        }
-        // No race between the check and the sleep: syscalls run with
-        // interrupts off and kernel code is never preempted, so the target can
-        // only exit after we have switched away.
-        task::futex_wait_block(crate::process::wait_key(pid));
-    }
+    crate::app::wait_exit(pid).unwrap_or(syserr::INVAL)
 }
 
 /// PROC_ARGS: copy the caller's argument string (NUL-terminated if it fits).

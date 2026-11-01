@@ -133,6 +133,7 @@ extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
             nr,
             n::MMAP | n::MPROTECT | n::MUNMAP | n::THREAD_SELF | n::DEBUG_WRITE | n::WIN_CMD | n::WIN_PRESENT | n::SYS_STAT | n::PROC_LIST
                 | n::FS_READ | n::FS_WRITE | n::FS_LIST
+                | n::PROC_SPAWN | n::NET_SEND | n::NET_RECV | n::PKG_LIST | n::AUDIO_STAT
         );
     if track {
         crate::task::fine_enter();

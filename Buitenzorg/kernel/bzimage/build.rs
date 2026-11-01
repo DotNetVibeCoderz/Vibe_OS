@@ -266,6 +266,7 @@ fn main() {
         ("smpgui.elf", "smpgui.elf"),
         ("pthread.elf", "pthread.elf"),
         ("smpfs.elf", "smpfs.elf"),
+        ("smpproc.elf", "smpproc.elf"),
         ("proctest.elf", "proctest.elf"),
         // Generic user-app slot (SDK / VS Code / MagicAppGen template output).
         // Optional: absent until a template app is built and deployed here.
