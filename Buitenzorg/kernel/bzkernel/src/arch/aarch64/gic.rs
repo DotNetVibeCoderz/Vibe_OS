@@ -14,7 +14,14 @@ const GICR_ISENABLER0: u64 = 0x0100;
 const GICR_IPRIORITYR: u64 = 0x0400;
 
 static GICD: AtomicU64 = AtomicU64::new(0);
+/// Base of the redistributor region: CPU n's frames are at + n * 0x20000
+/// (QEMU `virt` lays them out in MPIDR order).
 static GICR: AtomicU64 = AtomicU64::new(0);
+const GICR_STRIDE: u64 = 0x2_0000;
+
+fn my_gicr() -> u64 {
+    GICR.load(Ordering::SeqCst) + super::cpu::id() as u64 * GICR_STRIDE
+}
 static SPURIOUS: AtomicU64 = AtomicU64::new(0);
 
 fn w32(addr: u64, v: u32) {
@@ -24,13 +31,19 @@ fn r32(addr: u64) -> u32 {
     unsafe { (addr as *const u32).read_volatile() }
 }
 
-/// Bring the GIC up for this CPU. `gicd` / `gicr` are the mapped virtual
-/// addresses of the distributor and of CPU 0's redistributor.
+/// Bring the GIC up (boot CPU): `gicd` / `gicr` are the mapped virtual
+/// addresses of the distributor and of the redistributor region.
 pub fn init(gicd: u64, gicr: u64) -> Result<(), &'static str> {
     GICD.store(gicd, Ordering::SeqCst);
     GICR.store(gicr, Ordering::SeqCst);
     // Distributor: affinity routing + group 1 enabled.
     w32(gicd + GICD_CTLR, (1 << 4) | (1 << 1) | 1);
+    init_cpu()
+}
+
+/// This CPU's part: wake its redistributor, enable its CPU interface.
+pub fn init_cpu() -> Result<(), &'static str> {
+    let gicr = my_gicr();
     // Wake this CPU's redistributor.
     let waker = r32(gicr + GICR_WAKER);
     w32(gicr + GICR_WAKER, waker & !(1 << 1));
@@ -57,7 +70,7 @@ pub fn init(gicd: u64, gicr: u64) -> Result<(), &'static str> {
 
 /// Enable private interrupt (SGI/PPI) `intid` (< 32) on this CPU, group 1.
 pub fn enable_ppi(intid: u32) {
-    let sgi = GICR.load(Ordering::SeqCst) + SGI_BASE;
+    let sgi = my_gicr() + SGI_BASE;
     w32(sgi + GICR_IGROUPR0, r32(sgi + GICR_IGROUPR0) | (1 << intid));
     unsafe { ((sgi + GICR_IPRIORITYR + intid as u64) as *mut u8).write_volatile(0x80) };
     w32(sgi + GICR_ISENABLER0, 1 << intid);

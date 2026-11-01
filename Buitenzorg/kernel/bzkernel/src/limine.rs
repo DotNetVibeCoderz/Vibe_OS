@@ -108,6 +108,16 @@ static mut RSDP: Request<AddrResponse> = req(0xc5e77b6b397e7b43, 0x27637845accdc
 #[used]
 static mut DTB: Request<AddrResponse> = req(0xb40ddb48fb54bac7, 0x545081493f81ffb7, ());
 #[used]
+static mut KERNEL_ADDRESS: Request<KernelAddressResponse> = req(0x71ba76863cc55f63, 0xb2644a48c516a487, ());
+
+#[repr(C)]
+struct KernelAddressResponse {
+    revision: u64,
+    physical_base: u64,
+    virtual_base: u64,
+}
+
+#[used]
 static mut MODULES: Request<ModuleResponse> = req(0x3e7e279702be32af, 0xca1c4f3bd1280cee, ());
 
 /// `struct limine_file` (the fields used here).
@@ -184,6 +194,7 @@ extern "C" fn limine_entry() -> ! {
     // Base revision >= 4: the RSDP is an HHDM virtual address.
     info.firmware.rsdp = response(addr_of!(RSDP)).map(|r| r.address - hhdm);
     info.firmware.dtb = response(addr_of!(DTB)).filter(|r| r.address != 0).map(|r| r.address - hhdm);
+    info.kernel_base = response(addr_of!(KERNEL_ADDRESS)).map(|r| (r.physical_base, r.virtual_base));
     // Modules (`module_path` in limine.conf), named by their `module_string`
     // or else by the file name.
     if let Some(mr) = response(addr_of!(MODULES)) {

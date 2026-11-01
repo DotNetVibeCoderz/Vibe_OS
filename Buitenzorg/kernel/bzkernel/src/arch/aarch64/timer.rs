@@ -22,9 +22,14 @@ pub fn start(hz: u64) {
     unsafe { asm!("msr cntv_ctl_el0, {}", "isb", in(reg) 1u64, options(nostack)) }; // enable, unmasked
 }
 
+/// Every CPU's timer interrupt reloads its own timer; only CPU 0's advances
+/// the system tick count (as the PIT, routed to CPU 0, does on PCs) -- the
+/// other CPUs' ticks drive preemption only.
 pub fn on_tick() {
     set_tval(RELOAD.load(Ordering::Relaxed));
-    TICKS.fetch_add(1, Ordering::Relaxed);
+    if super::cpu::id() == 0 {
+        TICKS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub fn ticks() -> u64 {

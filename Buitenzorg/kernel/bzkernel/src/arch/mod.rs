@@ -128,7 +128,7 @@ pub mod cpu {
         #[cfg(target_arch = "x86_64")]
         return super::x86::smp::cpu_index();
         #[cfg(target_arch = "aarch64")]
-        return 0; // single core until the ARM64 SMP increment (PSCI)
+        return super::aarch64::cpu::id();
     }
 
     /// Invalidate every non-global TLB entry on this CPU.

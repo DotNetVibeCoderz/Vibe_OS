@@ -21,12 +21,19 @@ pub struct Space {
 }
 
 static KERNEL_ROOT: AtomicU64 = AtomicU64::new(0);
-static CURRENT: AtomicU64 = AtomicU64::new(0);
+/// Space installed on each CPU (u64::MAX = none yet: an AP before its first
+/// install).
+static CURRENT: [AtomicU64; crate::arch::cpu::MAX_CPUS] =
+    [const { AtomicU64::new(u64::MAX) }; crate::arch::cpu::MAX_CPUS];
+
+fn me() -> usize {
+    crate::arch::cpu::id()
+}
 
 /// Record the kernel's (empty) user-half root, created at boot.
 pub fn init(kernel_user_root: u64) {
     KERNEL_ROOT.store(kernel_user_root, Ordering::SeqCst);
-    CURRENT.store(0, Ordering::SeqCst);
+    CURRENT[me()].store(0, Ordering::SeqCst);
 }
 
 pub fn kernel() -> Space {
@@ -35,7 +42,10 @@ pub fn kernel() -> Space {
 
 /// Id of the installed space.
 pub fn current_id() -> u64 {
-    CURRENT.load(Ordering::SeqCst)
+    match CURRENT[me()].load(Ordering::SeqCst) {
+        u64::MAX => 0,
+        id => id,
+    }
 }
 
 /// A fresh, empty user address space.
@@ -46,23 +56,26 @@ pub fn create(id: u64) -> Result<Space, &'static str> {
     Ok(Space { id, root })
 }
 
-/// Make `space` the active lower half on this CPU.
+/// Make `space` the active lower half on this CPU. The TLB flush is local:
+/// other CPUs keep their own TTBR0 (changes to a shared mapping are
+/// broadcast by the paging code's `tlbi ...is`).
 pub fn install(space: Space) {
-    if CURRENT.load(Ordering::SeqCst) == space.id {
+    let c = me();
+    if CURRENT[c].load(Ordering::SeqCst) == space.id {
         return;
     }
     unsafe {
         asm!(
             "msr ttbr0_el1, {}",
             "isb",
-            "tlbi vmalle1is",
-            "dsb ish",
+            "tlbi vmalle1",
+            "dsb nsh",
             "isb",
             in(reg) space.root,
             options(nostack)
         );
     }
-    CURRENT.store(space.id, Ordering::SeqCst);
+    CURRENT[c].store(space.id, Ordering::SeqCst);
 }
 
 /// Free every page and table of a dead space (it must not be installed).
@@ -71,7 +84,10 @@ pub fn destroy(space: Space) -> u64 {
     if space.id == 0 {
         return 0;
     }
-    assert!(CURRENT.load(Ordering::SeqCst) != space.id, "aspace: destroying the installed space");
+    assert!(
+        CURRENT.iter().all(|c| c.load(Ordering::SeqCst) != space.id),
+        "aspace: destroying a space installed on a CPU"
+    );
     fn free_table(t: u64, level: u32, freed: &mut u64) {
         let e = phys_to_virt(t) as *const u64;
         for i in 0..512 {

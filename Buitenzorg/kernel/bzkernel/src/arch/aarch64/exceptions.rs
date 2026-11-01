@@ -101,6 +101,25 @@ extern "C" {
 }
 
 static IRQS: AtomicU64 = AtomicU64::new(0);
+/// Interrupts taken per CPU.
+static IRQS_ON: [AtomicU64; crate::arch::cpu::MAX_CPUS] = [const { AtomicU64::new(0) }; crate::arch::cpu::MAX_CPUS];
+
+/// Most CPUs seen running user code at the same moment (sampled at every
+/// interrupt on every CPU).
+static MAX_PARALLEL_EL0: AtomicU64 = AtomicU64::new(0);
+
+/// Reset / read the EL0 parallelism peak.
+pub fn reset_parallel_peak() {
+    MAX_PARALLEL_EL0.store(0, Ordering::SeqCst);
+}
+pub fn parallel_peak() -> u64 {
+    MAX_PARALLEL_EL0.load(Ordering::SeqCst)
+}
+
+/// Interrupts CPU `cpu` has taken.
+pub fn irqs_on(cpu: usize) -> u64 {
+    IRQS_ON.get(cpu).map(|c| c.load(Ordering::Relaxed)).unwrap_or(0)
+}
 static IRQS_FROM_EL0: AtomicU64 = AtomicU64::new(0);
 static SVCS: AtomicU64 = AtomicU64::new(0);
 
@@ -152,13 +171,20 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
     let from_el0 = index >= 8;
     if kind == 1 {
         IRQS.fetch_add(1, Ordering::Relaxed);
+        IRQS_ON[super::cpu::id()].fetch_add(1, Ordering::Relaxed);
         if from_el0 {
             IRQS_FROM_EL0.fetch_add(1, Ordering::Relaxed);
+            let n = (0..super::smp::cpus_online()).filter(|&c| crate::task::cpu_runs_user(c)).count() as u64;
+            MAX_PARALLEL_EL0.fetch_max(n, Ordering::Relaxed);
         }
         // Acknowledged + EOI'd inside; a timer tick then may switch tasks
         // (ring-3 code is always preemptible, kernel code only in the demo).
         if super::gic::handle_irq() == Some(super::timer::INTID) {
-            crate::task::preempt(from_el0);
+            if super::cpu::id() == 0 {
+                crate::task::preempt(from_el0);
+            } else {
+                crate::task::ap_timer(from_el0);
+            }
         }
         return;
     }

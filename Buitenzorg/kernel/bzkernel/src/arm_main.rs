@@ -86,6 +86,8 @@ use core::panic::PanicInfo;
 pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     use arch::aarch64::{cpu, exceptions, gic, timer};
 
+    // The boot CPU is CPU 0 (TPIDR_EL1 may hold anything the loader left).
+    cpu::set_id(0);
     if let Some(fb) = info.framebuffer {
         framebuffer::init(fb);
     }
@@ -160,11 +162,13 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     let gic_regs = fdt.as_ref().and_then(|f| {
         let i = f.compatible("arm,gic-v3").next()?;
         let r = f.reg(i);
-        Some((r.first()?.0, r.get(1)?.0))
+        Some((r.first()?.0, r.get(1)?.0, r.get(1)?.1))
     });
     let mut timer_ok = false;
-    if let Some((gicd_pa, gicr_pa)) = gic_regs {
-        let mapped = memory::map_mmio(gicd_pa, 0x1_0000).zip(memory::map_mmio(gicr_pa, 0x2_0000)).ok_or("cannot map the GIC");
+    if let Some((gicd_pa, gicr_pa, gicr_len)) = gic_regs {
+        // Every CPU's redistributor (0x20000 each), not just the boot CPU's.
+        let gicr_len = gicr_len.min(0x2_0000 * arch::cpu::MAX_CPUS as u64);
+        let mapped = memory::map_mmio(gicd_pa, 0x1_0000).zip(memory::map_mmio(gicr_pa, gicr_len)).ok_or("cannot map the GIC");
         match mapped.and_then(|(d, r)| gic::init(d, r)) {
             Ok(()) => {
                 gic::enable_ppi(timer::INTID);
@@ -199,6 +203,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
+    start_secondary_cpus(info, fdt.as_ref());
     shared_kernel_setup(info, fdt.as_ref());
     run_boot_programs(info);
     show_desktop();
@@ -571,6 +576,9 @@ fn run_boot_programs(info: &boot::BootInfo) {
     }
 
     if let Some(image) = find("mproc") {
+        // Timer preemption is the point here: keep both copies on CPU 0 (the
+        // x86 MULTIPROC test does the same); the SMP test below spreads them.
+        let aps = task::set_ap_scheduling(false);
         let p0 = task::user_preemptions();
         let t0 = interrupts::ticks();
         let pids: alloc::vec::Vec<u64> = (0..2).filter_map(|i| app::spawn_image(if i == 0 { "mproc-a" } else { "mproc-b" }, &image).ok()).collect();
@@ -587,6 +595,8 @@ fn run_boot_programs(info: &boot::BootInfo) {
         if pids.len() == 2 && codes.iter().all(|&c| c == 0) && preempts >= 10 {
             println!("[kernel] MILESTONE: ARM64 MULTIPROC OK (shared scheduler on AArch64: two processes preempted by the timer, each in its own TTBR0 space with its own FP state)");
         }
+        task::set_ap_scheduling(aps);
+        smp_processes_test(&image);
     }
 
     // GUI apps (window syscalls into the shared window manager) and the rest.
@@ -665,6 +675,70 @@ fn gpu_self_test(info: &boot::BootInfo) {
         }
     }
     virtio::gpu::present(&back);
+}
+
+// ---- SMP --------------------------------------------------------------------
+
+/// Start the other CPUs of the DTB's `/cpus` with PSCI CPU_ON; each joins
+/// the shared scheduler. Verified by every CPU taking its own timer
+/// interrupts.
+fn start_secondary_cpus(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
+    let (Some(f), Some(base)) = (fdt, info.kernel_base) else { return };
+    let Some(cpus) = f.find_path("/cpus") else { return };
+    let mpidrs: alloc::vec::Vec<u64> = (0..f.nodes.len())
+        .filter(|&i| f.nodes[i].parent == Some(cpus) && f.nodes[i].strings("device_type").any(|s| s == "cpu"))
+        .filter_map(|i| f.reg(i).first().map(|r| r.0))
+        .collect();
+    let method = f.find_path("/psci").and_then(|i| f.nodes[i].strings("method").next()).unwrap_or("");
+    if mpidrs.len() < 2 || !power::init(method) {
+        println!("[smp] single CPU ({} in the DTB)", mpidrs.len());
+        return;
+    }
+    let online = arch::aarch64::smp::start_aps(&mpidrs, base);
+    let irq0: alloc::vec::Vec<u64> = (0..online).map(arch::aarch64::exceptions::irqs_on).collect();
+    let t0 = arch::cpu::timestamp();
+    while arch::cpu::timestamp() - t0 < arch::aarch64::cpu::counter_hz() / 5 {
+        arch::cpu::halt();
+    }
+    let ticked = (0..online).filter(|&c| arch::aarch64::exceptions::irqs_on(c) > irq0[c] + 5).count();
+    println!(
+        "[smp] {} of {} CPUs online via PSCI CPU_ON (MPIDRs {:x?}); {} took their own timer interrupts in 200 ms",
+        online,
+        mpidrs.len(),
+        mpidrs,
+        ticked
+    );
+    if online == mpidrs.len() && ticked == online {
+        println!("[kernel] MILESTONE: ARM64 SMP OK ({} CPUs: PSCI CPU_ON + MMU-off trampoline, per-CPU GIC redistributor + timer, shared scheduler)", online);
+    }
+}
+
+/// One `mproc` per CPU at once, the scheduler free to spread them: they must
+/// all finish correctly, and at some timer interrupt several CPUs must have
+/// been running user code simultaneously.
+fn smp_processes_test(image: &[u8]) {
+    let n = arch::aarch64::smp::cpus_online();
+    if n < 2 {
+        return;
+    }
+    arch::aarch64::exceptions::reset_parallel_peak();
+    let sys0: u64 = (1..n).map(task::syscalls_on).sum();
+    let pids: alloc::vec::Vec<u64> =
+        (0..n).filter_map(|i| app::spawn_image(&alloc::format!("mproc-smp{}", i), image).ok()).collect();
+    let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| app::wait(p)).collect();
+    let peak = arch::aarch64::exceptions::parallel_peak();
+    let ap_sys: u64 = (1..n).map(task::syscalls_on).sum::<u64>() - sys0;
+    println!(
+        "[smp] {} mproc copies: exit codes {:?}; at most {} CPUs ran user code at once; {} syscalls served on secondary CPUs; {} migrations",
+        pids.len(),
+        codes,
+        peak,
+        ap_sys,
+        task::migrations()
+    );
+    if pids.len() == n && codes.iter().all(|&c| c == 0) && peak >= 2 && ap_sys > 0 {
+        println!("[kernel] MILESTONE: ARM64 SMP SCHED OK (processes ran in parallel on {} CPUs, syscalls served on the secondary CPUs, exact FP results)", peak);
+    }
 }
 
 // ---- The shared kernel on ARM64 ---------------------------------------------

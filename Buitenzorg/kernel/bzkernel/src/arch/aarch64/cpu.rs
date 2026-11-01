@@ -65,6 +65,26 @@ pub fn flush_tlb() {
     unsafe { asm!("dsb ishst", "tlbi vmalle1is", "dsb ish", "isb", options(nostack)) }
 }
 
+/// This CPU's kernel index (0 = the boot CPU), kept in TPIDR_EL1 -- an EL1-only
+/// register user code cannot change. Set once per CPU at bring-up.
+#[inline]
+pub fn id() -> usize {
+    let v: u64;
+    unsafe { asm!("mrs {}, tpidr_el1", out(reg) v, options(nomem, nostack, preserves_flags)) };
+    v as usize
+}
+
+pub fn set_id(cpu: usize) {
+    unsafe { asm!("msr tpidr_el1, {}", in(reg) cpu as u64, options(nomem, nostack)) };
+}
+
+/// MPIDR_EL1 affinity (Aff2:Aff1:Aff0), the id PSCI CPU_ON takes.
+pub fn mpidr_affinity() -> u64 {
+    let v: u64;
+    unsafe { asm!("mrs {}, mpidr_el1", out(reg) v, options(nomem, nostack, preserves_flags)) };
+    v & 0xFF_FFFF
+}
+
 /// Current exception level (1 or 2).
 pub fn current_el() -> u64 {
     let v: u64;

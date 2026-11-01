@@ -35,6 +35,10 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 9): SMP on ARM64 — the ARM64 port is complete.**
+  Secondary CPUs start through PSCI and join the shared scheduler; processes
+  run in parallel on all cores (4 copies of a CPU-bound program on 4 CPUs at
+  once), with per-CPU interrupt controllers and timers.
 - **Multi-arch M3 (increment 8): the interactive desktop on ARM64.** The
   desktop session loop is now shared code; on ARM64 the terminal takes typing
   from a virtio keyboard, the pointer comes from a virtio tablet, and the live

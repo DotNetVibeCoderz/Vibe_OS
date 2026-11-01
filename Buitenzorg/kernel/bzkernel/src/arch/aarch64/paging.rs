@@ -219,6 +219,17 @@ fn lookup(root: u64, va: u64) -> Option<u64> {
     None
 }
 
+/// A fresh lower-half root that identity-maps the 4 KiB page at `phys`
+/// (kernel-executable): a secondary CPU switching its MMU on while running at
+/// that physical address keeps fetching from it. Returns the root.
+pub fn identity_root(frames: &mut BootInfoFrameAllocator, phys: u64) -> Option<u64> {
+    let root = frames.alloc()?;
+    unsafe { core::ptr::write_bytes(table(root) as *mut u8, 0, 4096) };
+    let e = walk(root, phys, Some(frames)).ok()?;
+    unsafe { e.write_volatile((phys & ADDR) | VALID | TABLE | ATTR_NORMAL | SH_INNER | AF | UXN) };
+    Some(root)
+}
+
 /// EL0 access rights of a user address in the active tables:
 /// `Some((user_accessible, writable))`, or `None` if unmapped.
 pub fn user_access(va: u64) -> Option<(bool, bool)> {
