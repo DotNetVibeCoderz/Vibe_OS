@@ -81,7 +81,7 @@ for media in ahci nvme usb; do
   boot "$media" "$root/dist/boot-$media.log"
   require "$root/dist/boot-$media.log" "${basic[@]}"
   if [ "$media" = ahci ]; then
-    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)"
+    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"
     echo "smoke [ahci]: second CPU started (SMP)"
   fi
   echo "smoke [$media]: boots to READY"
@@ -106,7 +106,7 @@ if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
     grep -q "BUITENZORG READY" "$log" 2>/dev/null && break
   done
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
-  require "$log" "${basic[@]}" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)"
+  require "$log" "${basic[@]}" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"
   echo "smoke [uefi]: boots to READY on 2 CPUs"
 else
   echo "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"

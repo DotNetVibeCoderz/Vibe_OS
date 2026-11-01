@@ -112,7 +112,7 @@ foreach ($media in @("ahci", "nvme", "usb")) {
     Invoke-Boot -Media $media -Log $log
     Assert-Markers -Log $log -Markers $basic
     if ($media -eq "ahci") {
-        Assert-Markers -Log $log -Markers @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)")
+        Assert-Markers -Log $log -Markers @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK")
         Write-Host "smoke [ahci]: second CPU started (SMP)"
     }
     Write-Host "smoke [$media]: boots to READY"
@@ -137,7 +137,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers ($basic + @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)"))
+    Assert-Markers -Log $log -Markers ($basic + @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK"))
     Write-Host "smoke [uefi]: boots to READY on 2 CPUs"
 } else {
     Write-Host "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"

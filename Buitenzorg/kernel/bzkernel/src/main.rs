@@ -162,7 +162,24 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     smp::record_kernel_cr3();
     let (cpus, aps) = smp::init();
     if aps + 1 == cpus {
-        println!("[kernel] MILESTONE: SMP OK ({} CPU(s): {} AP(s) started via INIT-SIPI-SIPI, parked)", cpus, aps);
+        println!("[kernel] MILESTONE: SMP OK ({} CPU(s): {} AP(s) started via INIT-SIPI-SIPI)", cpus, aps);
+        if aps > 0 {
+            match smp::self_test() {
+                Ok(summary) if arch::cpu::id() == 0 => {
+                    println!("[kernel] MILESTONE: SMP PERCPU OK ({})", summary);
+                    for line in smp::report() {
+                        println!("[smp] {}", line);
+                    }
+                }
+                Ok(_) => println!("[kernel] smp per-CPU self-test FAILED: boot code not on CPU #0"),
+                Err(why) => {
+                    println!("[kernel] smp per-CPU self-test FAILED: {}", why);
+                    for line in smp::report() {
+                        println!("[smp] {}", line);
+                    }
+                }
+            }
+        }
     } else {
         println!("[kernel] smp: only {} of {} application processors came online", aps, cpus - 1);
     }

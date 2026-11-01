@@ -63,6 +63,13 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **SMP increment 2: per-CPU state, AP interrupts, IPIs.** Each AP gets its
+  own GDT + TSS (private double-fault and ring-0 stacks), loads the IDT, and
+  runs a 100 Hz Local APIC timer calibrated against the PIT; per-CPU state is
+  found by LAPIC id (`arch::cpu::id()`). IPIs: ping and a broadcast TLB
+  shootdown with acknowledgement. `MILESTONE: SMP PERCPU OK` (required on the
+  AHCI and UEFI smoke boots); shell `cpu` lists per-CPU counters. The APs still
+  run no tasks.
 - **SMP increment 1.** CPUs discovered from the ACPI MADT; the BSP's Local
   APIC enabled; every AP started with INIT-SIPI-SIPI through a real-mode ->
   long-mode trampoline at 0x8000 (temporary page tables with an identity map;

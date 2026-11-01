@@ -93,17 +93,42 @@ pub fn set_rsp0(top: u64) {
     }
 }
 
-/// Load the kernel GDT on an application processor and reload its segment
-/// registers. The TSS is not loaded: it is marked busy by the BSP, and a parked
-/// AP (interrupts off) never needs a privilege-level stack switch.
+/// Give an application processor its own GDT + TSS and load them.
+///
+/// A TSS descriptor is marked busy when loaded, so every CPU needs its own.
+/// The AP's GDT has exactly the BSP's layout (same selector values — the
+/// SYSCALL STAR MSR and everything holding a `Selectors` stay valid on every
+/// CPU), and its TSS carries a private double-fault IST stack plus a private
+/// ring-0 stack. Everything is leaked: a CPU lives as long as the kernel.
 pub fn load_on_ap() {
-    let (gdt, selectors) = GDT.get().expect("gdt not initialized");
+    use alloc::boxed::Box;
+    let stack_top = |size: usize| -> VirtAddr {
+        let stack: &'static mut [u8] = Box::leak(alloc::vec![0u8; size].into_boxed_slice());
+        VirtAddr::new((stack.as_ptr() as u64 + size as u64) & !0xF)
+    };
+    let mut tss = TaskStateSegment::new();
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = stack_top(STACK_SIZE);
+    tss.privilege_stack_table[0] = stack_top(PRIV_STACK_SIZE);
+    let tss: &'static TaskStateSegment = Box::leak(Box::new(tss));
+
+    let gdt: &'static mut GlobalDescriptorTable = Box::leak(Box::new(GlobalDescriptorTable::new()));
+    let kernel_code = gdt.append(Descriptor::kernel_code_segment());
+    let kernel_data = gdt.append(Descriptor::kernel_data_segment());
+    gdt.append(Descriptor::user_data_segment());
+    gdt.append(Descriptor::user_code_segment());
+    let tss_sel = gdt.append(Descriptor::tss_segment(tss));
+    let bsp = selectors();
+    assert!(
+        kernel_code == bsp.kernel_code && kernel_data == bsp.kernel_data && tss_sel == bsp.tss,
+        "gdt: AP layout differs from the BSP's"
+    );
     gdt.load();
     unsafe {
-        CS::set_reg(selectors.kernel_code);
-        SS::set_reg(selectors.kernel_data);
-        DS::set_reg(selectors.kernel_data);
-        ES::set_reg(selectors.kernel_data);
+        CS::set_reg(kernel_code);
+        SS::set_reg(kernel_data);
+        DS::set_reg(kernel_data);
+        ES::set_reg(kernel_data);
+        load_tss(tss_sel);
     }
 }
 

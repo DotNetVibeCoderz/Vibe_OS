@@ -927,7 +927,7 @@ Dijadwalkan **setelah v1.0** karena berisiko & tak boleh menghambat rilis stabil
 Item yang belum tuntas dan dijadwalkan menyusul (lihat anotasi di [Progress.md](Progress.md)):
 
 - **CoreCLR/JIT + GC + reflection** — runtime C# masih NativeAOT/bflat freestanding (heap bump tanpa kolektor sejak v0.15). Loncatan Layer-4 "Menengah" (§5.1).
-- **APIC + SMP** — sebagian (2026-11-01): LAPIC BSP (virtual wire), MADT, AP dibangunkan + diparkir (`SMP OK`). Sisa: IOAPIC + timer LAPIC, state per-CPU (GS/swapgs), root page table per-CPU, lock sungguhan, TLB shootdown, lalu scheduler multi-core.
+- **APIC + SMP** — sebagian (2026-11-01): LAPIC BSP (virtual wire), MADT, AP dibangunkan (`SMP OK`); increment 2: GDT/TSS per-AP, timer LAPIC di AP, IPI ping + TLB shootdown, state per-CPU via ID LAPIC (`SMP PERCPU OK`). Sisa: IOAPIC, swapgs + state SYSCALL per-CPU, root page table per-CPU, lock sungguhan, lalu scheduler multi-core.
 - **Driver native NVMe/AHCI/USB & e1000** — saat ini hanya IDE PIO + net loopback.
 - **Filesystem kustom journaled** — FAT12/16/32 read + write sudah ada (2026-11-01); journaling, subdirektori, LFN belum.
 - **TCP** — sudah Ethernet/ARP/IPv4/ICMP + **UDP** (loopback); TCP + driver NIC belum.

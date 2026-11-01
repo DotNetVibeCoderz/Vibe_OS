@@ -79,6 +79,8 @@ pub fn init() {
         stub!(PIC_2_OFFSET + 5);
         stub!(PIC_2_OFFSET + 6);
         stub!(PIC_2_OFFSET + 7);
+        // Local APIC vectors: AP timer, IPIs, spurious (smp.rs).
+        crate::smp::install_vectors(&mut idt);
         idt
     });
     idt.load();
@@ -101,6 +103,11 @@ pub fn init() {
         "[kernel] PIC masks left by firmware: master {:#04x} slave {:#04x} (timer/kbd/cascade/mouse unmasked)\n",
         fw_master, fw_slave
     ));
+}
+
+/// Load the (shared) IDT on an application processor.
+pub fn load_on_ap() {
+    IDT.get().expect("idt not initialized").load();
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {

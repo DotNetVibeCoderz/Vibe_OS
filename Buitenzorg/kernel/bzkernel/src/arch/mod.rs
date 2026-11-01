@@ -69,6 +69,13 @@ pub mod cpu {
         return unsafe { core::arch::x86_64::_rdtsc() };
     }
 
+    /// Index of the CPU running this code (0 = the bootstrap CPU).
+    #[inline]
+    pub fn id() -> usize {
+        #[cfg(target_arch = "x86_64")]
+        return super::x86::smp::cpu_index();
+    }
+
     /// Invalidate every non-global TLB entry on this CPU.
     #[inline]
     pub fn flush_tlb() {
