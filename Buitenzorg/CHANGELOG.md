@@ -35,6 +35,11 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M4 (increment 6): SMP on RISC-V -- the RISC-V port is
+  complete.** Secondary harts start through the SBI firmware and join the
+  shared scheduler; processes run in parallel on every core (4 copies of a
+  CPU-bound program on 4 harts at once). Page-table changes are flushed on all
+  harts, and idle harts are woken by inter-processor interrupts.
 - **Multi-arch M4 (increment 5): the full kernel and the desktop on RISC-V.**
   RISC-V now runs the same kernel as the PC and ARM64: the window system and
   the interactive desktop (keyboard, mouse, terminal, Start menu), the

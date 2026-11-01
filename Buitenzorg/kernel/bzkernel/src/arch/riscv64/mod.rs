@@ -1,4 +1,4 @@
-//! RISC-V (RV64) implementation of the HAL — multi-arch M4 (increments 1-5): the
+//! RISC-V (RV64) implementation of the HAL — multi-arch M4 (increments 1-6): the
 //! kernel runs in S-mode on QEMU `virt` under OpenSBI, loaded by Limine
 //! (through edk2).
 //!
@@ -14,7 +14,8 @@
 //! - `context`: kernel-thread switch + per-task F/D register state;
 //! - `usermode`: entering U-mode (`sret`) and coming back (EXIT / faults),
 //!   with the per-task API the shared scheduler (`task.rs`) uses;
-//! - `gdt`, `smp`: the no-op / single-hart pieces `task.rs` calls;
+//! - `smp`: secondary harts through SBI HSM, remote fences, wake-up IPIs;
+//! - `gdt`: the no-op pieces `task.rs` calls;
 //! - `vmx`: virtualization detection (the software VMM runs guests).
 
 pub mod aspace;

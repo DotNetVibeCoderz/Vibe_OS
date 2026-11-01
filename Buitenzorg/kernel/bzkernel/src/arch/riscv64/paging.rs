@@ -153,6 +153,25 @@ pub fn new_root(frames: &mut BootInfoFrameAllocator) -> Option<u64> {
     Some(root)
 }
 
+/// A temporary root for a starting hart: the kernel half of `kernel_root`
+/// plus an identity mapping (kernel-only, executable) of the 4 KiB page at
+/// physical `pa` -- the SMP trampoline, which turns paging on while running
+/// at its physical address.
+pub fn identity_root(frames: &mut BootInfoFrameAllocator, kernel_root: u64, pa: u64) -> Option<u64> {
+    let root = frames.alloc()?;
+    let src = table(kernel_root);
+    let dst = table(root);
+    unsafe {
+        core::ptr::write_bytes(dst as *mut u8, 0, 2048);
+        for i in 256..512 {
+            dst.add(i).write_volatile(src.add(i).read_volatile());
+        }
+    }
+    let e = walk(root, pa, Some(frames)).ok()?;
+    unsafe { e.write_volatile(pte_for(pa) | V | R | X | A | D) };
+    Some(root)
+}
+
 fn leaf_bits(f: Flags) -> u64 {
     let mut d = V | R | A | D;
     if f.write {

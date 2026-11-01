@@ -37,6 +37,24 @@ pub fn call(ext: u64, fid: u64, a0: u64, a1: u64, a2: u64) -> (i64, u64) {
     (err, val)
 }
 
+/// An SBI call with four arguments (a0..a3), e.g. RFENCE.
+pub fn call4(ext: u64, fid: u64, a0: u64, a1: u64, a2: u64, a3: u64) -> (i64, u64) {
+    let (err, val): (i64, u64);
+    unsafe {
+        asm!(
+            "ecall",
+            inlateout("a0") a0 => err,
+            inlateout("a1") a1 => val,
+            in("a2") a2,
+            in("a3") a3,
+            in("a6") fid,
+            in("a7") ext,
+            options(nostack)
+        );
+    }
+    (err, val)
+}
+
 /// Write one byte through the firmware's console (legacy extension).
 pub fn console_putchar(b: u8) {
     unsafe {

@@ -17,7 +17,9 @@
 // builds for RISC-V too -- the real `syscall.rs` (same dispatcher, pointer
 // validation, BKL-free paths) and `app.rs`, the window system, shell,
 // network, packages, VMM, the JS/TS/Python runtime -- with SBI SRST power,
-// virtio input / net, Rust GUI apps, and the interactive desktop. The rest of the shared kernel joins
+// virtio input / net, Rust GUI apps, and the interactive desktop.
+// Increment 6: SMP -- secondary harts started through SBI HSM join the
+// shared scheduler. The rest of the shared kernel joins
 // as subsystems gain an `arch/riscv64` backend -- the path the ARM64 port
 // (M3) took.
 
@@ -180,6 +182,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // The periodic tick: the SBI timer at 100 Hz.
     let has_time = sbi::probe(sbi::EXT_TIME);
     timer::start(100);
+    cpu::sie_set(cpu::SIE_SSIE); // wake-up IPIs from other harts
     cpu::enable_interrupts();
     let t0 = cpu::timestamp();
     let hz = cpu::counter_hz();
@@ -208,6 +211,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
+    start_secondary_harts(info, fdt.as_ref());
     shared_kernel_setup(info);
     polyglot_test();
     run_boot_programs(info);
@@ -221,7 +225,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG RISCV READY -- increments 1-5 (boot, traps, memory, address spaces, timer, U-mode, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU + input + net, RTC, SBI power, shared syscalls + window system, JS/TS/Python, interactive desktop); SMP follows");
+    println!("[kernel] BUITENZORG RISCV READY -- increments 1-6 (boot, traps, memory, address spaces, timer, U-mode, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU + input + net, RTC, SBI power, shared syscalls + window system, JS/TS/Python, interactive desktop, SMP via SBI HSM) -- M4 complete");
     // The interactive desktop session, shared with the PC and ARM64 kernels:
     // virtio keyboard / tablet -> terminal + window manager, frames through
     // the framebuffer and the virtio GPU.
@@ -607,6 +611,9 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     }
     if let Some(image) = find("mproc") {
+        // Timer preemption is the point here: keep both copies on CPU 0 (the
+        // x86 / ARM64 MULTIPROC tests do the same); the SMP test spreads them.
+        let aps = task::set_ap_scheduling(false);
         let p0 = task::user_preemptions();
         let t0 = arch::cpu::timestamp();
         let pids: alloc::vec::Vec<u64> =
@@ -620,6 +627,8 @@ fn run_boot_programs(info: &boot::BootInfo) {
         if ok {
             println!("[kernel] MILESTONE: RISCV MULTIPROC OK (shared scheduler on RISC-V: two processes preempted by the timer in U-mode, each in its own satp space with its own FP state)");
         }
+        task::set_ap_scheduling(aps);
+        all_ok &= smp_processes_test(&image);
     }
     for (name, milestone) in [
         ("thread", "RISCV THREAD OK (two ring-3 threads of one process share its address space; THREAD_CREATE/JOIN/EXIT)"),
@@ -775,6 +784,75 @@ fn gpu_self_test(info: &boot::BootInfo) {
         }
     }
     virtio::gpu::present(&back);
+}
+
+// ---- SMP ---------------------------------------------------------------------
+
+/// Start every other hart of the DTB through SBI HSM, give each its PLIC
+/// context and timer, and check they all take their own timer interrupts.
+fn start_secondary_harts(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
+    let (Some(f), Some(base)) = (fdt, info.kernel_base) else { return };
+    let Some(cpus) = f.find_path("/cpus") else { return };
+    let harts: alloc::vec::Vec<u64> = (0..f.nodes.len())
+        .filter(|&i| f.nodes[i].parent == Some(cpus) && f.nodes[i].strings("device_type").any(|s| s == "cpu"))
+        .filter_map(|i| f.reg(i).first().map(|r| r.0))
+        .collect();
+    let boot_hart = info.bsp_hartid.unwrap_or(f.boot_cpu as u64);
+    if harts.len() < 2 {
+        println!("[smp] single hart ({} in the DTB)", harts.len());
+        return;
+    }
+    let plic = f.compatible("sifive,plic-1.0.0").next().or_else(|| f.compatible("riscv,plic0").next());
+    let ctx_of = |hart: u64| plic.and_then(|p| plic_context(f, p, hart));
+    let online = arch::riscv64::smp::start_harts(&harts, boot_hart, base, &ctx_of);
+    let irq0: alloc::vec::Vec<u64> = (0..online).map(arch::riscv64::trap::irqs_on).collect();
+    let t0 = arch::cpu::timestamp();
+    while arch::cpu::timestamp() - t0 < arch::riscv64::cpu::counter_hz() / 5 {
+        arch::cpu::halt();
+    }
+    let ticked = (0..online).filter(|&c| arch::riscv64::trap::irqs_on(c) > irq0[c] + 5).count();
+    println!(
+        "[smp] {} of {} harts online via SBI HSM hart_start (hart ids {:?}, boot hart {}); {} took their own timer interrupts in 200 ms",
+        online,
+        harts.len(),
+        harts,
+        boot_hart,
+        ticked
+    );
+    if online == harts.len() && ticked == online {
+        println!("[kernel] MILESTONE: RISCV SMP OK ({} harts: SBI HSM + paging-off trampoline, per-hart SBI timer + PLIC context, shared scheduler)", online);
+    }
+}
+
+/// One `mproc` per hart at once, the scheduler free to spread them: they must
+/// all finish correctly, and at some interrupt several harts must have been
+/// running user code simultaneously.
+fn smp_processes_test(image: &[u8]) -> bool {
+    let n = arch::riscv64::smp::cpus_online();
+    if n < 2 {
+        return true;
+    }
+    arch::riscv64::trap::reset_parallel_peak();
+    let sys0: u64 = (1..n).map(task::syscalls_on).sum();
+    let pids: alloc::vec::Vec<u64> =
+        (0..n).filter_map(|i| app::spawn_image(&alloc::format!("mproc-smp{}", i), image).ok()).collect();
+    let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| app::wait(p)).collect();
+    let peak = arch::riscv64::trap::parallel_peak();
+    let ap_sys: u64 = (1..n).map(task::syscalls_on).sum::<u64>() - sys0;
+    println!(
+        "[smp] {} mproc copies: exit codes {:?}; at most {} harts ran user code at once; {} syscalls served on secondary harts; {} migrations; {} wake-up IPIs",
+        pids.len(),
+        codes,
+        peak,
+        ap_sys,
+        task::migrations(),
+        arch::riscv64::smp::ipis_sent()
+    );
+    let ok = pids.len() == n && codes.iter().all(|&c| c == 0) && peak >= 2 && ap_sys > 0;
+    if ok {
+        println!("[kernel] MILESTONE: RISCV SMP SCHED OK (processes ran in parallel on {} harts, syscalls served on the secondary harts, exact FP results)", peak);
+    }
+    ok
 }
 
 // ---- The shared kernel --------------------------------------------------------

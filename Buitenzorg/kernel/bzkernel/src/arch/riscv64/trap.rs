@@ -109,6 +109,16 @@ const ECALL_FROM_U: u64 = 8;
 static IRQS: AtomicU64 = AtomicU64::new(0);
 static IRQS_FROM_USER: AtomicU64 = AtomicU64::new(0);
 static ECALLS: AtomicU64 = AtomicU64::new(0);
+/// Most harts seen running user code at once (sampled in interrupts from U-mode).
+static MAX_PARALLEL_USER: AtomicU64 = AtomicU64::new(0);
+
+/// Reset / read the U-mode parallelism peak.
+pub fn reset_parallel_peak() {
+    MAX_PARALLEL_USER.store(0, Ordering::SeqCst);
+}
+pub fn parallel_peak() -> u64 {
+    MAX_PARALLEL_USER.load(Ordering::SeqCst)
+}
 static IRQS_ON: [AtomicU64; crate::arch::cpu::MAX_CPUS] = [const { AtomicU64::new(0) }; crate::arch::cpu::MAX_CPUS];
 
 /// Install the trap vector on this hart (`sscratch` = 0: running the kernel).
@@ -166,6 +176,8 @@ extern "C" fn bz_trap(f: &mut TrapFrame) {
         IRQS.fetch_add(1, Ordering::Relaxed);
         if from_user {
             IRQS_FROM_USER.fetch_add(1, Ordering::Relaxed);
+            let n = (0..super::smp::cpus_online()).filter(|&c| crate::task::cpu_runs_user(c)).count() as u64;
+            MAX_PARALLEL_USER.fetch_max(n, Ordering::Relaxed);
         }
         if let Some(c) = IRQS_ON.get(super::cpu::id()) {
             c.fetch_add(1, Ordering::Relaxed);

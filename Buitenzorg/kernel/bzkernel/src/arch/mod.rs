@@ -65,6 +65,10 @@ pub mod cpu {
         flush_tlb();
         #[cfg(target_arch = "x86_64")]
         super::x86::smp::tlb_shootdown();
+        // RISC-V has no broadcast sfence.vma: ask the SBI firmware for a
+        // remote fence on every hart (ARM64's `tlbi ...is` broadcasts).
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::smp::remote_sfence_all();
     }
 
     /// Stop the CPU until the next interrupt.
