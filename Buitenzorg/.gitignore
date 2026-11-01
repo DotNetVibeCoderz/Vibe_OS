@@ -36,3 +36,6 @@ Thumbs.db
 
 # Local secrets — API keys for LLM/testing. NEVER commit.
 testkey.txt
+
+# Generation log written by the Rodin MCP image tools
+*_History.json
