@@ -316,7 +316,11 @@ fn bg_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     match arg {
         None => (vec![format!("wallpaper: {}", wallpaper::label())], Effect::None),
         Some("list") => {
-            let mut out = vec![String::from("wallpaper bawaan:")];
+            let mut out = vec![String::from("wallpaper resmi Buitenzorg OS:")];
+            for (n, _, desc) in wallpaper::OFFICIAL {
+                out.push(format!("  {:<11} {}", n, desc));
+            }
+            out.push(String::from("pola bawaan:"));
             for n in wallpaper::BUILTINS {
                 out.push(format!("  {}", n));
             }
@@ -330,6 +334,12 @@ fn bg_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             },
             Err(e) => (vec![format!("bg: {}: {}", path, e)], Effect::None),
         },
+        Some(name) if wallpaper::OFFICIAL.iter().any(|(n, _, _)| *n == name) => {
+            match wallpaper::set_official(name) {
+                Ok(_) => (vec![format!("wallpaper: {} (resmi)", name)], Effect::Redraw),
+                Err(e) => (vec![format!("bg: {}: {}", name, e)], Effect::None),
+            }
+        }
         Some(name) => {
             if wallpaper::set_builtin(name) {
                 (vec![format!("wallpaper: {}", name)], Effect::Redraw)

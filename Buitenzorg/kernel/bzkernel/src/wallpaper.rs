@@ -1,7 +1,11 @@
 //! Desktop wallpaper (v0.11 "Cahaya" personalization). The default follows the
-//! active theme's desktop gradient; built-in patterns and a user-supplied image
-//! (24-bit BMP loaded from the VFS) can replace it. `paint` renders the current
-//! wallpaper into the compositor's back buffer.
+//! active theme's desktop gradient; built-in patterns, the **official
+//! Buitenzorg OS wallpapers** (`OFFICIAL`: AI-generated artwork shipped on
+//! /disk as 800x450 BMPs, built from `assets/wallpapers/*.jpg` by
+//! `bzimage/build.rs`) and any user 24-bit BMP from the VFS can replace it.
+//! `paint` renders the current wallpaper into the compositor's back buffer;
+//! an image is resampled (bilinear) to the screen size once and cached, so a
+//! frame is a row copy instead of a per-pixel stretch.
 
 use alloc::{string::String, vec::Vec};
 use spin::Mutex;
@@ -14,13 +18,33 @@ enum Kind {
     Theme,
     /// A built-in procedural pattern by index.
     Pattern(u8),
-    /// A user image (RGB pixels).
-    Image { w: i32, h: i32, pixels: Vec<u32> },
+    /// An image (RGB pixels) plus its screen-sized resample, built lazily.
+    Image { w: i32, h: i32, pixels: Vec<u32>, scaled: Option<(i32, i32, Vec<u32>)> },
 }
 
 struct State {
     kind: Kind,
     label: String,
+}
+
+/// Official wallpapers: (name for `bg`, file on /disk, description). Keep in
+/// sync with `OFFICIAL_WALLPAPERS` in bzimage/build.rs.
+pub const OFFICIAL: [(&str, &str, &str); 8] = [
+    ("nature", "/disk/WPNATURE.BMP", "Kebun Raya Bogor saat fajar"),
+    ("futuristic", "/disk/WPFUTURE.BMP", "kota taman neon masa depan"),
+    ("city", "/disk/WPCITY.BMP", "kota hujan di jam biru"),
+    ("art", "/disk/WPART.BMP", "seni batik kawung-parang modern"),
+    ("surreal", "/disk/WPSURREA.BMP", "beringin terbalik di atas laut"),
+    ("imaginary", "/disk/WPIMAGIN.BMP", "pulau hutan melayang"),
+    ("space", "/disk/WPSPACE.BMP", "planet bercincin & nebula"),
+    ("minimal", "/disk/WPMINIMA.BMP", "pegunungan senja minimalis"),
+];
+
+/// Load official wallpaper `name` from /disk. Returns its (w, h).
+pub fn set_official(name: &str) -> Result<(i32, i32), &'static str> {
+    let (_, path, _) = OFFICIAL.iter().find(|(n, _, _)| *n == name).ok_or("unknown wallpaper")?;
+    let bytes = crate::vfs::read(path).map_err(|_| "wallpaper file not on /disk")?;
+    load_bmp(&bytes, name)
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -57,7 +81,7 @@ pub fn set_builtin(name: &str) -> bool {
 /// Set a user image wallpaper from decoded RGB pixels.
 pub fn set_image(w: i32, h: i32, pixels: Vec<u32>, label: &str) {
     *STATE.lock() = Some(State {
-        kind: Kind::Image { w, h, pixels },
+        kind: Kind::Image { w, h, pixels, scaled: None },
         label: String::from(label),
     });
 }
@@ -102,10 +126,10 @@ pub fn load_bmp(bytes: &[u8], label: &str) -> Result<(i32, i32), &'static str> {
 /// Render the current wallpaper into `canvas` (full-screen).
 pub fn paint(canvas: &mut Canvas, th: &Theme, workspace: u8) {
     ensure();
-    let guard = STATE.lock();
-    let state = guard.as_ref().unwrap();
+    let mut guard = STATE.lock();
+    let state = guard.as_mut().unwrap();
     let (cw, ch) = (canvas.width as i32, canvas.height as i32);
-    match &state.kind {
+    match &mut state.kind {
         Kind::Theme => {
             let tint = workspace as u32 * 10;
             let top = crate::wm::shift(th.desktop_top, tint);
@@ -117,17 +141,43 @@ pub fn paint(canvas: &mut Canvas, th: &Theme, workspace: u8) {
             }
         }
         Kind::Pattern(p) => paint_pattern(canvas, *p, th, cw, ch),
-        Kind::Image { w, h, pixels } => {
-            // Stretch-blit the image to the screen (nearest-neighbor).
-            for y in 0..ch {
-                let sy = (y * *h / ch).clamp(0, *h - 1);
-                for x in 0..cw {
-                    let sx = (x * *w / cw).clamp(0, *w - 1);
-                    canvas.put(x as usize, y as usize, pixels[(sy * *w + sx) as usize]);
-                }
+        Kind::Image { w, h, pixels, scaled } => {
+            if !matches!(scaled, Some((sw, sh, _)) if *sw == cw && *sh == ch) {
+                *scaled = Some((cw, ch, resample(pixels, *w, *h, cw, ch)));
+            }
+            let (_, _, img) = scaled.as_ref().unwrap();
+            if canvas.pixels.len() == img.len() {
+                canvas.pixels.copy_from_slice(img);
             }
         }
     }
+}
+
+/// Bilinear resample of `src` (`sw` x `sh`) to `dw` x `dh`, in 8.8 fixed point
+/// (the kernel is soft-float). Done once per wallpaper change.
+fn resample(src: &[u32], sw: i32, sh: i32, dw: i32, dh: i32) -> Vec<u32> {
+    let mut out = alloc::vec![0u32; (dw * dh) as usize];
+    let ch = |p: u32, s: u32| (p >> s) & 0xFF;
+    for y in 0..dh {
+        let fy = ((y * 2 + 1) * sh * 128 / dh - 128).max(0); // source y in 1/256 px
+        let (y0, wy) = ((fy >> 8).min(sh - 1), (fy & 0xFF) as u32);
+        let y1 = (y0 + 1).min(sh - 1);
+        for x in 0..dw {
+            let fx = ((x * 2 + 1) * sw * 128 / dw - 128).max(0);
+            let (x0, wx) = ((fx >> 8).min(sw - 1), (fx & 0xFF) as u32);
+            let x1 = (x0 + 1).min(sw - 1);
+            let p = |xx: i32, yy: i32| src[(yy * sw + xx) as usize];
+            let (a, b, c, d) = (p(x0, y0), p(x1, y0), p(x0, y1), p(x1, y1));
+            let mut v = 0u32;
+            for s in [16u32, 8, 0] {
+                let top = ch(a, s) * (256 - wx) + ch(b, s) * wx;
+                let bot = ch(c, s) * (256 - wx) + ch(d, s) * wx;
+                v |= ((top * (256 - wy) + bot * wy) >> 16) << s;
+            }
+            out[(y * dw + x) as usize] = v;
+        }
+    }
+    out
 }
 
 fn paint_pattern(canvas: &mut Canvas, p: u8, th: &Theme, cw: i32, ch: i32) {

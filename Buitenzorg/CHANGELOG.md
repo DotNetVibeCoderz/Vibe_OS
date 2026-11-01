@@ -28,6 +28,11 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Eight official wallpapers.** AI-generated artwork (nature — the default,
+  Bogor Botanical Gardens at dawn — futuristic, city, art, surreal, imaginary,
+  space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
+  BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
+  `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
 - **SMP increment 1.** CPUs discovered from the ACPI MADT; the BSP's Local
   APIC enabled; every AP started with INIT-SIPI-SIPI through a real-mode ->
   long-mode trampoline at 0x8000 (temporary page tables with an identity map;

@@ -119,6 +119,23 @@ USB)** via `MILESTONE: … OK` markers that the smoke test greps for.
 | **AI subsystem** — local LLM + model gallery (v0.12 "Nalar") | **Screensaver** — Mystify, Win 3.1/98 style |
 | [![AI subsystem](docs/img/desktop-nalar.png)](docs/img/desktop-nalar.png) | [![Screensaver](docs/img/screensaver-mystify.png)](docs/img/screensaver-mystify.png) |
 
+### Official wallpapers
+
+Eight built-in wallpapers ship with the OS — AI-generated artwork in different
+moods, from the Bogor Botanical Gardens at dawn to batik-inspired art. Pick one
+with `bg <name>` in the terminal (`bg list` shows them all); **nature** is the
+default desktop.
+
+[![Official Buitenzorg OS wallpapers](docs/img/wallpapers/gallery.jpg)](docs/img/wallpapers/gallery.jpg)
+
+| `nature` | `futuristic` | `city` | `art` |
+|---|---|---|---|
+| [![nature](docs/img/wallpapers/wallpaper-nature.jpg)](docs/img/wallpapers/wallpaper-nature.jpg) | [![futuristic](docs/img/wallpapers/wallpaper-futuristic.jpg)](docs/img/wallpapers/wallpaper-futuristic.jpg) | [![city](docs/img/wallpapers/wallpaper-city.jpg)](docs/img/wallpapers/wallpaper-city.jpg) | [![art](docs/img/wallpapers/wallpaper-art.jpg)](docs/img/wallpapers/wallpaper-art.jpg) |
+| Bogor Botanical Gardens at dawn | Neon garden city | Rainy city at blue hour | Modern kawung/parang batik |
+| **`surreal`** | **`imaginary`** | **`space`** | **`minimal`** |
+| [![surreal](docs/img/wallpapers/wallpaper-surreal.jpg)](docs/img/wallpapers/wallpaper-surreal.jpg) | [![imaginary](docs/img/wallpapers/wallpaper-imaginary.jpg)](docs/img/wallpapers/wallpaper-imaginary.jpg) | [![space](docs/img/wallpapers/wallpaper-space.jpg)](docs/img/wallpapers/wallpaper-space.jpg) | [![minimal](docs/img/wallpapers/wallpaper-minimal.jpg)](docs/img/wallpapers/wallpaper-minimal.jpg) |
+| Upside-down banyan over the sea | Floating rainforest islands | Ringed planet + nebula | Twilight mountains |
+
 **MagicAppGen** — the host-side AI app generator (`tools/MagicAppGen`) that
 writes Buitenzorg apps from a prompt:
 

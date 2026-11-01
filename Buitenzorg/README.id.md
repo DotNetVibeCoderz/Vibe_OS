@@ -119,6 +119,23 @@ NVMe / USB)** lewat marker `MILESTONE: … OK` yang dicek smoke test.
 | **Subsistem AI** — LLM lokal + galeri model (v0.12 "Nalar") | **Screensaver** — Mystify, gaya Win 3.1/98 |
 | [![Subsistem AI](docs/img/desktop-nalar.png)](docs/img/desktop-nalar.png) | [![Screensaver](docs/img/screensaver-mystify.png)](docs/img/screensaver-mystify.png) |
 
+### Wallpaper resmi
+
+Delapan wallpaper bawaan ikut terpasang di OS — karya seni hasil AI dengan
+suasana berbeda, dari Kebun Raya Bogor saat fajar sampai seni bermotif batik.
+Pilih dengan `bg <nama>` di terminal (`bg list` menampilkan semuanya);
+**nature** adalah desktop default.
+
+[![Wallpaper resmi Buitenzorg OS](docs/img/wallpapers/gallery.jpg)](docs/img/wallpapers/gallery.jpg)
+
+| `nature` | `futuristic` | `city` | `art` |
+|---|---|---|---|
+| [![nature](docs/img/wallpapers/wallpaper-nature.jpg)](docs/img/wallpapers/wallpaper-nature.jpg) | [![futuristic](docs/img/wallpapers/wallpaper-futuristic.jpg)](docs/img/wallpapers/wallpaper-futuristic.jpg) | [![city](docs/img/wallpapers/wallpaper-city.jpg)](docs/img/wallpapers/wallpaper-city.jpg) | [![art](docs/img/wallpapers/wallpaper-art.jpg)](docs/img/wallpapers/wallpaper-art.jpg) |
+| Kebun Raya Bogor saat fajar | Kota taman neon | Kota hujan di jam biru | Batik kawung/parang modern |
+| **`surreal`** | **`imaginary`** | **`space`** | **`minimal`** |
+| [![surreal](docs/img/wallpapers/wallpaper-surreal.jpg)](docs/img/wallpapers/wallpaper-surreal.jpg) | [![imaginary](docs/img/wallpapers/wallpaper-imaginary.jpg)](docs/img/wallpapers/wallpaper-imaginary.jpg) | [![space](docs/img/wallpapers/wallpaper-space.jpg)](docs/img/wallpapers/wallpaper-space.jpg) | [![minimal](docs/img/wallpapers/wallpaper-minimal.jpg)](docs/img/wallpapers/wallpaper-minimal.jpg) |
+| Beringin terbalik di atas laut | Pulau hutan melayang | Planet bercincin + nebula | Pegunungan senja |
+
 **MagicAppGen** — generator app AI sisi-host (`tools/MagicAppGen`) yang menulis
 aplikasi Buitenzorg dari sebuah prompt:
 

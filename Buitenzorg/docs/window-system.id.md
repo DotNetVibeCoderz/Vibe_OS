@@ -67,6 +67,25 @@ QEMU:
   `theme`.
 - **Compute API** (`compute.rs`): backend CPU dengan interface siap-GPU.
 
+### Wallpaper resmi
+
+`wallpaper::OFFICIAL` berisi delapan wallpaper bawaan (`nature` — default —
+`futuristic`, `city`, `art`, `surreal`, `imaginary`, `space`, `minimal`).
+Semuanya karya seni hasil AI yang disimpan sebagai JPEG di
+`assets/wallpapers/`; `bzimage/build.rs` men-decode-nya di host, mengecilkannya
+(box filter) ke 800×450 dan menyimpannya di `/disk` sebagai BMP 24-bit
+(`WPNATURE.BMP` …), karena kernel hanya membaca BMP. Saat dipilih
+(`bg <nama>`), `wallpaper.rs` me-resample-nya ke ukuran layar **sekali**
+(bilinear, fixed-point — kernel soft-float) lalu menyimpannya di cache, jadi
+menggambar satu frame cukup satu salinan, bukan stretch per piksel seperti
+dulu. `MILESTONE: WALLPAPERS OK` memastikan kedelapan berkas ada di `/disk` dan
+default-nya termuat.
+
+![Terminal menampilkan daftar wallpaper resmi di atas desktop yang ramai](img/wallpapers/desktop-in-use.jpg)
+
+![Kedelapan wallpaper resmi](img/wallpapers/gallery.jpg)
+
+
 > Catatan penting: `desktop_loop` butuh timer hidup. `usermode::enter_user`
 > me-*re-enable* interrupt setelah app ring-3 keluar (IF dulu tetap mati → timer
 > mati → desktop interaktif/screensaver/animasi rusak sejak v0.4).

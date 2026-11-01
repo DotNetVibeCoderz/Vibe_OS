@@ -68,6 +68,24 @@ QEMU screenshot:
   `theme`.
 - **Compute API** (`compute.rs`): a CPU backend with a GPU-ready interface.
 
+### Official wallpapers
+
+`wallpaper::OFFICIAL` lists eight built-in wallpapers (`nature` — the default —
+`futuristic`, `city`, `art`, `surreal`, `imaginary`, `space`, `minimal`). They
+are AI-generated artwork kept as JPEGs in `assets/wallpapers/`;
+`bzimage/build.rs` decodes them on the host, box-filters them to 800×450 and
+stores them on `/disk` as 24-bit BMPs (`WPNATURE.BMP` …), because the kernel
+reads BMP only. When one is selected (`bg <name>`), `wallpaper.rs` resamples it
+to the screen **once** (bilinear, fixed-point — the kernel is soft-float) and
+caches the result, so drawing a frame is a single copy instead of the old
+per-pixel stretch. `MILESTONE: WALLPAPERS OK` checks that all eight are on
+`/disk` and that the default loads.
+
+![The terminal listing the official wallpapers over a busy desktop](img/wallpapers/desktop-in-use.jpg)
+
+![All eight official wallpapers](img/wallpapers/gallery.jpg)
+
+
 > Important note: `desktop_loop` needs the timer alive. `usermode::enter_user`
 > re-enables interrupts after a ring-3 app exits (IF used to stay off → the timer
 > stopped → the interactive desktop/screensaver/animation was broken from v0.4).

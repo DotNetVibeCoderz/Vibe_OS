@@ -11,4 +11,7 @@ ovmf-prebuilt = "0.2"
 
 [build-dependencies]
 bootloader = "0.11"
+# Decodes the official wallpapers (assets/wallpapers/*.jpg) at image-build time;
+# the kernel itself only reads 24-bit BMP.
+jpeg-decoder = { version = "0.3", default-features = false }
 bzkernel = { path = "../bzkernel", artifact = "bin", target = "x86_64-unknown-none" }

@@ -182,6 +182,7 @@
 ### 🖼️ Personalization & Display Settings
 - [~] Antarmuka Personalization via shell (`settings`, `bg`, `saver`, `cursor`, `anim`, `theme`) — *app GUI belum*
 - [x] Desktop background: **wallpaper bawaan** (theme, waves, grid, dots, aurora)
+- [x] **8 wallpaper resmi Buitenzorg OS ✓ (2026-11-01)** — karya seni AI (Rodin / Nano Banana 2): nature (default, Kebun Raya Bogor), futuristic, city, art (batik), surreal, imaginary, space, minimal. JPEG di `assets/wallpapers/` → `bzimage/build.rs` decode + box-filter 800×450 → BMP di `/disk`; kernel resample bilinear sekali ke ukuran layar + cache (frame = 1 salinan, bukan stretch per piksel). Shell `bg list` / `bg <nama>`; `MILESTONE: WALLPAPERS OK`; galeri di README + `docs/window-system.md`
 - [x] Desktop background: **file gambar milik user** (BMP 24-bit dari VFS, mis. `/disk/PHOTO.BMP`)
 - [x] Pilih screensaver · [x] pilih theme (8 tema + dark/light) · [x] kursor (normal/besar)
 - [x] Opsi: animasi on/off, rounded on/off

@@ -831,9 +831,22 @@ fn cahaya_demo() {
 
     println!("[kernel] MILESTONE: CAHAYA OK (GPU compute + window controls + screensaver + personalization)");
 
+    // Official wallpapers (AI-generated artwork on /disk). Count them, and make
+    // "nature" (Kebun Raya Bogor at dawn) the default desktop.
+    let listing = vfs::list("/disk").unwrap_or_default();
+    let present = wallpaper::OFFICIAL
+        .iter()
+        .filter(|(_, p, _)| listing.iter().any(|f| p.ends_with(f.as_str())))
+        .count();
+    let default_ok = matches!(wallpaper::set_official("nature"), Ok((800, 450)));
+    println!("[personalize] {} of {} official wallpapers on /disk; default 'nature' loaded={}", present, wallpaper::OFFICIAL.len(), default_ok);
+    if present == wallpaper::OFFICIAL.len() && default_ok {
+        println!("[kernel] MILESTONE: WALLPAPERS OK ({} official wallpapers, default nature)", present);
+    }
+
     // Final desktop: a rounded theme + a wallpaper for the screenshot.
     theme::set_by_name("dark");
-    if user_img.is_none() {
+    if user_img.is_none() && !default_ok {
         wallpaper::set_builtin("aurora");
     }
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];

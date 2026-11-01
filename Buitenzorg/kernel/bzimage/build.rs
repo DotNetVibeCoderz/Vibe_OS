@@ -66,6 +66,61 @@ fn generate_bmp(w: i32, h: i32) -> Vec<u8> {
     buf
 }
 
+/// (asset name, 8.3 file on /disk) — keep in sync with `wallpaper::OFFICIAL`.
+const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
+    ("nature", "WPNATURE.BMP"),
+    ("futuristic", "WPFUTURE.BMP"),
+    ("city", "WPCITY.BMP"),
+    ("art", "WPART.BMP"),
+    ("surreal", "WPSURREA.BMP"),
+    ("imaginary", "WPIMAGIN.BMP"),
+    ("space", "WPSPACE.BMP"),
+    ("minimal", "WPMINIMA.BMP"),
+];
+
+/// Decode a JPEG and box-filter it down to `tw` x `th` as a 24-bit BMP.
+fn jpeg_to_bmp(jpeg: &[u8], tw: usize, th: usize) -> Option<Vec<u8>> {
+    let mut dec = jpeg_decoder::Decoder::new(jpeg);
+    let rgb = dec.decode().ok()?;
+    let info = dec.info()?;
+    if info.pixel_format != jpeg_decoder::PixelFormat::RGB24 {
+        return None;
+    }
+    let (sw, sh) = (info.width as usize, info.height as usize);
+    let row_stride = (tw * 3 + 3) & !3;
+    let data_len = row_stride * th;
+    let mut bmp = Vec::with_capacity(54 + data_len);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&((54 + data_len) as u32).to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&54u32.to_le_bytes());
+    bmp.extend_from_slice(&40u32.to_le_bytes());
+    bmp.extend_from_slice(&(tw as i32).to_le_bytes());
+    bmp.extend_from_slice(&(th as i32).to_le_bytes()); // bottom-up rows
+    bmp.extend_from_slice(&1u16.to_le_bytes());
+    bmp.extend_from_slice(&24u16.to_le_bytes());
+    bmp.extend_from_slice(&[0; 24]);
+    for y in (0..th).rev() {
+        let (y0, y1) = (y * sh / th, ((y + 1) * sh / th).max(y * sh / th + 1));
+        for x in 0..tw {
+            let (x0, x1) = (x * sw / tw, ((x + 1) * sw / tw).max(x * sw / tw + 1));
+            let mut acc = [0u32; 3];
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let p = (sy * sw + sx) * 3;
+                    for c in 0..3 {
+                        acc[c] += rgb[p + c] as u32;
+                    }
+                }
+            }
+            let n = ((y1 - y0) * (x1 - x0)) as u32;
+            bmp.extend_from_slice(&[(acc[2] / n) as u8, (acc[1] / n) as u8, (acc[0] / n) as u8]);
+        }
+        bmp.resize(bmp.len() + row_stride - tw * 3, 0);
+    }
+    Some(bmp)
+}
+
 fn main() {
     let kernel = PathBuf::from(std::env::var("CARGO_BIN_FILE_BZKERNEL_bzkernel").unwrap());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -128,6 +183,18 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         if let Ok(bytes) = std::fs::read(&path) {
             builder.set_file_contents(dest.into(), bytes);
+        }
+    }
+
+    // Official Buitenzorg OS wallpapers: JPEGs in assets/wallpapers are decoded
+    // here (host side), downscaled to 800x450 and stored on /disk as 24-bit
+    // BMP (the kernel reads BMP only and resamples to the screen once).
+    let wallpapers = manifest_dir().join("..").join("..").join("assets").join("wallpapers");
+    for (src, dest) in OFFICIAL_WALLPAPERS {
+        let path = wallpapers.join(format!("{src}.jpg"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        if let Some(bmp) = std::fs::read(&path).ok().and_then(|j| jpeg_to_bmp(&j, 800, 450)) {
+            builder.set_file_contents(dest.to_lowercase().into(), bmp);
         }
     }
 
