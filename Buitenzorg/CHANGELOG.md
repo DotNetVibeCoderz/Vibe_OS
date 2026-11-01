@@ -63,6 +63,15 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **SMP increment 3: ring-3 processes run on every core.** Asymmetric
+  multiprocessing: the kernel stays on the boot CPU, user programs run in
+  parallel on the APs. Tasks move to an idle AP when they return to ring 3 and
+  come back for syscalls, faults and kills; hand-offs only complete after the
+  task's context is saved. Each AP has its own page-table root, SYSCALL entry
+  stub and TSS stack; TLB shootdowns follow unmap/mprotect; a dead process's
+  address space is freed only once none of its threads is on an AP. Threads of
+  one process are still serialized. `MILESTONE: SMP SCHED OK` (3 APs busy at
+  once with `-smp 4`); the IDE smoke boot now uses 2 CPUs, plus a 1-CPU run.
 - **SMP increment 2: per-CPU state, AP interrupts, IPIs.** Each AP gets its
   own GDT + TSS (private double-fault and ring-0 stacks), loads the IDT, and
   runs a 100 Hz Local APIC timer calibrated against the PIT; per-CPU state is

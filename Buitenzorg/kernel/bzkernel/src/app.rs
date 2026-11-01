@@ -92,9 +92,21 @@ pub fn spawn_image_at(
 pub fn process_exited(pid: u64, code: u64) {
     let space = task::current_space();
     task::detach_current_from_space(pid);
-    aspace::destroy(space);
+    destroy_when_home(space);
     process::app_exit(pid, code);
     crate::println!("[app] process {} exited with code {:#x}", pid, code);
+}
+
+/// Free a dead process's address space once none of its threads is still on an
+/// application processor (they were marked finished; an AP sends a running one
+/// home within a tick). On timeout the space is leaked, never freed under an
+/// AP's feet.
+fn destroy_when_home(space: aspace::Space) {
+    if task::wait_home(space.id) {
+        aspace::destroy(space);
+    } else {
+        crate::println!("[app] process {}: a thread did not leave its AP -- address space leaked", space.id);
+    }
 }
 
 /// Terminate spawned process `pid` from outside (PROC_KILL / Task Manager).
@@ -102,7 +114,7 @@ pub fn kill(pid: u64) -> bool {
     let Some(space) = task::kill_space(pid) else {
         return false;
     };
-    aspace::destroy(space);
+    destroy_when_home(space);
     process::app_exit(pid, KILLED_EXIT_CODE);
     crate::println!("[app] process {} killed", pid);
     true

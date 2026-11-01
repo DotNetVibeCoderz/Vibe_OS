@@ -143,6 +143,13 @@ kooperatif (yield lewat `YIELD`). Tiap thread punya SYSCALL kernel stack sendiri
 (terpisah dari stack interrupt TSS). Shim:
 `bz_thread_create`/`join`/`exit`/`bz_yield`.
 
+**SMP:** *proses* yang berbeda berjalan paralel di semua CPU, tetapi thread dalam
+satu proses tidak pernah berjalan bersamaan (runtime ring-3, mis. `malloc`
+bump-heap di `bzstart.rs`, belum aman-SMP). Thread tetap bisa di-preempt timer
+di antara dua instruksi mana pun, jadi data bersama perlu mutex futex
+(`bz_mutex_lock`). `TICKS` dan `CLOCK_MONO` dijawab di CPU pemanggil; syscall
+lain dijalankan di CPU 0.
+
 > **Catatan register (penting):** syscall meng-clobber `rcx` + `r11` (instruksi
 > `syscall`) **dan** `r8`/`r9`/`r10` plus register caller-saved lain (marshaling
 > kernel entry + C dispatch). Inline-asm syscall sisi user harus mendeklarasikan

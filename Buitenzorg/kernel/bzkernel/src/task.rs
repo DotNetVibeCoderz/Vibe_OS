@@ -3,8 +3,10 @@
 //! preemptive multi-process ring 3 (multi-process increment 1).
 //!
 //! Design notes:
-//! - Single core. Preemption happens in the timer IRQ (after EOI) via
-//!   [`preempt`]; voluntary switches via [`yield_now`].
+//! - Kernel code runs on the bootstrap CPU only. Preemption happens in the
+//!   timer IRQ (after EOI) via [`preempt`]; voluntary switches via
+//!   [`yield_now`]. Ring-3 code may also run on the application processors
+//!   (see "SMP" below).
 //! - **Only ring-3 code is preempted** (plus kernel code during the v0.2
 //!   scheduler demo). Kernel code stays cooperative: preempting the boot task
 //!   mid heap/framebuffer work corrupted memory in the past, while a timer that
@@ -22,7 +24,7 @@
 //!   next time [`spawn`] runs (single-core, so nothing references them then).
 
 use alloc::{boxed::Box, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 use crate::arch::context::{self, FpuState};
 use crate::arch::cpu as interrupts;
@@ -97,10 +99,15 @@ struct Task {
     /// User address space this task runs in (`aspace::kernel()` for kernel
     /// tasks); its id is the owning process id.
     space: aspace::Space,
+    /// Queued for, or running on, an application processor: the BSP must not
+    /// schedule it, reap its stacks, or destroy its space.
+    away: bool,
 }
 
 struct Scheduler {
-    tasks: Vec<Task>,
+    /// Boxed so a task's address never changes when the vector grows: another
+    /// CPU may be saving into `rsp`/`fpu` of a task while the BSP spawns one.
+    tasks: Vec<Box<Task>>,
     current: usize,
     next_id: u64,
 }
@@ -170,13 +177,44 @@ pub fn kill(id: u64) -> bool {
     })
 }
 
+/// Address spaces with a thread away on an AP (fixed capacity: at most one
+/// running per AP plus the AP queue).
+struct BusySpaces {
+    ids: [u64; 96],
+    n: usize,
+}
+
+impl BusySpaces {
+    fn contains(&self, id: u64) -> bool {
+        id != 0 && self.ids[..self.n].contains(&id)
+    }
+}
+
 impl Scheduler {
+    /// Processes that currently have a thread on an application processor.
+    /// Threads of one process never run at the same time (the ring-3 runtime
+    /// - e.g. the bump-heap malloc in bzstart.rs - is not SMP-safe, and the
+    /// thread ABI is documented as cooperative); only separate processes run
+    /// in parallel.
+    fn busy_spaces(&self) -> BusySpaces {
+        let mut b = BusySpaces { ids: [0; 96], n: 0 };
+        for t in self.tasks.iter() {
+            if t.away && t.space.id != 0 && !b.contains(t.space.id) && b.n < b.ids.len() {
+                b.ids[b.n] = t.space.id;
+                b.n += 1;
+            }
+        }
+        b
+    }
+
     /// Pick the next runnable task after `current` (round-robin).
     fn pick_next(&self) -> usize {
         let n = self.tasks.len();
+        let busy = self.busy_spaces();
         for off in 1..=n {
             let idx = (self.current + off) % n;
-            if self.tasks[idx].state == State::Runnable {
+            let t = &self.tasks[idx];
+            if t.state == State::Runnable && !t.away && !busy.contains(t.space.id) {
                 return idx;
             }
         }
@@ -203,7 +241,7 @@ pub fn init() {
     interrupts::without_interrupts(|| {
         let mut sched = SCHEDULER.lock();
         *sched = Some(Scheduler {
-            tasks: alloc::vec![Task {
+            tasks: alloc::vec![Box::new(Task {
                 id: 0,
                 name: "kernel",
                 state: State::Runnable,
@@ -216,7 +254,8 @@ pub fn init() {
                 ctx: CpuCtx::kernel(),
                 fpu: FpuState::clean(),
                 space: aspace::kernel(),
-            }],
+                away: false,
+            })],
             current: 0,
             next_id: 1,
         });
@@ -238,7 +277,7 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
         let sched = guard.as_mut().expect("scheduler not initialized");
         // Lazily reap stacks of finished tasks (safe: they can't be running).
         for t in sched.tasks.iter_mut() {
-            if t.state == State::Finished {
+            if t.state == State::Finished && !t.away {
                 t.stack = None;
                 t.user = None;
             }
@@ -246,7 +285,7 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
         let rsp = context::prepare_stack(&stack, task_trampoline);
         let id = sched.next_id;
         sched.next_id += 1;
-        sched.tasks.push(Task {
+        sched.tasks.push(Box::new(Task {
             id,
             name,
             state: State::Runnable,
@@ -259,7 +298,8 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
             ctx: CpuCtx::kernel(),
             fpu,
             space: aspace::kernel(),
-        });
+            away: false,
+        }));
     });
 }
 
@@ -335,7 +375,7 @@ fn spawn_ring3(
         let mut guard = SCHEDULER.lock();
         let sched = guard.as_mut().expect("scheduler not initialized");
         for t in sched.tasks.iter_mut() {
-            if t.state == State::Finished {
+            if t.state == State::Finished && !t.away {
                 t.stack = None;
                 t.user = None;
             }
@@ -343,7 +383,7 @@ fn spawn_ring3(
         let rsp = context::prepare_stack(&kstack, task_trampoline);
         let id = sched.next_id;
         sched.next_id += 1;
-        sched.tasks.push(Task {
+        sched.tasks.push(Box::new(Task {
             id,
             name,
             state: State::Runnable,
@@ -364,7 +404,8 @@ fn spawn_ring3(
             },
             fpu,
             space,
-        });
+            away: false,
+        }));
         id
     })
 }
@@ -448,7 +489,7 @@ pub fn user_work_pending() -> bool {
         s.tasks
             .iter()
             .enumerate()
-            .any(|(i, t)| i != s.current && t.state == State::Runnable && t.space.id != 0)
+            .any(|(i, t)| i != s.current && t.state == State::Runnable && !t.away && t.space.id != 0)
     })
 }
 
@@ -489,7 +530,7 @@ pub fn futex_wait_block(key: u64) {
                 .tasks
                 .iter()
                 .enumerate()
-                .any(|(i, t)| i != cur && t.state == State::Runnable);
+                .any(|(i, t)| i != cur && t.state == State::Runnable && !t.away);
             if has_other {
                 s.tasks[cur].state = State::Blocked;
                 s.tasks[cur].wait_key = key;
@@ -533,6 +574,7 @@ pub fn is_finished(id: u64) -> bool {
 }
 
 extern "C" fn task_trampoline() -> ! {
+    finish_switch();
     let entry = interrupts::without_interrupts(|| {
         let guard = SCHEDULER.lock();
         let sched = guard.as_ref().expect("scheduler not initialized");
@@ -567,6 +609,10 @@ pub fn preempt(from_user: bool) {
     if !STARTED.load(Ordering::SeqCst) {
         return;
     }
+    if from_user && maybe_offload() {
+        USER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     if from_user || PREEMPT_ENABLED.load(Ordering::SeqCst) {
         if switch_with(|_| ()) && from_user {
             USER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
@@ -587,15 +633,34 @@ pub fn user_preemptions() -> u64 {
 /// task if it differs from the current one. Interrupts must be disabled.
 /// Returns true if a switch happened (once this task has been resumed).
 fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
+    switch_with_offload(false, before)
+}
+
+/// [`switch_with`], optionally handing the outgoing task to the AP queue
+/// (`offload`): it is marked away and queued only once its context is saved.
+fn switch_with_offload(offload: bool, before: impl FnOnce(&mut Scheduler)) -> bool {
     let (prev_rsp_ptr, next_rsp, prev_fx, next_fx) = {
         let mut guard = SCHEDULER.lock();
         let Some(sched) = guard.as_mut() else { return false };
         before(sched);
+        let cur = sched.current;
+        if offload {
+            let t = &sched.tasks[cur];
+            if cur == 0 || t.user.is_none() || t.space.id == 0 || t.state != State::Runnable {
+                return false; // only ring-3 tasks run on the APs
+            }
+            if sched.busy_spaces().contains(t.space.id) {
+                return false; // a sibling thread is already on an AP
+            }
+            sched.tasks[cur].away = true;
+        }
         let next = sched.pick_next();
         if next == sched.current {
+            if offload {
+                sched.tasks[cur].away = false;
+            }
             return false; // nothing else runnable (or still just the boot task)
         }
-        let cur = sched.current;
         // Save the outgoing task's SYSCALL-path state...
         let c = &mut sched.tasks[cur].ctx;
         c.kctx = usermode::get_kctx();
@@ -615,10 +680,319 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
         usermode::set_user_active(n.user_active);
         aspace::install(sched.tasks[next].space);
         let next_fx: *const FpuState = &*sched.tasks[next].fpu;
+        if offload {
+            HANDOFF[cpu()].store(HANDOFF_TO_AP << 56 | cur as u64, Ordering::Release);
+        }
         (prev, sched.tasks[next].rsp, prev_fx, next_fx)
-        // Lock is dropped here; no allocation happens before the switch, so the
-        // pointers stay valid (single core, interrupts off; boxed areas never move).
+        // Lock is dropped here. Tasks are boxed, so the pointers stay valid even
+        // if another task is spawned before the switch.
     };
     unsafe { context::switch(prev_rsp_ptr, next_rsp, prev_fx, next_fx) };
+    finish_switch();
     true
+}
+
+// --- SMP: ring-3 tasks on the application processors (SMP increment 3) -------
+//
+// Asymmetric multiprocessing. All kernel code keeps running on the bootstrap
+// CPU (the kernel was written for one core); the application processors run
+// *ring-3 code only*. A user task is handed to an AP at the points where it is
+// about to return to ring 3 on the BSP (end of a syscall, a timer preemption);
+// on the AP it runs until it makes a syscall, faults, gets preempted for
+// another AP-queued task, or is killed — then it goes back (to the BSP, or to
+// the AP queue). So user programs compute in parallel on every core while the
+// kernel stays single-threaded.
+//
+// A task "away" from the BSP (queued for or running on an AP) is invisible to
+// the BSP scheduler, its stack is never reaped, and its address space is never
+// destroyed (`wait_home`). Hand-offs between CPUs happen only after the moving
+// task's context is fully saved: the CPU that switched away records the
+// hand-off in its per-CPU slot, and the context it switched *to* completes it
+// (`finish_switch`) — so no CPU can resume a half-saved task.
+
+const MAX_CPUS: usize = crate::arch::cpu::MAX_CPUS;
+const NONE: u64 = u64::MAX;
+const NO_TASK: usize = usize::MAX;
+
+const HANDOFF_TO_AP: u64 = 1;
+const HANDOFF_TO_BSP: u64 = 2;
+const HANDOFF_REQUEUE: u64 = 3;
+
+/// Per-CPU pending hand-off: kind << 56 | task index (NONE = nothing).
+static HANDOFF: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(NONE) }; MAX_CPUS];
+/// Task index each AP is running (NO_TASK = idle).
+static AP_CURRENT: [AtomicUsize; MAX_CPUS] = [const { AtomicUsize::new(NO_TASK) }; MAX_CPUS];
+/// Saved stack pointer of each AP's idle context while it runs a task.
+static mut AP_IDLE_RSP: [u64; MAX_CPUS] = [0; MAX_CPUS];
+/// Each AP's idle-context FPU area (leaked Box).
+static AP_IDLE_FPU: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+/// AP timer ticks that interrupted ring-3 code, per CPU (evidence of parallel
+/// user execution).
+static AP_USER_TICKS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+/// Hand-offs BSP -> AP (for the self-test and `cpu`).
+static OFFLOADS: AtomicU64 = AtomicU64::new(0);
+/// The AP scheduler is running (at least one AP entered its idle loop).
+static AP_SCHED: AtomicBool = AtomicBool::new(false);
+/// Master switch (the shell's `smp off` / tests can force BSP-only).
+static AP_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Queue of task indices waiting for an AP (FIFO ring).
+struct ApQueue {
+    buf: [usize; 64],
+    head: usize,
+    len: usize,
+}
+
+static AP_QUEUE: Mutex<ApQueue> = Mutex::new(ApQueue { buf: [0; 64], head: 0, len: 0 });
+
+fn queue_push(idx: usize) -> bool {
+    let mut q = AP_QUEUE.lock();
+    if q.len == q.buf.len() {
+        return false;
+    }
+    let tail = (q.head + q.len) % q.buf.len();
+    q.buf[tail] = idx;
+    q.len += 1;
+    true
+}
+
+fn queue_pop() -> Option<usize> {
+    let mut q = AP_QUEUE.lock();
+    if q.len == 0 {
+        return None;
+    }
+    let idx = q.buf[q.head];
+    q.head = (q.head + 1) % q.buf.len();
+    q.len -= 1;
+    Some(idx)
+}
+
+fn queue_len() -> usize {
+    AP_QUEUE.lock().len
+}
+
+fn cpu() -> usize {
+    crate::arch::cpu::id()
+}
+
+/// Enable/disable handing ring-3 tasks to the APs (tasks already away finish
+/// their slice). Returns the previous setting.
+pub fn set_ap_scheduling(on: bool) -> bool {
+    AP_ENABLED.swap(on, Ordering::SeqCst)
+}
+
+/// Ring-3 timer ticks AP `cpu` has run (0 for the BSP).
+pub fn ap_user_ticks(cpu: usize) -> u64 {
+    AP_USER_TICKS.get(cpu).map(|t| t.load(Ordering::Relaxed)).unwrap_or(0)
+}
+
+/// Total ring-3 ticks across all APs.
+pub fn ap_user_ticks_total() -> u64 {
+    AP_USER_TICKS.iter().map(|t| t.load(Ordering::Relaxed)).sum()
+}
+
+/// Number of BSP -> AP hand-offs since boot.
+pub fn offloads() -> u64 {
+    OFFLOADS.load(Ordering::Relaxed)
+}
+
+/// True while AP `cpu` runs a task.
+pub fn ap_running(cpu: usize) -> bool {
+    AP_CURRENT.get(cpu).map(|c| c.load(Ordering::Relaxed) != NO_TASK).unwrap_or(false)
+}
+
+/// Complete the hand-off the previous context on this CPU left behind. Must
+/// run right after every context switch, in the context switched to.
+fn finish_switch() {
+    let me = cpu();
+    let h = HANDOFF[me].swap(NONE, Ordering::AcqRel);
+    if h == NONE {
+        return;
+    }
+    let (kind, idx) = (h >> 56, (h & 0x00FF_FFFF_FFFF_FFFF) as usize);
+    match kind {
+        HANDOFF_TO_AP | HANDOFF_REQUEUE => {
+            if queue_push(idx) {
+                crate::smp::wake_aps();
+            } else {
+                set_home(idx); // queue full: back to the BSP
+            }
+        }
+        HANDOFF_TO_BSP => {
+            set_home(idx);
+            crate::smp::wake_bsp(); // it may be idle in hlt
+        }
+        _ => {}
+    }
+}
+
+fn set_home(idx: usize) {
+    let mut guard = SCHEDULER.lock();
+    if let Some(s) = guard.as_mut() {
+        if let Some(t) = s.tasks.get_mut(idx) {
+            t.away = false;
+        }
+    }
+}
+
+/// BSP, interrupts off, about to return to ring 3 (end of a syscall or a
+/// timer preemption of user code): hand the current user task to an idle AP.
+/// Returns true if it was handed over (once it runs again, on some AP).
+pub fn maybe_offload() -> bool {
+    if !AP_SCHED.load(Ordering::Relaxed) || !AP_ENABLED.load(Ordering::Relaxed) || cpu() != 0 {
+        return false;
+    }
+    let aps = crate::smp::aps_online();
+    if aps == 0 || queue_len() >= aps {
+        return false; // every AP already has work waiting
+    }
+    let moved = switch_with_offload(true, |_| ());
+    if moved {
+        OFFLOADS.fetch_add(1, Ordering::Relaxed);
+    }
+    moved
+}
+
+/// AP, interrupts off, on the current task's kernel stack: give the CPU back
+/// to this AP's idle context and leave the task with hand-off `kind`. Returns
+/// when the task is resumed — on the BSP for HANDOFF_TO_BSP.
+fn ap_leave(kind: u64) {
+    let me = cpu();
+    let idx = AP_CURRENT[me].load(Ordering::Relaxed);
+    if me == 0 || idx == NO_TASK {
+        return;
+    }
+    let (prev_rsp, prev_fx) = {
+        let mut guard = SCHEDULER.lock();
+        let s = guard.as_mut().expect("scheduler not initialized");
+        let t = &mut s.tasks[idx];
+        (&mut t.rsp as *mut u64, &mut *t.fpu as *mut FpuState)
+    };
+    HANDOFF[me].store(kind << 56 | idx as u64, Ordering::Release);
+    let idle_rsp = unsafe { (core::ptr::addr_of!(AP_IDLE_RSP) as *const u64).add(me).read_volatile() };
+    let idle_fx = AP_IDLE_FPU[me].load(Ordering::Relaxed) as *const FpuState;
+    unsafe { context::switch(prev_rsp, idle_rsp, prev_fx, idle_fx) };
+    finish_switch();
+}
+
+/// Syscall from ring 3 on an AP: move to the BSP, where kernel code runs.
+pub fn ap_leave_to_bsp() {
+    if cpu() != 0 {
+        ap_leave(HANDOFF_TO_BSP);
+    }
+}
+
+/// A ring-3 fault: handle it on the BSP (it ends the program, kernel work).
+pub fn ensure_on_bsp() {
+    ap_leave_to_bsp();
+}
+
+/// LAPIC timer on an AP (after EOI, interrupts off). Ring-3 time is charged to
+/// the task; a killed task is sent home; with others waiting, round-robin.
+pub fn ap_tick(from_user: bool) {
+    let me = cpu();
+    if me == 0 || !from_user {
+        return;
+    }
+    let idx = AP_CURRENT[me].load(Ordering::Relaxed);
+    if idx == NO_TASK {
+        return;
+    }
+    let n = AP_USER_TICKS[me].fetch_add(1, Ordering::Relaxed) + 1;
+    let (alive, space_id) = {
+        let mut guard = SCHEDULER.lock();
+        let Some(s) = guard.as_mut() else { return };
+        let t = &mut s.tasks[idx];
+        // The AP timer runs at ~100 Hz, the PIT at ~18.2 Hz: charge one
+        // CPU-accounting tick per 5 AP ticks so `ps` / Task Manager units match.
+        if n % 5 == 0 {
+            t.cpu_ticks += 1;
+        }
+        (t.state == State::Runnable, t.space.id)
+    };
+    if n % 5 == 0 {
+        crate::process::account_space_tick(space_id);
+    }
+    if !alive {
+        ap_leave(HANDOFF_TO_BSP); // killed: let the BSP reap it
+    } else if queue_len() > 0 {
+        USER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+        ap_leave(HANDOFF_REQUEUE);
+    }
+}
+
+/// Run task `idx` on this AP until it leaves. Returns false if it was not
+/// runnable (killed while queued): it goes straight home.
+fn ap_run(me: usize, idx: usize) -> bool {
+    let (next_rsp, next_fx) = {
+        let mut guard = SCHEDULER.lock();
+        let Some(s) = guard.as_mut() else { return false };
+        let Some(t) = s.tasks.get_mut(idx) else { return false };
+        if t.state != State::Runnable || !t.away {
+            t.away = false;
+            return false;
+        }
+        AP_CURRENT[me].store(idx, Ordering::Relaxed);
+        usermode::set_ap_syscall_kstack(me, t.ctx.sys_kstack_top);
+        gdt::set_rsp0_on(me, t.ctx.sys_kstack_top);
+        aspace::install_on_ap(me, t.space);
+        (t.rsp, &*t.fpu as *const FpuState)
+    };
+    let idle_rsp = unsafe { (core::ptr::addr_of_mut!(AP_IDLE_RSP) as *mut u64).add(me) };
+    let idle_fx = AP_IDLE_FPU[me].load(Ordering::Relaxed) as *mut FpuState;
+    unsafe { context::switch(idle_rsp, next_rsp, idle_fx, next_fx) };
+    true
+}
+
+/// Main loop of an application processor (never returns): run queued ring-3
+/// tasks, otherwise sleep until a timer tick or a wake-up IPI.
+pub fn ap_idle_loop(me: usize) -> ! {
+    AP_IDLE_FPU[me].store(Box::leak(FpuState::clean()) as *mut FpuState as u64, Ordering::Release);
+    AP_SCHED.store(true, Ordering::Release);
+    loop {
+        interrupts::disable_interrupts();
+        // A task just came back to this idle context: complete its hand-off,
+        // and stop using its address space (it may be destroyed next).
+        if AP_CURRENT[me].swap(NO_TASK, Ordering::Relaxed) != NO_TASK {
+            aspace::install_on_ap(me, aspace::kernel());
+        }
+        finish_switch();
+        match queue_pop() {
+            Some(idx) => {
+                ap_run(me, idx);
+            }
+            // Atomically enable interrupts and halt: no wake-up can slip by.
+            None => interrupts::enable_and_halt(),
+        }
+    }
+}
+
+/// Wait (bounded) until no task of `space_id` is away on an AP — required
+/// before its address space or stacks may be freed. Its tasks must already be
+/// marked finished; an AP sends a running one home at its next tick (~10 ms)
+/// and drops a queued one when it pops it. Returns false on timeout (the
+/// caller then leaks the space instead of freeing memory an AP may still use).
+pub fn wait_home(space_id: u64) -> bool {
+    let away = || {
+        interrupts::without_interrupts(|| {
+            let guard = SCHEDULER.lock();
+            guard
+                .as_ref()
+                .map(|s| s.tasks.iter().any(|t| t.away && t.space.id == space_id))
+                .unwrap_or(false)
+        })
+    };
+    if !away() {
+        return true;
+    }
+    crate::smp::wake_aps();
+    for _ in 0..400_000u64 {
+        for _ in 0..500 {
+            core::hint::spin_loop();
+        }
+        if !away() {
+            return true;
+        }
+    }
+    false
 }

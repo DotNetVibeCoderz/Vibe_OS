@@ -93,6 +93,26 @@ pub fn set_rsp0(top: u64) {
     }
 }
 
+/// Each application processor's TSS (address; 0 = none), so the scheduler can
+/// point its ring-0 stack at the task that CPU is running.
+static AP_TSS: [core::sync::atomic::AtomicU64; crate::arch::cpu::MAX_CPUS] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; crate::arch::cpu::MAX_CPUS];
+
+/// Set the ring-0 stack (TSS rsp0) of CPU `cpu` (0 = the BSP). Only ever
+/// called on that CPU itself, with interrupts disabled.
+pub fn set_rsp0_on(cpu: usize, top: u64) {
+    if cpu == 0 {
+        return set_rsp0(top);
+    }
+    let tss = AP_TSS[cpu].load(core::sync::atomic::Ordering::Acquire) as *mut TaskStateSegment;
+    if tss.is_null() {
+        return;
+    }
+    unsafe {
+        core::ptr::write_unaligned(core::ptr::addr_of_mut!((*tss).privilege_stack_table[0]), VirtAddr::new(top));
+    }
+}
+
 /// Give an application processor its own GDT + TSS and load them.
 ///
 /// A TSS descriptor is marked busy when loaded, so every CPU needs its own.
@@ -100,7 +120,7 @@ pub fn set_rsp0(top: u64) {
 /// SYSCALL STAR MSR and everything holding a `Selectors` stay valid on every
 /// CPU), and its TSS carries a private double-fault IST stack plus a private
 /// ring-0 stack. Everything is leaked: a CPU lives as long as the kernel.
-pub fn load_on_ap() {
+pub fn load_on_ap(cpu: usize) {
     use alloc::boxed::Box;
     let stack_top = |size: usize| -> VirtAddr {
         let stack: &'static mut [u8] = Box::leak(alloc::vec![0u8; size].into_boxed_slice());
@@ -109,7 +129,9 @@ pub fn load_on_ap() {
     let mut tss = TaskStateSegment::new();
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = stack_top(STACK_SIZE);
     tss.privilege_stack_table[0] = stack_top(PRIV_STACK_SIZE);
-    let tss: &'static TaskStateSegment = Box::leak(Box::new(tss));
+    let tss: &'static mut TaskStateSegment = Box::leak(Box::new(tss));
+    AP_TSS[cpu].store(tss as *mut TaskStateSegment as u64, core::sync::atomic::Ordering::Release);
+    let tss: &'static TaskStateSegment = tss;
 
     let gdt: &'static mut GlobalDescriptorTable = Box::leak(Box::new(GlobalDescriptorTable::new()));
     let kernel_code = gdt.append(Descriptor::kernel_code_segment());

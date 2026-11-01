@@ -16,7 +16,10 @@ function Invoke-Boot {
     param([string]$Media, [string]$Log)
     if (Test-Path $Log) { Remove-Item $Log -Force -Confirm:$false }
     $qargs = switch ($Media) {
-        "ide"  { @('-drive', "format=raw,file=$image") }
+        # The full IDE run uses 2 CPUs (ring-3 processes on the AP, SMP SCHED);
+        # "ide1" re-runs the process tests on a single CPU.
+        "ide"  { @('-smp', '2', '-drive', "format=raw,file=$image") }
+        "ide1" { @('-drive', "format=raw,file=$image") }
         # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
         "ahci" { @('-smp', '2', '-drive', "id=bzdisk,format=raw,file=$image,if=none",
                    '-device', 'ahci,id=ahci0', '-device', 'ide-hd,drive=bzdisk,bus=ahci0.0') }
@@ -92,10 +95,13 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: FILES OK", "MILESTONE: EDITOR OK",
                      "MILESTONE: IMGVIEW OK", "MILESTONE: JPEG OK",
                      "MILESTONE: MULTIPROC OK", "MILESTONE: DISK WRITE OK",
-                     "MILESTONE: PROCCTL OK", "MILESTONE: WALLPAPERS OK", "MILESTONE: ICONS OK")
+                     "MILESTONE: PROCCTL OK", "MILESTONE: WALLPAPERS OK", "MILESTONE: ICONS OK",
+                     "MILESTONE: SMP SCHED OK")
 }
+$ideMarkers += @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK")
 Assert-Markers -Log $ideLog -Markers $ideMarkers
-Write-Host "smoke [ide]: all milestones present"
+Write-Host "smoke [ide]: all milestones present (2 CPUs, ring-3 on the AP)"
+
 
 # Persistent /disk: the kernel printed the exact contents it wrote to
 # /disk/BOOTCNT.TXT. Those bytes must now be inside the disk image file on the
@@ -106,6 +112,16 @@ $needle = $persist.Matches[0].Groups[1].Value
 $diskText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($image))
 if (-not $diskText.Contains($needle)) { Write-Error "SMOKE TEST FAILED: '$needle' not found in $image"; exit 1 }
 Write-Host "smoke [ide]: /disk write persisted to the image ($needle)"
+
+# Uniprocessor regression: the same process/thread tests on one CPU.
+$ide1Log = Join-Path $root "dist\boot-ide1.log"
+Invoke-Boot -Media ide1 -Log $ide1Log
+$ide1Markers = $basic + @("MILESTONE: SMP OK (1 CPU(s)")
+if (Select-String -Path $ide1Log -Pattern "Hello from C#" -Quiet) {
+    $ide1Markers += @("MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "MILESTONE: MULTIPROC OK", "MILESTONE: PROCCTL OK")
+}
+Assert-Markers -Log $ide1Log -Markers $ide1Markers
+Write-Host "smoke [ide1]: process tests pass on a single CPU"
 
 foreach ($media in @("ahci", "nvme", "usb")) {
     $log = Join-Path $root "dist\boot-$media.log"

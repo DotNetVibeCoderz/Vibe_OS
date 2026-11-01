@@ -65,7 +65,7 @@ pub const AP_TIMER_HZ: u64 = 100;
 /// The PIT's rate (1193182 / 65536 Hz), in milli-hertz.
 const PIT_MILLIHZ: u64 = 18_207;
 
-pub const MAX_CPUS: usize = 16;
+pub const MAX_CPUS: usize = crate::arch::cpu::MAX_CPUS;
 
 static ONLINE: AtomicU64 = AtomicU64::new(0);
 
@@ -122,9 +122,11 @@ fn eoi() {
     lapic_write(LAPIC_EOI, 0);
 }
 
-extern "x86-interrupt" fn lapic_timer_handler(_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn lapic_timer_handler(frame: InterruptStackFrame) {
     this_cpu().timer_ticks.fetch_add(1, Ordering::Relaxed);
     eoi();
+    // After EOI, interrupts still off: the AP scheduler may switch tasks here.
+    crate::task::ap_tick(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
 }
 
 extern "x86-interrupt" fn ping_handler(_frame: InterruptStackFrame) {
@@ -193,7 +195,7 @@ fn other_online() -> Vec<usize> {
 
 /// Flush the TLB on every other online CPU and wait until each acknowledged
 /// (the building block for unmapping memory that other cores may cache).
-/// Returns false if a CPU did not answer within ~0.5 s.
+/// Returns false if a CPU did not answer within the spin budget.
 pub fn tlb_shootdown() -> bool {
     let others = other_online();
     if others.is_empty() {
@@ -201,9 +203,15 @@ pub fn tlb_shootdown() -> bool {
     }
     let before: Vec<u64> = others.iter().map(|&i| CPUS[i].tlb_flushes.load(Ordering::Acquire)).collect();
     broadcast_ipi(IPI_TLB_VECTOR);
-    wait_until(9, || {
-        others.iter().zip(&before).all(|(&i, &b)| CPUS[i].tlb_flushes.load(Ordering::Acquire) > b)
-    })
+    // Spin budget, not PIT ticks: callers (syscalls) run with interrupts off,
+    // so the tick count does not advance while we wait.
+    for _ in 0..50_000_000u64 {
+        if others.iter().zip(&before).all(|(&i, &b)| CPUS[i].tlb_flushes.load(Ordering::Acquire) > b) {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
 }
 
 /// Measure the Local APIC timer against the PIT (on the BSP, timer masked) and
@@ -247,16 +255,17 @@ pub fn report() -> Vec<String> {
         let role = if i == 0 {
             "BSP (scheduler)"
         } else if c.online.load(Ordering::Relaxed) {
-            "AP  (idle)     "
+            if crate::task::ap_running(i) { "AP  (ring 3)   " } else { "AP  (idle)     " }
         } else {
             "AP  (offline)  "
         };
         out.push(alloc::format!(
-            "  #{} lapic {:>2}  {}  timer {:>6}  ipi {:>3}  tlb {:>3}",
+            "  #{} lapic {:>2}  {}  timer {:>6}  ring-3 {:>6}  ipi {:>4}  tlb {:>4}",
             i,
             c.lapic_id.load(Ordering::Relaxed),
             role,
             c.timer_ticks.load(Ordering::Relaxed),
+            crate::task::ap_user_ticks(i),
             c.pings.load(Ordering::Relaxed),
             c.tlb_flushes.load(Ordering::Relaxed)
         ));
@@ -594,7 +603,11 @@ pub fn init() -> (u64, u64) {
     }
 
     let mut stacks: Vec<Vec<u8>> = Vec::new();
-    for &id in order.iter().skip(1) {
+    for (cpu, &id) in order.iter().enumerate().skip(1) {
+        if crate::aspace::create_ap_root(cpu).is_none() {
+            crate::println!("[smp] could not build a page-table root for CPU #{}", cpu);
+            continue;
+        }
         let stack = alloc::vec![0u8; AP_STACK];
         let top = (stack.as_ptr() as u64 + AP_STACK as u64) & !0xF;
         stacks.push(stack);
@@ -642,25 +655,47 @@ pub fn init() -> (u64, u64) {
 /// stack). Switch to the kernel's page tables, take its own GDT + TSS, load
 /// the IDT, start its LAPIC timer, report in, and idle with interrupts on.
 extern "C" fn ap_main(_lapic_id: u64) -> ! {
+    // The temporary tables share the kernel mappings (LAPIC included), so the
+    // CPU can find its index before switching to its own root.
+    let me = cpu_index();
     unsafe {
         x86_64::registers::control::Cr3::write(
-            PhysFrame::containing_address(PhysAddr::new(KERNEL_CR3.load(Ordering::SeqCst))),
+            PhysFrame::containing_address(PhysAddr::new(crate::aspace::ap_root(me))),
             x86_64::registers::control::Cr3Flags::empty(),
         )
     };
     // The GDT/TSS are heap-allocated; the BSP is spinning in `init` (not
     // holding the heap lock) while it waits for this AP to report in.
-    crate::gdt::load_on_ap();
+    crate::gdt::load_on_ap(me);
     crate::interrupts::load_on_ap();
     crate::gdt::enable_sse();
-    let me = cpu_index();
+    crate::usermode::init_on_ap(me);
     start_local_timer();
     CPUS[me].seen_index.store(me, Ordering::Release);
     CPUS[me].online.store(true, Ordering::Release);
     ONLINE.fetch_add(1, Ordering::SeqCst);
-    loop {
-        // Atomically enable interrupts and halt: no wake-up can slip between.
-        x86_64::instructions::interrupts::enable_and_hlt();
+    // Run ring-3 tasks handed over by the BSP (task.rs); idles in sti;hlt.
+    crate::task::ap_idle_loop(me)
+}
+
+/// Number of application processors online.
+pub fn aps_online() -> usize {
+    ONLINE.load(Ordering::Acquire) as usize
+}
+
+/// Wake the bootstrap CPU (a ping IPI) — e.g. when a task came home from an
+/// AP for a syscall while the BSP sleeps in `hlt`.
+pub fn wake_bsp() {
+    if cpu_index() != 0 && CPU_COUNT.load(Ordering::Acquire) > 0 {
+        send_ipi(CPUS[0].lapic_id.load(Ordering::Relaxed), IPI_PING_VECTOR);
+    }
+}
+
+/// Wake idle application processors (a ping IPI to all but this CPU), e.g.
+/// after queueing work for them.
+pub fn wake_aps() {
+    if aps_online() > 0 {
+        broadcast_ipi(IPI_PING_VECTOR);
     }
 }
 

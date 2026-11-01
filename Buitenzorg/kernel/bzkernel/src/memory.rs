@@ -145,7 +145,8 @@ pub fn unmap_user_pages(pages: &[u64], ctx: &mut MemCtx) {
             ctx.frames.free(phys);
         }
     }
-    crate::arch::cpu::flush_tlb();
+    // Another thread of this process may run on an AP with these pages cached.
+    crate::arch::cpu::flush_tlb_everywhere();
 }
 
 // --- User-space anonymous mmap arena (v0.15 "Matang" managed-runtime PAL) ----
@@ -279,6 +280,8 @@ pub fn user_mprotect(addr: u64, size: u64, prot: u64) -> u64 {
             }
             // else: prot NONE on an uncommitted page — nothing to do.
         }
+        // Downgraded permissions must not survive in another CPU's TLB.
+        crate::arch::cpu::flush_tlb_everywhere();
         0
     })
 }

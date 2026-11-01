@@ -13,7 +13,10 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
   local media="$1" log="$2"
   local -a drive
   case "$media" in
-    ide)  drive=(-drive "format=raw,file=$img") ;;
+    # The full IDE run uses 2 CPUs (ring-3 processes on the AP, SMP SCHED);
+    # "ide1" re-runs the process tests on a single CPU.
+    ide)  drive=(-smp 2 -drive "format=raw,file=$img") ;;
+    ide1) drive=(-drive "format=raw,file=$img") ;;
     # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
     ahci) drive=(-smp 2 -drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device ahci,id=ahci0 -device ide-hd,drive=bzdisk,bus=ahci0.0) ;;
@@ -64,7 +67,8 @@ if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
     "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: HEAP OK" \
     "MILESTONE: GCMEM OK" "MILESTONE: BCL OK" "MILESTONE: BCL2 OK" "MILESTONE: DRAW OK" \
     "MILESTONE: UI OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: CLOCK OK" "MILESTONE: PIANO OK" "MILESTONE: STORE OK" "MILESTONE: FILES OK" "MILESTONE: EDITOR OK" "MILESTONE: IMGVIEW OK" "MILESTONE: JPEG OK" \
-    "MILESTONE: MULTIPROC OK" "MILESTONE: DISK WRITE OK" "MILESTONE: PROCCTL OK" "MILESTONE: WALLPAPERS OK" "MILESTONE: ICONS OK"
+    "MILESTONE: MULTIPROC OK" "MILESTONE: DISK WRITE OK" "MILESTONE: PROCCTL OK" "MILESTONE: WALLPAPERS OK" "MILESTONE: ICONS OK" \
+    "MILESTONE: SMP SCHED OK"
   # Persistent /disk: the exact bytes the kernel wrote to /disk/BOOTCNT.TXT
   # must now be inside the image file on the host (they reached the medium).
   needle="$(grep -a -o 'BOOTCNT.TXT = BZPERSIST[^[:cntrl:]]*' "$root/dist/boot-ide.log" | head -1 | sed 's/^BOOTCNT.TXT = //')"
@@ -73,7 +77,16 @@ if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
   fi
   echo "smoke [ide]: /disk write persisted to the image ($needle)"
 fi
-echo "smoke [ide]: all milestones present"
+require "$root/dist/boot-ide.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"
+echo "smoke [ide]: all milestones present (2 CPUs, ring-3 on the AP)"
+
+# Uniprocessor regression: the same process/thread tests on one CPU.
+boot ide1 "$root/dist/boot-ide1.log"
+require "$root/dist/boot-ide1.log" "${basic[@]}" "MILESTONE: SMP OK (1 CPU(s)"
+if grep -qF "Hello from C#" "$root/dist/boot-ide1.log"; then
+  require "$root/dist/boot-ide1.log" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: MULTIPROC OK" "MILESTONE: PROCCTL OK"
+fi
+echo "smoke [ide1]: process tests pass on a single CPU"
 
 # Boot-media matrix: kernel must come up when the disk hangs off other
 # controllers (their native drivers are later roadmap work).

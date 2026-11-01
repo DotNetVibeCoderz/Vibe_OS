@@ -7,6 +7,15 @@
 //! SFMASK clears IF on entry, so a syscall runs to completion without
 //! interruption; the timer still preempts *user* code normally via the TSS
 //! ring-0 stack.
+//!
+//! SMP (increment 3): SYSCALL does not switch stacks, so the entry needs a
+//! per-CPU place for the user rsp and the kernel stack. LSTAR is a per-CPU MSR,
+//! so every application processor gets its *own* entry stub
+//! (`ap_syscall_entry_<n>`) that uses slot `n` of [`AP_USER_RSP`] /
+//! [`AP_KSTACK`] — no GS base and no `swapgs` involved. Each stub immediately
+//! pushes the user rsp onto the task's kernel stack, so the return path
+//! (`syscall_exit_common`: pop rflags, rip, rsp; `sysretq`) is CPU-independent:
+//! a syscall entered on an AP may finish on the BSP or on another AP.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -16,11 +25,39 @@ use x86_64::VirtAddr;
 
 use crate::gdt;
 
-/// Kernel stack pointer used by the SYSCALL entry (SYSCALL does not switch
-/// stacks itself). Single-core, so one is enough.
+/// Kernel stack pointer used by the BSP's SYSCALL entry (SYSCALL does not
+/// switch stacks itself).
 static SYSCALL_KSTACK_TOP: AtomicU64 = AtomicU64::new(0);
-/// Scratch slot for the user's rsp across a syscall.
+/// Scratch slot for the user's rsp during the BSP's syscall entry (only valid
+/// between the entry's first instructions; the entry then pushes it).
 static USER_RSP: AtomicU64 = AtomicU64::new(0);
+
+const MAX_CPUS: usize = crate::arch::cpu::MAX_CPUS;
+/// Per-AP user-rsp scratch for the entry stubs (index = CPU index).
+static mut AP_USER_RSP: [u64; MAX_CPUS] = [0; MAX_CPUS];
+/// Per-AP SYSCALL kernel stack: the running task's syscall stack top.
+static mut AP_KSTACK: [u64; MAX_CPUS] = [0; MAX_CPUS];
+
+/// Point AP `cpu`'s SYSCALL entry at kernel stack `top` (the task it is about
+/// to run). Called on that CPU with interrupts disabled.
+pub fn set_ap_syscall_kstack(cpu: usize, top: u64) {
+    unsafe { (core::ptr::addr_of_mut!(AP_KSTACK) as *mut u64).add(cpu).write_volatile(top) };
+}
+
+/// Program this AP's SYSCALL MSRs (they are per CPU): same STAR/SFMASK as the
+/// BSP, LSTAR = this CPU's own entry stub.
+pub fn init_on_ap(cpu: usize) {
+    let sel = gdt::selectors();
+    unsafe {
+        Efer::update(|f| f.insert(EferFlags::SYSTEM_CALL_EXTENSIONS));
+    }
+    Star::write(sel.user_code, sel.user_data, sel.kernel_code, sel.kernel_data)
+        .expect("STAR segment layout invalid");
+    let table = core::ptr::addr_of!(ap_syscall_table) as *const i32;
+    let entry = (table as i64 + unsafe { table.add(cpu).read() } as i64) as u64;
+    LStar::write(VirtAddr::new(entry));
+    SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG | RFlags::TRAP_FLAG);
+}
 /// Saved kernel context for the longjmp back out of [`enter_user`] on exit.
 static KCTX_RSP: AtomicU64 = AtomicU64::new(0);
 /// True while a ring-3 program is running (routes the EXIT syscall).
@@ -105,13 +142,33 @@ pub fn exit_user(code: u64) -> ! {
     unsafe { return_to_kernel(code) }
 }
 
-/// C entry called from the assembly SYSCALL trampoline.
+/// C entry called from the BSP's SYSCALL trampoline.
 #[no_mangle]
 extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     // Everything arriving here came from ring 3, so its pointer arguments are
     // untrusted and must be validated (v1.0 hardening). Kernel-internal callers
     // of `dispatch` pass their own addresses and are trusted.
-    crate::syscall::dispatch_from_user(nr, a0, a1, a2)
+    let r = crate::syscall::dispatch_from_user(nr, a0, a1, a2);
+    // About to return to ring 3: an idle application processor may take over.
+    crate::task::maybe_offload();
+    r
+}
+
+/// C entry called from an AP's SYSCALL trampoline. Kernel code runs only on
+/// the BSP (asymmetric multiprocessing), so the task migrates there for the
+/// syscall — except for a few that only read a clock and touch no kernel state.
+#[no_mangle]
+extern "C" fn ap_syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::sysno as n;
+    match nr {
+        n::TICKS => return crate::interrupts::ticks(),
+        n::CLOCK_MONO => return crate::arch::cpu::timestamp(),
+        _ => {}
+    }
+    crate::task::ap_leave_to_bsp();
+    let r = crate::syscall::dispatch_from_user(nr, a0, a1, a2);
+    crate::task::maybe_offload();
+    r
 }
 
 core::arch::global_asm!(
@@ -120,8 +177,10 @@ core::arch::global_asm!(
     // On entry: rcx = user rip, r11 = user rflags, rsp = user rsp.
     "mov [rip + {user_rsp}], rsp",
     "mov rsp, [rip + {kstack}]",
+    "push qword ptr [rip + {user_rsp}]", // user rsp, kept with the task
     "push rcx",                 // save user rip
     "push r11",                 // save user rflags
+    "sub rsp, 8",               // 16-byte alignment for the call
     // Marshal (rax=nr, rdi=a0, rsi=a1, rdx=a2) into the C ABI
     // dispatch(nr, a0, a1, a2) = (rdi, rsi, rdx, rcx).
     "mov r8, rax",
@@ -133,13 +192,74 @@ core::arch::global_asm!(
     "mov rdx, r10",
     "mov rcx, r11",
     "call syscall_dispatch_c",  // result in rax
+    "add rsp, 8",
+    // Shared return path (also used by the AP stubs): CPU-independent.
+    ".global syscall_exit_common",
+    "syscall_exit_common:",
     "pop r11",                  // user rflags
     "pop rcx",                  // user rip
-    "mov rsp, [rip + {user_rsp}]",
+    "pop rsp",                  // user rsp
     "sysretq",
     user_rsp = sym USER_RSP,
     kstack = sym SYSCALL_KSTACK_TOP,
 );
+
+// Common body of the AP entry stubs: the stub already switched to the task's
+// kernel stack and pushed the user rsp.
+core::arch::global_asm!(
+    ".global syscall_body_ap",
+    "syscall_body_ap:",
+    "push rcx",
+    "push r11",
+    "sub rsp, 8",
+    "mov r8, rax",
+    "mov r9, rdi",
+    "mov r10, rsi",
+    "mov r11, rdx",
+    "mov rdi, r8",
+    "mov rsi, r9",
+    "mov rdx, r10",
+    "mov rcx, r11",
+    "call ap_syscall_dispatch_c",
+    "add rsp, 8",
+    "jmp syscall_exit_common",
+);
+
+/// One SYSCALL entry stub per AP: per-CPU slot `n` of the scratch/stack arrays.
+macro_rules! ap_syscall_stubs {
+    ($($n:literal),*) => {
+        $(
+            core::arch::global_asm!(
+                concat!(".global ap_syscall_entry_", stringify!($n)),
+                concat!("ap_syscall_entry_", stringify!($n), ":"),
+                "mov [rip + {ursp} + {off}], rsp",
+                "mov rsp, [rip + {kstack} + {off}]",
+                "push qword ptr [rip + {ursp} + {off}]",
+                "jmp syscall_body_ap",
+                ursp = sym AP_USER_RSP,
+                kstack = sym AP_KSTACK,
+                off = const $n * 8,
+            );
+        )*
+        core::arch::global_asm!(
+            ".pushsection .rodata",
+            ".p2align 3",
+            ".global ap_syscall_table",
+            "ap_syscall_table:",
+            // Offsets relative to the table (the kernel is position-independent,
+            // so it cannot hold absolute addresses in data).
+            ".long 0", // the BSP uses `syscall_entry`
+            $( concat!(".long ap_syscall_entry_", stringify!($n), " - ap_syscall_table"), )*
+            ".popsection",
+        );
+    };
+}
+ap_syscall_stubs!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+
+extern "C" {
+    /// Entry stub offset (from the table) per CPU index (0 unused).
+    static ap_syscall_table: [i32; MAX_CPUS];
+}
 
 extern "C" {
     fn syscall_entry();

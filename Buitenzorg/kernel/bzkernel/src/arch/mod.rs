@@ -33,11 +33,31 @@ pub mod paging {
 
 /// CPU primitives every architecture provides.
 pub mod cpu {
+    /// Upper bound on the CPUs the kernel manages (per-CPU arrays).
+    pub const MAX_CPUS: usize = 16;
+
+    /// Invalidate stale translations on every CPU: this one, plus a TLB
+    /// shootdown (with acknowledgement) on every other online CPU. Use after
+    /// removing or downgrading a mapping that another core may have cached.
+    pub fn flush_tlb_everywhere() {
+        flush_tlb();
+        #[cfg(target_arch = "x86_64")]
+        super::x86::smp::tlb_shootdown();
+    }
+
     /// Stop the CPU until the next interrupt.
     #[inline]
     pub fn halt() {
         #[cfg(target_arch = "x86_64")]
         x86_64::instructions::hlt();
+    }
+
+    /// Enable interrupts and halt as one step (no interrupt can slip in
+    /// between and leave the CPU asleep with work pending).
+    #[inline]
+    pub fn enable_and_halt() {
+        #[cfg(target_arch = "x86_64")]
+        x86_64::instructions::interrupts::enable_and_hlt();
     }
 
     /// Enable maskable interrupts on this CPU.

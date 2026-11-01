@@ -60,7 +60,7 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
         "ps" => (ps_cmd(), Effect::None),
-        "cpu" | "cpus" => (crate::smp::report(), Effect::None),
+        "cpu" | "cpus" => (cpu_cmd(args.first().copied()), Effect::None),
         "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
@@ -116,7 +116,7 @@ fn help() -> Vec<String> {
      "  ws [1-4]          pindah virtual desktop",
      "  run <app> [arg..] jalankan app sebagai proses (xox, paint, taskmgr)",
      "  ps                daftar proses (task kernel + app)",
-     "  cpu               daftar CPU (timer LAPIC, IPI, TLB shootdown)",
+     "  cpu [on|off]      daftar CPU; on/off = proses ring-3 boleh jalan di AP",
      "  echo <teks> > f   tulis teks ke file (>> = tambahkan); /disk persisten",
      "  rm <file>         hapus file",
      "  df                ruang kosong tiap mount",
@@ -286,6 +286,20 @@ fn run_cmd(arg: Option<&str>, app_args: &[&str]) -> (Vec<String>, Effect) {
     match app::spawn_with_args(name, &app_args.join(" ")) {
         Ok(pid) => (vec![format!("app '{}' berjalan (pid {})", name, pid)], Effect::Redraw),
         Err(e) => (vec![format!("run: {}: {}", name, e)], Effect::None),
+    }
+}
+
+fn cpu_cmd(arg: Option<&str>) -> Vec<String> {
+    match arg {
+        Some("on") => {
+            crate::task::set_ap_scheduling(true);
+            vec![String::from("proses ring-3 kini dibagi ke semua CPU")]
+        }
+        Some("off") => {
+            crate::task::set_ap_scheduling(false);
+            vec![String::from("proses ring-3 kini hanya di CPU #0 (BSP)")]
+        }
+        _ => crate::smp::report(),
     }
 }
 

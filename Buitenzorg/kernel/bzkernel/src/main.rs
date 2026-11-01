@@ -516,6 +516,10 @@ fn multiproc_demo() {
     // Frames in use before any test process exists: every frame the processes
     // take (pages, page tables, directories) must come back when they end.
     let frames_start = memory::frames_in_use();
+    // This phase proves *timer preemption* on one CPU (its negative control
+    // needs the copies to share a core), so ring-3 stays on the BSP here; the
+    // SMP phase at the end runs the same program on every core.
+    let ap_sched_was = task::set_ap_scheduling(false);
     let spawn = |name: &str, entry: Option<u64>| app::spawn_image_at(name, &image, entry);
     let (Ok(a), Ok(b), Ok(c), Ok(f)) = (
         spawn("mproc-a", None),
@@ -618,12 +622,81 @@ fn multiproc_demo() {
         println!("[kernel] multiproc self-test FAILED");
     }
 
+    task::set_ap_scheduling(ap_sched_was);
+    smp_sched_demo(&image);
+
     // Process control from ring 3: PROCTEST.ELF spawns copies of itself with
     // arguments (by path and by app name) and waits for their exit codes. Its
     // own MILESTONE: PROCCTL OK line is the verdict.
     match app::run_named("proctest") {
         Ok(code) => println!("[kernel] proctest exited (code {})", code),
         Err(e) => println!("[kernel] proctest not run: {}", e),
+    }
+}
+
+/// SMP increment 3: ring-3 processes on every core. Starts one MPROC copy per
+/// application processor plus one (so an AP also has to time-slice), and
+/// requires that the APs really ran ring-3 code - several of them at the same
+/// moment when there are several - while every copy still ends with its exact
+/// SSE sum and isolated memory (each syscall migrates a task to the BSP and
+/// back, so the FPU state crosses CPUs constantly). A copy is killed while it
+/// may be running on an AP, and no frame may leak.
+fn smp_sched_demo(image: &[u8]) {
+    let aps = smp::aps_online();
+    if aps == 0 {
+        return;
+    }
+    let frames_start = memory::frames_in_use();
+    let (ticks0, offloads0, pre0) = (task::ap_user_ticks_total(), task::offloads(), task::user_preemptions());
+    let copies = (aps + 1).min(8);
+    let mut pids = alloc::vec::Vec::new();
+    for i in 0..copies {
+        if let Ok(pid) = app::spawn_image(&alloc::format!("smp-{}", i), image) {
+            pids.push(pid);
+        }
+    }
+    let victim = app::spawn_image("smp-kill", image).ok();
+    let start = interrupts::ticks();
+    let mut max_parallel = 0;
+    let mut killed = false;
+    loop {
+        let running = (1..=aps).filter(|&c| task::ap_running(c)).count();
+        max_parallel = max_parallel.max(running);
+        if let Some(v) = victim {
+            if !killed && process::cpu_ticks(v) >= 3 {
+                killed = process::kill(v);
+            }
+        }
+        let victim_alive = victim.map_or(false, |v| process::is_alive(v));
+        if pids.iter().all(|&p| !process::is_alive(p)) && !victim_alive {
+            break;
+        }
+        if interrupts::ticks() - start > 18 * 40 {
+            println!("[kernel] smp: timed out waiting for the processes");
+            break;
+        }
+        task::yield_now();
+    }
+    let exact = pids.len() == copies && pids.iter().all(|&p| process::exit_code(p) == Some(0));
+    let leaked = memory::frames_in_use() as i64 - frames_start as i64;
+    let ticks = task::ap_user_ticks_total() - ticks0;
+    let offloads = task::offloads() - offloads0;
+    let preempts = task::user_preemptions() - pre0;
+    let want_parallel = aps.min(copies);
+    println!(
+        "[kernel] smp: {} copies on {} AP(s): exact={} killed={} leaked={} frames; AP ring-3 ticks={} hand-offs={} preemptions={} max APs busy at once={}",
+        pids.len(), aps, exact, killed, leaked, ticks, offloads, preempts, max_parallel
+    );
+    for line in smp::report() {
+        println!("[smp] {}", line);
+    }
+    if exact && killed && leaked == 0 && offloads > 0 && ticks >= 20 && max_parallel >= want_parallel {
+        println!(
+            "[kernel] MILESTONE: SMP SCHED OK (ring-3 processes ran in parallel on {} AP(s) at once; {} AP ticks, {} hand-offs; kernel stays on the BSP)",
+            max_parallel, ticks, offloads
+        );
+    } else {
+        println!("[kernel] smp scheduling self-test FAILED");
     }
 }
 

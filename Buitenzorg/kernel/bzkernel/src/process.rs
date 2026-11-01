@@ -113,6 +113,19 @@ pub fn account_tick() {
     }
 }
 
+/// Charge one CPU tick to process `pid` (ring-3 time on an application
+/// processor; the BSP's time is charged by [`account_tick`]).
+pub fn account_space_tick(pid: u64) {
+    if pid == 0 {
+        return;
+    }
+    if let Some(mut apps) = APPS.try_lock() {
+        if let Some(a) = apps.iter_mut().find(|a| a.pid == pid) {
+            a.cpu_ticks += 1;
+        }
+    }
+}
+
 /// Fill `out` with process descriptors (kernel tasks + running programs).
 /// Returns the count written.
 pub fn list(out: &mut [ProcInfo]) -> usize {

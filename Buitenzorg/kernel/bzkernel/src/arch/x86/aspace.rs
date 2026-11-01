@@ -18,6 +18,14 @@
 //! When a space dies (`destroy`), every frame it owns goes back to the frame
 //! allocator: user pages, the page tables under its two directories, and the
 //! directories themselves.
+//!
+//! SMP (increment 3): the bootstrap CPU keeps using the bootloader's
+//! hierarchy (the *master*). Every application processor runs on its own root:
+//! a private PML4 whose entry 0 points to a private PDPT. Slots 0/1 of that
+//! PDPT hold the space the AP is running ([`install_on_ap`]); everything else
+//! is copied from the master on each install, so the kernel mappings are the
+//! same pointers on every CPU and anything the kernel maps later shows up on
+//! the APs at their next task switch.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -41,6 +49,88 @@ static PDPT_VIRT: AtomicU64 = AtomicU64::new(0);
 static BASE_PD: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 /// Id of the space currently installed in the PDPT.
 static CURRENT: AtomicU64 = AtomicU64::new(0);
+
+const MAX_CPUS: usize = crate::arch::cpu::MAX_CPUS;
+/// Kernel virtual address of the master PML4 (the BSP's).
+static MASTER_PML4: AtomicU64 = AtomicU64::new(0);
+/// Per-AP root: physical PML4, and kernel virtual addresses of PML4 + PDPT.
+static AP_ROOT_PHYS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+static AP_PML4: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+static AP_PDPT: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+/// Space installed on each AP (u64::MAX = none yet).
+static AP_SPACE: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(u64::MAX) }; MAX_CPUS];
+
+/// Build AP `cpu`'s private root (on the BSP, before the AP starts). Returns
+/// the physical address to load into its CR3.
+pub fn create_ap_root(cpu: usize) -> Option<u64> {
+    if !ready() || cpu == 0 || cpu >= MAX_CPUS {
+        return None;
+    }
+    let pml4_phys = alloc_zeroed_frame()?;
+    let pdpt_phys = alloc_zeroed_frame()?;
+    AP_ROOT_PHYS[cpu].store(pml4_phys, Ordering::SeqCst);
+    AP_PML4[cpu].store(memory::phys_to_virt(pml4_phys), Ordering::SeqCst);
+    AP_PDPT[cpu].store(memory::phys_to_virt(pdpt_phys), Ordering::SeqCst);
+    refresh_ap_root(cpu);
+    install_slots(cpu, kernel());
+    AP_SPACE[cpu].store(0, Ordering::SeqCst);
+    Some(pml4_phys)
+}
+
+/// Copy the master's kernel half into AP `cpu`'s root: PML4 entries 1..512,
+/// PML4[0]'s flags, and PDPT entries 2..512 (slots 0/1 are per space).
+fn refresh_ap_root(cpu: usize) {
+    let master = MASTER_PML4.load(Ordering::Relaxed) as *const u64;
+    let pml4 = AP_PML4[cpu].load(Ordering::Relaxed) as *mut u64;
+    let pdpt = AP_PDPT[cpu].load(Ordering::Relaxed) as *mut u64;
+    let master_pdpt = PDPT_VIRT.load(Ordering::Relaxed) as *const u64;
+    let pdpt_phys = pdpt as u64 - memory::phys_to_virt(0);
+    unsafe {
+        for i in 1..512 {
+            pml4.add(i).write_volatile(master.add(i).read_volatile());
+        }
+        let flags = master.read_volatile() & !PTE_ADDR_MASK;
+        pml4.write_volatile(pdpt_phys | flags);
+        for i in 2..512 {
+            pdpt.add(i).write_volatile(master_pdpt.add(i).read_volatile());
+        }
+    }
+}
+
+fn install_slots(cpu: usize, space: Space) {
+    let pdpt = AP_PDPT[cpu].load(Ordering::Relaxed) as *mut u64;
+    for slot in 0..2 {
+        let entry = if space.id == 0 {
+            BASE_PD[slot].load(Ordering::Relaxed)
+        } else {
+            space.pd[slot] | PTE_PRESENT | PTE_WRITABLE | PTE_USER
+        };
+        unsafe { pdpt.add(slot).write_volatile(entry) };
+    }
+}
+
+/// Install `space` on application processor `cpu` (called on that CPU, with
+/// interrupts disabled): refresh the kernel half from the master, set the two
+/// user slots, flush this CPU's TLB.
+pub fn install_on_ap(cpu: usize, space: Space) {
+    if AP_PML4[cpu].load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    refresh_ap_root(cpu);
+    install_slots(cpu, space);
+    AP_SPACE[cpu].store(space.id, Ordering::SeqCst);
+    crate::arch::cpu::flush_tlb();
+}
+
+/// AP `cpu`'s root page table (physical), for its CR3.
+pub fn ap_root(cpu: usize) -> u64 {
+    AP_ROOT_PHYS[cpu].load(Ordering::SeqCst)
+}
+
+/// True if some AP still has `space_id` installed.
+fn installed_on_an_ap(space_id: u64) -> bool {
+    AP_SPACE.iter().any(|s| s.load(Ordering::SeqCst) == space_id)
+}
 
 /// The kernel's base space.
 pub fn kernel() -> Space {
@@ -69,6 +159,7 @@ pub fn init() {
     use x86_64::registers::control::Cr3;
     let (l4, _) = Cr3::read();
     let l4_virt = memory::phys_to_virt(l4.start_address().as_u64()) as *mut u64;
+    MASTER_PML4.store(l4_virt as u64, Ordering::SeqCst);
     let pml4e = unsafe { core::ptr::read_volatile(l4_virt) };
     assert!(pml4e & PTE_PRESENT != 0, "aspace: PML4[0] not present");
     let pdpt = memory::phys_to_virt(pml4e & PTE_ADDR_MASK) as *mut u64;
@@ -144,6 +235,7 @@ pub fn destroy(space: Space) -> u64 {
         return 0;
     }
     assert!(CURRENT.load(Ordering::SeqCst) != space.id, "aspace: destroying the installed space");
+    assert!(!installed_on_an_ap(space.id), "aspace: destroying a space installed on an AP");
     let mut freed = 0;
     for slot in 0..2 {
         let pd_phys = space.pd[slot];
