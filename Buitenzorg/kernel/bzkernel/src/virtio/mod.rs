@@ -13,11 +13,14 @@
 
 pub mod blk;
 pub mod gpu;
+#[cfg(not(target_arch = "riscv64"))]
 pub mod input;
 pub mod mmio;
+#[cfg(not(target_arch = "riscv64"))]
 pub mod net;
 #[cfg(target_arch = "x86_64")]
 pub mod pci;
+#[cfg(not(target_arch = "riscv64"))]
 pub mod snd;
 
 /// Every virtio device of type `kind` the platform exposes: virtio-PCI on

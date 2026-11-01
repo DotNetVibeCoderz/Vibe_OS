@@ -182,7 +182,7 @@ extern "C" fn bz_trap(f: &mut TrapFrame) {
                 }
             }
             IRQ_S_SOFT => unsafe { asm!("csrci sip, 2", options(nomem, nostack)) },
-            IRQ_S_EXT => {}
+            IRQ_S_EXT => super::plic::handle_external(),
             other => crate::println!("[riscv] unexpected interrupt {}", other),
         }
         return;

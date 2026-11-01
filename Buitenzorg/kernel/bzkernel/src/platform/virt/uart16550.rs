@@ -8,8 +8,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 const THR: u64 = 0;
+const IER: u64 = 1;
+const IIR: u64 = 2;
 const LSR: u64 = 5;
 const LSR_THRE: u8 = 1 << 5;
+const IER_THRE: u8 = 1 << 1;
 
 static BASE: AtomicU64 = AtomicU64::new(0);
 static LOCK: Mutex<()> = Mutex::new(());
@@ -21,6 +24,28 @@ pub fn init() {}
 /// already programmed its line settings).
 pub fn set_base(va: u64) {
     BASE.store(va, Ordering::SeqCst);
+}
+
+/// Ask for a "transmitter holding register empty" interrupt: the UART
+/// raises its line (through the PLIC) as soon as THR is empty -- a real
+/// device interrupt the PLIC self-test can wait for. [`on_irq`] turns it off.
+pub fn request_tx_irq() {
+    let base = BASE.load(Ordering::Relaxed);
+    if base != 0 {
+        unsafe { ((base + IER) as *mut u8).write_volatile(IER_THRE) };
+    }
+}
+
+/// The UART's PLIC handler: read IIR (acknowledges a THRE interrupt) and
+/// mask the transmit interrupt again.
+pub fn on_irq() {
+    let base = BASE.load(Ordering::Relaxed);
+    if base != 0 {
+        unsafe {
+            let _ = ((base + IIR) as *const u8).read_volatile();
+            ((base + IER) as *mut u8).write_volatile(0);
+        }
+    }
 }
 
 fn put(base: u64, b: u8) {

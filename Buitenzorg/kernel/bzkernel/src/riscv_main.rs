@@ -10,15 +10,20 @@
 // own address space calling the kernel with `ECALL`, faults contained.
 // Increment 3: ELF programs (Rust, `userland/riscv`; Limine boot modules) run
 // as processes of the shared scheduler (`task.rs`, `process.rs`) --
-// preemptive, with ring-3 threads and futexes. The rest of the shared kernel joins
+// preemptive, with ring-3 threads and futexes. Increment 4: the PLIC
+// (device interrupts), the Goldfish RTC, and virtio-mmio -- /disk on
+// virtio-blk through the shared FAT + VFS code (programs now load from it)
+// and virtio-gpu. The rest of the shared kernel joins
 // as subsystems gain an `arch/riscv64` backend -- the path the ARM64 port
 // (M3) took.
 
 mod allocator;
 mod arch;
 mod boot;
+mod driver;
 mod dtb;
 mod elf;
+mod fat;
 mod framebuffer;
 mod limine;
 mod logo;
@@ -26,8 +31,11 @@ mod memory;
 mod platform;
 mod process;
 mod task;
+mod vfs;
+mod virtio;
 
 pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode};
+pub(crate) use platform::virt::goldfish_rtc as rtc;
 pub(crate) use platform::virt::uart16550 as serial;
 
 /// Set once the interactive desktop owns the screen (as on the PC).
@@ -40,14 +48,6 @@ mod interactive {
     }
     pub fn is_active() -> bool {
         ACTIVE.load(Ordering::SeqCst)
-    }
-}
-
-/// The virtio drivers join in a later increment (virtio-mmio is shared with
-/// ARM64); until then frames go to the loader's framebuffer only.
-mod virtio {
-    pub mod gpu {
-        pub fn present(_back: &[u32]) {}
     }
 }
 
@@ -131,6 +131,23 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
     dtb::self_test();
 
+    // Platform devices from the DTB: the Goldfish clock, the virtio-mmio
+    // slots, the PLIC.
+    if let Some(f) = fdt.as_ref() {
+        if let Some(i) = f.compatible("google,goldfish-rtc").next() {
+            if let Some(va) = f.reg(i).first().and_then(|r| memory::map_mmio(r.0, 0x1000)) {
+                rtc::init(va);
+            }
+        }
+    }
+    if let Some(p) = platform.as_ref() {
+        virtio::mmio::set_slots(&p.virtio_mmio);
+    }
+    let hart = info.bsp_hartid.unwrap_or(fdt.as_ref().map_or(0, |f| f.boot_cpu as u64));
+    let plic_up = fdt.as_ref().map_or(false, |f| plic_init(f, hart));
+    rtc_self_test();
+    storage_self_test();
+
     // The periodic tick: the SBI timer at 100 Hz.
     let has_time = sbi::probe(sbi::EXT_TIME);
     timer::start(100);
@@ -155,12 +172,16 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         println!("[kernel] MILESTONE: RISCV TIMER OK (stvec trap vector; SBI set_timer at 100 Hz on the timebase from the DTB)");
     }
 
+    if plic_up {
+        plic_self_test(fdt.as_ref());
+    }
     umode_self_test();
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
     run_boot_programs(info);
 
+    gpu_self_test(info);
     if timer_ok && uart.is_some() && info.loader == "limine" {
         println!(
             "[kernel] MILESTONE: RISCV BOOT OK (Limine -> S-mode kernel; live DTB -> {} console + SBI timer; {}; framebuffer {})",
@@ -169,7 +190,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG RISCV READY -- increments 1-3 (boot, traps, memory, address spaces, timer, context switch, U-mode + ECALL, ELF programs, scheduler + processes + threads); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG RISCV READY -- increments 1-4 (boot, traps, memory, address spaces, timer, context switch, U-mode + ECALL, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU, RTC); the rest of the kernel follows");
     loop {
         cpu::enable_and_halt();
     }
@@ -620,7 +641,7 @@ mod app {
 /// Run one program as a process and wait for it: (exit code, its output).
 fn run_program(name: &str, image: &[u8]) -> Option<(u64, alloc::string::String)> {
     USER_OUTPUT.lock().clear();
-    println!("[riscv] --- program '{}' ({} bytes, ELF from a Limine module) ---", name, image.len());
+    println!("[riscv] --- program '{}' ({} bytes) ---", name, image.len());
     match app::spawn_image(name, image) {
         Ok(pid) => {
             let code = app::wait(pid);
@@ -647,24 +668,33 @@ fn run_program(name: &str, image: &[u8]) -> Option<(u64, alloc::string::String)>
 /// - `thread` (ring-3 threads + join) and `sync` (futex-backed mutex);
 /// - every frame the processes used comes back.
 fn run_boot_programs(info: &boot::BootInfo) {
-    let find = |name: &str| info.modules().iter().find(|m| m.name() == name).map(|m| m.bytes());
+    // From /disk (virtio-blk) when it is mounted, else from the Limine modules.
+    let find = |name: &str| -> Option<alloc::vec::Vec<u8>> {
+        let path = alloc::format!("/disk/{}.ELF", name.to_uppercase());
+        vfs::read(&path).ok().or_else(|| info.modules().iter().find(|m| m.name() == name).map(|m| m.bytes().to_vec()))
+    };
+    let from_disk = vfs::read("/disk/HELLO.ELF").is_ok();
     if find("hello").is_none() {
-        println!("[riscv] no RISC-V user programs among the boot modules");
+        println!("[riscv] no RISC-V user programs on /disk or among the boot modules");
         return;
     }
+    println!("[riscv] user programs from {}", if from_disk { "/disk (virtio-blk)" } else { "Limine boot modules" });
     let frames0 = memory::frames_in_use();
     let mut all_ok = true;
 
     if let Some(image) = find("hello") {
-        let r = run_program("hello", image);
+        let r = run_program("hello", &image);
         let ok = matches!(&r, Some((0, out)) if out.contains("Hello from Rust on RISC-V"));
         all_ok &= ok;
         if ok {
-            println!("[kernel] MILESTONE: RISCV ELF OK (a RISC-V ELF loaded by the generic elf.rs, run in U-mode as a process of the shared scheduler)");
+            println!(
+                "[kernel] MILESTONE: RISCV ELF OK (a RISC-V ELF {}, loaded by the generic elf.rs, run in U-mode as a process of the shared scheduler)",
+                if from_disk { "read from /disk" } else { "from a Limine module" }
+            );
         }
     }
     if let Some(image) = find("mem") {
-        let ok = matches!(run_program("mem", image), Some((0, _)));
+        let ok = matches!(run_program("mem", &image), Some((0, _)));
         all_ok &= ok;
         if ok {
             println!("[kernel] MILESTONE: RISCV USERMEM OK (MMAP/MPROTECT/MUNMAP from U-mode: rw region, read-only, unmap, 64 MiB reserve + commit on demand)");
@@ -674,7 +704,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         let p0 = task::user_preemptions();
         let t0 = arch::cpu::timestamp();
         let pids: alloc::vec::Vec<u64> =
-            ["mproc-a", "mproc-b"].iter().filter_map(|n| app::spawn_image(n, image).ok()).collect();
+            ["mproc-a", "mproc-b"].iter().filter_map(|n| app::spawn_image(n, &image).ok()).collect();
         let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| app::wait(p)).collect();
         let preempts = task::user_preemptions() - p0;
         let ms = (arch::cpu::timestamp() - t0) * 1000 / arch::riscv64::cpu::counter_hz().max(1);
@@ -690,7 +720,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         ("sync", "RISCV SYNC OK (futex-backed mutex under contention: FUTEX_WAIT blocks, FUTEX_WAKE resumes, mutual exclusion held)"),
     ] {
         let Some(image) = find(name) else { continue };
-        let ok = matches!(run_program(name, image), Some((0, _)));
+        let ok = matches!(run_program(name, &image), Some((0, _)));
         all_ok &= ok;
         if ok {
             println!("[kernel] MILESTONE: {}", milestone);
@@ -701,6 +731,142 @@ fn run_boot_programs(info: &boot::BootInfo) {
     if all_ok && leaked == 0 {
         println!("[kernel] MILESTONE: RISCV PROCESSES OK (every program exited 0, every frame returned)");
     }
+}
+
+// ---- Platform devices: interrupts, clock, storage, display -----------------
+
+/// UART interrupt source on the PLIC (from the DTB), for the self-test.
+static UART_IRQ: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The PLIC context that delivers S-mode external interrupts to `hart`: the
+/// PLIC's `interrupts-extended` lists (cpu-intc phandle, cause) pairs, one
+/// per context, in context order; ours names the hart's interrupt
+/// controller with cause 9 (supervisor external interrupt).
+fn plic_context(f: &dtb::Fdt, plic: usize, hart: u64) -> Option<usize> {
+    let intc_phandle = (0..f.nodes.len()).find_map(|i| {
+        let n = &f.nodes[i];
+        if !n.is_compatible("riscv,cpu-intc") {
+            return None;
+        }
+        let cpu = n.parent?;
+        (f.reg(cpu).first()?.0 == hart).then(|| n.u32_prop("phandle"))?
+    })?;
+    let ext = f.nodes[plic].prop("interrupts-extended")?;
+    ext.chunks_exact(8).position(|pair| {
+        let ph = u32::from_be_bytes([pair[0], pair[1], pair[2], pair[3]]);
+        let cause = u32::from_be_bytes([pair[4], pair[5], pair[6], pair[7]]);
+        ph == intc_phandle && cause == 9
+    })
+}
+
+/// Map the PLIC from the DTB and bind the boot hart to its S-mode context.
+fn plic_init(f: &dtb::Fdt, hart: u64) -> bool {
+    use arch::riscv64::{cpu, plic};
+    let Some(node) = f.compatible("sifive,plic-1.0.0").next().or_else(|| f.compatible("riscv,plic0").next()) else {
+        println!("[riscv] no PLIC in the Device Tree");
+        return false;
+    };
+    let Some(&(pa, _)) = f.reg(node).first() else { return false };
+    let Some(ctx) = plic_context(f, node, hart) else {
+        println!("[riscv] PLIC: no S-mode context for hart {}", hart);
+        return false;
+    };
+    let Some(va) = memory::map_mmio(pa, plic::WINDOW) else { return false };
+    plic::init(va, 0, ctx);
+    cpu::sie_set(cpu::SIE_SEIE);
+    if let Some(irq) = f.stdout().and_then(|i| f.nodes[i].u32_prop("interrupts")) {
+        UART_IRQ.store(irq as usize, core::sync::atomic::Ordering::SeqCst);
+    }
+    println!("[riscv] PLIC at {:#x}: hart {} -> S-mode context {}; UART on source {}", pa, hart, ctx, UART_IRQ.load(core::sync::atomic::Ordering::SeqCst));
+    true
+}
+
+/// A real device interrupt through the PLIC: the UART is asked for a
+/// "transmit holding register empty" interrupt, which it raises at once; the
+/// PLIC must deliver it as a supervisor external interrupt, the handler
+/// claims + completes it.
+fn plic_self_test(f: Option<&dtb::Fdt>) {
+    use arch::riscv64::plic;
+    let irq = UART_IRQ.load(core::sync::atomic::Ordering::SeqCst);
+    if irq == 0 || f.is_none() {
+        return;
+    }
+    let before = plic::count(irq);
+    plic::enable(irq, 1, 0, serial::on_irq);
+    serial::request_tx_irq();
+    let t0 = arch::cpu::timestamp();
+    while plic::count(irq) == before && arch::cpu::timestamp() - t0 < arch::riscv64::cpu::counter_hz() / 2 {
+        arch::cpu::halt();
+    }
+    let got = plic::count(irq) - before;
+    plic::disable(irq, 0);
+    println!("[riscv] PLIC: UART (source {}) transmit interrupt delivered {} time(s)", irq, got);
+    if got >= 1 {
+        println!("[kernel] MILESTONE: RISCV PLIC OK (device interrupt -> PLIC -> S-mode external interrupt; claimed, handled, completed)");
+    }
+}
+
+/// The Goldfish clock answers through the same `rtc::read` the FAT code
+/// stamps files with.
+fn rtc_self_test() {
+    let (y, mo, d, h, mi, s) = rtc::read();
+    println!("[riscv] Goldfish RTC: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC (unix {})", y, mo, d, h, mi, s, rtc::unix_time());
+    if (2024..2200).contains(&y) && (1..=12).contains(&mo) && (1..=31).contains(&d) {
+        println!("[kernel] MILESTONE: RISCV RTC OK (google,goldfish-rtc from the DTB, nanoseconds since the epoch -> calendar)");
+    }
+}
+
+/// `/disk` on RISC-V: the virtio-blk driver (shared with x86 and ARM64) over
+/// the virtio-mmio transport, mounted by the shared FAT + VFS code. Lists
+/// the root, reads BATANG.TXT, writes a file and reads it back.
+fn storage_self_test() {
+    let n = virtio::init_block();
+    if n == 0 {
+        println!("[riscv] storage: no virtio-blk device (QEMU: -device virtio-blk-device + -global virtio-mmio.force-legacy=false)");
+        return;
+    }
+    let Some(dev) = driver::take_boot_block_device() else { return };
+    if let Err(e) = vfs::mount("disk", dev, false) {
+        println!("[riscv] storage: mount /disk failed: {}", e);
+        return;
+    }
+    let names = vfs::list("/disk").unwrap_or_default();
+    let batang = vfs::read("/disk/BATANG.TXT").ok().and_then(|b| alloc::string::String::from_utf8(b).ok());
+    let (y, mo, d, h, mi, s) = rtc::read();
+    let stamp = alloc::format!("BZRISCV written {:04}-{:02}-{:02} {:02}:{:02}:{:02}\n", y, mo, d, h, mi, s);
+    let wrote = vfs::write("/disk/RISCV.TXT", stamp.as_bytes()).is_ok();
+    let back = vfs::read("/disk/RISCV.TXT").ok();
+    println!(
+        "[riscv] /disk: {} entries, BATANG.TXT {}, RISCV.TXT = {}",
+        names.len(),
+        if batang.is_some() { "read" } else { "missing" },
+        stamp.trim_end()
+    );
+    if names.len() > 5 && batang.as_deref().map_or(false, |t| t.contains("batang")) && wrote && back.as_deref() == Some(stamp.as_bytes()) {
+        println!("[kernel] MILESTONE: RISCV DISK OK (virtio-blk over virtio-mmio, shared FAT + VFS: /disk listed, read, written + read back)");
+    }
+}
+
+/// virtio-gpu over virtio-mmio: copy the framebuffer console's pixels into a
+/// back buffer and present it -- the driver prints `VIRTIO GPU OK` on its
+/// first frame (the RISC-V desktop will present through it).
+fn gpu_self_test(info: &boot::BootInfo) {
+    let Some(fb) = info.framebuffer else { return };
+    if fb.bytes_per_pixel != 4 || virtio::find(virtio::device::GPU).is_empty() {
+        return;
+    }
+    virtio::gpu::init(fb.width, fb.height);
+    let mut back = alloc::vec![0u32; fb.width * fb.height];
+    for y in 0..fb.height {
+        for x in 0..fb.width {
+            let px = unsafe { ((fb.addr as *const u32).add(y * fb.stride + x)).read_volatile() };
+            back[y * fb.width + x] = match fb.format {
+                boot::PixelFormat::Rgb => ((px & 0xFF) << 16) | (px & 0xFF00) | ((px >> 16) & 0xFF),
+                _ => px & 0x00FF_FFFF,
+            };
+        }
+    }
+    virtio::gpu::present(&back);
 }
 
 #[panic_handler]

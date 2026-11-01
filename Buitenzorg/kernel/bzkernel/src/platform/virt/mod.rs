@@ -3,6 +3,9 @@
 
 #[cfg(target_arch = "aarch64")]
 pub mod audio;
+pub mod calendar;
+#[cfg(target_arch = "riscv64")]
+pub mod goldfish_rtc;
 #[cfg(target_arch = "aarch64")]
 pub mod mouse;
 #[cfg(target_arch = "aarch64")]

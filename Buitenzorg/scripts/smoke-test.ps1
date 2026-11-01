@@ -289,15 +289,23 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
                '-drive', "`"if=pflash,format=raw,unit=1,file=$rvVars`"",
                '-global', 'virtio-mmio.force-legacy=false',
                '-drive', "`"id=d0,format=raw,file=$rvImage,if=none`"", '-device', 'virtio-blk-device,drive=d0',
-               '-device', 'ramfb', '-display', 'none', '-serial', "file:$log", '-no-reboot')
+               '-device', 'virtio-gpu-device', '-device', 'ramfb', '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemuRv -ArgumentList $qargs -PassThru
     foreach ($i in 1..90) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "RISCV READY" -Quiet)) { break }
     }
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
-    Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes"
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
+    Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU"
+    # The file the kernel wrote to /disk must be inside the image file.
+    # (QEMU must be gone first: it holds the image open.)
+    $p.WaitForExit(15000) | Out-Null
+    $rvStamp = Select-String -Path $log -Pattern 'RISCV\.TXT = (BZRISCV[^\r\n]*)' | Select-Object -First 1
+    if (-not $rvStamp) { Write-Error "SMOKE TEST FAILED: RISC-V boot did not report RISCV.TXT"; exit 1 }
+    $needle = $rvStamp.Matches[0].Groups[1].Value
+    if (-not [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($rvImage)).Contains($needle)) { Write-Error "SMOKE TEST FAILED: '$needle' not found in $rvImage"; exit 1 }
+    Write-Host "smoke [riscv64]: /disk write persisted to the image ($needle)"
 } else {
     Write-Host "smoke [riscv64]: skipped (needs qemu-system-riscv64, edk2-riscv-code.fd/-vars.fd and dist\buitenzorg-riscv64.img)"
 }

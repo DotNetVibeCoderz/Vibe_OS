@@ -1,4 +1,4 @@
-//! RISC-V (RV64) implementation of the HAL — multi-arch M4 (increments 1-3): the
+//! RISC-V (RV64) implementation of the HAL — multi-arch M4 (increments 1-4): the
 //! kernel runs in S-mode on QEMU `virt` under OpenSBI, loaded by Limine
 //! (through edk2).
 //!
@@ -7,6 +7,7 @@
 //!   `sfence.vma`, the CPU index (kept in `tp` while in the kernel);
 //! - `trap`: the S-mode trap vector (`stvec`) and its Rust dispatcher;
 //! - `timer`: the SBI timer as the periodic tick;
+//! - `plic`: the platform interrupt controller (device interrupts);
 //! - `paging`: the `arch::paging` HAL over Sv48 (Sv39/Sv57 tolerated);
 //! - `aspace`: per-process address spaces (one root per process, the kernel
 //!   half shared by copying its top-level entries);
@@ -21,6 +22,7 @@ pub mod cpu;
 pub mod gdt;
 pub mod interrupts;
 pub mod paging;
+pub mod plic;
 pub mod sbi;
 pub mod smp;
 pub mod timer;

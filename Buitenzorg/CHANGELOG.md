@@ -35,6 +35,11 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M4 (increment 4): disk, clock, display and device interrupts on
+  RISC-V.** The RISC-V kernel now mounts `/disk` from a virtio disk (read and
+  write, through the same FAT code as the PC) and loads its programs from it,
+  reads the date and time from the board's clock, shows its screen through
+  virtio-gpu, and receives device interrupts through the PLIC.
 - **Multi-arch M4 (increment 3): programs and processes on RISC-V.** RISC-V
   user programs (written in Rust for now -- the C# compiler has no RISC-V
   target yet) run as real processes under the same scheduler as on the PC and
