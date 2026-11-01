@@ -4,6 +4,7 @@
 //! detection (`vmx`).
 
 pub mod aspace;
+pub mod boot;
 pub mod context;
 pub mod gdt;
 pub mod interrupts;

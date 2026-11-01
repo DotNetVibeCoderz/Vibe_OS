@@ -13,7 +13,9 @@
 # the list can only shrink.
 set -uo pipefail
 src="$(cd "$(dirname "$0")/.." && pwd)/kernel/bzkernel/src"
-pattern='x86_64::|asm!|core::arch::x86_64|\bPort(::|<)|\bMsr\b'
+# bootloader_api: the boot protocol is arch glue as well (M1) -- generic code
+# sees only crate::boot::BootInfo.
+pattern='x86_64::|asm!|core::arch::x86_64|\bPort(::|<)|\bMsr\b|bootloader_api'
 
 # Empty since M0 increment 3 (paging HAL): every generic file is clean. Add an
 # entry only as a temporary, documented exception.

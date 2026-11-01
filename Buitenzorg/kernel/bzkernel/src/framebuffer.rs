@@ -1,6 +1,6 @@
 //! Text console rendered into the boot framebuffer (v0.1: "gambar piksel").
 
-use bootloader_api::info::{FrameBuffer, PixelFormat};
+use crate::boot::{Framebuffer as FbInfo, PixelFormat};
 use core::fmt;
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
@@ -16,6 +16,27 @@ const BORDER: usize = 8;
 const FG: (u8, u8, u8) = (0xB8, 0xE9, 0x94); // leaf green
 const BG: (u8, u8, u8) = (0x0B, 0x12, 0x0B); // deep soil
 
+/// The boot framebuffer: its description plus the mapped pixel memory.
+pub struct FrameBuffer {
+    info: FbInfo,
+    buf: &'static mut [u8],
+}
+
+impl FrameBuffer {
+    /// # Safety
+    /// `info` must describe a mapping that stays valid and is used only here.
+    pub unsafe fn new(info: FbInfo) -> Self {
+        let buf = unsafe { core::slice::from_raw_parts_mut(info.addr as *mut u8, info.len) };
+        FrameBuffer { info, buf }
+    }
+    pub fn info(&self) -> FbInfo {
+        self.info
+    }
+    pub fn buffer_mut(&mut self) -> &mut [u8] {
+        self.buf
+    }
+}
+
 pub struct Console {
     fb: FrameBuffer,
     x: usize,
@@ -30,7 +51,7 @@ impl Console {
         let bpp = info.bytes_per_pixel;
         // Clear to background color.
         for px in fb.buffer_mut().chunks_exact_mut(bpp) {
-            write_pixel_bytes(px, info.pixel_format, bg);
+            write_pixel_bytes(px, info.format, bg);
         }
         Self {
             fb,
@@ -40,7 +61,7 @@ impl Console {
         }
     }
 
-    pub fn info(&self) -> bootloader_api::info::FrameBufferInfo {
+    pub fn info(&self) -> FbInfo {
         self.fb.info()
     }
 
@@ -68,7 +89,7 @@ impl Console {
         let len = buf.len();
         let tail = &mut buf[len - step..];
         for px in tail.chunks_exact_mut(info.bytes_per_pixel) {
-            write_pixel_bytes(px, info.pixel_format, BG);
+            write_pixel_bytes(px, info.format, BG);
         }
         self.y -= FONT_HEIGHT.val() + LINE_SPACING;
     }
@@ -103,7 +124,7 @@ impl Console {
                 let color = blend(*intensity);
                 let offset = (y * info.stride + x) * info.bytes_per_pixel;
                 let px = &mut buf[offset..offset + info.bytes_per_pixel];
-                write_pixel_bytes(px, info.pixel_format, color);
+                write_pixel_bytes(px, info.format, color);
             }
         }
     }
@@ -128,7 +149,7 @@ fn write_pixel_bytes(px: &mut [u8], format: PixelFormat, (r, g, b): (u8, u8, u8)
             px[1] = g;
             px[2] = r;
         }
-        PixelFormat::U8 => {
+        PixelFormat::Gray => {
             px[0] = ((r as u16 + g as u16 + b as u16) / 3) as u8;
         }
         _ => {
@@ -177,7 +198,7 @@ impl Console {
                     let px_color = if edge { BG } else { color };
                     let offset = (y * info.stride + x) * info.bytes_per_pixel;
                     let px = &mut buf[offset..offset + info.bytes_per_pixel];
-                    write_pixel_bytes(px, info.pixel_format, px_color);
+                    write_pixel_bytes(px, info.format, px_color);
                 }
             }
         }
@@ -209,7 +230,7 @@ impl Console {
         let info = self.fb.info();
         let bpp = info.bytes_per_pixel;
         let (w, h) = (info.width, info.height);
-        let format = info.pixel_format;
+        let format = info.format;
         let buffer = self.fb.buffer_mut();
         for y in 0..h {
             for x in 0..w {
@@ -228,7 +249,10 @@ impl Console {
 
 pub static CONSOLE: Once<Mutex<Console>> = Once::new();
 
-pub fn init(fb: FrameBuffer) {
+pub fn init(info: FbInfo) {
+    // SAFETY: the loader mapped the framebuffer for the kernel; only the
+    // console touches it.
+    let fb = unsafe { FrameBuffer::new(info) };
     CONSOLE.call_once(|| Mutex::new(Console::new(fb)));
 }
 

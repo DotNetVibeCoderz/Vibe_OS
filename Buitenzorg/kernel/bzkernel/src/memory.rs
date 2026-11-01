@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
+use crate::boot::MemRegion;
 
 use crate::arch::paging::{self, Flags, PageMap};
 
@@ -368,7 +368,7 @@ pub fn alloc_dma_frame() -> Option<(u64, *mut u8)> {
 /// boot went on. The architecture's paging code adapts it to its own
 /// allocator interface (`arch/x86/paging.rs`).
 pub struct BootInfoFrameAllocator {
-    regions: &'static MemoryRegions,
+    regions: &'static [MemRegion],
     region: usize,
     addr: u64,
     /// Intrusive free list of returned frames: each free frame stores the
@@ -388,7 +388,7 @@ const FREE_END: u64 = u64::MAX;
 impl BootInfoFrameAllocator {
     /// # Safety
     /// The memory map must be valid and its `Usable` regions really unused.
-    pub unsafe fn init(regions: &'static MemoryRegions) -> Self {
+    pub unsafe fn init(regions: &'static [MemRegion]) -> Self {
         Self { regions, region: 0, addr: 0, free_head: FREE_END, allocated: 0, freed: 0 }
     }
 
@@ -396,7 +396,7 @@ impl BootInfoFrameAllocator {
     pub fn usable_frame_count(&self) -> usize {
         self.regions
             .iter()
-            .filter(|r| r.kind == MemoryRegionKind::Usable)
+            .filter(|r| r.usable)
             .map(|r| ((r.end - r.start) / 4096) as usize)
             .sum()
     }
@@ -415,7 +415,7 @@ impl BootInfoFrameAllocator {
         // Then fresh frames, in memory-map order.
         loop {
             let r = self.regions.get(self.region)?;
-            if r.kind == MemoryRegionKind::Usable {
+            if r.usable {
                 // Never hand out memory below 1 MiB: it holds the SMP
                 // trampoline (0x8000, smp.rs) and must stay free for it.
                 let floor = r.start.max(LOW_MEMORY_END);
@@ -450,7 +450,7 @@ pub fn is_usable_ram(phys: u64) -> bool {
         ctx.frames
             .regions
             .iter()
-            .any(|r| r.kind == MemoryRegionKind::Usable && r.start <= phys && phys + 4096 <= r.end)
+            .any(|r| r.usable && r.start <= phys && phys + 4096 <= r.end)
     })
 }
 

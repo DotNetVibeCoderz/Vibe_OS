@@ -15,6 +15,8 @@ mod aio;
 mod allocator;
 mod app;
 mod arch;
+mod boot;
+mod dtb;
 mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
@@ -66,20 +68,11 @@ mod vmm;
 mod wallpaper;
 mod wm;
 
-use bootloader_api::config::{BootloaderConfig, Mapping};
-use bootloader_api::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 
-pub static BOOTLOADER_CONFIG: BootloaderConfig = {
-    let mut config = BootloaderConfig::new_default();
-    config.mappings.physical_memory = Some(Mapping::Dynamic);
-    // The boot task runs the milestone demos (compositor renders, terminal +
-    // shell + VFS call chains) on this stack; the default is too small.
-    config.kernel_stack_size = 512 * 1024;
-    config
-};
-
-entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
+// The entry point is the boot-protocol glue (`arch/x86/boot.rs` for the
+// `bootloader` crate); it converts the loader's hand-off into
+// `boot::BootInfo` and calls `kernel_main`.
 
 /// Print to serial (COM1) and the framebuffer console.
 #[macro_export]
@@ -97,14 +90,9 @@ macro_rules! println {
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }
 
-fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     serial::init();
-    if let Some(fb) = core::mem::replace(
-        &mut boot_info.framebuffer,
-        bootloader_api::info::Optional::None,
-    )
-    .into_option()
-    {
+    if let Some(fb) = boot_info.framebuffer {
         framebuffer::init(fb);
     }
 
@@ -119,13 +107,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     usermode::init();
     println!("[kernel] GDT/IDT loaded, PIC remapped, interrupts enabled, SYSCALL armed, SSE on");
 
-    let phys_offset = boot_info
-        .physical_memory_offset
-        .into_option()
-        .expect("bootloader must map physical memory");
-    let mapper = unsafe { memory::init(phys_offset) };
-    let frame_allocator =
-        unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_regions) };
+    let mapper = unsafe { memory::init(boot_info.phys_offset) };
+    let frame_allocator = unsafe { memory::BootInfoFrameAllocator::init(boot_info.regions()) };
     let usable_mib = frame_allocator.usable_frame_count() * 4096 / (1024 * 1024);
     // The global paging context: the heap, the LAPIC page, ring-3 programs and
     // the app launcher all map memory through it.
@@ -133,11 +116,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     memory::set_total_usable_mib(usable_mib as u64);
     println!("[kernel] physical memory: {} MiB usable", usable_mib);
 
-    // Power management: parse ACPI from the bootloader-provided RSDP.
-    let rsdp = boot_info.rsdp_addr.into_option().unwrap_or(0);
-    power::init(rsdp);
+    // Power management: parse ACPI from the loader-provided RSDP.
+    power::init(boot_info.firmware.rsdp.unwrap_or(0));
 
     allocator::init().expect("heap init failed");
+    println!("[boot] {}", boot::describe(boot_info));
+    // Platform discovery without ACPI (multi-arch M1): the Device Tree parser.
+    dtb::self_test();
     // Route the legacy PIC's IRQs through the Local APIC (virtual wire). BIOS
     // firmware leaves it like this; UEFI firmware does not, and without it no
     // timer interrupt ever arrives on a UEFI boot.

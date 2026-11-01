@@ -861,11 +861,11 @@ fn sys_fb_info(out_ptr: u64) -> u64 {
         height: info.height as u64,
         stride: info.stride as u64,
         bytes_per_pixel: info.bytes_per_pixel as u64,
-        pixel_format: match info.pixel_format {
-            bootloader_api::info::PixelFormat::Rgb => pixel_format::RGB,
-            bootloader_api::info::PixelFormat::Bgr => pixel_format::BGR,
-            bootloader_api::info::PixelFormat::U8 => pixel_format::GRAY,
-            _ => pixel_format::UNKNOWN,
+        pixel_format: match info.format {
+            crate::boot::PixelFormat::Rgb => pixel_format::RGB,
+            crate::boot::PixelFormat::Bgr => pixel_format::BGR,
+            crate::boot::PixelFormat::Gray => pixel_format::GRAY,
+            crate::boot::PixelFormat::Unknown => pixel_format::UNKNOWN,
         },
     };
     unsafe { core::ptr::write(out_ptr as *mut FramebufferInfo, fb) };

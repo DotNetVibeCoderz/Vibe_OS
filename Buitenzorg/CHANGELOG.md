@@ -35,6 +35,14 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M1 (increment 1): boot-protocol HAL + Device Tree.** The
+  `bootloader` crate is confined to `arch/x86/boot.rs`, which converts its
+  hand-off into a neutral `boot::BootInfo` (memory map, framebuffer,
+  ACPI RSDP / DTB, physical-memory offset); the boundary check forbids
+  `bootloader_api` elsewhere. New `dtb.rs` parses flattened Device Trees and
+  discovers RAM, CPUs, UART, interrupt controller, timer, virtio-mmio slots and
+  PSCI — verified against real QEMU `virt` trees for aarch64 and riscv64, with
+  malformed blobs rejected (`MILESTONE: DTB OK`).
 - **Multi-arch M0 (increment 3): paging HAL — M0 complete.** `arch::paging`
   maps/unmaps/protects pages with neutral `Flags { write, user, exec }` and
   `u64` frames, and answers the ring-3 access check used by syscall pointer

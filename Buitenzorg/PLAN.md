@@ -880,7 +880,7 @@ mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
    I/O pindah ke `platform/pc`. Gerbang: kernel x86-64 identik perilakunya
    (smoke 4-media + UEFI lolos), dan **CI cek bahwa modul generik tak lagi
    memakai `x86_64::`/`asm!`/port I/O**.
-2. **M1 — Boot & penemuan platform multi-arch.** Abstraksi `BootInfo` (peta
+2. **M1 — Boot & penemuan platform multi-arch.** *(increment 1 ✓ 2026-11-01: `boot::BootInfo` + `dtb.rs`, `DTB OK`; Limine menyusul)* Abstraksi `BootInfo` (peta
    memori, framebuffer, RSDP/DTB, offset peta fisik); dukungan Limine; parser
    Device Tree kecil di samping ACPI.
 3. **M2 — Driver virtio** (blk, input, gpu, net, sound) — juga mempercepat x86
