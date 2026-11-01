@@ -35,6 +35,12 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M4 (increment 5): the full kernel and the desktop on RISC-V.**
+  RISC-V now runs the same kernel as the PC and ARM64: the window system and
+  the interactive desktop (keyboard, mouse, terminal, Start menu), the
+  network, the shell, packages, and the JavaScript / TypeScript / Python
+  runtime. RISC-V apps can open windows and start other programs. Shutdown
+  and restart go through the SBI firmware.
 - **Multi-arch M4 (increment 4): disk, clock, display and device interrupts on
   RISC-V.** The RISC-V kernel now mounts `/disk` from a virtio disk (read and
   write, through the same FAT code as the PC) and loads its programs from it,
@@ -246,6 +252,12 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **virtio: the device could overwrite 4 bytes of an unrelated page.** A
+  virtqueue's used ring was 6 bytes too small for 256 entries; once a queue
+  wrapped (after 255 disk reads, for example), the device wrote past the end
+  of the ring's page into the next physical frame. Affected every
+  architecture; surfaced as a crash on RISC-V. The used ring now has a page of
+  its own.
 - **UEFI boots hung at the first timer wait** (pre-existing; the BIOS-only
   smoke test never saw it). `pic8259::initialize` restores the firmware's IRQ
   masks, and UEFI firmware (OVMF) leaves the 8259 fully masked (0xff/0xff), so

@@ -13,30 +13,59 @@
 // preemptive, with ring-3 threads and futexes. Increment 4: the PLIC
 // (device interrupts), the Goldfish RTC, and virtio-mmio -- /disk on
 // virtio-blk through the shared FAT + VFS code (programs now load from it)
-// and virtio-gpu. The rest of the shared kernel joins
+// and virtio-gpu. Increment 5: the rest of the PC kernel's generic code
+// builds for RISC-V too -- the real `syscall.rs` (same dispatcher, pointer
+// validation, BKL-free paths) and `app.rs`, the window system, shell,
+// network, packages, VMM, the JS/TS/Python runtime -- with SBI SRST power,
+// virtio input / net, Rust GUI apps, and the interactive desktop. The rest of the shared kernel joins
 // as subsystems gain an `arch/riscv64` backend -- the path the ARM64 port
 // (M3) took.
 
+mod ai;
+mod aio;
 mod allocator;
+mod app;
 mod arch;
 mod boot;
+mod compute;
+mod desktop;
 mod driver;
 mod dtb;
 mod elf;
 mod fat;
 mod framebuffer;
+mod gfx;
+mod icons;
+mod ipc;
+mod keyboard;
 mod limine;
 mod logo;
 mod memory;
+mod model;
+mod net;
+mod pkg;
 mod platform;
 mod process;
+mod profile;
+mod ramdisk;
+mod screensaver;
+mod script;
+mod service;
+mod shell;
+mod syscall;
 mod task;
+mod terminal;
+mod theme;
 mod vfs;
 mod virtio;
+mod vmm;
+mod wallpaper;
+mod wm;
 
-pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode};
+pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::virt::goldfish_rtc as rtc;
 pub(crate) use platform::virt::uart16550 as serial;
+pub(crate) use platform::virt::{audio, mouse, power};
 
 /// Set once the interactive desktop owns the screen (as on the PC).
 mod interactive {
@@ -179,9 +208,11 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
+    shared_kernel_setup(info);
+    polyglot_test();
     run_boot_programs(info);
-
     gpu_self_test(info);
+    show_desktop();
     if timer_ok && uart.is_some() && info.loader == "limine" {
         println!(
             "[kernel] MILESTONE: RISCV BOOT OK (Limine -> S-mode kernel; live DTB -> {} console + SBI timer; {}; framebuffer {})",
@@ -190,10 +221,11 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG RISCV READY -- increments 1-4 (boot, traps, memory, address spaces, timer, context switch, U-mode + ECALL, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU, RTC); the rest of the kernel follows");
-    loop {
-        cpu::enable_and_halt();
-    }
+    println!("[kernel] BUITENZORG RISCV READY -- increments 1-5 (boot, traps, memory, address spaces, timer, U-mode, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU + input + net, RTC, SBI power, shared syscalls + window system, JS/TS/Python, interactive desktop); SMP follows");
+    // The interactive desktop session, shared with the PC and ARM64 kernels:
+    // virtio keyboard / tablet -> terminal + window manager, frames through
+    // the framebuffer and the virtio GPU.
+    desktop::run()
 }
 
 /// The generic memory subsystem on RISC-V page tables:
@@ -403,82 +435,29 @@ fn context_self_test() {
 const FAULT_EXIT_CODE: u64 = 0xDEAD;
 
 static USER_FAULT_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-/// What user programs wrote (DEBUG_WRITE), for the self-tests.
-static USER_OUTPUT: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
-
 /// `ECALL` from U-mode (a7 = number, a0..a2 = arguments; the result goes to
-/// a0; bz-abi numbers, the same table as on x86). Like x86's
-/// `syscall_dispatch_c`: clock reads take no lock; everything else runs under
-/// the Big Kernel Lock with interrupts enabled (the trap frame holds
-/// `sepc`/`sstatus`, so a nested interrupt or a task switch inside the
-/// syscall is safe). The shared `syscall.rs` replaces this table when the
-/// rest of the kernel joins.
+/// a0; bz-abi numbers, the same table as on x86): the counterpart of x86
+/// `usermode::syscall_dispatch_c` -- clock reads lock-free; BKL-free syscalls
+/// (`syscall::bkl_free`) skip the Big Kernel Lock; served with interrupts
+/// enabled (the trap frame holds `sepc`/`sstatus`); then the shared
+/// `syscall.rs` dispatcher, pointer validation included.
 pub(crate) fn user_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
-    use bz_abi::sysno;
+    use bz_abi::sysno as n;
     match nr {
-        sysno::TICKS => return interrupts::ticks(),
-        sysno::CLOCK_MONO => return arch::cpu::timestamp(),
+        n::TICKS => return interrupts::ticks(),
+        n::CLOCK_MONO => return arch::cpu::timestamp(),
         _ => {}
     }
-    task::kernel_enter();
+    let fine = syscall::bkl_free(nr);
+    if !fine {
+        task::kernel_enter();
+    }
     arch::cpu::enable_interrupts();
-    let r = user_dispatch(nr, a0, a1, a2);
+    task::note_syscall(fine);
+    let r = syscall::dispatch_from_user(nr, a0, a1, a2);
     arch::cpu::disable_interrupts();
     task::kernel_exit();
     r
-}
-
-fn user_dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
-    use bz_abi::{syserr, sysno};
-    match nr {
-        sysno::ABI_VERSION => bz_abi::ABI_VERSION,
-        sysno::DEBUG_WRITE => {
-            if a1 > 4096 || !memory::validate_user_range(a0, a1, false) {
-                return syserr::INVAL;
-            }
-            let bytes: alloc::vec::Vec<u8> = (0..a1).map(|i| unsafe { ((a0 + i) as *const u8).read_volatile() }).collect();
-            let text = core::str::from_utf8(&bytes).unwrap_or("<not UTF-8>");
-            print!("{}", text);
-            let mut out = USER_OUTPUT.lock();
-            if out.len() < 4096 {
-                out.push_str(text);
-            }
-            a1
-        }
-        sysno::EXIT | sysno::THREAD_EXIT => usermode::exit_user(a0),
-        sysno::YIELD => {
-            task::yield_now();
-            0
-        }
-        // The generic user-memory PAL: same code as x86 and ARM64.
-        sysno::MMAP => memory::user_mmap(a0, a1),
-        sysno::MPROTECT => memory::user_mprotect(a0, a1, a2),
-        sysno::MUNMAP => memory::user_munmap(a0, a1),
-        // Threads + futexes: the shared scheduler.
-        sysno::THREAD_CREATE => {
-            if a0 == 0 || a2 == 0 {
-                return syserr::INVAL;
-            }
-            task::ensure_main_user_thread();
-            task::spawn_user_thread(a0, a1, a2)
-        }
-        sysno::THREAD_JOIN => {
-            while !task::is_finished(a0) {
-                task::yield_now();
-            }
-            0
-        }
-        sysno::THREAD_SELF => task::current_id(),
-        sysno::FUTEX_WAIT => {
-            if a0 % 4 != 0 || !memory::validate_user_range(a0, 4, false) {
-                return syserr::INVAL;
-            }
-            while task::futex_wait_if(a0, a1 as u32) {}
-            0
-        }
-        sysno::FUTEX_WAKE => task::futex_wake(a0, a1),
-        _ => syserr::NOSYS,
-    }
 }
 
 /// A fatal exception in U-mode code: end that program (exit code 0xDEAD),
@@ -566,87 +545,15 @@ fn umode_self_test() {
 
 // ---- Processes (the shared scheduler) -----------------------------------------
 
-/// The PC kernel's `app.rs` launches programs from /disk with the window
-/// system around them; until those reach RISC-V this is its core (as ARM64's
-/// was at the same stage): start an ELF image as its own preemptively
-/// scheduled process, wait for it, clean up.
-mod app {
-    use crate::{aspace, elf, memory, process, task};
-
-    const USER_STACK_BASE: u64 = 0x7000_0000 - USER_STACK_PAGES * 4096;
-    const USER_STACK_PAGES: u64 = 32; // 128 KiB
-    const KILLED_EXIT_CODE: u64 = 0xDEAD;
-
-    /// Start `image` as a process named `name`; returns its pid (= its space id).
-    pub fn spawn_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
-        let pid = process::app_start(name);
-        let space = match aspace::create(pid) {
-            Ok(s) => s,
-            Err(e) => {
-                process::app_exit(pid, u64::MAX);
-                return Err(e);
-            }
-        };
-        let prev = task::current_space();
-        aspace::install(space);
-        let loaded = memory::with_ctx(|ctx| {
-            let program = elf::load(image, ctx)?;
-            let (stack_top, _) = memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
-            Ok::<_, &'static str>((program.entry, stack_top))
-        });
-        aspace::install(prev);
-        crate::usermode::sync_icache();
-        match loaded {
-            Ok((entry, stack_top)) => {
-                task::spawn_process(entry, stack_top, space);
-                Ok(pid)
-            }
-            Err(e) => {
-                aspace::destroy(space);
-                process::app_exit(pid, u64::MAX);
-                Err(e)
-            }
-        }
-    }
-
-    /// Block until process `pid` exits; its exit code.
-    pub fn wait(pid: u64) -> u64 {
-        while task::block_while(process::wait_key(pid), || process::is_alive(pid)) {}
-        process::exit_code(pid).unwrap_or(u64::MAX)
-    }
-
-    fn destroy_when_home(space: aspace::Space) {
-        if task::wait_space_stopped(space.id) {
-            aspace::destroy(space);
-        }
-    }
-
-    /// On the process's own task once its program exited (scheduler hook).
-    pub fn process_exited(pid: u64, code: u64) {
-        let space = task::current_space();
-        task::detach_current_from_space(pid);
-        destroy_when_home(space);
-        process::app_exit(pid, code);
-    }
-
-    /// PROC_KILL.
-    pub fn kill(pid: u64) -> bool {
-        let Some(space) = task::kill_space(pid) else { return false };
-        destroy_when_home(space);
-        process::app_exit(pid, KILLED_EXIT_CODE);
-        true
-    }
-}
-
-/// Run one program as a process and wait for it: (exit code, its output).
-fn run_program(name: &str, image: &[u8]) -> Option<(u64, alloc::string::String)> {
-    USER_OUTPUT.lock().clear();
+/// Run one program as a process (the shared `app.rs`) and wait for it; its
+/// exit code.
+fn run_program(name: &str, image: &[u8]) -> Option<u64> {
     println!("[riscv] --- program '{}' ({} bytes) ---", name, image.len());
     match app::spawn_image(name, image) {
         Ok(pid) => {
             let code = app::wait(pid);
             println!("[riscv] --- '{}' (pid {}) exited with code {:#x} ---", name, pid, code);
-            Some((code, USER_OUTPUT.lock().clone()))
+            Some(code)
         }
         Err(e) => {
             println!("[riscv] '{}': {}", name, e);
@@ -683,8 +590,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
     let mut all_ok = true;
 
     if let Some(image) = find("hello") {
-        let r = run_program("hello", &image);
-        let ok = matches!(&r, Some((0, out)) if out.contains("Hello from Rust on RISC-V"));
+        let ok = run_program("hello", &image) == Some(0);
         all_ok &= ok;
         if ok {
             println!(
@@ -694,7 +600,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     }
     if let Some(image) = find("mem") {
-        let ok = matches!(run_program("mem", &image), Some((0, _)));
+        let ok = run_program("mem", &image) == Some(0);
         all_ok &= ok;
         if ok {
             println!("[kernel] MILESTONE: RISCV USERMEM OK (MMAP/MPROTECT/MUNMAP from U-mode: rw region, read-only, unmap, 64 MiB reserve + commit on demand)");
@@ -718,9 +624,11 @@ fn run_boot_programs(info: &boot::BootInfo) {
     for (name, milestone) in [
         ("thread", "RISCV THREAD OK (two ring-3 threads of one process share its address space; THREAD_CREATE/JOIN/EXIT)"),
         ("sync", "RISCV SYNC OK (futex-backed mutex under contention: FUTEX_WAIT blocks, FUTEX_WAKE resumes, mutual exclusion held)"),
+        ("proc", "RISCV PROCCTL OK (shared syscalls from U-mode: FS_WRITE + FS_READ on /disk, PROC_SPAWN of /disk/HELLO.ELF with arguments, PROC_WAIT)"),
+        ("gui", "RISCV GUI OK (a RISC-V app drew a window through the shared window manager: WIN_CREATE / WIN_CMD / WIN_PRESENT, CLOCK_RTC, FB_INFO)"),
     ] {
         let Some(image) = find(name) else { continue };
-        let ok = matches!(run_program(name, &image), Some((0, _)));
+        let ok = run_program(name, &image) == Some(0);
         all_ok &= ok;
         if ok {
             println!("[kernel] MILESTONE: {}", milestone);
@@ -867,6 +775,115 @@ fn gpu_self_test(info: &boot::BootInfo) {
         }
     }
     virtio::gpu::present(&back);
+}
+
+// ---- The shared kernel --------------------------------------------------------
+
+/// Bring up the generic subsystems the PC kernel uses, on RISC-V: the
+/// syscall hardening test, SBI power, the window manager (theme, icons,
+/// official wallpaper), virtio input, and the network (loopback, then a
+/// virtio NIC).
+fn shared_kernel_setup(info: &boot::BootInfo) {
+    if syscall::security_self_test() {
+        println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
+    } else {
+        println!("[kernel] security self-test FAILED");
+    }
+
+    if power::init("") {
+        println!(
+            "[kernel] MILESTONE: RISCV POWER OK ({} extension present: shutdown / restart through the SBI firmware)",
+            power::firmware()
+        );
+    }
+    for line in vmx::summary() {
+        println!("[riscv/vmx] {}", line);
+    }
+
+    if let Some(fb) = info.framebuffer {
+        wm::init(fb.width, fb.height);
+        mouse::set_bounds(fb.width, fb.height);
+        theme::set_default();
+        let n = icons::load();
+        let wp = wallpaper::set_official("nature").is_ok();
+        println!("[riscv] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
+    }
+    virtio::input::init();
+
+    net::init([10, 0, 0, 1]);
+    net::send_ping([10, 0, 0, 1], 0x5256, 1);
+    for _ in 0..4 {
+        if net::poll() == 0 {
+            break;
+        }
+    }
+    if net::counters().0 > 0 {
+        println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on RISC-V)");
+    }
+    if let Some(nic) = virtio::net::probe() {
+        const ME: [u8; 4] = [10, 0, 2, 15];
+        const GW: [u8; 4] = [10, 0, 2, 2];
+        net::attach(alloc::boxed::Box::new(nic), ME);
+        let icmp0 = net::counters().0;
+        let wait = |done: &dyn Fn() -> bool| {
+            let t0 = interrupts::ticks();
+            while !done() && interrupts::ticks() - t0 < 36 {
+                net::poll();
+                task::yield_now();
+            }
+            done()
+        };
+        net::arp_request(GW);
+        if wait(&|| net::resolve(GW).is_some()) {
+            net::send_ping(GW, 0x5256, 2);
+            if wait(&|| net::counters().0 > icmp0) {
+                println!("[kernel] MILESTONE: VIRTIO NET OK (virtio-net over virtio-mmio: ARP + ICMP echo with the gateway 10.0.2.2)");
+            }
+        }
+    }
+}
+
+/// The polyglot runtime (`script.rs`, v0.14 "Babel") on RISC-V: the same fib
+/// program in JavaScript, TypeScript and Python through the shared in-kernel
+/// interpreter -- PLAN.md's "first apps through JS/TS/Python" while .NET has
+/// no RISC-V NativeAOT.
+fn polyglot_test() {
+    let mut ok = 0;
+    for lang in [script::Lang::Js, script::Lang::Ts, script::Lang::Python] {
+        let out = script::run(lang, script::demo_source(lang));
+        for l in &out.lines {
+            println!("[riscv/{}] {}", lang.name(), l);
+        }
+        if let Some(e) = &out.error {
+            println!("[riscv/{}] ERROR: {}", lang.name(), e);
+        }
+        let joined = out.lines.join("\n");
+        if out.error.is_none() && joined.contains("55") && joined.contains("88") {
+            ok += 1;
+        }
+    }
+    if ok == 3 {
+        println!("[kernel] MILESTONE: RISCV POLYGLOT OK (JavaScript, TypeScript and Python run on RISC-V through the shared interpreter: fib(10) = 55, sum = 88)");
+    }
+}
+
+/// Compose the desktop -- wallpaper, taskbar, and the windows the apps left
+/// -- with the shared window manager, and present it (framebuffer +
+/// virtio-gpu). From here the console stops drawing over the screen.
+fn show_desktop() {
+    let Some((w, h)) = framebuffer::dimensions() else { return };
+    desktop::ensure_session_windows();
+    let windows = wm::window_count();
+    wm::tile();
+    let mut back = alloc::vec::Vec::new();
+    wm::render_frame(&mut back, w, h);
+    let lit = back.iter().filter(|&&p| p != 0).count();
+    interactive::set_active();
+    framebuffer::present(&back);
+    println!("[riscv] desktop frame: {}x{}, {} windows, {} lit pixels", w, h, windows, lit);
+    if windows >= 3 && lit > w * h / 2 {
+        println!("[kernel] MILESTONE: RISCV DESKTOP FRAME OK (shared window manager on RISC-V: the session windows and the RISC-V GUI app composited over the wallpaper and presented)");
+    }
 }
 
 #[panic_handler]

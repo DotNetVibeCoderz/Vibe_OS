@@ -13,14 +13,11 @@
 
 pub mod blk;
 pub mod gpu;
-#[cfg(not(target_arch = "riscv64"))]
 pub mod input;
 pub mod mmio;
-#[cfg(not(target_arch = "riscv64"))]
 pub mod net;
 #[cfg(target_arch = "x86_64")]
 pub mod pci;
-#[cfg(not(target_arch = "riscv64"))]
 pub mod snd;
 
 /// Every virtio device of type `kind` the platform exposes: virtio-PCI on
@@ -124,8 +121,8 @@ pub struct Buf {
     pub device_writes: bool,
 }
 
-/// A split virtqueue in DMA memory: page 0 holds the descriptor table (16
-/// bytes each), page 1 the available ring (at 0) and the used ring (at 2048).
+/// A split virtqueue in DMA memory, one page each for the descriptor table
+/// (16 bytes per entry), the available ring and the used ring.
 pub struct Virtqueue {
     pub index: u16,
     size: u16,
@@ -148,10 +145,17 @@ impl Virtqueue {
             return Err("virtio: queue not available");
         }
         let size = max.min(256);
+        // One page each: descriptors (16 x 256 = 4096 bytes), the available
+        // ring (6 + 2 x 256) and the used ring (6 + 8 x 256 = 2054 bytes). The
+        // used ring used to share the available ring's page at offset 2048 --
+        // 6 bytes too few for 256 entries, so once the queue wrapped the
+        // device wrote element 255's `len` (e.g. 513 for a sector read) into
+        // the first bytes of the *next* physical frame. Found on RISC-V,
+        // where that frame was on the allocator's free list.
         let (desc_phys, desc) = crate::memory::alloc_dma_frame().ok_or("virtio: out of memory")?;
         let (ring_phys, ring) = crate::memory::alloc_dma_frame().ok_or("virtio: out of memory")?;
-        let used = unsafe { ring.add(2048) };
-        t.setup_queue(index, size, desc_phys, ring_phys, ring_phys + 2048);
+        let (used_phys, used) = crate::memory::alloc_dma_frame().ok_or("virtio: out of memory")?;
+        t.setup_queue(index, size, desc_phys, ring_phys, used_phys);
         let q = Virtqueue {
             index,
             size,
