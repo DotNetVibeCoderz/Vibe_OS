@@ -35,6 +35,13 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 7): the whole kernel on ARM64.** Every generic
+  subsystem of the PC kernel — syscalls, app launcher, window manager, shell,
+  network, packages, VMM, scripting — now builds and runs on ARM64 unchanged,
+  with PSCI power, virtio input/net and a pointer driver as the ARM platform
+  parts. C# GUI apps (Calculator, 2048, the UI toolkit, Drawing, XOX) run on
+  ARM64 and are composited into a desktop frame. A small tool patches the
+  arm64 zerolib with the division-overflow helper bflat's code generator needs.
 - **Multi-arch M3 (increment 6): disk, clock and display on ARM64.** A
   virtio-mmio transport lets the existing virtio drivers run on ARM64: `/disk`
   is mounted from a virtio disk through the shared FAT and VFS code (read and

@@ -828,6 +828,12 @@ pub fn switch_workspace(n: u8) -> u8 {
     wm.workspace
 }
 
+/// Open windows on the current workspace (tests, the ARM64 desktop frame).
+#[allow(dead_code)]
+pub fn window_count() -> usize {
+    WM.lock().as_ref().map(|w| w.windows.iter().filter(|x| x.workspace == w.workspace).count()).unwrap_or(0)
+}
+
 pub fn current_workspace() -> u8 {
     WM.lock().as_ref().map(|w| w.workspace).unwrap_or(0)
 }

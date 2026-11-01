@@ -13,19 +13,15 @@
 
 pub mod blk;
 pub mod gpu;
-#[cfg(target_arch = "x86_64")]
 pub mod input;
 pub mod mmio;
-#[cfg(target_arch = "x86_64")]
 pub mod net;
 #[cfg(target_arch = "x86_64")]
 pub mod pci;
-#[cfg(target_arch = "x86_64")]
 pub mod snd;
 
 /// Every virtio device of type `kind` the platform exposes: virtio-PCI on
-/// PCs, virtio-mmio slots from the Device Tree on ARM64 (input / net / sound
-/// join the ARM64 kernel with the subsystems they feed).
+/// PCs, virtio-mmio slots from the Device Tree on ARM64.
 pub fn find(kind: u16) -> alloc::vec::Vec<alloc::boxed::Box<dyn Transport>> {
     #[cfg(target_arch = "x86_64")]
     return pci::find(kind);

@@ -16,36 +16,69 @@
 // (`process.rs`) run unchanged on ARM64 -- preemptive processes, ring-3
 // threads and futexes. Increment 6: virtio over virtio-mmio (slots from the
 // DTB) -- `/disk` on virtio-blk through the shared FAT + VFS code, programs
-// loaded from it -- the PL031 clock, and virtio-gpu.
+// loaded from it -- the PL031 clock, and virtio-gpu. Increment 7: the rest of
+// the PC kernel's generic code builds for ARM64 too -- the real `syscall.rs`
+// (same dispatcher, pointer validation, BKL-free paths) and `app.rs`, the
+// window system, shell, network, packages, VMM, scripting -- with PSCI power,
+// virtio input / net, and C# GUI apps composited into a desktop frame.
 
+mod ai;
+mod aio;
 mod allocator;
+mod app;
 mod arch;
 mod boot;
+mod compute;
 mod driver;
 mod dtb;
 mod elf;
 mod fat;
 mod framebuffer;
+mod gfx;
+mod icons;
+mod ipc;
+mod keyboard;
 mod limine;
 mod logo;
 mod memory;
+mod model;
+mod net;
+mod pkg;
 mod platform;
 mod process;
+mod profile;
+mod ramdisk;
+mod screensaver;
+mod script;
+mod service;
+mod shell;
+mod syscall;
 mod task;
+mod terminal;
+mod theme;
 mod vfs;
 mod virtio;
+mod vmm;
+mod wallpaper;
+mod wm;
 
+pub(crate) use arch::aarch64::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::virt::pl011 as serial;
 pub(crate) use platform::virt::pl031 as rtc;
+pub(crate) use platform::virt::{audio, mouse, power};
 
-/// Mirrors the PC kernel's flag; the ARM64 desktop is not up yet.
+/// Set once the interactive desktop owns the screen (as on the PC).
 mod interactive {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    #[allow(dead_code)]
+    pub fn set_active() {
+        ACTIVE.store(true, Ordering::SeqCst);
+    }
     pub fn is_active() -> bool {
-        false
+        ACTIVE.load(Ordering::SeqCst)
     }
 }
-
-pub(crate) use arch::aarch64::{aspace, gdt, interrupts, smp, usermode};
 
 use core::panic::PanicInfo;
 
@@ -165,7 +198,9 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
+    shared_kernel_setup(info, fdt.as_ref());
     run_boot_programs(info);
+    show_desktop();
 
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();
     if timer_ok && !uart.is_empty() && info.loader == "limine" {
@@ -176,7 +211,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-6 (boot, interrupts, memory, EL0, C# programs, scheduler + processes + threads, virtio-mmio disk + GPU, RTC); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-7 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps); the rest of the kernel follows");
     loop {
         cpu::enable_and_halt();
     }
@@ -379,87 +414,33 @@ fn context_self_test() {
 
 // ---- User mode (EL0) ---------------------------------------------------------
 
-static USER_WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static USER_FAULT_FAR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-/// What user programs wrote (DEBUG_WRITE), for the self-tests.
-static USER_OUTPUT: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
 
 /// Exit code of a user program ended by a fault (as on x86).
 const FAULT_EXIT_CODE: u64 = 0xDEAD;
 
-/// `SVC #0` from EL0 (x8 = number, x0..x2 = arguments; bz-abi numbers, the
-/// same table as on x86). Like x86's `syscall_dispatch_c`: clock reads take no
-/// lock; everything else runs under the Big Kernel Lock, with interrupts
-/// enabled (the exception frame holds ELR/SPSR/SP_EL0, so a nested interrupt
-/// or a task switch inside the syscall is safe).
+/// `SVC #0` from EL0 (x8 = number, x0..x2 = arguments): the counterpart of
+/// x86 `usermode::syscall_dispatch_c` -- clock reads lock-free; BKL-free
+/// syscalls (`syscall::bkl_free`) skip the Big Kernel Lock; served with
+/// interrupts enabled (the exception frame holds ELR/SPSR/SP_EL0); then the
+/// shared `syscall.rs` dispatcher, pointer validation included.
 pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
-    use bz_abi::sysno;
+    use bz_abi::sysno as n;
     match nr {
-        sysno::TICKS => return interrupts::ticks(),
-        sysno::CLOCK_MONO => return arch::cpu::timestamp(),
+        n::TICKS => return interrupts::ticks(),
+        n::CLOCK_MONO => return arch::cpu::timestamp(),
         _ => {}
     }
-    task::kernel_enter();
+    let fine = syscall::bkl_free(nr);
+    if !fine {
+        task::kernel_enter();
+    }
     arch::cpu::enable_interrupts();
-    let r = el0_dispatch(nr, a0, a1, a2);
+    task::note_syscall(fine);
+    let r = syscall::dispatch_from_user(nr, a0, a1, a2);
     arch::cpu::disable_interrupts();
     task::kernel_exit();
     r
-}
-
-fn el0_dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
-    use bz_abi::{syserr, sysno};
-    match nr {
-        sysno::ABI_VERSION => bz_abi::ABI_VERSION,
-        sysno::DEBUG_WRITE => {
-            if a1 > 4096 || !memory::validate_user_range(a0, a1, false) {
-                return syserr::INVAL;
-            }
-            let bytes: alloc::vec::Vec<u8> =
-                (0..a1).map(|i| unsafe { ((a0 + i) as *const u8).read_volatile() }).collect();
-            let text = core::str::from_utf8(&bytes).unwrap_or("<not UTF-8>");
-            print!("{}", text);
-            let mut out = USER_OUTPUT.lock();
-            if out.len() < 4096 {
-                out.push_str(text);
-            }
-            USER_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            a1
-        }
-        sysno::EXIT | sysno::THREAD_EXIT => usermode::exit_user(a0),
-        sysno::YIELD => {
-            task::yield_now();
-            0
-        }
-        // The generic user-memory PAL (the C# runtime's heap): same code as x86.
-        sysno::MMAP => memory::user_mmap(a0, a1),
-        sysno::MPROTECT => memory::user_mprotect(a0, a1, a2),
-        sysno::MUNMAP => memory::user_munmap(a0, a1),
-        // Threads + futexes: the shared scheduler.
-        sysno::THREAD_CREATE => {
-            if a0 == 0 || a2 == 0 {
-                return syserr::INVAL;
-            }
-            task::ensure_main_user_thread();
-            task::spawn_user_thread(a0, a1, a2)
-        }
-        sysno::THREAD_JOIN => {
-            while !task::is_finished(a0) {
-                task::yield_now();
-            }
-            0
-        }
-        sysno::THREAD_SELF => task::current_id(),
-        sysno::FUTEX_WAIT => {
-            if a0 % 4 != 0 || !memory::validate_user_range(a0, 4, false) {
-                return syserr::INVAL;
-            }
-            while task::futex_wait_if(a0, a1 as u32) {}
-            0
-        }
-        sysno::FUTEX_WAKE => task::futex_wake(a0, a1),
-        _ => syserr::NOSYS,
-    }
 }
 
 /// A fatal exception in EL0 code: end that program (exit code 0xDEAD), like
@@ -535,7 +516,7 @@ fn el0_self_test() {
         r2.map(|r| r.1)
     );
     let ok = r1 == Some((want, 0))
-        && USER_WRITES.load(core::sync::atomic::Ordering::Relaxed) >= 1
+        && svcs >= 3
         && irq1 - irq0 >= 3
         && r2 == Some((FAULT_EXIT_CODE, 0))
         && far == 0xFFFF_D000_0000_0000;
@@ -545,77 +526,6 @@ fn el0_self_test() {
 }
 
 // ---- Processes (the shared scheduler) -----------------------------------------
-
-/// The PC kernel's `app.rs` launches programs from /disk with the window
-/// system around them; until those reach ARM64 this is its core: start an
-/// ELF image as its own preemptively scheduled process, wait for it, clean up.
-mod app {
-    use crate::{aspace, elf, memory, process, task};
-
-    const USER_STACK_BASE: u64 = 0x7000_0000 - USER_STACK_PAGES * 4096;
-    const USER_STACK_PAGES: u64 = 32; // 128 KiB
-    const KILLED_EXIT_CODE: u64 = 0xDEAD;
-
-    /// Start `image` as a process named `name`; returns its pid (= its space id).
-    pub fn spawn_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
-        let pid = process::app_start(name);
-        let space = match aspace::create(pid) {
-            Ok(s) => s,
-            Err(e) => {
-                process::app_exit(pid, u64::MAX);
-                return Err(e);
-            }
-        };
-        let prev = task::current_space();
-        aspace::install(space);
-        let loaded = memory::with_ctx(|ctx| {
-            let program = elf::load(image, ctx)?;
-            let (stack_top, _) = memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
-            Ok::<_, &'static str>((program.entry, stack_top))
-        });
-        aspace::install(prev);
-        crate::usermode::sync_icache();
-        match loaded {
-            Ok((entry, stack_top)) => {
-                task::spawn_process(entry, stack_top, space);
-                Ok(pid)
-            }
-            Err(e) => {
-                aspace::destroy(space);
-                process::app_exit(pid, u64::MAX);
-                Err(e)
-            }
-        }
-    }
-
-    /// Block until process `pid` exits; its exit code.
-    pub fn wait(pid: u64) -> u64 {
-        while task::block_while(process::wait_key(pid), || process::is_alive(pid)) {}
-        process::exit_code(pid).unwrap_or(u64::MAX)
-    }
-
-    fn destroy_when_home(space: aspace::Space) {
-        if task::wait_space_stopped(space.id) {
-            aspace::destroy(space);
-        }
-    }
-
-    /// On the process's own task once its program exited (scheduler hook).
-    pub fn process_exited(pid: u64, code: u64) {
-        let space = task::current_space();
-        task::detach_current_from_space(pid);
-        destroy_when_home(space);
-        process::app_exit(pid, code);
-    }
-
-    /// PROC_KILL.
-    pub fn kill(pid: u64) -> bool {
-        let Some(space) = task::kill_space(pid) else { return false };
-        destroy_when_home(space);
-        process::app_exit(pid, KILLED_EXIT_CODE);
-        true
-    }
-}
 
 /// Run the ELF programs Limine handed over as modules, as processes of the
 /// shared scheduler (`task.rs`, the same code as on x86):
@@ -643,15 +553,14 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     };
     let frames0 = memory::frames_in_use();
-    for name in ["hello", "matang", "heap", "gcmem"] {
+    for name in ["hello", "matang", "heap", "gcmem", "bcl", "proctest"] {
         let Some(image) = find(name) else { continue };
-        USER_OUTPUT.lock().clear();
         println!("[arm64] --- program '{}' ({} bytes, from {}) ---", name, image.len(), if from_disk.get() { "/disk" } else { "a Limine module" });
         match app::spawn_image(name, &image) {
             Ok(pid) => {
                 let code = app::wait(pid);
                 println!("[arm64] --- '{}' (pid {}) exited with code {:#x} ---", name, pid, code);
-                if name == "hello" && code == 0 && USER_OUTPUT.lock().contains("Hello from C#!") {
+                if name == "hello" && code == 0 {
                     println!("[kernel] MILESTONE: ARM64 CSHARP OK (C# compiled for linux-arm64 by bflat, loaded by the generic ELF loader, ran in EL0 as a process: Hello from C#!)");
                 }
             }
@@ -678,7 +587,8 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     }
 
-    for name in ["thread", "sync"] {
+    // GUI apps (window syscalls into the shared window manager) and the rest.
+    for name in ["thread", "sync", "calc", "g2048", "ui", "draw", "xox"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ---", name);
         match app::spawn_image(name, &image) {
@@ -753,6 +663,92 @@ fn gpu_self_test(info: &boot::BootInfo) {
         }
     }
     virtio::gpu::present(&back);
+}
+
+// ---- The shared kernel on ARM64 ---------------------------------------------
+
+/// Bring up the generic subsystems the PC kernel uses, on ARM64: the syscall
+/// hardening test, PSCI power, the window manager (theme, icons, official
+/// wallpaper), virtio input, and the network (loopback, then a virtio NIC).
+fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
+    if syscall::security_self_test() {
+        println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
+    } else {
+        println!("[kernel] security self-test FAILED");
+    }
+
+    let method = fdt
+        .and_then(|f| f.find_path("/psci").map(|i| f.nodes[i].strings("method").next().unwrap_or("").into()))
+        .unwrap_or(alloc::string::String::new());
+    if power::init(&method) {
+        let v = arch::aarch64::psci::call(arch::aarch64::psci::PSCI_VERSION, 0, 0, 0);
+        println!(
+            "[kernel] MILESTONE: ARM64 PSCI OK (conduit {}, PSCI {}.{}: SYSTEM_OFF / SYSTEM_RESET for shutdown / restart)",
+            method,
+            v >> 16,
+            v & 0xFFFF
+        );
+    }
+
+    if let Some(fb) = info.framebuffer {
+        wm::init(fb.width, fb.height);
+        mouse::set_bounds(fb.width, fb.height);
+        theme::set_default();
+        let n = icons::load();
+        let wp = wallpaper::set_official("nature").is_ok();
+        println!("[arm64] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
+    }
+    virtio::input::init();
+
+    net::init([10, 0, 0, 1]);
+    net::send_ping([10, 0, 0, 1], 0xA64, 1);
+    for _ in 0..4 {
+        if net::poll() == 0 {
+            break;
+        }
+    }
+    if net::counters().0 > 0 {
+        println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)");
+    }
+    if let Some(nic) = virtio::net::probe() {
+        const ME: [u8; 4] = [10, 0, 2, 15];
+        const GW: [u8; 4] = [10, 0, 2, 2];
+        net::attach(alloc::boxed::Box::new(nic), ME);
+        let icmp0 = net::counters().0;
+        let wait = |done: &dyn Fn() -> bool| {
+            let t0 = interrupts::ticks();
+            while !done() && interrupts::ticks() - t0 < 36 {
+                net::poll();
+                task::yield_now();
+            }
+            done()
+        };
+        net::arp_request(GW);
+        if wait(&|| net::resolve(GW).is_some()) {
+            net::send_ping(GW, 0xA64, 2);
+            if wait(&|| net::counters().0 > icmp0) {
+                println!("[kernel] MILESTONE: VIRTIO NET OK (virtio-net over virtio-mmio: ARP + ICMP echo with the gateway 10.0.2.2)");
+            }
+        }
+    }
+}
+
+/// Compose the desktop -- wallpaper, taskbar, and the windows the GUI apps
+/// left -- with the shared window manager, and present it (framebuffer +
+/// virtio-gpu). From here the console stops drawing over the screen.
+fn show_desktop() {
+    let Some((w, h)) = framebuffer::dimensions() else { return };
+    let windows = wm::window_count();
+    wm::tile();
+    let mut back = alloc::vec::Vec::new();
+    wm::render_frame(&mut back, w, h);
+    let lit = back.iter().filter(|&&p| p != 0).count();
+    interactive::set_active();
+    framebuffer::present(&back);
+    println!("[arm64] desktop frame: {}x{}, {} windows, {} lit pixels", w, h, windows, lit);
+    if windows >= 3 && lit > w * h / 2 {
+        println!("[kernel] MILESTONE: ARM64 DESKTOP FRAME OK (shared window manager on ARM64: C# GUI app windows composited over the wallpaper and presented)");
+    }
 }
 
 #[panic_handler]

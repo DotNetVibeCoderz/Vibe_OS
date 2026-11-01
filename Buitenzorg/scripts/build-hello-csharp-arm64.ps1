@@ -2,13 +2,27 @@
 # by bflat for linux-arm64 (zerolib) and linked with the aarch64 build of the
 # bzstart.rs shim (SVC #0 syscalls) into static ELFs at 0x400000 under
 # userland/hello-csharp/arm64/. bzimage puts them on dist/buitenzorg-arm64.img
-# and Limine loads them as boot modules (the ARM64 kernel has no disk driver
-# yet). Only programs whose syscalls the ARM64 kernel serves are listed.
+# and the ARM64 kernel loads them from /disk (virtio-blk).
+#
+# arm64 code needs ThrowHelpers.ThrowOverflowException (division checks),
+# which bflat's zerolib lacks: tools/ZerolibPatch adds it to a copy of
+# zerolib, used by a private bflat copy in kernel/target/bflat-arm64 (the
+# installed bflat is not modified).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "userland\hello-csharp"
 $out = Join-Path $dir "arm64"
-$bflat = Join-Path $root "tools\bflat\bflat.exe"
+$bflatHome = Join-Path $root "tools\bflat"
+$patched = Join-Path $root "kernel\target\bflat-arm64"
+$bflat = Join-Path $patched "bflat.exe"
+if (-not (Test-Path $bflat)) {
+    Write-Host "==> preparing a bflat copy with the patched arm64 zerolib"
+    New-Item -ItemType Directory -Force (Split-Path -Parent $patched) | Out-Null
+    Copy-Item -Recurse -Force $bflatHome $patched
+    & dotnet run --project (Join-Path $root "tools\ZerolibPatch") -c Release -- `
+        (Join-Path $bflatHome "lib\linux\arm64\zerolib.dll") (Join-Path $patched "lib\linux\arm64\zerolib.dll")
+    if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $patched; throw "ZerolibPatch failed" }
+}
 $lld = Get-ChildItem "$env:USERPROFILE\.rustup\toolchains\nightly-*\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe" |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $lld) { throw "rust-lld not found (install rust nightly)" }
@@ -29,9 +43,14 @@ try {
         @{src=@("gcmem.cs");           elf="gcmem.elf"},
         @{src=@("mproc.cs");           elf="mproc.elf"},
         @{src=@("thread.cs");          elf="thread.elf"},
-        @{src=@("sync.cs");            elf="sync.elf"}
-        # bcl.cs: not yet -- bflat's arm64 codegen needs
-        # ThrowHelpers.ThrowOverflowException, which zerolib lacks.
+        @{src=@("sync.cs");            elf="sync.elf"},
+        @{src=@("bcl.cs", "bzbcl.cs"); elf="bcl.elf"},
+        @{src=@("proctest.cs", "bzbcl.cs", "bzbcl2.cs"); elf="proctest.elf"},
+        @{src=@("calc.cs", "bzui.cs", "bzgfx.cs"); elf="calc.elf"},
+        @{src=@("game2048.cs", "bzui.cs", "bzgfx.cs"); elf="g2048.elf"},
+        @{src=@("ui.cs", "bzui.cs", "bzgfx.cs"); elf="ui.elf"},
+        @{src=@("draw.cs", "bzgfx.cs"); elf="draw.elf"},
+        @{src=@("xox.cs");             elf="xox.elf"}
     )
     foreach ($prog in $programs) {
         $obj = "arm64/" + [IO.Path]::ChangeExtension($prog.elf, ".o")

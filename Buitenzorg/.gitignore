@@ -26,6 +26,10 @@ tools/*
 !tools/MagicAppGen/
 tools/MagicAppGen/bin/
 tools/MagicAppGen/obj/
+# ZerolibPatch (adds the arm64 runtime helpers zerolib lacks) is ours too.
+!tools/ZerolibPatch/
+tools/ZerolibPatch/bin/
+tools/ZerolibPatch/obj/
 
 # Editors / OS
 .vs/
