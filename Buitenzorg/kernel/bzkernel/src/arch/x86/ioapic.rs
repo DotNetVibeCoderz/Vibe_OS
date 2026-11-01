@@ -186,6 +186,21 @@ fn kbc_wait_write() -> bool {
     false
 }
 
+/// Wait (up to ~18 PIT ticks, ~1 s) until the 8042's output buffer is empty,
+/// i.e. the interrupt handler consumed the last injected byte. Injecting the
+/// next one while it is still full can merge two bytes into one IRQ.
+fn kbc_wait_output_empty() -> bool {
+    let mut status = Port::<u8>::new(0x64);
+    let t0 = crate::interrupts::ticks();
+    while crate::interrupts::ticks() < t0 + 18 {
+        if unsafe { status.read() } & 0x01 == 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
 /// Prove the routes: the PIT still ticks, and IRQ 1 / IRQ 12 raised by the
 /// 8042 itself are handled on the CPU they were routed to.
 pub fn self_test() -> Result<alloc::string::String, alloc::string::String> {
@@ -213,8 +228,10 @@ pub fn self_test() -> Result<alloc::string::String, alloc::string::String> {
             unsafe { data.write(0x9E) };
         }
     }
-    // One empty mouse packet (no movement, no buttons), byte by byte.
+    // One empty mouse packet (no movement, no buttons), byte by byte -- each
+    // only once the previous byte was taken out of the output buffer.
     for b in [0x08u8, 0x00, 0x00] {
+        kbc_wait_output_empty();
         if kbc_wait_write() {
             unsafe { cmd.write(0xD3) };
             if kbc_wait_write() {
@@ -226,8 +243,14 @@ pub fn self_test() -> Result<alloc::string::String, alloc::string::String> {
             core::hint::spin_loop();
         }
     }
+    // The IRQs are handled on another CPU: give them up to ~1 s (a busy CI
+    // host can deschedule that vCPU for a while), but stop as soon as all
+    // four have arrived.
     let t = crate::interrupts::ticks();
-    while crate::interrupts::ticks() < t + 2 {
+    while crate::interrupts::ticks() < t + 18 {
+        if irq_counts(kbd_cpu).0 > k0 && irq_counts(mouse_cpu).1 >= m0 + 3 {
+            break;
+        }
         core::hint::spin_loop();
     }
     let (k1, _) = irq_counts(kbd_cpu);
