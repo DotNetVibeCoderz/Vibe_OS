@@ -159,4 +159,28 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
     Write-Host "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
 }
 
+# Limine boot (multi-arch M1): the same kernel through the Limine protocol,
+# UEFI, 2 CPUs, /disk on an MBR FAT partition. Needs OVMF + the Limine
+# binaries (scripts/fetch-limine.ps1) so bzimage built the image.
+$limineImage = Join-Path $root "dist\buitenzorg-limine-uefi.img"
+if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
+    $log = Join-Path $root "dist\boot-limine.log"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    $qargs = @('-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'code.fd')",
+               '-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'vars.fd')",
+               '-drive', "format=raw,file=$limineImage", '-smp', '2',
+               '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
+               '-display', 'none', '-serial', "file:$log", '-no-reboot')
+    $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
+    foreach ($i in 1..150) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
+    }
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Assert-Markers -Log $log -Markers ($basic + @("[boot] loader=limine", "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: DISK WRITE OK", "MILESTONE: MULTIPROC OK"))
+    Write-Host "smoke [limine]: Limine protocol boot (UEFI) to READY on 2 CPUs, /disk + processes"
+} else {
+    Write-Host "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.ps1 before the build)"
+}
+
 Write-Host "SMOKE TEST PASSED: ide/ahci/nvme/usb" -ForegroundColor Green

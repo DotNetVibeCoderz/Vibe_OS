@@ -39,6 +39,11 @@ jobs:
         working-directory: Buitenzorg/kernel
         run: cargo test -p bz-abi
 
+      # Limine binaries (pinned + SHA-256): bzimage then also builds the
+      # Limine-protocol UEFI image (multi-arch M1).
+      - name: Fetch Limine
+        run: bash scripts/fetch-limine.sh
+
       - name: Build kernel + boot images
         working-directory: Buitenzorg/kernel
         run: cargo build --release

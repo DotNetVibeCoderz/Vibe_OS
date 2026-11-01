@@ -14,4 +14,6 @@ bootloader = "0.11"
 # Decodes the official wallpapers (assets/wallpapers/*.jpg) at image-build time;
 # the kernel itself only reads 24-bit BMP.
 jpeg-decoder = { version = "0.3", default-features = false }
+# Writes the FAT partition of the Limine image (multi-arch M1).
+fatfs = "0.3"
 bzkernel = { path = "../bzkernel", artifact = "bin", target = "x86_64-unknown-none" }

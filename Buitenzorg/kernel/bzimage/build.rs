@@ -209,6 +209,71 @@ fn jpeg_to_bmp(jpeg: &[u8], tw: usize, th: usize) -> Option<Vec<u8>> {
     Some(bmp)
 }
 
+/// Put a file on /disk (bootloader-crate images) and remember it for Limine.
+fn add_file(builder: &mut bootloader::DiskImageBuilder, files: &mut Vec<(String, Vec<u8>)>, name: String, bytes: Vec<u8>) {
+    builder.set_file_contents(name.clone().into(), bytes.clone());
+    files.push((name, bytes));
+}
+
+/// A disk image Limine boots under UEFI: an MBR with one FAT partition (type
+/// 0x0C, LBA 2048) holding `EFI/BOOT/BOOTX64.EFI` + `EFI/BOOT/limine.conf`,
+/// the kernel ELF as `boot/bzkernel`, and every /disk file at the root in 8.3
+/// upper case (the kernel's FAT driver reads the first MBR FAT partition, so
+/// /disk works exactly as on the other images). Returns Ok(false) when the
+/// Limine binaries are absent.
+fn limine_image(limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let Ok(efi) = std::fs::read(limine.join("BOOTX64.EFI")) else { return Ok(false) };
+    let kernel_elf = std::fs::read(kernel)?;
+    const START_LBA: u64 = 2048;
+    const PART_MIB: u64 = 64;
+    let part_bytes = PART_MIB * 1024 * 1024;
+    let part_path = out.with_extension("part");
+    {
+        let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&part_path)?;
+        f.set_len(part_bytes)?;
+        fatfs::format_volume(&mut f, fatfs::FormatVolumeOptions::new().volume_label(*b"BUITENZORG "))?;
+        let fs = fatfs::FileSystem::new(&mut f, fatfs::FsOptions::new())?;
+        let root = fs.root_dir();
+        let put = |dir: &fatfs::Dir<'_, &mut std::fs::File>, name: &str, bytes: &[u8]| -> std::io::Result<()> {
+            let mut file = dir.create_file(name)?;
+            file.truncate()?;
+            file.write_all(bytes)
+        };
+        let boot = root.create_dir("EFI")?.create_dir("BOOT")?;
+        put(&boot, "BOOTX64.EFI", &efi)?;
+        put(
+            &boot,
+            "limine.conf",
+            b"# Buitenzorg OS -- Limine boot (multi-arch M1)\ntimeout: 0\nserial: yes\n\n/Buitenzorg OS\n    protocol: limine\n    path: boot():/boot/bzkernel\n",
+        )?;
+        put(&root.create_dir("boot")?, "bzkernel", &kernel_elf)?;
+        for (name, bytes) in files {
+            put(&root, &name.to_uppercase(), bytes)?;
+        }
+    }
+    let mut part = Vec::new();
+    std::fs::File::open(&part_path)?.read_to_end(&mut part)?;
+    std::fs::remove_file(&part_path)?;
+
+    let mut mbr = [0u8; 512];
+    let sectors = part_bytes / 512;
+    let e = &mut mbr[446..462];
+    e[0] = 0x80; // active
+    e[1..4].copy_from_slice(&[0xFE, 0xFF, 0xFF]); // CHS: use LBA
+    e[4] = 0x0C; // FAT32 (LBA); also accepted for FAT16 by OVMF and the kernel
+    e[5..8].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
+    e[8..12].copy_from_slice(&(START_LBA as u32).to_le_bytes());
+    e[12..16].copy_from_slice(&(sectors as u32).to_le_bytes());
+    mbr[510] = 0x55;
+    mbr[511] = 0xAA;
+    let mut disk = std::fs::File::create(out)?;
+    disk.write_all(&mbr)?;
+    disk.seek(SeekFrom::Start(START_LBA * 512))?;
+    disk.write_all(&part)?;
+    Ok(true)
+}
+
 fn main() {
     let kernel = PathBuf::from(std::env::var("CARGO_BIN_FILE_BZKERNEL_bzkernel").unwrap());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -216,10 +281,12 @@ fn main() {
     let uefi_path = out_dir.join("buitenzorg-uefi.img");
     let bios_path = out_dir.join("buitenzorg-bios.img");
 
-    let mut builder = bootloader::DiskImageBuilder::new(kernel);
+    let mut builder = bootloader::DiskImageBuilder::new(kernel.clone());
+    // Every /disk file, also written into the Limine image (see limine_image).
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     // Test file for the v0.3 "Batang" milestone: the kernel reads this back
     // through its own IDE PIO driver + FAT parser ("baca file dari disk").
-    builder.set_file_contents(
+    add_file(&mut builder, &mut files, 
         "batang.txt".into(),
         b"Akar menembus tanah, batang menjulang: file ini dibaca kernel dari disk. (v0.3 Batang)\n"
             .to_vec(),
@@ -275,7 +342,7 @@ fn main() {
         let path = userland.join(src);
         println!("cargo:rerun-if-changed={}", path.display());
         if let Ok(bytes) = std::fs::read(&path) {
-            builder.set_file_contents(dest.into(), bytes);
+            add_file(&mut builder, &mut files, dest.into(), bytes);
         }
     }
 
@@ -287,7 +354,7 @@ fn main() {
         let path = wallpapers.join(format!("{src}.jpg"));
         println!("cargo:rerun-if-changed={}", path.display());
         if let Some(bmp) = std::fs::read(&path).ok().and_then(|j| jpeg_to_bmp(&j, 800, 450)) {
-            builder.set_file_contents(dest.to_lowercase().into(), bmp);
+            add_file(&mut builder, &mut files, dest.to_lowercase().into(), bmp);
         }
     }
 
@@ -295,12 +362,12 @@ fn main() {
     // anti-aliased rounded ARGB icons packed into /disk/ICONS.BIN).
     let icon_dir = manifest_dir().join("..").join("..").join("assets").join("icons");
     if let Some(pack) = build_icon_pack(&icon_dir) {
-        builder.set_file_contents("icons.bin".into(), pack);
+        add_file(&mut builder, &mut files, "icons.bin".into(), pack);
     }
 
     // v0.11: a generated 24-bit BMP so the kernel can demo loading a user
     // image as the desktop wallpaper.
-    builder.set_file_contents("photo.bmp".into(), generate_bmp(320, 200));
+    add_file(&mut builder, &mut files, "photo.bmp".into(), generate_bmp(320, 200));
 
     // v0.16: a baseline JPEG (64x64 red->blue gradient, committed) to exercise
     // the Buitenzorg.Drawing JPEG decoder from ring-3 C# (see jpgtest.cs).
@@ -308,12 +375,26 @@ fn main() {
         let jpg = userland.join("grad.jpg");
         println!("cargo:rerun-if-changed={}", jpg.display());
         if let Ok(bytes) = std::fs::read(&jpg) {
-            builder.set_file_contents("grad.jpg".into(), bytes);
+            add_file(&mut builder, &mut files, "grad.jpg".into(), bytes);
         }
     }
 
     builder.create_uefi_image(&uefi_path).unwrap();
     builder.create_bios_image(&bios_path).unwrap();
+
+    // Multi-arch M1: the same kernel booted by Limine (UEFI), when the Limine
+    // binaries have been fetched (scripts/fetch-limine.*). Optional.
+    let limine_path = out_dir.join("buitenzorg-limine-uefi.img");
+    let limine_dir = manifest_dir().join("..").join("target").join("limine").join("limine-binary");
+    println!("cargo:rerun-if-changed={}", limine_dir.join("BOOTX64.EFI").display());
+    match limine_image(&limine_dir, &kernel, &files, &limine_path) {
+        Ok(true) => println!("cargo:rustc-env=LIMINE_IMAGE={}", limine_path.display()),
+        Ok(false) => {
+            println!("cargo:warning=Limine binaries not found (scripts/fetch-limine) -- no Limine image");
+            println!("cargo:rustc-env=LIMINE_IMAGE=");
+        }
+        Err(e) => panic!("limine image: {e}"),
+    }
 
     println!("cargo:rustc-env=UEFI_IMAGE={}", uefi_path.display());
     println!("cargo:rustc-env=BIOS_IMAGE={}", bios_path.display());

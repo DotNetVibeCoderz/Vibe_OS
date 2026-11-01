@@ -167,8 +167,16 @@ pub fn init() {
     let (l4, _) = Cr3::read();
     let l4_virt = memory::phys_to_virt(l4.start_address().as_u64()) as *mut u64;
     MASTER_PML4.store(l4_virt as u64, Ordering::SeqCst);
-    let pml4e = unsafe { core::ptr::read_volatile(l4_virt) };
-    assert!(pml4e & PTE_PRESENT != 0, "aspace: PML4[0] not present");
+    let mut pml4e = unsafe { core::ptr::read_volatile(l4_virt) };
+    if pml4e & PTE_PRESENT == 0 {
+        // No identity map below the kernel (Limine, base revision >= 1): the
+        // user half starts out empty. Give it a PDPT of its own.
+        let phys = alloc_zeroed_frame().expect("aspace: out of frames");
+        pml4e = phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+        unsafe { core::ptr::write_volatile(l4_virt, pml4e) };
+        crate::arch::cpu::flush_tlb();
+    }
+    assert!(pml4e & (1 << 7) == 0, "aspace: huge page at PML4[0]");
     let pdpt = memory::phys_to_virt(pml4e & PTE_ADDR_MASK) as *mut u64;
     PDPT_VIRT.store(pdpt as u64, Ordering::SeqCst);
 

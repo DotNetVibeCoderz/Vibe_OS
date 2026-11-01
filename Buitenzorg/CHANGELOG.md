@@ -35,6 +35,14 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M1 (increment 2): Limine boot — M1 complete.** The same
+  kernel ELF boots through the Limine protocol (base revision 6, requests
+  declared in `arch/x86/limine.rs`): higher-half load, no identity map,
+  HHDM-relative RSDP. `bzimage` builds `buitenzorg-limine-uefi.img` (MBR + FAT
+  partition with Limine, the kernel and all /disk files) when
+  `scripts/fetch-limine.*` has fetched the pinned Limine v12.9.3 binaries; a
+  new `[limine]` smoke step boots it to READY on 2 CPUs with /disk and
+  processes, reaching the same milestones as the IDE boot.
 - **Multi-arch M1 (increment 1): boot-protocol HAL + Device Tree.** The
   `bootloader` crate is confined to `arch/x86/boot.rs`, which converts its
   hand-off into a neutral `boot::BootInfo` (memory map, framebuffer,

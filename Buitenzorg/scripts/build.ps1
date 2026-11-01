@@ -13,6 +13,10 @@ if (Test-Path (Join-Path $root "tools\bflat\bflat.exe")) {
     Write-Host "==> skipping C# user program (tools/bflat not installed)" -ForegroundColor Yellow
 }
 
+# Multi-arch M1: Limine binaries (pinned + SHA-256) so bzimage also builds the
+# Limine-protocol UEFI image. Optional: a download failure only skips it.
+try { & (Join-Path $PSScriptRoot "fetch-limine.ps1") } catch { Write-Host "==> Limine not fetched ($_); no Limine image" -ForegroundColor Yellow }
+
 Write-Host "==> kernel (Rust)" -ForegroundColor Green
 Push-Location (Join-Path $root "kernel")
 try {

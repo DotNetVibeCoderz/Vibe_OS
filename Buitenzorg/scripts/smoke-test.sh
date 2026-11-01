@@ -125,4 +125,28 @@ else
   echo "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
 fi
 
+# Limine boot (multi-arch M1): the same kernel through the Limine protocol,
+# UEFI, 2 CPUs, /disk on an MBR FAT partition. Needs OVMF + the Limine
+# binaries (scripts/fetch-limine.sh) so bzimage built the image.
+if [ -f "$ovmf/code.fd" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
+  log="$root/dist/boot-limine.log"
+  rm -f "$log"
+  timeout --foreground 170 "$qemu" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/code.fd" \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf/vars.fd" \
+    -drive "format=raw,file=$root/dist/buitenzorg-limine-uefi.img" -smp 2 \
+    -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
+    -display none -serial "file:$log" -no-reboot &
+  qpid=$!
+  for _ in $(seq 150); do
+    sleep 1
+    grep -q "BUITENZORG READY" "$log" 2>/dev/null && break
+  done
+  kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
+  require "$log" "${basic[@]}" "[boot] loader=limine" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: DISK WRITE OK" "MILESTONE: MULTIPROC OK"
+  echo "smoke [limine]: Limine protocol boot (UEFI) to READY on 2 CPUs, /disk + processes"
+else
+  echo "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.sh before the build)"
+fi
+
 echo "SMOKE TEST PASSED: ide/ahci/nvme/usb"

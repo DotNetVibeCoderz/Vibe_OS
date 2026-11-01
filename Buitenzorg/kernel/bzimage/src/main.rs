@@ -1,7 +1,7 @@
 //! Build pipeline entry point (requirements.md §17 "Pipeline boot QEMU otomatis").
 //!
 //! ```text
-//! bzimage --out <dir>            copy UEFI+BIOS images to <dir> and print paths
+//! bzimage --out <dir>            copy UEFI+BIOS (+ Limine UEFI) images to <dir>
 //! bzimage --run [--uefi]         boot the image in QEMU (BIOS default)
 //! bzimage --smoke [--uefi]       headless boot, serial to stdout (for CI grep)
 //!         --media ide|ahci|nvme|usb   controller the boot disk is attached to
@@ -12,6 +12,9 @@ use std::process::Command;
 
 const UEFI_IMAGE: &str = env!("UEFI_IMAGE");
 const BIOS_IMAGE: &str = env!("BIOS_IMAGE");
+/// The same kernel booted by Limine under UEFI; empty when the Limine
+/// binaries were not fetched at build time (scripts/fetch-limine.*).
+const LIMINE_IMAGE: &str = env!("LIMINE_IMAGE");
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -26,6 +29,11 @@ fn main() {
         std::fs::copy(BIOS_IMAGE, &bios).expect("copy bios image");
         println!("UEFI image: {}", uefi.display());
         println!("BIOS image: {}", bios.display());
+        if !LIMINE_IMAGE.is_empty() {
+            let limine = dir.join("buitenzorg-limine-uefi.img");
+            std::fs::copy(LIMINE_IMAGE, &limine).expect("copy limine image");
+            println!("Limine (UEFI) image: {}", limine.display());
+        }
         return;
     }
 

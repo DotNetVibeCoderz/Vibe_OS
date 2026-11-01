@@ -10,6 +10,10 @@ else
     echo "==> skipping C# user program (tools/bflat not installed)"
 fi
 
+# Multi-arch M1: Limine binaries (pinned + SHA-256) so bzimage also builds the
+# Limine-protocol UEFI image. Optional: a download failure only skips it.
+"$root/scripts/fetch-limine.sh" || echo "==> Limine not fetched; no Limine image"
+
 echo "==> kernel (Rust)"
 (cd "$root/kernel" && cargo build --release && cargo run --release -p bzimage -- --out "$root/dist")
 
