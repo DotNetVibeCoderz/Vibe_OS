@@ -1,8 +1,14 @@
 //! The EL1 exception vector table (VBAR_EL1): 16 entries of 0x80 bytes —
 //! {synchronous, IRQ, FIQ, SError} × {current EL with SP_EL0, current EL with
-//! SP_ELx, lower EL AArch64, lower EL AArch32}. Each entry reserves a 256-byte
-//! frame, saves x0/x1, and jumps to a common path that saves x2..x30 and calls
-//! [`bz_exception`] with the entry index; returning restores and `eret`s.
+//! SP_ELx, lower EL AArch64, lower EL AArch32}. Each entry reserves a 272-byte
+//! frame, saves x0/x1, and jumps to a common path that saves x2..x30 plus
+//! ELR_EL1, SPSR_EL1 and SP_EL0 and calls [`bz_exception`] with the entry
+//! index; returning restores all of it and `eret`s.
+//!
+//! ELR/SPSR/SP_EL0 live in the frame (not just in the registers) because the
+//! handler may run with interrupts enabled (syscalls) or switch tasks (timer
+//! preemption): a nested exception overwrites ELR/SPSR, and another task's
+//! return to EL0 needs *its* user stack pointer in SP_EL0.
 
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -12,7 +18,7 @@ global_asm!(
 .section .text.bz_vectors, "ax"
 .macro BZ_VEC idx
     .balign 0x80
-    sub sp, sp, #256
+    sub sp, sp, #272
     stp x0, x1, [sp, #0]
     mov x0, #\idx
     b bz_exc_common
@@ -54,8 +60,21 @@ bz_exc_common:
     stp x26, x27, [sp, #208]
     stp x28, x29, [sp, #224]
     str x30, [sp, #240]
+    mrs x9, elr_el1
+    mrs x10, spsr_el1
+    mrs x11, sp_el0
+    str x9, [sp, #248]
+    str x10, [sp, #256]
+    str x11, [sp, #264]
     mov x1, sp
     bl bz_exception
+    msr daifset, #2              // no interrupt between restoring ELR/SPSR and eret
+    ldr x9, [sp, #248]
+    ldr x10, [sp, #256]
+    ldr x11, [sp, #264]
+    msr elr_el1, x9
+    msr spsr_el1, x10
+    msr sp_el0, x11
     ldp x2, x3, [sp, #16]
     ldp x4, x5, [sp, #32]
     ldp x6, x7, [sp, #48]
@@ -72,7 +91,7 @@ bz_exc_common:
     ldp x28, x29, [sp, #224]
     ldr x30, [sp, #240]
     ldp x0, x1, [sp, #0]
-    add sp, sp, #256
+    add sp, sp, #272
     eret
 "#
 );
@@ -136,7 +155,11 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
         if from_el0 {
             IRQS_FROM_EL0.fetch_add(1, Ordering::Relaxed);
         }
-        super::gic::handle_irq();
+        // Acknowledged + EOI'd inside; a timer tick then may switch tasks
+        // (ring-3 code is always preemptible, kernel code only in the demo).
+        if super::gic::handle_irq() == Some(super::timer::INTID) {
+            crate::task::preempt(from_el0);
+        }
         return;
     }
     let (esr, elr, far): (u64, u64, u64);

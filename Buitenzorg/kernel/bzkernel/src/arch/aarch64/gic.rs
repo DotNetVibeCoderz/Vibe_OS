@@ -63,17 +63,19 @@ pub fn enable_ppi(intid: u32) {
     w32(sgi + GICR_ISENABLER0, 1 << intid);
 }
 
-/// IRQ entry: acknowledge, dispatch, end of interrupt.
-pub fn handle_irq() {
+/// IRQ entry: acknowledge, dispatch, end of interrupt. Returns the interrupt
+/// id handled (None if spurious).
+pub fn handle_irq() -> Option<u32> {
     let intid: u64;
     unsafe { asm!("mrs {}, icc_iar1_el1", out(reg) intid, options(nomem, nostack)) };
     let id = intid & 0xFF_FFFF;
     if id >= 1020 {
         SPURIOUS.fetch_add(1, Ordering::Relaxed);
-        return; // spurious: no EOI
+        return None; // spurious: no EOI
     }
     if id == super::timer::INTID as u64 {
         super::timer::on_tick();
     }
     unsafe { asm!("msr icc_eoir1_el1, {}", "isb", in(reg) intid, options(nostack)) };
+    Some(id as u32)
 }

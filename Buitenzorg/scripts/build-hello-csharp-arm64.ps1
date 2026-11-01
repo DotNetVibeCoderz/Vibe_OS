@@ -26,7 +26,10 @@ try {
         @{src=@("hello.cs");           elf="hello.elf"},
         @{src=@("matang.cs");          elf="matang.elf"},
         @{src=@("heap.cs");            elf="heap.elf"},
-        @{src=@("gcmem.cs");           elf="gcmem.elf"}
+        @{src=@("gcmem.cs");           elf="gcmem.elf"},
+        @{src=@("mproc.cs");           elf="mproc.elf"},
+        @{src=@("thread.cs");          elf="thread.elf"},
+        @{src=@("sync.cs");            elf="sync.elf"}
         # bcl.cs: not yet -- bflat's arm64 codegen needs
         # ThrowHelpers.ThrowOverflowException, which zerolib lacks.
     )

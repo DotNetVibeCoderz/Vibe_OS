@@ -12,6 +12,9 @@
 // kernel with `SVC #0`, faults contained. Increment 4: real ELF programs
 // (`elf.rs`), handed over by Limine as boot modules -- the first C# app built
 // for ARM64 (bflat linux-arm64 + the aarch64 `bzstart.rs` shim).
+// Increment 5: the shared scheduler (`task.rs`) and process registry
+// (`process.rs`) run unchanged on ARM64 -- preemptive processes, ring-3
+// threads and futexes.
 
 mod allocator;
 mod arch;
@@ -23,6 +26,8 @@ mod limine;
 mod logo;
 mod memory;
 mod platform;
+mod process;
+mod task;
 
 pub(crate) use platform::virt::pl011 as serial;
 
@@ -33,7 +38,7 @@ mod interactive {
     }
 }
 
-pub(crate) use arch::aarch64::aspace;
+pub(crate) use arch::aarch64::{aspace, gdt, interrupts, smp, usermode};
 
 use core::panic::PanicInfo;
 
@@ -135,6 +140,9 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
 
     el0_self_test();
+    // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
+    // task joins, and programs run as preemptively scheduled processes.
+    task::init();
     run_boot_programs(info);
 
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();
@@ -146,7 +154,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-4 (boot, interrupts, memory, threads + EL0, ELF + C# programs); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-5 (boot, interrupts, memory, EL0, C# programs, scheduler + processes + threads); the rest of the kernel follows");
     loop {
         cpu::enable_and_halt();
     }
@@ -349,8 +357,6 @@ fn context_self_test() {
 
 // ---- User mode (EL0) ---------------------------------------------------------
 
-static USER_CTX: core::sync::atomic::AtomicPtr<arch::aarch64::user::KernelCtx> =
-    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 static USER_WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static USER_FAULT_FAR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// What user programs wrote (DEBUG_WRITE), for the self-tests.
@@ -359,9 +365,27 @@ static USER_OUTPUT: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc:
 /// Exit code of a user program ended by a fault (as on x86).
 const FAULT_EXIT_CODE: u64 = 0xDEAD;
 
-/// `SVC #0` from EL0: x8 = number, x0..x2 = arguments (the bz-abi numbers,
-/// the same table as on x86). Called from the exception handler.
-pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, _a2: u64) -> u64 {
+/// `SVC #0` from EL0 (x8 = number, x0..x2 = arguments; bz-abi numbers, the
+/// same table as on x86). Like x86's `syscall_dispatch_c`: clock reads take no
+/// lock; everything else runs under the Big Kernel Lock, with interrupts
+/// enabled (the exception frame holds ELR/SPSR/SP_EL0, so a nested interrupt
+/// or a task switch inside the syscall is safe).
+pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::sysno;
+    match nr {
+        sysno::TICKS => return interrupts::ticks(),
+        sysno::CLOCK_MONO => return arch::cpu::timestamp(),
+        _ => {}
+    }
+    task::kernel_enter();
+    arch::cpu::enable_interrupts();
+    let r = el0_dispatch(nr, a0, a1, a2);
+    arch::cpu::disable_interrupts();
+    task::kernel_exit();
+    r
+}
+
+fn el0_dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     use bz_abi::{syserr, sysno};
     match nr {
         sysno::ABI_VERSION => bz_abi::ABI_VERSION,
@@ -380,27 +404,46 @@ pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, _a2: u64) -> u64 {
             USER_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             a1
         }
-        sysno::EXIT => {
-            let ctx = USER_CTX.load(core::sync::atomic::Ordering::SeqCst);
-            if ctx.is_null() {
-                return syserr::INVAL;
-            }
-            arch::aarch64::user::return_to_kernel(unsafe { &*ctx }, a0)
+        sysno::EXIT | sysno::THREAD_EXIT => usermode::exit_user(a0),
+        sysno::YIELD => {
+            task::yield_now();
+            0
         }
-        sysno::TICKS => arch::aarch64::timer::ticks(),
         // The generic user-memory PAL (the C# runtime's heap): same code as x86.
         sysno::MMAP => memory::user_mmap(a0, a1),
-        sysno::MPROTECT => memory::user_mprotect(a0, a1, _a2),
+        sysno::MPROTECT => memory::user_mprotect(a0, a1, a2),
         sysno::MUNMAP => memory::user_munmap(a0, a1),
-        sysno::CLOCK_MONO => arch::cpu::timestamp(),
+        // Threads + futexes: the shared scheduler.
+        sysno::THREAD_CREATE => {
+            if a0 == 0 || a2 == 0 {
+                return syserr::INVAL;
+            }
+            task::ensure_main_user_thread();
+            task::spawn_user_thread(a0, a1, a2)
+        }
+        sysno::THREAD_JOIN => {
+            while !task::is_finished(a0) {
+                task::yield_now();
+            }
+            0
+        }
+        sysno::THREAD_SELF => task::current_id(),
+        sysno::FUTEX_WAIT => {
+            if a0 % 4 != 0 || !memory::validate_user_range(a0, 4, false) {
+                return syserr::INVAL;
+            }
+            while task::futex_wait_if(a0, a1 as u32) {}
+            0
+        }
+        sysno::FUTEX_WAKE => task::futex_wake(a0, a1),
         _ => syserr::NOSYS,
     }
 }
 
-/// A fatal exception in EL0 code: end the program (exit code 0xDEAD).
+/// A fatal exception in EL0 code: end that program (exit code 0xDEAD), like
+/// the x86 ring-3 #PF/#GP containment.
 pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64) -> ! {
-    let ctx = USER_CTX.load(core::sync::atomic::Ordering::SeqCst);
-    if ctx.is_null() {
+    if !usermode::user_active() {
         panic!("EL0 fault outside a user program: ESR={:#x} FAR={:#x} ELR={:#x}", esr, far, elr);
     }
     println!(
@@ -411,14 +454,15 @@ pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64) -> ! {
         far
     );
     USER_FAULT_FAR.store(far, core::sync::atomic::Ordering::SeqCst);
-    arch::aarch64::user::return_to_kernel(unsafe { &*ctx }, FAULT_EXIT_CODE)
+    task::kernel_enter();
+    usermode::exit_user(FAULT_EXIT_CODE)
 }
 
-/// Run `code` as an EL0 program in a fresh address space: code page at
-/// 0x40_0000 (user, read-only, executable), one stack page below 0x7000_0000.
-/// Returns (exit code, frames leaked by the space).
+/// Run `code` as an EL0 program on the boot flow itself (before the
+/// scheduler starts), in a fresh address space: code page at 0x40_0000 (user,
+/// read-only, executable), one stack page below 0x7000_0000. Returns (exit
+/// code, frames leaked by the space).
 fn run_el0(id: u64, code: &[u8]) -> Option<(u64, i64)> {
-    use arch::aarch64::user;
     use arch::paging::{self, Flags};
     const ENTRY: u64 = 0x40_0000;
     const STACK_TOP: u64 = 0x7000_0000;
@@ -437,11 +481,8 @@ fn run_el0(id: u64, code: &[u8]) -> Option<(u64, i64)> {
         unsafe { core::ptr::write_bytes(memory::phys_to_virt(st) as *mut u8, 0, 4096) };
         paging::map(&mut ctx.mapper, &mut ctx.frames, STACK_TOP - 4096, st, Flags { write: true, user: true, exec: false }).ok()
     })?;
-    user::sync_icache();
-    let mut kctx = user::KernelCtx::new();
-    USER_CTX.store(&mut kctx, core::sync::atomic::Ordering::SeqCst);
-    let code = user::enter_user(ENTRY, STACK_TOP, &mut kctx);
-    USER_CTX.store(core::ptr::null_mut(), core::sync::atomic::Ordering::SeqCst);
+    usermode::sync_icache();
+    let code = usermode::enter_user(ENTRY, STACK_TOP);
     aspace::install(aspace::kernel());
     aspace::destroy(space);
     Some((code, memory::frames_in_use() as i64 - before))
@@ -452,8 +493,8 @@ fn run_el0(id: u64, code: &[u8]) -> Option<(u64, i64)> {
 /// 1+..+100 and exits with (abi << 16) + 5050; the other reads a kernel-half
 /// address and must be terminated by the fault, not crash the kernel.
 fn el0_self_test() {
-    use arch::aarch64::{exceptions, user};
-    let (demo, fault) = user::demo_programs();
+    use arch::aarch64::exceptions;
+    let (demo, fault) = usermode::demo_programs();
     let (irq0, _) = exceptions::el0_stats();
     let r1 = run_el0(3000, demo);
     let (irq1, svcs) = exceptions::el0_stats();
@@ -481,65 +522,136 @@ fn el0_self_test() {
     }
 }
 
-// ---- ELF programs from boot modules ---------------------------------------
+// ---- Processes (the shared scheduler) -----------------------------------------
 
-/// Load an ELF program into a fresh address space with the generic loader
-/// (`elf.rs`, the same as on x86 -- it checks `e_machine` = EM_AARCH64 here),
-/// give it a 128 KiB stack below 0x7000_0000, run it in EL0, tear it down.
-/// Returns (exit code, frames leaked).
-fn run_elf(id: u64, image: &[u8]) -> Result<(u64, i64), &'static str> {
-    use arch::aarch64::user;
-    const STACK_BASE: u64 = 0x7000_0000 - 32 * 4096;
-    let before = memory::frames_in_use() as i64;
-    let space = aspace::create(id)?;
-    aspace::install(space);
-    let loaded = memory::with_ctx(|ctx| {
-        let program = elf::load(image, ctx)?;
-        let (stack_top, _) = memory::map_user_region(STACK_BASE, 32, ctx)?;
-        Ok::<_, &'static str>((program.entry, stack_top))
-    });
-    let (entry, stack_top) = match loaded {
-        Ok(v) => v,
-        Err(e) => {
-            aspace::install(aspace::kernel());
-            aspace::destroy(space);
-            return Err(e);
-        }
-    };
-    user::sync_icache();
-    let mut kctx = user::KernelCtx::new();
-    USER_CTX.store(&mut kctx, core::sync::atomic::Ordering::SeqCst);
-    let code = user::enter_user(entry, stack_top, &mut kctx);
-    USER_CTX.store(core::ptr::null_mut(), core::sync::atomic::Ordering::SeqCst);
-    aspace::install(aspace::kernel());
-    aspace::destroy(space);
-    Ok((code, memory::frames_in_use() as i64 - before))
-}
+/// The PC kernel's `app.rs` launches programs from /disk with the window
+/// system around them; until those reach ARM64 this is its core: start an
+/// ELF image as its own preemptively scheduled process, wait for it, clean up.
+mod app {
+    use crate::{aspace, elf, memory, process, task};
 
-/// Run every ELF the loader handed over as a module (`module_path` in
-/// limine.conf). `hello` is the v0.4 milestone program: C# compiled by bflat
-/// for linux-arm64 with zerolib, linked with the aarch64 shim.
-fn run_boot_programs(info: &boot::BootInfo) {
-    let mut id = 4000;
-    for m in info.modules() {
-        let image = m.bytes();
-        if image.len() < 4 || &image[..4] != b"\x7fELF" {
-            continue;
-        }
-        println!("[arm64] --- program '{}' ({} bytes, from a Limine module) ---", m.name(), image.len());
-        USER_OUTPUT.lock().clear();
-        let r = run_elf(id, image);
-        id += 1;
-        match r {
-            Ok((code, leaked)) => {
-                println!("[arm64] --- '{}' exited with code {:#x}, {} frames leaked ---", m.name(), code, leaked);
-                if m.name() == "hello" && code == 0 && leaked == 0 && USER_OUTPUT.lock().contains("Hello from C#!") {
-                    println!("[kernel] MILESTONE: ARM64 CSHARP OK (C# compiled for linux-arm64 by bflat, loaded by the generic ELF loader, ran in EL0: Hello from C#!)");
-                }
+    const USER_STACK_BASE: u64 = 0x7000_0000 - USER_STACK_PAGES * 4096;
+    const USER_STACK_PAGES: u64 = 32; // 128 KiB
+    const KILLED_EXIT_CODE: u64 = 0xDEAD;
+
+    /// Start `image` as a process named `name`; returns its pid (= its space id).
+    pub fn spawn_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
+        let pid = process::app_start(name);
+        let space = match aspace::create(pid) {
+            Ok(s) => s,
+            Err(e) => {
+                process::app_exit(pid, u64::MAX);
+                return Err(e);
             }
-            Err(e) => println!("[arm64] '{}': {}", m.name(), e),
+        };
+        let prev = task::current_space();
+        aspace::install(space);
+        let loaded = memory::with_ctx(|ctx| {
+            let program = elf::load(image, ctx)?;
+            let (stack_top, _) = memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
+            Ok::<_, &'static str>((program.entry, stack_top))
+        });
+        aspace::install(prev);
+        crate::usermode::sync_icache();
+        match loaded {
+            Ok((entry, stack_top)) => {
+                task::spawn_process(entry, stack_top, space);
+                Ok(pid)
+            }
+            Err(e) => {
+                aspace::destroy(space);
+                process::app_exit(pid, u64::MAX);
+                Err(e)
+            }
         }
     }
+
+    /// Block until process `pid` exits; its exit code.
+    pub fn wait(pid: u64) -> u64 {
+        while task::block_while(process::wait_key(pid), || process::is_alive(pid)) {}
+        process::exit_code(pid).unwrap_or(u64::MAX)
+    }
+
+    fn destroy_when_home(space: aspace::Space) {
+        if task::wait_space_stopped(space.id) {
+            aspace::destroy(space);
+        }
+    }
+
+    /// On the process's own task once its program exited (scheduler hook).
+    pub fn process_exited(pid: u64, code: u64) {
+        let space = task::current_space();
+        task::detach_current_from_space(pid);
+        destroy_when_home(space);
+        process::app_exit(pid, code);
+    }
+
+    /// PROC_KILL.
+    pub fn kill(pid: u64) -> bool {
+        let Some(space) = task::kill_space(pid) else { return false };
+        destroy_when_home(space);
+        process::app_exit(pid, KILLED_EXIT_CODE);
+        true
+    }
+}
+
+/// Run the ELF programs Limine handed over as modules, as processes of the
+/// shared scheduler (`task.rs`, the same code as on x86):
+/// - one at a time: hello (the v0.4 milestone), matang, heap, gcmem;
+/// - **two copies of `mproc` at once**: each spins ~2 s without yielding,
+///   keeps a running sum in an FP register and stamps its own mmap page at the
+///   same virtual address -- they can only both finish (exact sums, own
+///   pages) if the timer preempts EL0 and every switch saves FP state and
+///   swaps TTBR0;
+/// - `thread` (ring-3 threads + join) and `sync` (futex-backed mutex).
+fn run_boot_programs(info: &boot::BootInfo) {
+    let find = |name: &str| info.modules().iter().find(|m| m.name() == name).map(|m| m.bytes());
+    let frames0 = memory::frames_in_use();
+    for name in ["hello", "matang", "heap", "gcmem"] {
+        let Some(image) = find(name) else { continue };
+        USER_OUTPUT.lock().clear();
+        println!("[arm64] --- program '{}' ({} bytes, from a Limine module) ---", name, image.len());
+        match app::spawn_image(name, image) {
+            Ok(pid) => {
+                let code = app::wait(pid);
+                println!("[arm64] --- '{}' (pid {}) exited with code {:#x} ---", name, pid, code);
+                if name == "hello" && code == 0 && USER_OUTPUT.lock().contains("Hello from C#!") {
+                    println!("[kernel] MILESTONE: ARM64 CSHARP OK (C# compiled for linux-arm64 by bflat, loaded by the generic ELF loader, ran in EL0 as a process: Hello from C#!)");
+                }
+            }
+            Err(e) => println!("[arm64] '{}': {}", name, e),
+        }
+    }
+
+    if let Some(image) = find("mproc") {
+        let p0 = task::user_preemptions();
+        let t0 = interrupts::ticks();
+        let pids: alloc::vec::Vec<u64> = (0..2).filter_map(|i| app::spawn_image(if i == 0 { "mproc-a" } else { "mproc-b" }, image).ok()).collect();
+        let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| app::wait(p)).collect();
+        let preempts = task::user_preemptions() - p0;
+        let secs10 = (interrupts::ticks() - t0) * 10 / 18;
+        println!(
+            "[arm64] mproc x2: exit codes {:?}, {} timer preemptions of EL0 code, {}.{} s",
+            codes,
+            preempts,
+            secs10 / 10,
+            secs10 % 10
+        );
+        if pids.len() == 2 && codes.iter().all(|&c| c == 0) && preempts >= 10 {
+            println!("[kernel] MILESTONE: ARM64 MULTIPROC OK (shared scheduler on AArch64: two processes preempted by the timer, each in its own TTBR0 space with its own FP state)");
+        }
+    }
+
+    for name in ["thread", "sync"] {
+        let Some(image) = find(name) else { continue };
+        println!("[arm64] --- program '{}' ---", name);
+        match app::spawn_image(name, image) {
+            Ok(pid) => println!("[arm64] --- '{}' exited with code {:#x} ---", name, app::wait(pid)),
+            Err(e) => println!("[arm64] '{}': {}", name, e),
+        }
+    }
+    let leaked = memory::frames_in_use() as i64 - frames0 as i64;
+    println!("[arm64] programs done; frames leaked: {}", leaked);
 }
 
 #[panic_handler]

@@ -33,5 +33,8 @@ build_prog hello hello.cs
 build_prog matang matang.cs
 build_prog heap heap.cs
 build_prog gcmem gcmem.cs
+build_prog mproc mproc.cs
+build_prog thread thread.cs
+build_prog sync sync.cs
 # bcl.cs: not yet -- bflat's arm64 codegen needs
 # ThrowHelpers.ThrowOverflowException, which zerolib lacks.

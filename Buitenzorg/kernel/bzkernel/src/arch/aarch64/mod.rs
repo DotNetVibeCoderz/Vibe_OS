@@ -12,10 +12,13 @@ pub mod aspace;
 pub mod context;
 pub mod cpu;
 pub mod exceptions;
+pub mod gdt;
 pub mod gic;
+pub mod interrupts;
 pub mod paging;
+pub mod smp;
 pub mod timer;
-pub mod user;
+pub mod usermode;
 
 /// ELF entry symbol. Limine enters through the entry-point request
 /// (`limine::limine_entry`) instead; this only satisfies the linker and parks
