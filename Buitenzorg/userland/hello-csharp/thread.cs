@@ -19,6 +19,7 @@ class ThreadDemo
 {
     [DllImport("*")] public static extern ulong bz_mmap(ulong size, ulong prot);
     [DllImport("*")] public static extern ulong bz_spawn_worker(ulong counter);
+    [DllImport("*")] public static extern unsafe long bz_atomic_add(long* p, long v);
     [DllImport("*")] public static extern ulong bz_thread_join(ulong tid);
     [DllImport("*")] public static extern void bz_yield();
 
@@ -51,7 +52,7 @@ class ThreadDemo
         // Main thread bumps the same counter, yielding so the two interleave.
         for (int i = 0; i < K; i++)
         {
-            (*counter)++;
+            bz_atomic_add(counter, 1); // the worker may run on another CPU
             bz_yield();
         }
 

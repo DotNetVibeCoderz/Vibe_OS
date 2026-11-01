@@ -682,21 +682,38 @@ pub fn blit_on_window(
 static PRESENT_BUF: spin::Mutex<alloc::vec::Vec<u32>> = spin::Mutex::new(alloc::vec::Vec::new());
 
 /// Compose + present immediately (v0.8 WIN_PRESENT syscall).
+/// Set by a present that found another CPU already composing: that CPU
+/// composes once more after it finishes, so the newer drawing is shown.
+static PRESENT_AGAIN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn present_now() {
+    use core::sync::atomic::Ordering;
     if let Some((w, h)) = crate::framebuffer::dimensions() {
-        let mut back = PRESENT_BUF.lock();
+        // Presents coalesce: a full compose takes long, and queueing every
+        // caller behind it (spinning) only repeats the same work. If another
+        // CPU is composing, ask it to go round once more and return.
+        let Some(mut back) = PRESENT_BUF.try_lock() else {
+            PRESENT_AGAIN.store(true, Ordering::Release);
+            return;
+        };
         if back.len() != w * h {
             back.resize(w * h, 0);
         }
-        {
-            // Profiler zone: the compositor is the deepest thing a WIN_PRESENT
-            // syscall runs, so it is the natural thing to measure. Inert unless
-            // profiling is enabled (`prof on` / the boot self-test).
-            let _z = crate::profile::Guard::new("wm::compose");
-            compose_into(&mut back, w, h);
+        for _ in 0..4 {
+            PRESENT_AGAIN.store(false, Ordering::Release);
+            {
+                // Profiler zone: the compositor is the deepest thing a
+                // WIN_PRESENT syscall runs, so it is the natural thing to
+                // measure. Inert unless profiling is enabled.
+                let _z = crate::profile::Guard::new("wm::compose");
+                compose_into(&mut back, w, h);
+            }
+            let _z = crate::profile::Guard::new("fb::present");
+            crate::framebuffer::present(&back);
+            if !PRESENT_AGAIN.load(Ordering::Acquire) {
+                break;
+            }
         }
-        let _z = crate::profile::Guard::new("fb::present");
-        crate::framebuffer::present(&back);
     }
 }
 

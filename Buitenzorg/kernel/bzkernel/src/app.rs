@@ -65,6 +65,13 @@ pub fn spawn_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
     spawn_image_at(name, image, None)
 }
 
+/// [`spawn_image`] with an argument string, visible to the program's first
+/// PROC_ARGS. The arguments are recorded *before* its task can be scheduled:
+/// on SMP another CPU may start running the child the moment it is spawned.
+pub fn spawn_image_args(name: &str, image: &[u8], args: &str) -> Result<u64, &'static str> {
+    spawn_image_full(name, image, None, args)
+}
+
 /// Like [`spawn_image`], optionally entering at `entry_override` instead of
 /// the ELF entry — the boot self-test uses an unmapped address to prove that
 /// a faulting program is terminated without taking the kernel down.
@@ -73,7 +80,17 @@ pub fn spawn_image_at(
     image: &[u8],
     entry_override: Option<u64>,
 ) -> Result<u64, &'static str> {
+    spawn_image_full(name, image, entry_override, "")
+}
+
+fn spawn_image_full(
+    name: &str,
+    image: &[u8],
+    entry_override: Option<u64>,
+    args: &str,
+) -> Result<u64, &'static str> {
     let pid = process::app_start(name);
+    process::set_args(pid, args);
     match load_program(pid, image) {
         Ok((space, entry, stack_top)) => {
             task::spawn_process(entry_override.unwrap_or(entry), stack_top, space);
@@ -160,11 +177,10 @@ pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
     } else {
         (alloc::string::String::from(target), read_app(target)?)
     };
-    // The child cannot run before this returns (kernel code is never preempted
-    // and spawning does not yield), so its first PROC_ARGS sees these args.
-    let pid = spawn_image(&name, &bytes)?;
-    process::set_args(pid, args);
-    Ok(pid)
+    // The args are recorded before the child's task exists: on SMP another
+    // CPU can start running it immediately (it used to be set afterwards,
+    // which was only safe on one core).
+    spawn_image_args(&name, &bytes, args)
 }
 
 /// Map a short app name to its 8.3 ELF filename.
@@ -200,6 +216,8 @@ fn app_file(name: &str) -> Option<&'static str> {
         "mproc" => Some("MPROC.ELF"),
         "smpsys" => Some("SMPSYS.ELF"),
         "smpgui" => Some("SMPGUI.ELF"),
+        "pthread" => Some("PTHREAD.ELF"),
+        "smpfs" => Some("SMPFS.ELF"),
         "proctest" => Some("PROCTEST.ELF"),
         // Generic slot for a user-authored app: the SDK/VS Code/MagicAppGen
         // template builds its ELF to userland/hello-csharp/userapp.elf, which

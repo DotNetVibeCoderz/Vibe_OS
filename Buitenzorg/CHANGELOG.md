@@ -63,6 +63,19 @@ Hardening toward a stable x86-64 release.
   space, minimal) in `assets/wallpapers/`; `bzimage` converts them to 800×450
   BMPs on `/disk`, the kernel resamples once (bilinear) and caches. `bg list` /
   `bg <name>`; `MILESTONE: WALLPAPERS OK`; gallery in the README and docs.
+- **Syscalls with interrupts on; files without the BKL.** A 4-CPU livelock
+  (CPU 0 spinning with interrupts off froze the PIT tick count) led to serving
+  every syscall with interrupts enabled and to coalescing presents. FS_LIST /
+  FS_READ / FS_WRITE run without the BKL under the VFS mount lock (SMPFS
+  workload). Process arguments are recorded before the child can be
+  scheduled (on SMP it could start reading them on another CPU).
+- **Parallel threads.** Threads of one process run on several CPUs at once.
+  The ring-3 runtime became SMP-safe: the heap allocator is locked,
+  `bz_mutex_lock` uses a compare-and-swap (it was a plain read-then-write),
+  and new `bz_atomic_add` / `bz_atomic_add32` / `bz_atomic_cas32` exports
+  replace racy shared-counter updates. `PTHREAD.ELF`: `MILESTONE: SMP THREADS
+  OK` (4 threads on 4 CPUs at once; disabling the heap lock makes it detect
+  overlapping allocations).
 - **I/O APIC.** Device interrupts are routed through the I/O APIC (MADT +
   ISA overrides) instead of the 8259, which is now masked; handlers EOI the
   Local APIC. The PIT stays on CPU 0, keyboard and mouse go to another CPU.

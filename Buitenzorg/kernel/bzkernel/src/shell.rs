@@ -295,6 +295,14 @@ fn cpu_cmd(arg: Option<&str>) -> Vec<String> {
             crate::task::set_ap_scheduling(true);
             vec![String::from("proses ring-3 kini dibagi ke semua CPU")]
         }
+        Some("threads-on") => {
+            crate::task::set_parallel_threads(true);
+            vec![String::from("thread dalam satu proses boleh jalan paralel")]
+        }
+        Some("threads-off") => {
+            crate::task::set_parallel_threads(false);
+            vec![String::from("thread dalam satu proses kini bergiliran")]
+        }
         Some("off") => {
             crate::task::set_ap_scheduling(false);
             vec![String::from("proses ring-3 kini hanya di CPU #0 (BSP)")]

@@ -117,12 +117,22 @@ extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     if !fine {
         crate::task::kernel_enter();
     }
+    // Serve the syscall with interrupts ON. SFMASK cleared IF on entry, but a
+    // long syscall (a compose, a disk read, a spin on a subsystem lock) must
+    // not keep this CPU deaf: device IRQs and the PIT go to particular CPUs
+    // (I/O APIC), and with CPU 0 stuck IF-off the tick count froze and every
+    // tick-timed loop in the system spun on. Kernel code is never preempted
+    // (a timer in ring 0 does not switch tasks), and every lock an interrupt
+    // handler also takes is taken with interrupts off, so this is safe —
+    // kernel tasks have always run like this.
+    crate::arch::cpu::enable_interrupts();
     crate::task::note_syscall(fine);
     // Concurrency statistic, for the BKL-free syscalls that never block.
     let track = fine
         && matches!(
             nr,
             n::MMAP | n::MPROTECT | n::MUNMAP | n::THREAD_SELF | n::DEBUG_WRITE | n::WIN_CMD | n::WIN_PRESENT | n::SYS_STAT | n::PROC_LIST
+                | n::FS_READ | n::FS_WRITE | n::FS_LIST
         );
     if track {
         crate::task::fine_enter();
@@ -134,6 +144,9 @@ extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     if track {
         crate::task::fine_leave();
     }
+    // Back to IF off before the return path: after `pop rsp` the stack is the
+    // user's, and an interrupt taken in ring 0 there would push onto it.
+    crate::arch::cpu::disable_interrupts();
     // Drops the BKL if this syscall took it; a killed task ends here.
     crate::task::kernel_exit();
     r

@@ -60,12 +60,13 @@ unsafe class Bcl2Demo
         int* counter = (int*)arg;
         for (int i = 0; i < 200; i++)
         {
-            *counter = *counter + 1;
+            bz_atomic_add32(counter, 1); // the other task may run on another CPU
             BzTask.Yield();
         }
     }
 
     [DllImport("*")] static extern ulong bz_mmap(ulong size, ulong prot);
+    [DllImport("*")] static extern unsafe int bz_atomic_add32(int* p, int v);
 
     static void Main()
     {

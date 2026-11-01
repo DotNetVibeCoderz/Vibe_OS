@@ -28,9 +28,10 @@
 //!   switches away records it in a per-CPU slot and the context it switched
 //!   *to* clears the flag (`finish_switch`). No other CPU can pick a running
 //!   task, so none can resume a half-saved one.
-//! - **Threads of one process never run at the same time** (`busy_spaces`):
-//!   the ring-3 runtime (e.g. the bump-heap malloc in bzstart.rs) is not
-//!   SMP-safe. Separate processes run in parallel.
+//! - **Threads of one process run in parallel too** (since the ring-3 runtime
+//!   became SMP-safe: locked heap, CAS mutex, atomics in bzstart.rs).
+//!   `set_parallel_threads(false)` restores the older rule that a process has
+//!   at most one thread on a CPU at a time (`busy_spaces`).
 //! - Per task: SYSCALL kernel stack (also TSS rsp0 of the CPU running it),
 //!   longjmp context for leaving ring 3, FXSAVE area, address space.
 //! - The scheduler lock is only taken with interrupts disabled, and never
@@ -271,6 +272,32 @@ pub struct TaskInfo {
     pub space_id: u64,
 }
 
+/// Threads of one process may run on several CPUs at once.
+static PARALLEL_THREADS: AtomicBool = AtomicBool::new(true);
+
+/// Allow/forbid threads of one process on several CPUs at once. Returns the
+/// previous setting.
+pub fn set_parallel_threads(on: bool) -> bool {
+    PARALLEL_THREADS.swap(on, Ordering::SeqCst)
+}
+
+/// Process whose parallelism the scheduler records (0 = none), and the most
+/// CPUs it has been seen running on at once.
+static WATCH_SPACE: AtomicU64 = AtomicU64::new(0);
+static WATCH_PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// Start recording how many CPUs run threads of process `space_id` at once
+/// (measured by the scheduler on every switch, on every CPU).
+pub fn watch_space(space_id: u64) {
+    WATCH_PEAK.store(0, Ordering::SeqCst);
+    WATCH_SPACE.store(space_id, Ordering::SeqCst);
+}
+
+/// Most CPUs the watched process ran on at the same time.
+pub fn watched_peak() -> u64 {
+    WATCH_PEAK.load(Ordering::SeqCst)
+}
+
 /// Address spaces with a thread running on another CPU.
 struct BusySpaces {
     ids: [u64; MAX_CPUS],
@@ -286,6 +313,9 @@ impl BusySpaces {
 impl Scheduler {
     fn busy_spaces(&self, c: usize) -> BusySpaces {
         let mut b = BusySpaces { ids: [0; MAX_CPUS], n: 0 };
+        if PARALLEL_THREADS.load(Ordering::Relaxed) {
+            return b; // threads of one process may share the CPUs
+        }
         for (cpu, &idx) in self.current.iter().enumerate() {
             if cpu == c || idx == NO_TASK {
                 continue;
@@ -1043,6 +1073,15 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
                     RUNNING_USER[c].store(n.user.is_some(), Ordering::Relaxed);
                     if !n.idle && n.user.is_none() {
                         KERNEL_RUNS[c].fetch_add(1, Ordering::Relaxed);
+                    }
+                    let watch = WATCH_SPACE.load(Ordering::Relaxed);
+                    if watch != 0 && n.space.id == watch {
+                        let on = sched
+                            .current
+                            .iter()
+                            .filter(|&&i| i != NO_TASK && sched.tasks[i].space.id == watch)
+                            .count() as u64;
+                        WATCH_PEAK.fetch_max(on, Ordering::Relaxed);
                     }
                     let prev: *mut u64 = &mut sched.tasks[cur].rsp;
                     let prev_fx: *mut FpuState = &mut *sched.tasks[cur].fpu;

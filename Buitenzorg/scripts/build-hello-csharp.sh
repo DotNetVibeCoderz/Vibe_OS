@@ -57,4 +57,6 @@ build_prog jpgtest jpgtest.cs bzgfx.cs
 build_prog mproc mproc.cs
 build_prog smpsys smpsys.cs
 build_prog smpgui smpgui.cs
+build_prog pthread pthread.cs
+build_prog smpfs smpfs.cs
 build_prog proctest proctest.cs bzbcl.cs bzbcl2.cs

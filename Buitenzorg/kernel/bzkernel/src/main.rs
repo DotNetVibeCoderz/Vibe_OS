@@ -710,6 +710,42 @@ fn smp_sched_demo(image: &[u8]) {
     }
     smp_kernel_demo(aps, ap_syscalls);
     smp_finelock_demo(aps);
+    smp_threads_demo(aps);
+}
+
+/// Parallel threads within one process: PTHREAD.ELF runs 3 worker threads that
+/// allocate from the (now locked) runtime heap, stamp and later verify their
+/// arrays, and count work with atomic adds. Its threads must really have run
+/// on several CPUs at the same moment, and it must exit 0 (no overlapping
+/// allocations, no lost update).
+fn smp_threads_demo(aps: usize) {
+    let Ok(image) = vfs::read("/disk/PTHREAD.ELF") else {
+        println!("[kernel] smp: PTHREAD.ELF not on /disk (parallel-threads test skipped)");
+        return;
+    };
+    let Ok(pid) = app::spawn_image("pthread", &image) else {
+        println!("[kernel] smp parallel-threads self-test FAILED (spawn)");
+        return;
+    };
+    // The scheduler records, on every CPU, how many CPUs run this process.
+    task::watch_space(pid);
+    let start = interrupts::ticks();
+    while process::is_alive(pid) && interrupts::ticks() - start < 18 * 30 {
+        task::yield_now();
+    }
+    let most = task::watched_peak() as usize;
+    task::watch_space(0);
+    let code = process::exit_code(pid).unwrap_or(u64::MAX);
+    let want = (aps + 1).min(3);
+    println!("[kernel] smp: PTHREAD exit code {} -- at most {} of its threads on CPUs at once (want {})", code, most, want);
+    if code == 0 && most >= want {
+        println!(
+            "[kernel] MILESTONE: SMP THREADS OK (threads of one process ran on {} CPUs at once; SMP-safe runtime heap + atomics)",
+            most
+        );
+    } else {
+        println!("[kernel] smp parallel-threads self-test FAILED");
+    }
 }
 
 /// Fine-grained locking (SMP increment 5): run one SMPSYS copy per CPU twice
@@ -726,10 +762,11 @@ fn smp_finelock_demo(aps: usize) {
     let overlap = wm::draws_during_compose() - draws0;
     println!("[kernel] smp: window draws that ran during a compose on another CPU: {}", overlap);
     let gui = gui.filter(|_| overlap > 0);
-    match (mem, gui) {
-        (Some((mp, mw0, mw1, mx)), Some((gp, gw0, gw1, gx))) => println!(
-            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02}; {} draws during another CPU's compose)",
-            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100, overlap
+    let fs = smp_finelock_run(aps, "SMPFS", "files (VFS + FAT + ATA)");
+    match (mem, gui, fs) {
+        (Some((mp, mw0, mw1, mx)), Some((gp, gw0, gw1, gx)), Some((fp, fw0, fw1, fx))) => println!(
+            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02}; {} draws during another CPU's compose; files: {} at once, BKL waits {} -> {}, x{}.{:02})",
+            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100, overlap, fp, fw0, fw1, fx / 100, fx % 100
         ),
         _ => println!("[kernel] smp fine-grained locking self-test FAILED"),
     }
@@ -750,7 +787,7 @@ fn smp_finelock_run(aps: usize, name: &str, what: &str) -> Option<(u64, u64, u64
         let (calls0, _) = task::fine_stats(true);
         let t0 = interrupts::ticks();
         let pids: alloc::vec::Vec<u64> = (0..copies)
-            .filter_map(|i| app::spawn_image(&alloc::format!("{}-{}", name, i), &image).ok())
+            .filter_map(|i| app::spawn_image_args(&alloc::format!("{}-{}", name, i), &image, &alloc::format!("{}", i)).ok())
             .collect();
         while pids.iter().any(|&p| process::is_alive(p)) && interrupts::ticks() - t0 < 18 * 30 {
             task::yield_now();
@@ -1407,13 +1444,16 @@ fn scheduler_demo() {
     use core::sync::atomic::Ordering;
 
     task::init();
-    // Enable timer preemption for this demo (busy-wait tasks must alternate
-    // without yielding); the rest of the kernel runs cooperatively.
-    task::set_preemption(true);
     task::spawn(demo::akar_a);
     task::spawn(demo::akar_b);
     task::spawn(demo::producer);
     task::spawn(demo::consumer);
+    // Enable timer preemption for this demo (busy-wait tasks must alternate
+    // without yielding); the rest of the kernel runs cooperatively. Only after
+    // the spawns: a spawn allocates, and a kernel task preempted while it holds
+    // the heap lock (taken with interrupts on) deadlocks the next task that
+    // allocates — a rare hang seen once on a UEFI smoke boot.
+    task::set_preemption(true);
 
     // Boot task waits (yielding) until the three worker groups report done.
     while demo::DONE.load(Ordering::SeqCst) < 3 {

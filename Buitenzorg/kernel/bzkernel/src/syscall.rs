@@ -68,6 +68,9 @@ fn from_user() -> bool {
 //   - process registry (PROC_LIST, PROC_ARGS, SYS_STAT): `process::APPS`,
 //     the scheduler lock, the heap allocator's lock;
 //   - CLOCK_RTC: the CMOS lock (rtc.rs);
+//   - files (FS_LIST/FS_READ/FS_WRITE): `vfs::MOUNTS`, held for the whole
+//     operation — it also serializes the FAT code and the block devices
+//     (ATA port I/O), which are only reachable through a mount;
 //   - constants/atomics (ABI_VERSION, IS_INTERACTIVE).
 // PROC_WAIT stays under the BKL: its "still alive?" check and its block must
 // be one step against the exiting child's wake-up.
@@ -108,6 +111,9 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::PROC_ARGS
             | sysno::SYS_STAT
             | sysno::CLOCK_RTC
+            | sysno::FS_LIST
+            | sysno::FS_READ
+            | sysno::FS_WRITE
     )
 }
 

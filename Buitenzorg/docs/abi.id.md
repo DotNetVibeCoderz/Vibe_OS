@@ -143,11 +143,10 @@ kooperatif (yield lewat `YIELD`). Tiap thread punya SYSCALL kernel stack sendiri
 (terpisah dari stack interrupt TSS). Shim:
 `bz_thread_create`/`join`/`exit`/`bz_yield`.
 
-**SMP:** *proses* yang berbeda berjalan paralel di semua CPU, tetapi thread dalam
-satu proses tidak pernah berjalan bersamaan (runtime ring-3, mis. `malloc`
-bump-heap di `bzstart.rs`, belum aman-SMP). Thread tetap bisa di-preempt timer
-di antara dua instruksi mana pun, jadi data bersama perlu mutex futex
-(`bz_mutex_lock`). `TICKS` dan `CLOCK_MONO` dijawab tanpa lock kernel. Syscall
+**SMP:** proses *dan* thread dalam satu proses berjalan paralel di semua CPU.
+Memori yang dibagi antar-thread harus diakses dengan atomik shim (`bz_atomic_add`,
+`bz_atomic_add32`, `bz_atomic_cas32`) atau di bawah mutex futex (`bz_mutex_lock`
+/ `BzMutex`); heap runtime (`new`, array) aman-thread. `TICKS` dan `CLOCK_MONO` dijawab tanpa lock kernel. Syscall
 lain dijalankan di CPU pemanggil: syscall memori (`MMAP`/`MPROTECT`/`MUNMAP`),
 scheduler (`YIELD`, `THREAD_SELF`, `FUTEX_*`) dan konsol (`DEBUG_WRITE`) hanya
 memakai lock subsistemnya sendiri sehingga berjalan paralel antar-CPU; sisanya

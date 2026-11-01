@@ -182,8 +182,33 @@ pub unsafe extern "C" fn bz_write(buffer: *const u8, length: u64) {
 // The root cause was NOT here but in `syscall3`: rdi/rsi/rdx were declared
 // `in` instead of clobbered, and LLVM kept `chunk` in rdi across the mmap
 // syscall — see the comment in `syscall3` before suspecting this code again.
-use core::sync::atomic::{AtomicUsize, Ordering as HeapOrd};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering as HeapOrd};
 static HEAP_BASE: AtomicUsize = AtomicUsize::new(0); // 0 => uninitialized
+/// Threads of one process run in parallel on different CPUs (SMP), so the
+/// bump allocator below — read offset, maybe grow, store offset — is one
+/// critical section. A spin lock that gives the CPU away (YIELD) after a few
+/// rounds, so a holder that got preempted can finish.
+static HEAP_LOCK: AtomicBool = AtomicBool::new(false);
+
+fn heap_lock() {
+    let mut spins = 0u32;
+    while HEAP_LOCK
+        .compare_exchange_weak(false, true, HeapOrd::Acquire, HeapOrd::Relaxed)
+        .is_err()
+    {
+        spins += 1;
+        if spins > 64 {
+            unsafe { syscall2(SYS_YIELD, 0, 0) };
+            spins = 0;
+        } else {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+fn heap_unlock() {
+    HEAP_LOCK.store(false, HeapOrd::Release);
+}
 static HEAP_OFF: AtomicUsize = AtomicUsize::new(0);
 static HEAP_CAP: AtomicUsize = AtomicUsize::new(0);
 // Accounting for Buitenzorg.Bcl's `BzGC` (there is no reclaiming collector yet,
@@ -211,6 +236,13 @@ pub unsafe extern "C" fn bz_heap_stats(out: *mut u64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn SystemNative_Malloc(size: usize) -> *mut u8 {
+    heap_lock();
+    let p = malloc_locked(size);
+    heap_unlock();
+    p
+}
+
+unsafe fn malloc_locked(size: usize) -> *mut u8 {
     let align = 16;
     let size = if size == 0 { 1 } else { size };
     let mut off = (HEAP_OFF.load(HeapOrd::Relaxed) + align - 1) & !(align - 1);
@@ -418,6 +450,28 @@ pub unsafe extern "C" fn bz_thread_create(entry: u64, arg: u64) -> u64 {
     }
 }
 
+/// Atomically add `v` to the i64 at `p`; returns the previous value. (zerolib
+/// has no `Interlocked`; threads of one process run in parallel on SMP.)
+#[no_mangle]
+pub unsafe extern "C" fn bz_atomic_add(p: *mut i64, v: i64) -> i64 {
+    (*(p as *const AtomicI64)).fetch_add(v, HeapOrd::SeqCst)
+}
+
+/// Atomically add `v` to the i32 at `p`; returns the previous value.
+#[no_mangle]
+pub unsafe extern "C" fn bz_atomic_add32(p: *mut i32, v: i32) -> i32 {
+    (*(p as *const AtomicI32)).fetch_add(v, HeapOrd::SeqCst)
+}
+
+/// Atomic compare-and-swap on the i32 at `p`: if it holds `expected`, store
+/// `new`. Returns the value that was there.
+#[no_mangle]
+pub unsafe extern "C" fn bz_atomic_cas32(p: *mut i32, expected: i32, new: i32) -> i32 {
+    match (*(p as *const AtomicI32)).compare_exchange(expected, new, HeapOrd::SeqCst, HeapOrd::SeqCst) {
+        Ok(v) | Err(v) => v,
+    }
+}
+
 /// Wait for a thread to finish; 0 on success.
 #[no_mangle]
 pub unsafe extern "C" fn bz_thread_join(tid: u64) -> u64 {
@@ -436,7 +490,7 @@ extern "C" fn bz_demo_worker(arg: u64) {
     let mut i = 0u64;
     while i < DEMO_WORKER_ITERS {
         unsafe {
-            *counter += 1;
+            bz_atomic_add(counter, 1); // the main thread may run on another CPU
             syscall2(SYS_YIELD, 0, 0);
         }
         i += 1;
@@ -616,9 +670,11 @@ pub unsafe extern "C" fn bz_net_info(out: *mut u8) -> u64 {
 /// on the futex instead of spinning.
 #[no_mangle]
 pub unsafe extern "C" fn bz_mutex_lock(m: *mut i32) {
+    // 0 = free, 1 = held. Acquire with a compare-and-swap: two threads may try
+    // at the same instant on different CPUs. While held, sleep in the kernel
+    // (FUTEX_WAIT re-checks the word under the scheduler lock).
     loop {
-        if *m == 0 {
-            *m = 1;
+        if bz_atomic_cas32(m, 0, 1) == 0 {
             return;
         }
         bz_futex_wait(m as u64, 1);
@@ -628,7 +684,7 @@ pub unsafe extern "C" fn bz_mutex_lock(m: *mut i32) {
 /// Unlock a mutex and wake one waiter.
 #[no_mangle]
 pub unsafe extern "C" fn bz_mutex_unlock(m: *mut i32) {
-    *m = 0;
+    (*(m as *const AtomicI32)).store(0, HeapOrd::SeqCst);
     bz_futex_wake(m as u64, 1);
 }
 
@@ -653,9 +709,8 @@ extern "C" fn bz_mutex_worker(arg: u64) {
     let c = arg as *const MutexCtx;
     unsafe {
         let me = bz_thread_self() as i64;
-        // Claim a slot (cooperative single-core: no yield between read/write).
-        let s = *(*c).slot;
-        *(*c).slot = s + 1;
+        // Claim a slot (atomically: the other worker may run on another CPU).
+        let s = bz_atomic_add32((*c).slot, 1);
         if s >= 0 && s < 2 {
             *(*c).ids.offset(s as isize) = me;
         }

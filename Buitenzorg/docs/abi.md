@@ -148,11 +148,11 @@ cooperatively (they yield via `YIELD`). Each thread has its own SYSCALL kernel
 stack (separate from the TSS interrupt stack). Shim:
 `bz_thread_create`/`join`/`exit`/`bz_yield`.
 
-**SMP:** separate *processes* run in parallel on all CPUs, but the threads of
-one process never run at the same time (the ring-3 runtime, e.g. the bump-heap
-`malloc` in `bzstart.rs`, is not SMP-safe). Threads may still be preempted by
-the timer between any two instructions, so shared data needs the futex mutex
-(`bz_mutex_lock`), not an assumption of cooperative switching. `TICKS` and
+**SMP:** processes *and* the threads of one process run in parallel on all
+CPUs. Memory shared between threads must be accessed with the shim's atomics
+(`bz_atomic_add`, `bz_atomic_add32`, `bz_atomic_cas32`) or under the futex
+mutex (`bz_mutex_lock` / `BzMutex`); the runtime heap (`new`, arrays) is
+thread-safe. `TICKS` and
 `CLOCK_MONO` are answered without taking any kernel lock. Every other syscall
 runs on the CPU that issued it: memory (`MMAP`/`MPROTECT`/`MUNMAP`), scheduler
 (`YIELD`, `THREAD_SELF`, `FUTEX_*`) and console (`DEBUG_WRITE`) syscalls take
