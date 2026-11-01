@@ -7,6 +7,7 @@ pub mod aspace;
 pub mod context;
 pub mod gdt;
 pub mod interrupts;
+pub mod ioapic;
 pub mod paging;
 pub mod smp;
 pub mod usermode;

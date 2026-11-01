@@ -272,7 +272,7 @@ pub fn report() -> Vec<String> {
             "idle   "
         };
         out.push(alloc::format!(
-            "  #{} lapic {:>2} {} {}  syscalls {:>6}  kernel-tasks {:>5}  ring-3 {:>5}  ipi {:>4}  tlb {:>3}",
+            "  #{} lapic {:>2} {} {}  syscalls {:>6}  kernel-tasks {:>5}  ring-3 {:>5}  ipi {:>4}  tlb {:>3}  kbd/mouse irq {}/{}",
             i,
             c.lapic_id.load(Ordering::Relaxed),
             if i == 0 { "BSP" } else { "AP " },
@@ -281,7 +281,9 @@ pub fn report() -> Vec<String> {
             crate::task::kernel_runs_on(i),
             crate::task::ap_user_ticks(i),
             c.pings.load(Ordering::Relaxed),
-            c.tlb_flushes.load(Ordering::Relaxed)
+            c.tlb_flushes.load(Ordering::Relaxed),
+            crate::ioapic::irq_counts(i).0,
+            crate::ioapic::irq_counts(i).1
         ));
     }
     out
@@ -499,8 +501,34 @@ fn temp_tables() -> Option<u64> {
 
 /// Map the Local APIC's MMIO page (uncached) at `LAPIC_VA`.
 fn map_lapic(phys: u64) -> bool {
+    map_mmio(LAPIC_VA, phys)
+}
+
+/// Acknowledge the interrupt being handled on this CPU at its Local APIC.
+pub fn lapic_eoi() {
+    eoi();
+}
+
+/// CPUs registered and online (the BSP counts).
+pub fn cpus_online() -> usize {
+    let n = CPU_COUNT.load(Ordering::Acquire);
+    (0..n).filter(|&i| CPUS[i].online.load(Ordering::Acquire)).count().max(1)
+}
+
+/// Local APIC id of CPU `cpu` (None before `init` registered it).
+pub fn lapic_id_of(cpu: usize) -> Option<u32> {
+    if cpu == 0 && CPU_COUNT.load(Ordering::Acquire) == 0 {
+        // Single CPU (no MADT walk happened): ask the hardware.
+        return LAPIC_READY.load(Ordering::Acquire).then(|| lapic_read(LAPIC_ID) >> 24);
+    }
+    let id = CPUS.get(cpu)?.lapic_id.load(Ordering::Relaxed);
+    (id != u32::MAX).then_some(id)
+}
+
+/// Map one uncached MMIO page at kernel address `va` (LAPIC, I/O APIC).
+pub fn map_mmio(va: u64, phys: u64) -> bool {
     memory::with_ctx(|ctx| {
-        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(LAPIC_VA));
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(va));
         if ctx.mapper.translate_page(page).is_ok() {
             return true;
         }

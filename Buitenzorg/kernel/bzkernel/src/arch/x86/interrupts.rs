@@ -61,7 +61,11 @@ pub fn init() {
             ($vector:expr) => {{
                 extern "x86-interrupt" fn handler(_frame: InterruptStackFrame) {
                     SPURIOUS.fetch_add(1, Ordering::Relaxed);
-                    unsafe { PICS.lock().notify_end_of_interrupt($vector) };
+                    // With the I/O APIC active the 8259 is masked: only its
+                    // spurious IRQ 7/15 can still show up, which needs no EOI.
+                    if !crate::ioapic::active() {
+                        unsafe { PICS.lock().notify_end_of_interrupt($vector) };
+                    }
                 }
                 idt[$vector].set_handler_fn(handler);
             }};
@@ -103,6 +107,16 @@ pub fn init() {
         "[kernel] PIC masks left by firmware: master {:#04x} slave {:#04x} (timer/kbd/cascade/mouse unmasked)\n",
         fw_master, fw_slave
     ));
+}
+
+/// Acknowledge device IRQ `vector`: at the Local APIC when the I/O APIC
+/// delivers device interrupts, else at the 8259.
+fn end_of_interrupt(vector: u8) {
+    if crate::ioapic::active() {
+        crate::smp::lapic_eoi();
+    } else {
+        unsafe { PICS.lock().notify_end_of_interrupt(vector) };
+    }
 }
 
 /// Load the (shared) IDT on an application processor.
@@ -170,9 +184,7 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::account_tick();
     crate::process::account_tick();
-    unsafe {
-        PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
-    }
+    end_of_interrupt(InterruptIndex::Timer.as_u8());
     // EOI is done, interrupts are still disabled: safe point to preempt. Ring-3
     // code is always preemptible (it holds no kernel lock); kernel code is not.
     crate::task::preempt(from_user(&frame));
@@ -210,18 +222,14 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
         }
     }
 
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
-    }
+    crate::ioapic::note_irq(1);
+    end_of_interrupt(InterruptIndex::Keyboard.as_u8());
 }
 
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
     let mut port = Port::new(0x60);
     let byte: u8 = unsafe { port.read() };
     crate::mouse::handle_byte(byte);
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
-    }
+    crate::ioapic::note_irq(12);
+    end_of_interrupt(InterruptIndex::Mouse.as_u8());
 }

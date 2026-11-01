@@ -18,7 +18,7 @@ mod arch;
 mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
-pub(crate) use arch::x86::{aspace, gdt, interrupts, smp, usermode, vmx};
+pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
 pub(crate) use platform::pc::{ata, audio, mouse, pci, power, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
@@ -182,6 +182,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     } else {
         println!("[kernel] smp: only {} of {} application processors came online", aps, cpus - 1);
+    }
+    // Device interrupts through the I/O APIC, spread over the CPUs.
+    match ioapic::init() {
+        Some(routes) => {
+            println!("[kernel] ioapic: {}", routes);
+            match ioapic::self_test() {
+                Ok(summary) => println!("[kernel] MILESTONE: IOAPIC OK ({})", summary),
+                Err(why) => println!("[kernel] ioapic self-test FAILED: {}", why),
+            }
+        }
+        None => println!("[kernel] no I/O APIC in the MADT -- device IRQs stay on the 8259 PIC"),
     }
 
     // Pre-install the base app set so `run`/`bz` work out of the box.
