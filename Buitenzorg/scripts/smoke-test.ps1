@@ -242,7 +242,9 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers ($basic + @("[boot] loader=limine", "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: DISK WRITE OK", "MILESTONE: MULTIPROC OK"))
+    Assert-Markers -Log $log -Markers ($basic + @("[boot] loader=limine", "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: DISK WRITE OK"))
+    # MULTIPROC runs C# programs (MPROC.ELF): only when bflat built them.
+    if (Select-String -Path $log -Pattern "Hello from C#" -Quiet) { Assert-Markers -Log $log -Markers @("MILESTONE: MULTIPROC OK") }
     Write-Host "smoke [limine]: Limine protocol boot (UEFI) to READY on 2 CPUs, /disk + processes"
 } else {
     Skip-Step "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.ps1 before the build)"

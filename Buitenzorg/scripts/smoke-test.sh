@@ -218,7 +218,9 @@ if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
     grep -q "BUITENZORG READY" "$log" 2>/dev/null && break
   done
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
-  require "$log" "${basic[@]}" "[boot] loader=limine" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: DISK WRITE OK" "MILESTONE: MULTIPROC OK"
+  require "$log" "${basic[@]}" "[boot] loader=limine" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: DISK WRITE OK"
+  # MULTIPROC runs C# programs (MPROC.ELF): only when bflat built them.
+  if grep -qF "Hello from C#" "$log"; then require "$log" "MILESTONE: MULTIPROC OK"; fi
   echo "smoke [limine]: Limine protocol boot (UEFI) to READY on 2 CPUs, /disk + processes"
 else
   skip "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.sh before the build)"
