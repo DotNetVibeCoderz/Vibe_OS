@@ -210,8 +210,8 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
   done
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" \
-    "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY"
-  echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer"
+    "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY"
+  echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces"
 else
   echo "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
 fi

@@ -31,7 +31,14 @@ pub mod context {
 /// handle (`PageMap`) and the ELF machine id of native executables.
 pub mod paging {
     #[cfg(target_arch = "x86_64")]
-    pub use super::x86::paging::{init, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE};
+    pub use super::x86::paging::{
+        init, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE, KERNEL_HEAP_BASE, MMIO_BASE,
+    };
+    #[cfg(target_arch = "aarch64")]
+    pub use super::aarch64::paging::{
+        init, init_user_half, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
+        KERNEL_HEAP_BASE, MMIO_BASE,
+    };
 }
 
 /// CPU primitives every architecture provides.

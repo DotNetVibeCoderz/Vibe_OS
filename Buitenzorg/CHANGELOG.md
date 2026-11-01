@@ -35,6 +35,10 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 2): memory on ARM64.** The generic frame
+  allocator, paging context and kernel heap run on ARM64 over a new AArch64
+  paging layer (TTBR1 kernel half, TTBR0 user half), and every process gets its
+  own TTBR0 address space (`ARM64 MEMORY OK`, `ARM64 ASPACE OK`).
 - **Multi-arch M3 (increment 1): the ARM64 kernel boots.** The kernel crate
   builds for `aarch64-unknown-none-softfloat`; Limine loads it on QEMU `virt`
   (UEFI). It installs its exception vectors, reads the live Device Tree,

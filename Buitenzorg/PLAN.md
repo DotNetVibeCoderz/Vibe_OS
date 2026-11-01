@@ -885,7 +885,7 @@ mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
    Device Tree kecil di samping ACPI.
 3. **M2 — Driver virtio** *(✓ 2026-11-01: blk/input/net/gpu/snd di atas virtio-PCI modern, smoke `[virtio]`; polling, virtio-mmio menyusul di M3)* (blk, input, gpu, net, sound) — juga mempercepat x86
    di QEMU dan menggantikan IDE PIO/PS/2/AC'97 di semua arsitektur.
-4. **M3 — ARM64 (`aarch64-unknown-none`, QEMU `virt`).** *(increment 1 ✓ 2026-11-01: boot via Limine, vektor exception, DTB hidup, PL011, GICv3 + timer — `ARM64 BOOT OK`; target `aarch64-unknown-none-softfloat`)* PL011, GICv3,
+4. **M3 — ARM64 (`aarch64-unknown-none`, QEMU `virt`).** *(increment 1 ✓ 2026-11-01: boot via Limine, vektor exception, DTB hidup, PL011, GICv3 + timer — `ARM64 BOOT OK`; target `aarch64-unknown-none-softfloat`. Increment 2 ✓: memori generik + heap berpaging + address space TTBR0 per proses — `ARM64 MEMORY OK`, `ARM64 ASPACE OK`)* PL011, GICv3,
    generic timer, MMU 4K (TTBR0 = user, TTBR1 = kernel: address space per
    proses jadi lebih alami), EL0/EL1 + `SVC`, PSCI. Userland C#: bflat
    `linux-arm64` + shim `bzstart.rs` versi aarch64 (`svc #0`).

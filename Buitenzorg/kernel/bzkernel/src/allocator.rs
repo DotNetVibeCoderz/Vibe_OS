@@ -5,7 +5,9 @@ use linked_list_allocator::LockedHeap;
 use crate::arch::paging::{self, Flags};
 use crate::memory;
 
-pub const HEAP_START: u64 = 0x_4444_4444_0000;
+/// Per architecture (`arch::paging::KERNEL_HEAP_BASE`): on ARM64 the lower
+/// half belongs to processes, so the heap lives in the upper half.
+pub const HEAP_START: u64 = paging::KERNEL_HEAP_BASE;
 // 32 MiB kernel heap. 16 MiB was exhausted once the desktop is up: the RAM
 // disks, ~20 open app-window canvases from the boot demos, the desktop back
 // buffer and the persistent full-screen compose buffer (wm::PRESENT_BUF) all

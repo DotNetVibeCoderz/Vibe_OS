@@ -13,7 +13,7 @@
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 // The ARM64 port compiles a growing subset; HAL facades it does not call yet
 // are not dead code on x86-64.
-#![cfg_attr(target_arch = "aarch64", allow(dead_code))]
+#![cfg_attr(target_arch = "aarch64", allow(dead_code, unused_imports))]
 
 extern crate alloc;
 

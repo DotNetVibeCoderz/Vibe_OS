@@ -348,7 +348,7 @@ pub fn with_ctx<R>(f: impl FnOnce(&mut MemCtx) -> R) -> R {
 /// Kernel virtual window for device registers (MMIO BARs of PCI devices,
 /// virtio-mmio slots, ...): above the user half and the heap, below the
 /// higher half; handed out bottom-up and never reused.
-const MMIO_WINDOW: u64 = 0x5555_0000_0000;
+const MMIO_WINDOW: u64 = crate::arch::paging::MMIO_BASE;
 const MMIO_WINDOW_SIZE: u64 = 1 << 32;
 static MMIO_NEXT: AtomicU64 = AtomicU64::new(MMIO_WINDOW);
 

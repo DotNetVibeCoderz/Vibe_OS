@@ -22,6 +22,12 @@ pub type PageMap = OffsetPageTable<'static>;
 /// ELF `e_machine` of executables for this architecture (EM_X86_64).
 pub const ELF_MACHINE: u16 = 0x3E;
 
+/// Kernel heap base (kernel-only pages above the 2 GiB user half; on x86 the
+/// whole low canonical half is shared by every address space).
+pub const KERNEL_HEAP_BASE: u64 = 0x4444_4444_0000;
+/// The MMIO window for device registers.
+pub const MMIO_BASE: u64 = 0x5555_0000_0000;
+
 const PTE_PRESENT: u64 = 1 << 0;
 const PTE_WRITABLE: u64 = 1 << 1;
 const PTE_USER: u64 = 1 << 2;
