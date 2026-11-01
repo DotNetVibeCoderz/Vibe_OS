@@ -29,6 +29,7 @@ mod app;
 mod arch;
 mod boot;
 mod compute;
+mod desktop;
 mod driver;
 mod dtb;
 mod elf;
@@ -211,10 +212,11 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-7 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps); the rest of the kernel follows");
-    loop {
-        cpu::enable_and_halt();
-    }
+    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows");
+    // The interactive desktop session, shared with the PC kernel: virtio
+    // keyboard / tablet -> terminal + window manager, frames through the
+    // framebuffer and the virtio GPU.
+    desktop::run()
 }
 
 /// The generic memory subsystem on AArch64 page tables:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI boot smoke test (requirements.md §17 + §18): build the images, boot the
+# CI boot smoke test (requirements.md Â§17 + Â§18): build the images, boot the
 # BIOS image in QEMU on all four storage controllers (IDE/AHCI/NVMe/USB), and
 # require the milestone markers on the serial console.
 set -uo pipefail
@@ -43,16 +43,16 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     sleep 1
     grep -qF "BUITENZORG READY" "$log" 2>/dev/null && break
   done
-  if [ "$media" = virtio ]; then virtio_input "$log"; fi
+  if [ "$media" = virtio ]; then virtio_input "$log" 4481; fi
   kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
 }
 
 # Type a few keys and move/click the pointer through the QEMU monitor; the
 # events reach the guest through the virtio keyboard/tablet.
-virtio_input() {
-  local log="$1"
-  if exec 3<>/dev/tcp/127.0.0.1/4481; then
+virtio_input() { # virtio_input <log> <monitor port>
+  local log="$1" port="$2"
+  if exec 3<>/dev/tcp/127.0.0.1/"$port"; then
     for cmd in "sendkey l" "sendkey s" "sendkey ret" "mouse_move 200 150" "mouse_button 1" "mouse_button 0"; do
       printf '%s\n' "$cmd" >&3; sleep 0.7
     done
@@ -140,7 +140,7 @@ for media in ahci nvme usb; do
   echo "smoke [$media]: boots to READY"
 done
 
-# UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked —
+# UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked â€”
 # that once hung every UEFI boot at the first timer wait while the BIOS-only
 # smoke test stayed green. Needs the OVMF files `bzimage --run --uefi` downloads.
 ovmf="$root/kernel/target/ovmf/x64"
@@ -200,21 +200,27 @@ done
 if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.img" ]; then
   log="$root/dist/boot-arm64.log"
   rm -f "$log"
-  timeout --foreground 100 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -m 512M \
+  timeout --foreground 150 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -m 512M \
     -bios "$arm_fw" -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-arm64.img,if=none" \
-    -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device ramfb     -netdev user,id=n0 -device virtio-net-device,netdev=n0 -display none -serial "file:$log" -no-reboot &
+    -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device ramfb     -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+    -device virtio-keyboard-device -device virtio-tablet-device \
+    -monitor tcp:127.0.0.1:4482,server,nowait -display none -serial "file:$log" -no-reboot &
   qpid=$!
   for _ in $(seq 90); do
     sleep 1
     grep -q "ARM64 READY" "$log" 2>/dev/null && break
   done
+  # The interactive desktop: type + move/click through the virtio devices.
+  sleep 3
+  virtio_input "$log" 4482
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" \
-    "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "MILESTONE: ARM64 EL0 OK" "Hello from EL0" "MILESTONE: ARM64 RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: ARM64 DISK OK" "MILESTONE: VIRTIO GPU OK"     "MILESTONE: SECURITY OK" "MILESTONE: ARM64 PSCI OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY"
+    "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "MILESTONE: ARM64 EL0 OK" "Hello from EL0" "MILESTONE: ARM64 RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: ARM64 DISK OK" "MILESTONE: VIRTIO GPU OK"     "MILESTONE: SECURITY OK" "MILESTONE: ARM64 PSCI OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" \
+    "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY"
   if grep -qF "program 'hello'" "$log"; then
     require "$log" "Hello from C#!" "MILESTONE: ARM64 CSHARP OK" "MILESTONE: MATANG OK" "MILESTONE: HEAP OK" "MILESTONE: GCMEM OK" "MILESTONE: ARM64 MULTIPROC OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "frames leaked: 0" "from /disk"       "MILESTONE: BCL OK" "MILESTONE: PROCCTL OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: UI OK"       "MILESTONE: DRAW OK" "MILESTONE: ARM64 DESKTOP FRAME OK"
   fi
-  echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + desktop frame"
+  echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + interactive desktop"
 else
   echo "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
 fi
