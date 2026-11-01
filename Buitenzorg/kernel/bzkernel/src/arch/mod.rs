@@ -24,6 +24,8 @@ pub mod aarch64;
 pub mod context {
     #[cfg(target_arch = "x86_64")]
     pub use super::x86::context::{prepare_stack, switch, FpuState};
+    #[cfg(target_arch = "aarch64")]
+    pub use super::aarch64::context::{prepare_stack, switch, FpuState};
 }
 
 /// Page tables: map / unmap / protect 4 KiB pages with neutral `Flags`, the

@@ -9,11 +9,13 @@
 //! - `timer`: the EL1 virtual generic timer (PPI 27) as the periodic tick.
 
 pub mod aspace;
+pub mod context;
 pub mod cpu;
 pub mod exceptions;
 pub mod gic;
 pub mod paging;
 pub mod timer;
+pub mod user;
 
 /// ELF entry symbol. Limine enters through the entry-point request
 /// (`limine::limine_entry`) instead; this only satisfies the linker and parks

@@ -6,8 +6,10 @@
 // subsystem (`memory.rs` frame allocator + paging context, `allocator.rs`
 // kernel heap) over the AArch64 paging HAL — TTBR1 for the kernel half,
 // TTBR0 for user space. The x86 kernel's other subsystems join one by one as
-// they get an `arch/aarch64` backend (context switch + EL0/SVC, virtio-mmio,
-// the desktop).
+// they get an `arch/aarch64` backend (virtio-mmio, the scheduler, the
+// desktop). Increment 3: kernel-thread context switch (with per-task FP/SIMD
+// state) and user mode -- EL0 programs in their own address space calling the
+// kernel with `SVC #0`, faults contained.
 
 mod allocator;
 mod arch;
@@ -84,6 +86,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         println!("[kernel] MILESTONE: MEMORY OK");
     }
     aspace_self_test();
+    context_self_test();
     match platform.as_ref() {
         Some(p) => println!("[arm64] platform (live DTB): {}", p.summary()),
         None => println!("[arm64] no Device Tree from the loader"),
@@ -128,6 +131,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         println!("[arm64] no arm,gic-v3 in the Device Tree");
     }
 
+    el0_self_test();
+
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();
     if timer_ok && !uart.is_empty() && info.loader == "limine" {
         println!(
@@ -137,7 +142,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-2 (boot, interrupts, memory); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-3 (boot, interrupts, memory, threads + EL0); the rest of the kernel follows");
     loop {
         cpu::enable_and_halt();
     }
@@ -256,6 +261,208 @@ fn aspace_self_test() {
     );
     if ok {
         println!("[kernel] MILESTONE: ARM64 ASPACE OK (a TTBR0 root per process, shared TTBR1 kernel half; switch = TTBR0 + TLB invalidate; teardown frees every frame)");
+    }
+}
+
+// ---- Kernel threads: context switch + FP state ---------------------------
+
+const SWITCH_ROUNDS: u64 = 1000;
+static mut CTX_SP: [u64; 3] = [0; 3]; // 0 = boot flow, 1 = thread A, 2 = thread B
+static mut CTX_FPU: Option<[alloc::boxed::Box<arch::context::FpuState>; 3]> = None;
+static CTX_ERRORS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static CTX_SWITCHES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn ctx_switch(from: usize, to: usize) {
+    use core::ptr::addr_of_mut;
+    CTX_SWITCHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        let sp = &mut *addr_of_mut!(CTX_SP);
+        let fpu = (*addr_of_mut!(CTX_FPU)).as_mut().unwrap();
+        let prev: *mut arch::context::FpuState = &mut *fpu[from];
+        let next: *const arch::context::FpuState = &*fpu[to];
+        let next_sp = sp[to];
+        arch::context::switch(&mut sp[from], next_sp, prev, next);
+    }
+}
+
+fn ctx_worker(me: usize, other: usize, tag: u64) {
+    use arch::aarch64::context::{fp_get_d0, fp_set_d0};
+    for i in 0..SWITCH_ROUNDS {
+        fp_set_d0(tag + i);
+        ctx_switch(me, other);
+        if fp_get_d0() != tag + i {
+            CTX_ERRORS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+extern "C" fn ctx_thread_a() -> ! {
+    ctx_worker(1, 2, 0xA000_0000);
+    ctx_switch(1, 0); // back to the boot flow for good
+    loop {
+        arch::cpu::halt();
+    }
+}
+
+extern "C" fn ctx_thread_b() -> ! {
+    ctx_worker(2, 1, 0xB000_0000);
+    loop {
+        ctx_switch(2, 1);
+    }
+}
+
+/// Two kernel threads on their own stacks ping-pong `SWITCH_ROUNDS` times
+/// through `arch::context::switch`; each keeps a different value in the FP
+/// register d0 across every switch (the FP state follows the task), and the
+/// boot flow's own d0 survives too.
+fn context_self_test() {
+    use core::ptr::addr_of_mut;
+    let stacks: [alloc::vec::Vec<u8>; 2] = [alloc::vec![0u8; 16 * 1024], alloc::vec![0u8; 16 * 1024]];
+    unsafe {
+        *addr_of_mut!(CTX_FPU) = Some([
+            arch::context::FpuState::clean(),
+            arch::context::FpuState::clean(),
+            arch::context::FpuState::clean(),
+        ]);
+        let sp = &mut *addr_of_mut!(CTX_SP);
+        sp[1] = arch::context::prepare_stack(&stacks[0], ctx_thread_a);
+        sp[2] = arch::context::prepare_stack(&stacks[1], ctx_thread_b);
+    }
+    arch::aarch64::context::fp_set_d0(0x0B007);
+    ctx_switch(0, 1);
+    let boot_fp_kept = arch::aarch64::context::fp_get_d0() == 0x0B007;
+    let switches = CTX_SWITCHES.load(core::sync::atomic::Ordering::Relaxed);
+    let errors = CTX_ERRORS.load(core::sync::atomic::Ordering::Relaxed);
+    core::mem::forget(stacks); // thread B stays parked on its stack
+    println!(
+        "[arm64] context switch: {} switches between two kernel threads, {} FP mismatches, boot flow's d0 kept: {}",
+        switches, errors, boot_fp_kept
+    );
+    if errors == 0 && boot_fp_kept && switches >= 2 * SWITCH_ROUNDS {
+        println!("[kernel] MILESTONE: ARM64 CONTEXT OK (arch::context on AArch64: x19-x30 + SP + DAIF, q0-q31/FPCR/FPSR per task)");
+    }
+}
+
+// ---- User mode (EL0) ---------------------------------------------------------
+
+static USER_CTX: core::sync::atomic::AtomicPtr<arch::aarch64::user::KernelCtx> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+static USER_WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static USER_FAULT_FAR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Exit code of a user program ended by a fault (as on x86).
+const FAULT_EXIT_CODE: u64 = 0xDEAD;
+
+/// `SVC #0` from EL0: x8 = number, x0..x2 = arguments (the bz-abi numbers,
+/// the same table as on x86). Called from the exception handler.
+pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, _a2: u64) -> u64 {
+    use bz_abi::{syserr, sysno};
+    match nr {
+        sysno::ABI_VERSION => bz_abi::ABI_VERSION,
+        sysno::DEBUG_WRITE => {
+            if a1 > 4096 || !memory::validate_user_range(a0, a1, false) {
+                return syserr::INVAL;
+            }
+            let bytes: alloc::vec::Vec<u8> =
+                (0..a1).map(|i| unsafe { ((a0 + i) as *const u8).read_volatile() }).collect();
+            print!("[el0] {}", core::str::from_utf8(&bytes).unwrap_or("<not UTF-8>"));
+            USER_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            a1
+        }
+        sysno::EXIT => {
+            let ctx = USER_CTX.load(core::sync::atomic::Ordering::SeqCst);
+            if ctx.is_null() {
+                return syserr::INVAL;
+            }
+            arch::aarch64::user::return_to_kernel(unsafe { &*ctx }, a0)
+        }
+        sysno::TICKS => arch::aarch64::timer::ticks(),
+        sysno::CLOCK_MONO => arch::cpu::timestamp(),
+        _ => syserr::NOSYS,
+    }
+}
+
+/// A fatal exception in EL0 code: end the program (exit code 0xDEAD).
+pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64) -> ! {
+    let ctx = USER_CTX.load(core::sync::atomic::Ordering::SeqCst);
+    if ctx.is_null() {
+        panic!("EL0 fault outside a user program: ESR={:#x} FAR={:#x} ELR={:#x}", esr, far, elr);
+    }
+    println!(
+        "[arm64] user fault: ESR_EL1={:#x} (EC={:#x}) at {:#x}, address {:#x} -- program terminated",
+        esr,
+        esr >> 26,
+        elr,
+        far
+    );
+    USER_FAULT_FAR.store(far, core::sync::atomic::Ordering::SeqCst);
+    arch::aarch64::user::return_to_kernel(unsafe { &*ctx }, FAULT_EXIT_CODE)
+}
+
+/// Run `code` as an EL0 program in a fresh address space: code page at
+/// 0x40_0000 (user, read-only, executable), one stack page below 0x7000_0000.
+/// Returns (exit code, frames leaked by the space).
+fn run_el0(id: u64, code: &[u8]) -> Option<(u64, i64)> {
+    use arch::aarch64::user;
+    use arch::paging::{self, Flags};
+    const ENTRY: u64 = 0x40_0000;
+    const STACK_TOP: u64 = 0x7000_0000;
+    let before = memory::frames_in_use() as i64;
+    let space = aspace::create(id).ok()?;
+    aspace::install(space);
+    memory::with_ctx(|ctx| {
+        let pa = ctx.frames.alloc()?;
+        let dst = memory::phys_to_virt(pa) as *mut u8;
+        unsafe {
+            core::ptr::write_bytes(dst, 0, 4096);
+            core::ptr::copy_nonoverlapping(code.as_ptr(), dst, code.len().min(4096));
+        }
+        paging::map(&mut ctx.mapper, &mut ctx.frames, ENTRY, pa, Flags { write: false, user: true, exec: true }).ok()?;
+        let st = ctx.frames.alloc()?;
+        unsafe { core::ptr::write_bytes(memory::phys_to_virt(st) as *mut u8, 0, 4096) };
+        paging::map(&mut ctx.mapper, &mut ctx.frames, STACK_TOP - 4096, st, Flags { write: true, user: true, exec: false }).ok()
+    })?;
+    user::sync_icache();
+    let mut kctx = user::KernelCtx::new();
+    USER_CTX.store(&mut kctx, core::sync::atomic::Ordering::SeqCst);
+    let code = user::enter_user(ENTRY, STACK_TOP, &mut kctx);
+    USER_CTX.store(core::ptr::null_mut(), core::sync::atomic::Ordering::SeqCst);
+    aspace::install(aspace::kernel());
+    aspace::destroy(space);
+    Some((code, memory::frames_in_use() as i64 - before))
+}
+
+/// Two EL0 programs: one prints through DEBUG_WRITE, asks ABI_VERSION, spins
+/// long enough to be interrupted by the timer *while in EL0*, computes
+/// 1+..+100 and exits with (abi << 16) + 5050; the other reads a kernel-half
+/// address and must be terminated by the fault, not crash the kernel.
+fn el0_self_test() {
+    use arch::aarch64::{exceptions, user};
+    let (demo, fault) = user::demo_programs();
+    let (irq0, _) = exceptions::el0_stats();
+    let r1 = run_el0(3000, demo);
+    let (irq1, svcs) = exceptions::el0_stats();
+    let r2 = run_el0(3001, fault);
+    let want = (bz_abi::ABI_VERSION << 16) + 5050;
+    let far = USER_FAULT_FAR.load(core::sync::atomic::Ordering::SeqCst);
+    println!(
+        "[arm64] EL0 program 1: exit {:#x} (want {:#x}), {} SVC calls, {} timer IRQs taken in EL0, leaked {:?} frames; program 2: exit {:#x}, fault address {:#x}, leaked {:?}",
+        r1.map(|r| r.0).unwrap_or(0),
+        want,
+        svcs,
+        irq1 - irq0,
+        r1.map(|r| r.1),
+        r2.map(|r| r.0).unwrap_or(0),
+        far,
+        r2.map(|r| r.1)
+    );
+    let ok = r1 == Some((want, 0))
+        && USER_WRITES.load(core::sync::atomic::Ordering::Relaxed) >= 1
+        && irq1 - irq0 >= 3
+        && r2 == Some((FAULT_EXIT_CODE, 0))
+        && far == 0xFFFF_D000_0000_0000;
+    if ok {
+        println!("[kernel] MILESTONE: ARM64 EL0 OK (user mode in its own TTBR0 space: SVC syscalls, timer IRQs from EL0, EXIT back to the kernel, a kernel-address read terminates only the program)");
     }
 }
 

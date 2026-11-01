@@ -35,6 +35,11 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 3): threads and user mode on ARM64.** Kernel
+  threads switch with their own FP/SIMD state, and programs run in EL0 in
+  their own address space, calling the kernel with `SVC` and exiting back to
+  it; a program that touches kernel memory is terminated on its own
+  (`ARM64 CONTEXT OK`, `ARM64 EL0 OK`).
 - **Multi-arch M3 (increment 2): memory on ARM64.** The generic frame
   allocator, paging context and kernel heap run on ARM64 over a new AArch64
   paging layer (TTBR1 kernel half, TTBR0 user half), and every process gets its

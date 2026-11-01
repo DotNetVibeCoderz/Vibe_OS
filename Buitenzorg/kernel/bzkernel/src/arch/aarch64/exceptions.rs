@@ -82,6 +82,8 @@ extern "C" {
 }
 
 static IRQS: AtomicU64 = AtomicU64::new(0);
+static IRQS_FROM_EL0: AtomicU64 = AtomicU64::new(0);
+static SVCS: AtomicU64 = AtomicU64::new(0);
 
 /// Install the vector table on this CPU.
 ///
@@ -91,6 +93,7 @@ static IRQS: AtomicU64 = AtomicU64::new(0);
 /// of the kernel image. So move onto SP_EL1 first, with the very same stack
 /// pointer value (the running Rust frame stays valid).
 pub fn init() {
+    super::context::enable_fp();
     unsafe {
         asm!(
             "mrs {t}, spsel",
@@ -112,14 +115,27 @@ pub fn irq_count() -> u64 {
     IRQS.load(Ordering::Relaxed)
 }
 
+/// (interrupts taken while EL0 code ran, SVC calls served).
+pub fn el0_stats() -> (u64, u64) {
+    (IRQS_FROM_EL0.load(Ordering::Relaxed), SVCS.load(Ordering::Relaxed))
+}
+
+const EC_SVC64: u64 = 0x15;
+
 const KINDS: [&str; 4] = ["synchronous", "IRQ", "FIQ", "SError"];
 const ORIGINS: [&str; 4] = ["EL1 (SP_EL0)", "EL1", "EL0 (AArch64)", "EL0 (AArch32)"];
 
+/// `frame` holds x0..x30 of the interrupted code (x0 at index 0); the
+/// syscall result is written back into x0.
 #[no_mangle]
-extern "C" fn bz_exception(index: u64, _frame: *mut u64) {
+extern "C" fn bz_exception(index: u64, frame: *mut u64) {
     let kind = (index & 3) as usize;
+    let from_el0 = index >= 8;
     if kind == 1 {
         IRQS.fetch_add(1, Ordering::Relaxed);
+        if from_el0 {
+            IRQS_FROM_EL0.fetch_add(1, Ordering::Relaxed);
+        }
         super::gic::handle_irq();
         return;
     }
@@ -128,6 +144,20 @@ extern "C" fn bz_exception(index: u64, _frame: *mut u64) {
         asm!("mrs {}, esr_el1", out(reg) esr, options(nomem, nostack));
         asm!("mrs {}, elr_el1", out(reg) elr, options(nomem, nostack));
         asm!("mrs {}, far_el1", out(reg) far, options(nomem, nostack));
+    }
+    if from_el0 && kind == 0 {
+        if esr >> 26 == EC_SVC64 {
+            SVCS.fetch_add(1, Ordering::Relaxed);
+            let r = unsafe {
+                let f = frame;
+                crate::el0_syscall(f.add(8).read(), f.read(), f.add(1).read(), f.add(2).read())
+            };
+            unsafe { frame.write(r) };
+            return;
+        }
+        // Any other synchronous exception from user code (bad access,
+        // undefined instruction, ...) ends that program, not the kernel.
+        crate::el0_fault(esr, far, elr);
     }
     panic!(
         "{} exception from {}: ESR_EL1={:#x} (EC={:#x}) ELR_EL1={:#x} FAR_EL1={:#x}",
