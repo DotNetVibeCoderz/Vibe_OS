@@ -14,13 +14,17 @@
 // for ARM64 (bflat linux-arm64 + the aarch64 `bzstart.rs` shim).
 // Increment 5: the shared scheduler (`task.rs`) and process registry
 // (`process.rs`) run unchanged on ARM64 -- preemptive processes, ring-3
-// threads and futexes.
+// threads and futexes. Increment 6: virtio over virtio-mmio (slots from the
+// DTB) -- `/disk` on virtio-blk through the shared FAT + VFS code, programs
+// loaded from it -- the PL031 clock, and virtio-gpu.
 
 mod allocator;
 mod arch;
 mod boot;
+mod driver;
 mod dtb;
 mod elf;
+mod fat;
 mod framebuffer;
 mod limine;
 mod logo;
@@ -28,8 +32,11 @@ mod memory;
 mod platform;
 mod process;
 mod task;
+mod vfs;
+mod virtio;
 
 pub(crate) use platform::virt::pl011 as serial;
+pub(crate) use platform::virt::pl031 as rtc;
 
 /// Mirrors the PC kernel's flag; the ARM64 desktop is not up yet.
 mod interactive {
@@ -101,6 +108,20 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
     dtb::self_test();
 
+    // Platform devices from the DTB: the PL031 clock and the virtio-mmio slots.
+    if let Some(f) = fdt.as_ref() {
+        if let Some(i) = f.compatible("arm,pl031").next() {
+            if let Some(va) = f.reg(i).first().and_then(|r| memory::map_mmio(r.0, 0x1000)) {
+                rtc::init(va);
+            }
+        }
+    }
+    if let Some(p) = platform.as_ref() {
+        virtio::mmio::set_slots(&p.virtio_mmio);
+    }
+    rtc_self_test();
+    storage_self_test();
+
     // Interrupts: GICv3 + the virtual timer at 100 Hz.
     let gic_regs = fdt.as_ref().and_then(|f| {
         let i = f.compatible("arm,gic-v3").next()?;
@@ -140,6 +161,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
 
     el0_self_test();
+    gpu_self_test(info);
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
@@ -154,7 +176,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
     }
-    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-5 (boot, interrupts, memory, EL0, C# programs, scheduler + processes + threads); the rest of the kernel follows");
+    println!("[kernel] BUITENZORG ARM64 READY -- increments 1-6 (boot, interrupts, memory, EL0, C# programs, scheduler + processes + threads, virtio-mmio disk + GPU, RTC); the rest of the kernel follows");
     loop {
         cpu::enable_and_halt();
     }
@@ -605,13 +627,27 @@ mod app {
 ///   swaps TTBR0;
 /// - `thread` (ring-3 threads + join) and `sync` (futex-backed mutex).
 fn run_boot_programs(info: &boot::BootInfo) {
-    let find = |name: &str| info.modules().iter().find(|m| m.name() == name).map(|m| m.bytes());
+    // From /disk (virtio-blk) when it is mounted, else from the Limine modules.
+    let from_disk = core::cell::Cell::new(false);
+    let find = |name: &str| -> Option<alloc::vec::Vec<u8>> {
+        let path = alloc::format!("/disk/{}.ELF", name.to_uppercase());
+        match vfs::read(&path) {
+            Ok(bytes) => {
+                from_disk.set(true);
+                Some(bytes)
+            }
+            Err(_) => {
+                from_disk.set(false);
+                info.modules().iter().find(|m| m.name() == name).map(|m| m.bytes().to_vec())
+            }
+        }
+    };
     let frames0 = memory::frames_in_use();
     for name in ["hello", "matang", "heap", "gcmem"] {
         let Some(image) = find(name) else { continue };
         USER_OUTPUT.lock().clear();
-        println!("[arm64] --- program '{}' ({} bytes, from a Limine module) ---", name, image.len());
-        match app::spawn_image(name, image) {
+        println!("[arm64] --- program '{}' ({} bytes, from {}) ---", name, image.len(), if from_disk.get() { "/disk" } else { "a Limine module" });
+        match app::spawn_image(name, &image) {
             Ok(pid) => {
                 let code = app::wait(pid);
                 println!("[arm64] --- '{}' (pid {}) exited with code {:#x} ---", name, pid, code);
@@ -626,7 +662,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
     if let Some(image) = find("mproc") {
         let p0 = task::user_preemptions();
         let t0 = interrupts::ticks();
-        let pids: alloc::vec::Vec<u64> = (0..2).filter_map(|i| app::spawn_image(if i == 0 { "mproc-a" } else { "mproc-b" }, image).ok()).collect();
+        let pids: alloc::vec::Vec<u64> = (0..2).filter_map(|i| app::spawn_image(if i == 0 { "mproc-a" } else { "mproc-b" }, &image).ok()).collect();
         let codes: alloc::vec::Vec<u64> = pids.iter().map(|&p| app::wait(p)).collect();
         let preempts = task::user_preemptions() - p0;
         let secs10 = (interrupts::ticks() - t0) * 10 / 18;
@@ -645,13 +681,78 @@ fn run_boot_programs(info: &boot::BootInfo) {
     for name in ["thread", "sync"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ---", name);
-        match app::spawn_image(name, image) {
+        match app::spawn_image(name, &image) {
             Ok(pid) => println!("[arm64] --- '{}' exited with code {:#x} ---", name, app::wait(pid)),
             Err(e) => println!("[arm64] '{}': {}", name, e),
         }
     }
     let leaked = memory::frames_in_use() as i64 - frames0 as i64;
     println!("[arm64] programs done; frames leaked: {}", leaked);
+}
+
+// ---- Platform devices: clock, storage, display ----------------------------
+
+/// The PL031 clock answers through the same `rtc::read` the FAT code stamps
+/// files with.
+fn rtc_self_test() {
+    let (y, mo, d, h, mi, s) = rtc::read();
+    println!("[arm64] PL031 clock: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC (unix {})", y, mo, d, h, mi, s, rtc::unix_time());
+    if (2024..2200).contains(&y) && (1..=12).contains(&mo) && (1..=31).contains(&d) {
+        println!("[kernel] MILESTONE: ARM64 RTC OK (PL031 from the DTB, epoch -> calendar)");
+    }
+}
+
+/// `/disk` on ARM64: the virtio-blk driver (shared with x86) over the
+/// virtio-mmio transport, mounted by the shared FAT + VFS code. Lists the
+/// root, reads BATANG.TXT, writes a file and reads it back.
+fn storage_self_test() {
+    let n = virtio::init_block();
+    if n == 0 {
+        println!("[arm64] storage: no virtio-blk device (QEMU: -device virtio-blk-device + -global virtio-mmio.force-legacy=false)");
+        return;
+    }
+    let Some(dev) = driver::take_boot_block_device() else { return };
+    if let Err(e) = vfs::mount("disk", dev, false) {
+        println!("[arm64] storage: mount /disk failed: {}", e);
+        return;
+    }
+    let names = vfs::list("/disk").unwrap_or_default();
+    let batang = vfs::read("/disk/BATANG.TXT").ok().and_then(|b| alloc::string::String::from_utf8(b).ok());
+    let (y, mo, d, h, mi, s) = rtc::read();
+    let stamp = alloc::format!("BZARM64 written {:04}-{:02}-{:02} {:02}:{:02}:{:02}\n", y, mo, d, h, mi, s);
+    let wrote = vfs::write("/disk/ARM64.TXT", stamp.as_bytes()).is_ok();
+    let back = vfs::read("/disk/ARM64.TXT").ok();
+    println!(
+        "[arm64] /disk: {} entries, BATANG.TXT {}, ARM64.TXT = {}",
+        names.len(),
+        if batang.is_some() { "read" } else { "missing" },
+        stamp.trim_end()
+    );
+    if names.len() > 5 && batang.as_deref().map_or(false, |t| t.contains("batang")) && wrote && back.as_deref() == Some(stamp.as_bytes()) {
+        println!("[kernel] MILESTONE: ARM64 DISK OK (virtio-blk over virtio-mmio, shared FAT + VFS: /disk listed, read, written + read back)");
+    }
+}
+
+/// virtio-gpu over virtio-mmio: copy the framebuffer console's pixels into a
+/// back buffer and present it -- the driver prints `VIRTIO GPU OK` on its
+/// first frame (the ARM64 desktop will present through it).
+fn gpu_self_test(info: &boot::BootInfo) {
+    let Some(fb) = info.framebuffer else { return };
+    if fb.bytes_per_pixel != 4 {
+        return;
+    }
+    virtio::gpu::init(fb.width, fb.height);
+    let mut back = alloc::vec![0u32; fb.width * fb.height];
+    for y in 0..fb.height {
+        for x in 0..fb.width {
+            let px = unsafe { ((fb.addr as *const u32).add(y * fb.stride + x)).read_volatile() };
+            back[y * fb.width + x] = match fb.format {
+                boot::PixelFormat::Rgb => ((px & 0xFF) << 16) | (px & 0xFF00) | ((px >> 16) & 0xFF),
+                _ => px & 0x00FF_FFFF,
+            };
+        }
+    }
+    virtio::gpu::present(&back);
 }
 
 #[panic_handler]

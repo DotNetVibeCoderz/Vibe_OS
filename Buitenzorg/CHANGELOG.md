@@ -35,6 +35,11 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M3 (increment 6): disk, clock and display on ARM64.** A
+  virtio-mmio transport lets the existing virtio drivers run on ARM64: `/disk`
+  is mounted from a virtio disk through the shared FAT and VFS code (read and
+  write), programs are loaded from it, the PL031 clock dates files, and
+  virtio-gpu shows frames (`ARM64 DISK OK`, `ARM64 RTC OK`, `VIRTIO GPU OK`).
 - **Multi-arch M3 (increment 5): processes and threads on ARM64.** The
   scheduler and process registry are shared with x86 unchanged; programs run
   as preemptively scheduled processes, two CPU-bound C# programs share the CPU

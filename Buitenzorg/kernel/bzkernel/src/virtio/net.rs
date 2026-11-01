@@ -108,7 +108,7 @@ impl NetDevice for VirtioNet {
 
 /// The first virtio NIC, if the machine has one.
 pub fn probe() -> Option<VirtioNet> {
-    for t in super::pci::find(super::device::NET) {
+    for t in super::find(super::device::NET) {
         let loc = t.location();
         match VirtioNet::new(t) {
             Ok(n) => return Some(n),

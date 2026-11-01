@@ -268,9 +268,8 @@ pub fn present(back: &[u32]) {
             console.lock().present(back);
         });
     }
-    // Mirror to a virtio GPU, if one is up (multi-arch M2; the ARM64 port
-    // gets virtio over virtio-mmio in a later M3 increment).
-    #[cfg(target_arch = "x86_64")]
+    // Mirror to a virtio GPU, if one is up (multi-arch M2; virtio-PCI on PCs,
+    // virtio-mmio on ARM64).
     crate::virtio::gpu::present(back);
 }
 

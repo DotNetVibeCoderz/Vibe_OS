@@ -2,3 +2,4 @@
 //! peripherals whose addresses the DTB provides.
 
 pub mod pl011;
+pub mod pl031;

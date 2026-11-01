@@ -148,7 +148,7 @@ impl VirtioSnd {
 
 /// Find the first virtio sound device and play a short test tone through it.
 pub fn init() {
-    for t in super::pci::find(super::device::SOUND) {
+    for t in super::find(super::device::SOUND) {
         let loc = t.location();
         match VirtioSnd::new(t) {
             Ok(mut s) => {

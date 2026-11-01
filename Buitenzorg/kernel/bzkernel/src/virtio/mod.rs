@@ -13,10 +13,25 @@
 
 pub mod blk;
 pub mod gpu;
+#[cfg(target_arch = "x86_64")]
 pub mod input;
+pub mod mmio;
+#[cfg(target_arch = "x86_64")]
 pub mod net;
+#[cfg(target_arch = "x86_64")]
 pub mod pci;
+#[cfg(target_arch = "x86_64")]
 pub mod snd;
+
+/// Every virtio device of type `kind` the platform exposes: virtio-PCI on
+/// PCs, virtio-mmio slots from the Device Tree on ARM64 (input / net / sound
+/// join the ARM64 kernel with the subsystems they feed).
+pub fn find(kind: u16) -> alloc::vec::Vec<alloc::boxed::Box<dyn Transport>> {
+    #[cfg(target_arch = "x86_64")]
+    return pci::find(kind);
+    #[cfg(not(target_arch = "x86_64"))]
+    return mmio::find(kind);
+}
 
 use alloc::vec::Vec;
 use core::sync::atomic::{fence, Ordering};
@@ -238,7 +253,7 @@ impl Virtqueue {
 /// Returns how many block devices were registered.
 pub fn init_block() -> usize {
     let mut n = 0;
-    for t in pci::find(device::BLOCK) {
+    for t in find(device::BLOCK) {
         let loc = t.location();
         match blk::VirtioBlk::new(t) {
             Ok(mut dev) => {
@@ -247,7 +262,8 @@ pub fn init_block() -> usize {
                 let mbr = dev.read_sector(0, &mut s0).is_ok() && s0[510] == 0x55 && s0[511] == 0xAA;
                 if mbr {
                     crate::println!(
-                        "[kernel] MILESTONE: VIRTIO BLK OK (virtio-PCI modern transport, split virtqueue, sector 0 read: MBR signature present)"
+                        "[kernel] MILESTONE: VIRTIO BLK OK ({}, split virtqueue, sector 0 read: MBR signature present)",
+                        if loc.starts_with("pci") { "virtio-PCI modern transport" } else { "virtio-mmio v2 transport" }
                     );
                 }
                 crate::driver::register_block_device(alloc::boxed::Box::new(dev));

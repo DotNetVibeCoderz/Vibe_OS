@@ -230,7 +230,7 @@ fn scancode(code: u16) -> Option<(bool, u8)> {
 /// Find and start every virtio input device.
 pub fn init() {
     let mut devs = DEVICES.lock();
-    for t in super::pci::find(super::device::INPUT) {
+    for t in super::find(super::device::INPUT) {
         let loc = t.location();
         match InputDev::new(t) {
             Ok(d) => devs.push(d),

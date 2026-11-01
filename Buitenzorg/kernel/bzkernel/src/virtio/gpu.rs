@@ -119,7 +119,7 @@ impl VirtioGpu {
 /// Bring up the first virtio GPU with a `width` x `height` desktop. Prints the
 /// milestone once a first frame went through it.
 pub fn init(width: usize, height: usize) {
-    for t in super::pci::find(super::device::GPU) {
+    for t in super::find(super::device::GPU) {
         let loc = t.location();
         match VirtioGpu::new(t, width as u32, height as u32) {
             Ok(g) => {
