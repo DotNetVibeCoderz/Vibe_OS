@@ -56,4 +56,5 @@ build_prog imgview imgview.cs bzui.cs bzgfx.cs bzbcl.cs bzbcl2.cs
 build_prog jpgtest jpgtest.cs bzgfx.cs
 build_prog mproc mproc.cs
 build_prog smpsys smpsys.cs
+build_prog smpgui smpgui.cs
 build_prog proctest proctest.cs bzbcl.cs bzbcl2.cs

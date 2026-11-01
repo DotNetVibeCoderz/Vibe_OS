@@ -708,9 +708,24 @@ fn smp_sched_demo(image: &[u8]) {
 /// fine-grained locking, syscalls must actually execute in the kernel on
 /// several CPUs at once and the BKL must stop being contended.
 fn smp_finelock_demo(aps: usize) {
-    let Ok(image) = vfs::read("/disk/SMPSYS.ELF") else {
-        println!("[kernel] smp: SMPSYS.ELF not on /disk (fine-grained locking test skipped)");
-        return;
+    let mem = smp_finelock_run(aps, "SMPSYS", "memory/scheduler/console");
+    let gui = smp_finelock_run(aps, "SMPGUI", "window system/process registry");
+    match (mem, gui) {
+        (Some((mp, mw0, mw1, mx)), Some((gp, gw0, gw1, gx))) => println!(
+            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02})",
+            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100
+        ),
+        _ => println!("[kernel] smp fine-grained locking self-test FAILED"),
+    }
+}
+
+/// One fine-grained-locking workload: `name`.ELF, one copy per CPU, run all-BKL
+/// then fine-grained. Returns (peak in the kernel at once, BKL waits all-BKL,
+/// BKL waits fine-grained, throughput ratio x100) if it passed.
+fn smp_finelock_run(aps: usize, name: &str, what: &str) -> Option<(u64, u64, u64, u64)> {
+    let Ok(image) = vfs::read(&alloc::format!("/disk/{}.ELF", name)) else {
+        println!("[kernel] smp: {}.ELF not on /disk (fine-grained locking test skipped)", name);
+        return None;
     };
     let copies = aps + 1;
     let run = |fine: bool| {
@@ -719,7 +734,7 @@ fn smp_finelock_demo(aps: usize) {
         let (calls0, _) = task::fine_stats(true);
         let t0 = interrupts::ticks();
         let pids: alloc::vec::Vec<u64> = (0..copies)
-            .filter_map(|i| app::spawn_image(&alloc::format!("smpsys-{}", i), &image).ok())
+            .filter_map(|i| app::spawn_image(&alloc::format!("{}-{}", name, i), &image).ok())
             .collect();
         while pids.iter().any(|&p| process::is_alive(p)) && interrupts::ticks() - t0 < 18 * 30 {
             task::yield_now();
@@ -733,20 +748,17 @@ fn smp_finelock_demo(aps: usize) {
     };
     let (a_ok, a_rounds, a_waits, a_fine, _) = run(false);
     let (b_ok, b_rounds, b_waits, b_fine, b_peak) = run(true);
+    let ratio = b_rounds * 100 / a_rounds.max(1);
     println!(
-        "[kernel] smp: {} SMPSYS copies -- BKL only: ok={} rounds={} BKL waits={} | fine-grained: ok={} rounds={} BKL waits={} BKL-free syscalls={} most in the kernel at once={} (throughput x{}.{:02})",
-        copies, a_ok, a_rounds, a_waits, b_ok, b_rounds, b_waits, b_fine, b_peak,
-        b_rounds / a_rounds.max(1), (b_rounds * 100 / a_rounds.max(1)) % 100
+        "[kernel] smp: {} {} copies ({}) -- BKL only: ok={} rounds={} BKL waits={} | fine-grained: ok={} rounds={} BKL waits={} BKL-free syscalls={} most in the kernel at once={} (throughput x{}.{:02})",
+        copies, name, what, a_ok, a_rounds, a_waits, b_ok, b_rounds, b_waits, b_fine, b_peak, ratio / 100, ratio % 100
     );
-    let parallel = b_peak >= 2;
-    if a_ok && b_ok && a_fine == 0 && b_fine > 0 && parallel && b_waits < a_waits {
-        println!(
-            "[kernel] MILESTONE: SMP FINELOCK OK (memory/scheduler/console syscalls run without the BKL: {} in the kernel at once, BKL waits {} -> {}, throughput x{}.{:02})",
-            b_peak, a_waits, b_waits, b_rounds / a_rounds.max(1), (b_rounds * 100 / a_rounds.max(1)) % 100
-        );
-    } else {
-        println!("[kernel] smp fine-grained locking self-test FAILED");
+    let passed = a_ok && b_ok && a_fine == 0 && b_fine > 0 && b_peak >= 2 && b_waits < a_waits;
+    if !passed {
+        println!("[kernel] smp: {} workload FAILED", name);
+        return None;
     }
+    Some((b_peak, a_waits, b_waits, ratio))
 }
 
 /// Symmetric SMP kernel: kernel code runs on every CPU (serialized by the Big

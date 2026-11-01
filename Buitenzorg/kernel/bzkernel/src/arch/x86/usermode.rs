@@ -119,7 +119,11 @@ extern "C" fn syscall_dispatch_c(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     }
     crate::task::note_syscall(fine);
     // Concurrency statistic, for the BKL-free syscalls that never block.
-    let track = fine && matches!(nr, n::MMAP | n::MPROTECT | n::MUNMAP | n::THREAD_SELF | n::DEBUG_WRITE);
+    let track = fine
+        && matches!(
+            nr,
+            n::MMAP | n::MPROTECT | n::MUNMAP | n::THREAD_SELF | n::DEBUG_WRITE | n::WIN_CMD | n::WIN_PRESENT | n::SYS_STAT | n::PROC_LIST
+        );
     if track {
         crate::task::fine_enter();
     }
@@ -261,3 +265,4 @@ core::arch::global_asm!(
 extern "C" {
     fn return_to_kernel(code: u64, kctx: u64) -> !;
 }
+

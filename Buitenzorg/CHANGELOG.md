@@ -68,7 +68,9 @@ Hardening toward a stable x86-64 release.
   CPUs. The "from ring 3" pointer-validation flag became per-task (it was
   global); TLB shootdowns no longer happen under a lock and frames are freed
   only after every CPU acknowledged; futex check-and-block is atomic under the
-  scheduler lock. New test program SMPSYS: `MILESTONE: SMP FINELOCK OK`
+  scheduler lock. The window system (WIN_*, KEY_READ, FB_INFO), process registry (PROC_LIST,
+  PROC_ARGS, SYS_STAT) and CLOCK_RTC followed (the CMOS port pair got its own
+  lock). New test programs SMPSYS and SMPGUI: `MILESTONE: SMP FINELOCK OK`
   (4 syscalls in the kernel at once with `-smp 4`, BKL waits ~4000 -> ~8,
   throughput x2.25).
 - **SMP increment 4: symmetric SMP kernel.** Every CPU runs the same

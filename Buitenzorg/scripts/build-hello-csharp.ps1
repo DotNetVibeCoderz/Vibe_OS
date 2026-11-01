@@ -52,6 +52,7 @@ try {
         @{src=@("jpgtest.cs", "bzgfx.cs"); elf="jpgtest.elf"},
         @{src=@("mproc.cs");             elf="mproc.elf"},
         @{src=@("smpsys.cs");            elf="smpsys.elf"},
+        @{src=@("smpgui.cs");            elf="smpgui.elf"},
         @{src=@("proctest.cs", "bzbcl.cs", "bzbcl2.cs"); elf="proctest.elf"}
     )
     foreach ($prog in $programs) {

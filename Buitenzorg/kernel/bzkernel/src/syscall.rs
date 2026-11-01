@@ -62,7 +62,15 @@ fn from_user() -> bool {
 //     futex value check and the block are one step under it (`futex_wait_if`),
 //     so no wake-up is lost;
 //   - console (DEBUG_WRITE): the serial and framebuffer-console locks;
+//   - window system (WIN_CREATE/WIN_CMD/WIN_PRESENT, FB_INFO): the `wm::WM`
+//     lock, then theme / wallpaper / RTC / process-registry locks inside it
+//     (never the other way round); KEY_READ: keyboard queue + `wm::WM`;
+//   - process registry (PROC_LIST, PROC_ARGS, SYS_STAT): `process::APPS`,
+//     the scheduler lock, the heap allocator's lock;
+//   - CLOCK_RTC: the CMOS lock (rtc.rs);
 //   - constants/atomics (ABI_VERSION, IS_INTERACTIVE).
+// PROC_WAIT stays under the BKL: its "still alive?" check and its block must
+// be one step against the exiting child's wake-up.
 // Pointer validation walks the calling CPU's own page tables. Everything else
 // still takes the BKL.
 
@@ -91,6 +99,15 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FUTEX_WAKE
             | sysno::THREAD_SELF
             | sysno::IS_INTERACTIVE
+            | sysno::FB_INFO
+            | sysno::WIN_CREATE
+            | sysno::WIN_CMD
+            | sysno::WIN_PRESENT
+            | sysno::KEY_READ
+            | sysno::PROC_LIST
+            | sysno::PROC_ARGS
+            | sysno::SYS_STAT
+            | sysno::CLOCK_RTC
     )
 }
 

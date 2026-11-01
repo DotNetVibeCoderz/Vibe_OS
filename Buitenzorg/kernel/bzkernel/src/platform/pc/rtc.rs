@@ -6,6 +6,12 @@
 
 use x86_64::instructions::port::Port;
 
+/// The CMOS is an index/data port pair: selecting a register and reading it
+/// are two steps, so two CPUs reading at once (the desktop's tray clock and an
+/// app's compose, CLOCK_RTC) would read each other's registers. Taken with
+/// interrupts off.
+static CMOS_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
 /// Read a CMOS register through the index/data port pair.
 unsafe fn cmos(reg: u8) -> u8 {
     let mut sel = Port::<u8>::new(0x70);
@@ -25,6 +31,13 @@ unsafe fn updating() -> bool {
 /// re-reads until two consecutive samples agree so an update can't tear the
 /// value across a second/minute boundary.
 pub fn read() -> (u16, u8, u8, u8, u8, u8) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let _cmos = CMOS_LOCK.lock();
+        unsafe { read_locked() }
+    })
+}
+
+unsafe fn read_locked() -> (u16, u8, u8, u8, u8, u8) {
     unsafe {
         let mut last = read_raw();
         for _ in 0..64 {
