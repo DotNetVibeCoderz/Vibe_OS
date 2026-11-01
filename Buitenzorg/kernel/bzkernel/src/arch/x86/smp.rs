@@ -230,29 +230,15 @@ fn map_lapic(phys: u64) -> bool {
 /// is why UEFI boots used to hang at the first timer wait (ticks stuck at 0).
 /// Call early, before anything waits on the timer. Uses the IA32_APIC_BASE MSR,
 /// so it needs neither ACPI nor the heap.
-pub fn enable_bsp_lapic(
-    mapper: &mut impl Mapper<Size4KiB>,
-    frames: &mut impl FrameAllocator<Size4KiB>,
-) -> bool {
+pub fn enable_bsp_lapic() -> bool {
     use x86_64::registers::model_specific::Msr;
     let mut apic_base = Msr::new(0x1B);
     let base = unsafe { apic_base.read() };
     if base & (1 << 11) == 0 {
         unsafe { apic_base.write(base | (1 << 11)) }; // global enable
     }
-    let phys = base & 0x000F_FFFF_FFFF_F000;
-    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(LAPIC_VA));
-    if mapper.translate_page(page).is_err() {
-        let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys));
-        let flags = PageTableFlags::PRESENT
-            | PageTableFlags::WRITABLE
-            | PageTableFlags::NO_CACHE
-            | PageTableFlags::WRITE_THROUGH
-            | PageTableFlags::NO_EXECUTE;
-        match unsafe { mapper.map_to(page, frame, flags, frames) } {
-            Ok(flush) => flush.flush(),
-            Err(_) => return false,
-        }
+    if !map_lapic(base & 0x000F_FFFF_FFFF_F000) {
+        return false;
     }
     lapic_write(0x80, 0); // TPR: accept every priority
     lapic_write(LAPIC_SVR, (lapic_read(LAPIC_SVR) & !0xFF) | 0x100 | 0xFF);

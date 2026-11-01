@@ -18,9 +18,8 @@ mod arch;
 mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
-pub(crate) use arch::x86::{gdt, interrupts, smp, usermode, vmx};
+pub(crate) use arch::x86::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::pc::{ata, audio, mouse, pci, power, rtc, serial};
-mod aspace;
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -70,7 +69,6 @@ mod wm;
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use bootloader_api::{entry_point, BootInfo};
 use core::panic::PanicInfo;
-use x86_64::VirtAddr;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -125,10 +123,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         .physical_memory_offset
         .into_option()
         .expect("bootloader must map physical memory");
-    let mut mapper = unsafe { memory::init(VirtAddr::new(phys_offset)) };
-    let mut frame_allocator =
+    let mapper = unsafe { memory::init(phys_offset) };
+    let frame_allocator =
         unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_regions) };
     let usable_mib = frame_allocator.usable_frame_count() * 4096 / (1024 * 1024);
+    // The global paging context: the heap, the LAPIC page, ring-3 programs and
+    // the app launcher all map memory through it.
+    memory::install_ctx(mapper, frame_allocator);
     memory::set_total_usable_mib(usable_mib as u64);
     println!("[kernel] physical memory: {} MiB usable", usable_mib);
 
@@ -136,11 +137,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let rsdp = boot_info.rsdp_addr.into_option().unwrap_or(0);
     power::init(rsdp);
 
-    allocator::init(&mut mapper, &mut frame_allocator).expect("heap init failed");
+    allocator::init().expect("heap init failed");
     // Route the legacy PIC's IRQs through the Local APIC (virtual wire). BIOS
     // firmware leaves it like this; UEFI firmware does not, and without it no
     // timer interrupt ever arrives on a UEFI boot.
-    if !smp::enable_bsp_lapic(&mut mapper, &mut frame_allocator) {
+    if !smp::enable_bsp_lapic() {
         println!("[kernel] warning: could not set up the Local APIC (virtual wire)");
     }
     heap_smoke_test();
@@ -152,12 +153,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     scheduler_demo();
     batang_demo();
-    tunas_demo(&mut mapper, &mut frame_allocator);
-    dahan_demo(&mut mapper, &mut frame_allocator);
+    tunas_demo();
+    dahan_demo();
 
-    // Hand the paging context to the global store so the app launcher and the
-    // shell's `run` command can map user memory after boot.
-    memory::install_ctx(mapper, frame_allocator);
     // Per-process user address spaces (multi-process increment 1).
     aspace::init();
     // SMP increment 1: discover CPUs (MADT) and start + park the APs.
@@ -1269,32 +1267,32 @@ fn batang_demo() {
 
 /// Load an ELF `image` and run it in ring 3, then tear down its mappings so
 /// the address space is free for the next program. Returns the exit code.
-fn run_user_elf(
-    image: &[u8],
-    mapper: &mut x86_64::structures::paging::OffsetPageTable<'static>,
-    frame_allocator: &mut memory::BootInfoFrameAllocator,
-) -> Result<u64, &'static str> {
+fn run_user_elf(image: &[u8]) -> Result<u64, &'static str> {
     const USER_STACK_BASE: u64 = 0x7000_0000;
     const USER_STACK_PAGES: u64 = 16;
 
-    let program = elf::load(image, mapper, frame_allocator)?;
-    let (stack_top, stack_pages) =
-        memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, mapper, frame_allocator)?;
+    // Map under the paging lock, but run the program without it: its own
+    // syscalls (mmap, ...) take the lock too.
+    let (program, stack_top, stack_pages) = memory::with_ctx(|ctx| {
+        let program = elf::load(image, ctx)?;
+        let (stack_top, stack_pages) =
+            memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
+        Ok::<_, &'static str>((program, stack_top, stack_pages))
+    })?;
 
     let code = usermode::enter_user(program.entry, stack_top);
 
-    memory::unmap_user_pages(&program.pages, mapper, frame_allocator);
-    memory::unmap_user_pages(&stack_pages, mapper, frame_allocator);
+    memory::with_ctx(|ctx| {
+        memory::unmap_user_pages(&program.pages, ctx);
+        memory::unmap_user_pages(&stack_pages, ctx);
+    });
     Ok(code)
 }
 
 /// v0.4 "Tunas": load a NativeAOT-compiled C# program (HELLO.ELF) from disk
 /// and run it in ring 3. Milestone: "Hello from C#!" printed by user code
 /// calling back through the syscall ABI.
-fn tunas_demo(
-    mapper: &mut x86_64::structures::paging::OffsetPageTable<'static>,
-    frame_allocator: &mut memory::BootInfoFrameAllocator,
-) {
+fn tunas_demo() {
     use alloc::vec::Vec;
 
     println!();
@@ -1311,7 +1309,7 @@ fn tunas_demo(
     println!("[kernel] tunas: loaded HELLO.ELF from disk ({} bytes)", bytes.len());
     println!("[kernel] tunas: entering ring 3 (C# via bflat/NativeAOT)...");
     println!("[kernel] --- user program output ---");
-    match run_user_elf(&bytes, mapper, frame_allocator) {
+    match run_user_elf(&bytes) {
         Ok(code) => {
             println!("[kernel] --- end user program (exit code {}) ---", code);
             println!("[kernel] MILESTONE: TUNAS OK (C# ran in ring 3 -> 'Hello from C#!')");
@@ -1383,10 +1381,7 @@ fn disk_persist_demo() {
 
 /// v0.5 "Dahan": VFS + FAT write, service/init manager, async I/O benchmark,
 /// networking, and a C# service running as a ring-3 process.
-fn dahan_demo(
-    mapper: &mut x86_64::structures::paging::OffsetPageTable<'static>,
-    frame_allocator: &mut memory::BootInfoFrameAllocator,
-) {
+fn dahan_demo() {
     println!();
 
     // --- VFS + FAT read/write ---------------------------------------------
@@ -1480,7 +1475,7 @@ fn dahan_demo(
         Ok(bytes) => {
             println!("[init] starting service: svc-csharp (ring-3 managed process, {} bytes)", bytes.len());
             println!("[kernel] --- svc-csharp output ---");
-            match run_user_elf(&bytes, mapper, frame_allocator) {
+            match run_user_elf(&bytes) {
                 Ok(code) => {
                     println!("[kernel] --- svc-csharp exited (code {}) ---", code);
                     println!("[kernel] MILESTONE: DAHAN OK (C# service ran as a process)");

@@ -8,9 +8,10 @@
 //! the facades here instead of the `x86_64` crate or inline assembly, so an
 //! ARM64 or RISC-V port provides another `arch/<arch>` behind the same API.
 //!
-//! `scripts/check-arch-boundary.sh` enforces the boundary: outside `arch/` and
-//! `platform/`, only the files on its allowlist (paging, the context switch
-//! and boot glue — the next M0 steps) may still touch architecture details.
+//! `scripts/check-arch-boundary.sh` enforces the boundary: no file outside
+//! `arch/` and `platform/` may touch architecture details (the `x86_64` crate,
+//! inline assembly, port I/O, MSRs). Per-process address spaces (`aspace`) are
+//! x86-specific by design — the PDPT-swap trick — and live in `arch/x86`.
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86;
@@ -20,6 +21,14 @@ pub mod x86;
 pub mod context {
     #[cfg(target_arch = "x86_64")]
     pub use super::x86::context::{prepare_stack, switch, FpuState};
+}
+
+/// Page tables: map / unmap / protect 4 KiB pages with neutral `Flags`, the
+/// ring-3 access check behind syscall pointer validation, the active-table
+/// handle (`PageMap`) and the ELF machine id of native executables.
+pub mod paging {
+    #[cfg(target_arch = "x86_64")]
+    pub use super::x86::paging::{init, is_mapped, map, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE};
 }
 
 /// CPU primitives every architecture provides.

@@ -35,6 +35,14 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Multi-arch M0 (increment 3): paging HAL — M0 complete.** `arch::paging`
+  maps/unmaps/protects pages with neutral `Flags { write, user, exec }` and
+  `u64` frames, and answers the ring-3 access check used by syscall pointer
+  validation. `memory.rs` is generic policy (frame allocator `alloc`/`free`,
+  mmap arena, validation); the ELF loader, kernel heap and boot path go
+  through `MemCtx`, which is now installed before the heap; `aspace` (the
+  PDPT-swap model) moved to `arch/x86`. The boundary checker's allowlist is
+  empty. The kernel heap is now mapped non-executable.
 - **Desktop UI/UX overhaul.** New default theme "kebun" (from the lotus-pond
   wallpaper: moss glass panels, mist text, a single lotus-pink accent, pollen
   time). The start menu is organised by category (Kantor, Multimedia,

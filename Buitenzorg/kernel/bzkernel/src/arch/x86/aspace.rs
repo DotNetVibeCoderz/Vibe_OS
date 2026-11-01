@@ -21,8 +21,6 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use x86_64::structures::paging::FrameAllocator;
-
 use crate::memory;
 
 const PTE_PRESENT: u64 = 1 << 0;
@@ -101,8 +99,7 @@ pub fn init() {
 
 fn alloc_zeroed_frame() -> Option<u64> {
     memory::with_ctx(|ctx| {
-        let frame = ctx.frames.allocate_frame()?;
-        let phys = frame.start_address().as_u64();
+        let phys = ctx.frames.alloc()?;
         unsafe { core::ptr::write_bytes(memory::phys_to_virt(phys) as *mut u8, 0, 4096) };
         Some(phys)
     })

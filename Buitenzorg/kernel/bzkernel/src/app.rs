@@ -33,13 +33,8 @@ fn load_program(pid: u64, image: &[u8]) -> Result<(aspace::Space, u64, u64), &'s
     let prev = task::current_space();
     aspace::install(space);
     let loaded = memory::with_ctx(|ctx| {
-        let program = elf::load(image, &mut ctx.mapper, &mut ctx.frames)?;
-        let (stack_top, _) = memory::map_user_region(
-            USER_STACK_BASE,
-            USER_STACK_PAGES,
-            &mut ctx.mapper,
-            &mut ctx.frames,
-        )?;
+        let program = elf::load(image, ctx)?;
+        let (stack_top, _) = memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
         Ok::<_, &'static str>((program.entry, stack_top))
     });
     aspace::install(prev);

@@ -1,11 +1,9 @@
 //! Kernel heap (linked-list allocator) so `alloc` types work in ring 0.
 
 use linked_list_allocator::LockedHeap;
-use x86_64::structures::paging::mapper::MapToError;
-use x86_64::structures::paging::{
-    FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
-};
-use x86_64::VirtAddr;
+
+use crate::arch::paging::{self, Flags};
+use crate::memory;
 
 pub const HEAP_START: u64 = 0x_4444_4444_0000;
 // 32 MiB kernel heap. 16 MiB was exhausted once the desktop is up: the RAM
@@ -17,25 +15,19 @@ pub const HEAP_SIZE: u64 = 32 * 1024 * 1024;
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-pub fn init(
-    mapper: &mut impl Mapper<Size4KiB>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<(), MapToError<Size4KiB>> {
-    let page_range = {
-        let heap_start = VirtAddr::new(HEAP_START);
-        let heap_end = heap_start + HEAP_SIZE - 1u64;
-        let first = Page::containing_address(heap_start);
-        let last = Page::containing_address(heap_end);
-        Page::range_inclusive(first, last)
-    };
-
-    for page in page_range {
-        let frame = frame_allocator
-            .allocate_frame()
-            .ok_or(MapToError::FrameAllocationFailed)?;
-        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
-        unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
-    }
+/// Map the heap's pages (kernel-only, read/write, not executable) through the
+/// paging context and hand the range to the allocator.
+pub fn init() -> Result<(), &'static str> {
+    const KERNEL_DATA: Flags = Flags { write: true, user: false, exec: false };
+    memory::with_ctx(|ctx| {
+        let mut va = HEAP_START;
+        while va < HEAP_START + HEAP_SIZE {
+            let phys = ctx.frames.alloc().ok_or("out of frames for the kernel heap")?;
+            paging::map(&mut ctx.mapper, &mut ctx.frames, va, phys, KERNEL_DATA)?;
+            va += 4096;
+        }
+        Ok::<(), &'static str>(())
+    })?;
 
     unsafe {
         ALLOCATOR

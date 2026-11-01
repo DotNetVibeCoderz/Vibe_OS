@@ -872,7 +872,7 @@ little-endian di ketiga arsitektur — hanya *instruksi* syscall yang beda),
 mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
 
 ### Rencana bertahap
-1. **M0 — Ekstraksi HAL di x86-64 (tanpa ubah perilaku)** *(increment 1 ✓ 2026-11-01: `arch/x86` + `platform/pc` + fasad `arch::cpu` + pemeriksa batas di CI; sisa: paging, context switch, boot)*. Modul `arch/`
+1. **M0 — Ekstraksi HAL di x86-64 (tanpa ubah perilaku)** *(✓ 2026-11-01 dalam 3 increment: `arch/x86` + `platform/pc` + fasad `arch::cpu`; `arch::context`; `arch::paging` + `aspace` pindah ke `arch/x86` — allowlist pemeriksa batas CI kini **kosong**. Sisa antarmuka `irq`/`timer`/`console`/`smp` ikut dirapikan saat M1–M3 membutuhkannya)*. Modul `arch/`
    dengan antarmuka: `cpu` (halt, irq on/off, relax, timestamp), `irq`
    (controller + EOI + vektor), `timer`, `paging` (map/unmap/switch address
    space — termasuk model PDPT-swap saat ini), `context` (switch + entri user +

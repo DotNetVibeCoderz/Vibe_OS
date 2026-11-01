@@ -15,13 +15,9 @@ set -uo pipefail
 src="$(cd "$(dirname "$0")/.." && pwd)/kernel/bzkernel/src"
 pattern='x86_64::|asm!|core::arch::x86_64|\bPort(::|<)|\bMsr\b'
 
-declare -A ALLOWED=(
-  [memory.rs]="paging HAL (page-table walk, mapper, frame allocator types)"
-  [aspace.rs]="paging HAL (per-process user roots)"
-  [elf.rs]="paging HAL (mapping program segments)"
-  [allocator.rs]="paging HAL (mapping the kernel heap)"
-  [main.rs]="boot HAL (BootInfo + mapper set-up)"
-)
+# Empty since M0 increment 3 (paging HAL): every generic file is clean. Add an
+# entry only as a temporary, documented exception.
+declare -A ALLOWED=()
 
 fail=0
 for f in "$src"/*.rs; do
@@ -42,4 +38,8 @@ if [ "$fail" -ne 0 ]; then
   echo "ARCH BOUNDARY CHECK FAILED"
   exit 1
 fi
-echo "arch boundary: ok (${#ALLOWED[@]} generic files still pending:" "${!ALLOWED[@]}" ")"
+if [ "${#ALLOWED[@]}" -eq 0 ]; then
+  echo "arch boundary: ok (no generic file touches architecture details)"
+else
+  echo "arch boundary: ok (${#ALLOWED[@]} generic files still pending:" "${!ALLOWED[@]}" ")"
+fi
