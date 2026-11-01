@@ -55,6 +55,30 @@ menu, ikon desktop, dan tray taskbar dengan jam RTC live:
 
 ![Desktop shell dengan ikon app dan start menu](img/desktop-start-menu.jpg)
 
+**Tampilan "kebun" (tema default).** Diambil dari wallpaper default —
+kolam teratai Kebun Raya Bogor: panel kaca hijau lumut yang di-blend di atas
+wallpaper (`Theme.glass`), teks warna kabut, lumut kerak untuk teks sekunder,
+kuning serbuk sari untuk jam, dan pink teratai sebagai satu-satunya aksen
+(daun Mulai, kategori terpilih, garis atas window yang fokus dan garis bawahnya
+di taskbar). Tema klasik tetap memakai panel solid (`glass = 0`).
+
+**Start menu — tertata per kategori.** Rel kategori di kiri (*Kantor*,
+*Multimedia*, *Permainan*, *Utilitas*, *Pengaturan*), masing-masing dengan
+warna daunnya sendiri dan jumlah app-nya; menunjuk sebuah kategori menampilkan
+app-nya sebagai kartu ikon dengan nama kategori sebagai judul bergaris warna
+itu. Header menampilkan tanggal hari ini; footer berisi *Tidur*, *Mulai ulang*
+dan *Matikan*. *Wallpaper* dan *Tema* di Pengaturan adalah aksi sistem
+(wallpaper resmi berikutnya / tema berikutnya), bukan app.
+
+![Start menu di kategori Permainan](img/desktop-start-menu-games.jpg)
+
+**Tampilan pertama yang rapi.** Saat sesi dimulai, window peninggalan demo
+boot (programnya sudah selesai, jadi hanya menampilkan frame beku) ditutup;
+terminal dibuka bersih di kiri dengan salam, dan kartu *Tips* berisi perintah
+untuk memulai.
+
+![Tampilan pertama sebuah sesi](img/desktop-session.jpg)
+
 **Ikon app.** Setiap entri launcher punya ikon sendiri — karya seni AI dengan
 satu gaya yang konsisten (`assets/icons/*.jpg`). `bzimage/build.rs`
 mengecilkannya ke 44 px (desktop) dan 18 px (start menu), memotong siluet
@@ -63,8 +87,6 @@ rounded-square beranti-alias yang sama ke kanal alpha, lalu mengemasnya ke
 atas wallpaper (`MILESTONE: ICONS OK`). Di media boot tanpa driver `/disk`,
 setiap app memakai tile berwarna sendiri dengan inisialnya, jadi tidak ada dua
 launcher yang terlihat sama.
-
-![Ikon desktop di atas wallpaper resmi nature](img/desktop-icons.jpg)
 
 ## Catatan scheduler
 

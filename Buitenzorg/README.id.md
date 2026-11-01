@@ -113,7 +113,7 @@ NVMe / USB)** lewat marker `MILESTONE: … OK` yang dicek smoke test.
 | | |
 |---|---|
 | **Desktop shell** — start menu, taskbar, jam tray live, window aplikasi | **Toolkit UI** — kontrol `Buitenzorg.UI` |
-| [![Desktop shell](docs/img/wallpapers/desktop-in-use.jpg)](docs/img/wallpapers/desktop-in-use.jpg) | [![Toolkit UI](docs/img/desktop-ui.png)](docs/img/desktop-ui.png) |
+| [![Desktop shell](docs/img/desktop-session.jpg)](docs/img/desktop-session.jpg) | [![Toolkit UI](docs/img/desktop-ui.png)](docs/img/desktop-ui.png) |
 | **Jam** — analog + digital, waktu CMOS nyata | **2048** — game bawaan |
 | [![Jam](docs/img/desktop-clock.png)](docs/img/desktop-clock.png) | [![2048](docs/img/desktop-2048.png)](docs/img/desktop-2048.png) |
 | **Subsistem AI** — LLM lokal + galeri model (v0.12 "Nalar") | **Screensaver** — Mystify, gaya Win 3.1/98 |

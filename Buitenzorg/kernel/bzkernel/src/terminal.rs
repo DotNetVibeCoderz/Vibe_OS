@@ -28,8 +28,21 @@ pub fn attach(window: u32, visible_rows: usize) {
         scrollback: Vec::new(),
         input: String::new(),
     };
-    term.scrollback.push("Buitenzorg Terminal — ketik 'help'".to_string());
+    term.scrollback.push("Buitenzorg Terminal - ketik 'help'".to_string());
     *TERMINAL.lock() = Some(term);
+    render();
+}
+
+/// Begin the interactive session: drop the boot-demo history, adopt the
+/// window's new height, and greet with where to start.
+pub fn start_session(visible_rows: usize) {
+    if let Some(term) = TERMINAL.lock().as_mut() {
+        term.visible_rows = visible_rows.max(2);
+        term.scrollback.clear();
+        term.scrollback.push("Buitenzorg OS - terminal".to_string());
+        term.scrollback.push("Ketik 'help' untuk daftar perintah, 'run <app>' untuk membuka app.".to_string());
+        term.scrollback.push(String::new());
+    }
     render();
 }
 

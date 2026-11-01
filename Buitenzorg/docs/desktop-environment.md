@@ -59,6 +59,30 @@ and menu, desktop icons, and a taskbar tray with a live RTC clock:
 
 ![The desktop shell with app icons and the start menu](img/desktop-start-menu.jpg)
 
+**The "kebun" look (default theme).** Taken from the default wallpaper —
+the Bogor Botanical Gardens' lotus pond: deep-moss glass panels blended over
+the wallpaper (`Theme.glass`), mist text, lichen for secondary text, pollen
+gold for the time, and lotus pink as the single accent (the Start leaf, the
+selected category, the focused window's top hairline and its taskbar
+underline). Classic themes keep their solid panels (`glass = 0`).
+
+**Start menu — organised by category.** A category rail on the left
+(*Kantor*, *Multimedia*, *Permainan*, *Utilitas*, *Pengaturan*), each with its
+own leaf color and its app count; resting on a category shows its apps as icon
+cards with the category name as a heading ruled in that color. The header
+shows today's date; the footer has *Tidur* (sleep), *Mulai ulang* (restart)
+and *Matikan* (shut down). *Wallpaper* and *Tema* under Pengaturan are system
+actions (next official wallpaper / next theme), not apps.
+
+![Start menu on the Permainan category](img/desktop-start-menu-games.jpg)
+
+**A tidy first view.** When the session starts, windows left behind by the
+boot demos (their programs have exited, so they only show frozen frames) are
+closed; the terminal opens fresh on the left with a greeting, and a *Tips*
+card lists the commands to start with.
+
+![The first view of a session](img/desktop-session.jpg)
+
 **App icons.** Every launcher entry has its own icon — AI-generated artwork in
 one consistent style (`assets/icons/*.jpg`). `bzimage/build.rs` downsamples
 each to 44 px (desktop) and 18 px (start menu), cuts the same anti-aliased
@@ -67,8 +91,6 @@ rounded-square silhouette into the alpha channel and packs them into
 icons over the wallpaper (`MILESTONE: ICONS OK`). On boot media without a
 `/disk` driver each app falls back to its own colored tile with an initial,
 so no two launchers look the same.
-
-![Desktop icons on the official nature wallpaper](img/desktop-icons.jpg)
 
 ## Scheduler note
 

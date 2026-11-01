@@ -190,6 +190,59 @@ fn isqrt(n: u64) -> u64 {
     x
 }
 
+/// Text style for the desktop shell's type scale: Noto Sans Mono is the one
+/// face the kernel carries, so hierarchy comes from weight (Bold) and size
+/// (24 px headings vs 16 px body).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TextStyle {
+    Body,
+    Strong,
+    Heading,
+}
+
+impl TextStyle {
+    fn font(self) -> (FontWeight, RasterHeight) {
+        match self {
+            TextStyle::Body => (FontWeight::Regular, RasterHeight::Size16),
+            TextStyle::Strong => (FontWeight::Bold, RasterHeight::Size16),
+            TextStyle::Heading => (FontWeight::Bold, RasterHeight::Size24),
+        }
+    }
+}
+
+/// Pixel width of `text` in `style`.
+pub fn text_width(text: &str, style: TextStyle) -> i32 {
+    let (w, h) = style.font();
+    (text.chars().count() * get_raster_width(w, h)) as i32
+}
+
+impl<'a> Canvas<'a> {
+    /// Draw `text` in `style`, clipped at `max_x`. Returns the x after it.
+    pub fn draw_text_styled(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32, style: TextStyle) -> i32 {
+        let (weight, height) = style.font();
+        let gw = get_raster_width(weight, height) as i32;
+        let mut cx = x;
+        for c in text.chars() {
+            if cx + gw > max_x {
+                break;
+            }
+            let raster = get_raster(c, weight, height)
+                .or_else(|| get_raster('?', weight, height))
+                .unwrap();
+            for (dy, row) in raster.raster().iter().enumerate() {
+                for (dx, &intensity) in row.iter().enumerate() {
+                    let (px, py) = (cx + dx as i32, y + dy as i32);
+                    if intensity > 0 && px >= 0 && py >= 0 {
+                        self.blend(px as usize, py as usize, color, intensity);
+                    }
+                }
+            }
+            cx += gw;
+        }
+        cx
+    }
+}
+
 pub fn glyph_width() -> usize {
     get_raster_width(FONT_WEIGHT, FONT_HEIGHT)
 }

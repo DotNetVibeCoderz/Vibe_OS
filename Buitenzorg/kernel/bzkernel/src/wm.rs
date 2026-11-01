@@ -24,55 +24,123 @@ pub const WORKSPACES: u8 = 4;
 // Ubuntu/GNOME (a launcher of apps) and Windows XP (a green Start button + a
 // two-part start menu). Geometry:
 const START_W: i32 = 76; // Start button width on the taskbar
-const SM_W: i32 = 244; // start-menu width
-const SM_ROW: i32 = 26; // start-menu / icon row height
+// Start menu ("herbarium drawer"): a category rail on the left, the chosen
+// category's apps as icon cards on the right, power actions in the footer.
+const SM_W: i32 = 528; // start-menu width
+const SM_H: i32 = 316; // start-menu height
+const SM_HDR: i32 = 46; // header band height
+const SM_FTR: i32 = 46; // footer band height
+const SM_RAIL_W: i32 = 168; // category rail width
+const SM_RAIL_ROW: i32 = 40; // category rail row pitch
+const SM_CELL_W: i32 = 112; // app card width
+const SM_CELL_H: i32 = 92; // app card height
 const ICON_W: i32 = 72; // desktop icon cell width
 const ICON_H: i32 = 70; // desktop icon cell height (44 px icon + label)
 
-/// Apps that appear on the desktop / start menu, as (launch-name, label). The
-/// launch-name must match `app::app_file`. The first `DESKTOP_ICONS` are also
-/// placed as desktop icons.
-const LAUNCH: &[(&str, &str)] = &[
+/// A start-menu category: its name, its own leaf color (the rail marker and
+/// the heading rule — it identifies the category, it is not decoration) and
+/// its entries as (launch-name, label). A launch-name starting with '@' is a
+/// system action the desktop loop performs instead of starting an app.
+struct Category {
+    name: &'static str,
+    leaf: Color,
+    apps: &'static [(&'static str, &'static str)],
+}
+
+const CATEGORIES: [Category; 5] = [
+    Category {
+        name: "Kantor",
+        leaf: gfx::rgb(0x7F, 0xB3, 0xE0),
+        apps: &[("editor", "Editor"), ("calc", "Kalkulator"), ("files", "Files")],
+    },
+    Category {
+        name: "Multimedia",
+        leaf: gfx::rgb(0xC7, 0x92, 0xEA),
+        apps: &[("imgview", "Gambar"), ("piano", "Piano"), ("paint", "Paint")],
+    },
+    Category {
+        name: "Permainan",
+        leaf: gfx::rgb(0xF3, 0xC9, 0x69),
+        apps: &[("2048", "2048"), ("xox", "Tic-Tac-Toe")],
+    },
+    Category {
+        name: "Utilitas",
+        leaf: gfx::rgb(0x7C, 0xC4, 0xA4),
+        apps: &[("clock", "Jam"), ("taskmgr", "Task Manager"), ("store", "App Store")],
+    },
+    Category {
+        name: "Pengaturan",
+        leaf: gfx::rgb(0xD9, 0xB3, 0x8C),
+        apps: &[("audiopanel", "Audio"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
+    },
+];
+
+/// Desktop launcher icons (top-left), as (launch-name, label).
+const DESKTOP: [(&str, &str); 4] = [
     ("files", "Files"),
     ("editor", "Editor"),
     ("calc", "Kalkulator"),
     ("store", "App Store"),
-    ("imgview", "Gambar"),
-    ("clock", "Jam"),
-    ("piano", "Piano"),
-    ("2048", "2048"),
-    ("taskmgr", "Task Manager"),
-    ("paint", "Paint"),
-];
-const DESKTOP_ICONS: usize = 4;
-
-/// Fallback icon colors (one per LAUNCH entry) when the icon pack is not
-/// available — every app still gets a distinct tile, not one shared glyph.
-const FALLBACK_COLORS: [Color; 10] = [
-    gfx::rgb(0xF5, 0x8A, 0x1F), // files: amber
-    gfx::rgb(0x2F, 0x7B, 0xE8), // editor: blue
-    gfx::rgb(0x3A, 0x3F, 0x47), // calc: slate
-    gfx::rgb(0x12, 0x9E, 0x6E), // store: emerald
-    gfx::rgb(0xC8, 0x34, 0xB4), // imgview: magenta
-    gfx::rgb(0x34, 0x2E, 0x8C), // clock: indigo
-    gfx::rgb(0xB8, 0x1E, 0x2E), // piano: crimson
-    gfx::rgb(0xD9, 0xB0, 0x6A), // 2048: gold
-    gfx::rgb(0x0F, 0x3B, 0x52), // taskmgr: navy
-    gfx::rgb(0x1C, 0xC8, 0xC8), // paint: cyan
 ];
 
-/// Draw app `i`'s icon (from the icon pack, or a colored initial tile).
-fn draw_app_icon(canvas: &mut Canvas, i: usize, x: i32, y: i32, big: bool) {
-    let (name, label) = LAUNCH[i];
-    if crate::icons::draw(canvas, name, x, y, big) {
+/// Fallback tile colors when the icon pack is unavailable (no /disk driver on
+/// this boot medium): each app still gets its own color, never a shared glyph.
+fn fallback_color(name: &str) -> Color {
+    match name {
+        "files" => gfx::rgb(0xF5, 0x8A, 0x1F),
+        "editor" => gfx::rgb(0x2F, 0x7B, 0xE8),
+        "calc" => gfx::rgb(0x3A, 0x3F, 0x47),
+        "store" => gfx::rgb(0x12, 0x9E, 0x6E),
+        "imgview" => gfx::rgb(0xC8, 0x34, 0xB4),
+        "clock" => gfx::rgb(0x34, 0x2E, 0x8C),
+        "piano" => gfx::rgb(0xB8, 0x1E, 0x2E),
+        "2048" => gfx::rgb(0xD9, 0xB0, 0x6A),
+        "taskmgr" => gfx::rgb(0x0F, 0x3B, 0x52),
+        "paint" => gfx::rgb(0x1C, 0xC8, 0xC8),
+        "xox" => gfx::rgb(0x6A, 0x2C, 0xB8),
+        "audiopanel" => gfx::rgb(0xE0, 0x7A, 0x14),
+        "@wallpaper" => gfx::rgb(0x1F, 0x7A, 0x52),
+        "@theme" => gfx::rgb(0xD0, 0x4A, 0x78),
+        _ => gfx::rgb(0x4C, 0x9A, 0x6A),
+    }
+}
+
+/// Draw an app's icon (from the icon pack — keyed by launch name without the
+/// '@' — or a colored tile with its initial).
+fn draw_app_icon(canvas: &mut Canvas, name: &str, label: &str, x: i32, y: i32, big: bool) {
+    if crate::icons::draw(canvas, name.trim_start_matches('@'), x, y, big) {
         return;
     }
     let sz = crate::icons::size(big);
-    let c = FALLBACK_COLORS[i % FALLBACK_COLORS.len()];
+    let c = fallback_color(name);
     fill_rounded_gradient(canvas, x, y, sz, sz, if big { 10 } else { 4 }, shift(c, 30), c);
     let initial = &label[..1];
     let gw = gfx::glyph_width() as i32;
     canvas.draw_text(x + (sz - gw) / 2, y + (sz - 16) / 2, initial, gfx::rgb(0xFF, 0xFF, 0xFF), x + sz);
+}
+
+/// Day/month names for the tray and start-menu date.
+const DAYS: [&str; 7] = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+/// Weekday (0 = Sunday) by Sakamoto's method.
+fn weekday(y: i32, m: i32, d: i32) -> usize {
+    const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if m < 3 { y - 1 } else { y };
+    ((y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d).rem_euclid(7)) as usize
+}
+
+/// Today as (weekday name, day, month name), from the CMOS clock.
+fn today() -> (&'static str, u8, &'static str) {
+    let (y, mo, d, _, _, _) = crate::rtc::read();
+    let mo = mo.clamp(1, 12);
+    (DAYS[weekday(y as i32, mo as i32, d as i32)], d, MONTHS[(mo - 1) as usize])
+}
+
+/// Format `n` as two digits into `buf` (no allocation in the render path).
+fn two_digits(buf: &mut [u8], n: u8) {
+    buf[0] = b'0' + (n / 10) % 10;
+    buf[1] = b'0' + n % 10;
 }
 
 /// Read wall-clock (hour, minute) from the CMOS RTC (see `rtc.rs`).
@@ -149,6 +217,8 @@ struct Wm {
     cursor_scale: i32,
     /// Desktop shell state (v0.16 UX pass).
     start_open: bool,
+    /// Category shown in the start menu (index into CATEGORIES).
+    start_cat: usize,
     /// A launch requested by a start-menu / desktop-icon click, drained by the
     /// desktop loop (the WM cannot run a ring-3 app itself).
     pending: Option<String>,
@@ -179,6 +249,7 @@ pub fn init(width: usize, height: usize) {
         rounded: true,
         cursor_scale: 1,
         start_open: false,
+        start_cat: 0,
         pending: None,
         pending_power: 0,
         closed_owners: Vec::new(),
@@ -203,6 +274,56 @@ pub fn set_window_owner(id: u32, owner: u64) {
         if let Some(w) = wm.windows.iter_mut().find(|w| w.id == id) {
             w.owner = owner;
         }
+    }
+}
+
+/// Remove every window whose owning program has exited — the boot demos leave
+/// their final frames behind, and a frozen window (a "monitor" stuck at
+/// "Uptime 6s") misinforms. Kernel windows (owner 0: Welcome, Terminal, …)
+/// stay. Returns how many were removed.
+pub fn close_orphan_windows() -> usize {
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return 0 };
+    let before = wm.windows.len();
+    wm.windows.retain(|w| w.owner == 0 || crate::process::is_alive(w.owner));
+    before - wm.windows.len()
+}
+
+/// Place the first window titled `title` (current workspace) at x, y with
+/// size w x h, restoring it if minimized/maximized. Returns true if found.
+pub fn place_window(title: &str, x: i32, y: i32, w: i32, h: i32) -> bool {
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return false };
+    let ws = wm.workspace;
+    let Some(win) = wm.windows.iter_mut().find(|win| win.title == title && win.workspace == ws) else {
+        return false;
+    };
+    (win.x, win.y, win.w, win.h) = (x, y, w, h);
+    win.saved = (x, y, w, h);
+    win.state = WinState::Normal;
+    true
+}
+
+/// Id of the first window titled `title`.
+pub fn window_id(title: &str) -> Option<u32> {
+    WM.lock().as_ref()?.windows.iter().find(|w| w.title == title).map(|w| w.id)
+}
+
+/// Rename window `id`.
+pub fn set_title(id: u32, title: &str) {
+    if let Some(wm) = WM.lock().as_mut() {
+        if let Some(w) = wm.windows.iter_mut().find(|w| w.id == id) {
+            w.title = String::from(title);
+        }
+    }
+}
+
+/// Bring the first window titled `title` to the front.
+pub fn focus_title(title: &str) {
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return };
+    if let Some(id) = wm.windows.iter().find(|w| w.title == title).map(|w| w.id) {
+        wm.focus(id);
     }
 }
 
@@ -234,21 +355,77 @@ pub fn self_test() -> bool {
     handle_mouse(40, height - 4, true);
     handle_mouse(40, height - 4, false);
     let opened = start_menu_open();
-    // Click the first app row ("files"): mirror draw_start_menu's geometry.
-    let rows = LAUNCH.len() as i32;
-    let menu_h = 40 + rows * SM_ROW + 34;
-    let y = height - TASKBAR_H - menu_h - 4;
-    let row0 = y + 40 + SM_ROW / 2;
-    handle_mouse(30, row0, true);
-    handle_mouse(30, row0, false);
-    let launched = matches!(take_pending_launch().as_deref(), Some("files"));
+    // The menu opens on the first category (Kantor): its first card is the
+    // editor. Then pick the "Permainan" rail entry and its first card (2048).
+    let (cx0, cy0) = card_center(height, 0);
+    handle_mouse(cx0, cy0, true);
+    handle_mouse(cx0, cy0, false);
+    let first = matches!(take_pending_launch().as_deref(), Some("editor"));
+    handle_mouse(40, height - 4, true);
+    handle_mouse(40, height - 4, false);
+    let (rx, ry) = rail_center(height, 2);
+    handle_mouse(rx, ry, true);
+    handle_mouse(rx, ry, false);
+    handle_mouse(cx0, cy0, true);
+    handle_mouse(cx0, cy0, false);
+    let game = matches!(take_pending_launch().as_deref(), Some("2048"));
+    let launched = first && game;
     // Reset shell state so the real desktop starts clean.
     if let Some(wm) = WM.lock().as_mut() {
         wm.start_open = false;
+        wm.start_cat = 0;
         wm.pending = None;
         wm.last_icon = (usize::MAX, 0);
     }
     opened && launched
+}
+
+/// Top-left of the start menu on a screen of `height`.
+fn menu_origin(height: i32) -> (i32, i32) {
+    (6, height - TASKBAR_H - SM_H - 6)
+}
+
+/// Rect (x, y, w, h) of category rail row `i`.
+fn rail_rect(height: i32, i: usize) -> (i32, i32, i32, i32) {
+    let (x, y) = menu_origin(height);
+    (x + 10, y + SM_HDR + 12 + i as i32 * SM_RAIL_ROW, SM_RAIL_W - 20, SM_RAIL_ROW - 6)
+}
+
+/// Rect (x, y, w, h) of app card `j` in the content pane (3 per row).
+fn card_rect(height: i32, j: usize) -> (i32, i32, i32, i32) {
+    let (x, y) = menu_origin(height);
+    let (col, row) = ((j % 3) as i32, (j / 3) as i32);
+    (x + SM_RAIL_W + 14 + col * (SM_CELL_W + 4), y + SM_HDR + 70 + row * (SM_CELL_H + 4), SM_CELL_W, SM_CELL_H)
+}
+
+fn rail_center(height: i32, i: usize) -> (i32, i32) {
+    let (x, y, w, h) = rail_rect(height, i);
+    (x + w / 2, y + h / 2)
+}
+
+fn card_center(height: i32, j: usize) -> (i32, i32) {
+    let (x, y, w, h) = card_rect(height, j);
+    (x + w / 2, y + h / 2)
+}
+
+/// Footer power actions: (x, w, power code, label). 1 = shutdown, 2 =
+/// restart, 3 = sleep; laid out right-to-left.
+fn power_buttons(height: i32) -> [(i32, i32, u8, &'static str); 3] {
+    let (x, _) = menu_origin(height);
+    let labels: [(u8, &str); 3] = [(1, "Matikan"), (2, "Mulai ulang"), (3, "Tidur")];
+    let mut out = [(0, 0, 0u8, ""); 3];
+    let mut right = x + SM_W - 12;
+    for (k, (code, label)) in labels.iter().enumerate() {
+        let w = gfx::text_width(label, gfx::TextStyle::Body) + 20;
+        right -= w;
+        out[k] = (right, w, *code, *label);
+        right -= 6;
+    }
+    out
+}
+
+fn hit(px: i32, py: i32, (x, y, w, h): (i32, i32, i32, i32)) -> bool {
+    px >= x && px < x + w && py >= y && py < y + h
 }
 
 /// Set cursor size (1 = normal, 2 = large) — Personalization.
@@ -561,6 +738,12 @@ pub fn handle_mouse(x: i32, y: i32, left: bool) {
 
     // Hover tracking (micro-interaction highlight on title-bar buttons).
     wm.hover = wm.title_button_at(cx, cy);
+    // Start menu: resting on a category in the rail shows its apps.
+    if wm.start_open {
+        if let Some(i) = (0..CATEGORIES.len()).find(|&i| hit(cx, cy, rail_rect(wm.height, i))) {
+            wm.start_cat = i;
+        }
+    }
 
     let pressed = left && !wm.prev_left;
     let released = !left && wm.prev_left;
@@ -650,24 +833,28 @@ impl Wm {
     fn shell_click(&mut self, cx: i32, cy: i32) -> bool {
         // Start menu open: route the click into it, or close on an outside click.
         if self.start_open {
-            let rows = LAUNCH.len() as i32;
-            let h = 40 + rows * SM_ROW + 34;
-            let x = 6;
-            let y = self.height - TASKBAR_H - h - 4;
-            if cx >= x && cx < x + SM_W && cy >= y && cy < y + h {
-                let mut ry = y + 40;
-                for (name, _) in LAUNCH {
-                    if cy >= ry && cy < ry + SM_ROW {
+            let (x, y) = menu_origin(self.height);
+            if cx >= x && cx < x + SM_W && cy >= y && cy < y + SM_H {
+                for i in 0..CATEGORIES.len() {
+                    if hit(cx, cy, rail_rect(self.height, i)) {
+                        self.start_cat = i;
+                        return true;
+                    }
+                }
+                let cat = &CATEGORIES[self.start_cat];
+                for (j, (name, _)) in cat.apps.iter().enumerate() {
+                    if hit(cx, cy, card_rect(self.height, j)) {
                         self.pending = Some(String::from(*name));
                         self.start_open = false;
                         return true;
                     }
-                    ry += SM_ROW;
                 }
-                let py = y + h - 30;
-                if cy >= py && cy < py + 24 {
-                    self.pending_power = if cx < x + SM_W / 2 { 1 } else { 2 };
-                    self.start_open = false;
+                let py = y + SM_H - SM_FTR + 10;
+                for (bx, bw, code, _) in power_buttons(self.height) {
+                    if hit(cx, cy, (bx, py, bw, 26)) {
+                        self.pending_power = code;
+                        self.start_open = false;
+                    }
                 }
                 return true;
             }
@@ -680,12 +867,12 @@ impl Wm {
             return true;
         }
         // Desktop icons: double-click launches (two clicks within ~0.6 s).
-        for i in 0..DESKTOP_ICONS.min(LAUNCH.len()) {
+        for i in 0..DESKTOP.len() {
             let (ix, iy) = icon_rect(i);
             if cx >= ix && cx < ix + ICON_W && cy >= iy && cy < iy + ICON_H {
                 let now = crate::interrupts::ticks();
                 if self.last_icon.0 == i && now.saturating_sub(self.last_icon.1) < 11 {
-                    self.pending = Some(String::from(LAUNCH[i].0));
+                    self.pending = Some(String::from(DESKTOP[i].0));
                     self.last_icon = (usize::MAX, 0);
                 } else {
                     self.last_icon = (i, now);
@@ -841,7 +1028,13 @@ impl Wm {
             outline_rounded(canvas, win.x, win.y, win.w, win.h, radius, bt, th.win_border);
 
             let title_bg = if active { th.win_title_active } else { th.win_title_inactive };
-            let title_color = if active { th.title_text } else { th.text };
+            let title_color = if active {
+                th.title_text
+            } else if th.glass > 0 {
+                crate::theme::LICHEN
+            } else {
+                th.text
+            };
             match th.title_style {
                 theme::TitleStyle::Tab => {
                     let tab_w = (win.w / 2).min(180).max(80);
@@ -861,6 +1054,11 @@ impl Wm {
                     canvas.fill_rect(win.x + bt, win.y + bt, win.w - 2 * bt, TITLE_H, title_bg);
                     canvas.draw_text(win.x + 8, win.y + 5, &win.title, title_color, win.x + win.w - 3 * BTN_W - 4);
                 }
+            }
+
+            // Glass themes mark the focused window with a lotus hairline.
+            if active && th.glass > 0 {
+                canvas.fill_rect(win.x + radius, win.y, win.w - 2 * radius, 2, th.accent);
             }
 
             // Title-bar control buttons (minimize / maximize / close).
@@ -955,135 +1153,224 @@ impl Wm {
 
     fn draw_taskbar(&self, canvas: &mut Canvas, th: &theme::Theme) {
         let y = self.height - TASKBAR_H;
-        // Subtle vertical gradient bar with an accent hairline on top.
-        gradient_v(canvas, 0, y, self.width, TASKBAR_H, shift(th.taskbar_bg, 14), th.taskbar_bg);
-        canvas.fill_rect(0, y, self.width, 1, th.accent);
-
-        // --- Start button (Windows XP-style green pill + a small logo mark) ---
-        let sb_hi = self.start_open;
-        let base = if sb_hi { shift(th.win_title_active, 30) } else { th.win_title_active };
-        fill_rounded_gradient(canvas, 6, y + 4, START_W, TASKBAR_H - 8, 8, shift(base, 40), base);
-        // 2x2 logo tile.
-        canvas.fill_rect(14, y + 11, 5, 5, th.title_text);
-        canvas.fill_rect(20, y + 11, 5, 5, shift(th.title_text, 0));
-        canvas.fill_rect(14, y + 17, 5, 5, shift(th.accent, 60));
-        canvas.fill_rect(20, y + 17, 5, 5, th.title_text);
-        canvas.draw_text(32, y + 9, "Start", th.title_text, 6 + START_W - 4);
-
-        // --- right tray: theme name, clock, workspace pips ---
-        let mut rx = self.width - 6;
-        // Workspace pips [1..4].
-        rx -= (WORKSPACES as i32) * 16 + 8;
-        let mut wx = rx + 8;
-        for ws in 0..WORKSPACES {
-            let sel = ws == self.workspace;
-            let c = if sel { th.accent } else { th.win_title_inactive };
-            fill_rounded(canvas, wx, y + 13, 10, TASKBAR_H - 26, 2, c);
-            wx += 16;
+        let glass = th.glass > 0;
+        // The bar: canopy glass over the wallpaper with a moss hairline on top
+        // (classic themes keep their solid gradient + accent rule).
+        if glass {
+            blend_rounded(canvas, 0, y, self.width, TASKBAR_H, 0, th.taskbar_bg, th.glass);
+            canvas.fill_rect(0, y, self.width, 1, th.win_border);
+        } else {
+            gradient_v(canvas, 0, y, self.width, TASKBAR_H, shift(th.taskbar_bg, 14), th.taskbar_bg);
+            canvas.fill_rect(0, y, self.width, 1, th.accent);
         }
-        // Clock HH:MM.
-        let (hh, mm) = read_clock();
-        let mut cbuf = [0u8; 5];
-        cbuf[0] = b'0' + (hh / 10) % 10; cbuf[1] = b'0' + hh % 10; cbuf[2] = b':';
-        cbuf[3] = b'0' + (mm / 10) % 10; cbuf[4] = b'0' + mm % 10;
-        let cs = core::str::from_utf8(&cbuf).unwrap();
-        let cw = 5 * gfx::glyph_width() as i32 + 4;
-        rx -= cw + 12;
-        canvas.draw_text(rx + 2, y + 9, cs, th.accent, rx + cw);
-        // Theme name.
-        let tn_w = th.name.len() as i32 * gfx::glyph_width() as i32 + 6;
-        rx -= tn_w + 4;
-        canvas.draw_text(rx, y + 9, th.name, th.text, rx + tn_w);
 
-        // --- running window buttons (rounded, gradient when active) ---
+        // --- Start button: a leaf mark + "Mulai" ---------------------------
+        if glass {
+            let bg = if self.start_open { shift(th.taskbar_bg, 34) } else { shift(th.taskbar_bg, 16) };
+            fill_rounded(canvas, 6, y + 5, START_W, TASKBAR_H - 10, 7, bg);
+            if self.start_open {
+                canvas.fill_rect(14, y + TASKBAR_H - 7, START_W - 16, 2, th.accent);
+            }
+        } else {
+            let base = if self.start_open { shift(th.win_title_active, 30) } else { th.win_title_active };
+            fill_rounded_gradient(canvas, 6, y + 4, START_W, TASKBAR_H - 8, 8, shift(base, 40), base);
+        }
+        let leaf = if glass { th.accent } else { th.title_text };
+        canvas.ellipse(14, y + 9, 9, 15, leaf, true); // the leaf
+        canvas.draw_line(18, y + 11, 18, y + 23, if glass { th.taskbar_bg } else { th.win_title_active }); // midrib
+        let label_c = if glass { th.text } else { th.title_text };
+        canvas.draw_text_styled(28, y + 9, "Mulai", label_c, 6 + START_W - 2, gfx::TextStyle::Strong);
+
+        // --- tray (right): date, time, workspace dots ------------------------
+        let mut rx = self.width - 12;
+        for ws in (0..WORKSPACES).rev() {
+            let sel = ws == self.workspace;
+            let c = if sel { th.accent } else { th.win_border };
+            canvas.ellipse(rx - 8, y + 13, 8, 8, c, true);
+            rx -= 13;
+        }
+        rx -= 10;
+        let (hh, mm) = read_clock();
+        let mut t = [b'0', b'0', b':', b'0', b'0'];
+        two_digits(&mut t[0..2], hh);
+        two_digits(&mut t[3..5], mm);
+        let ts = core::str::from_utf8(&t).unwrap();
+        let tw = gfx::text_width(ts, gfx::TextStyle::Strong);
+        rx -= tw;
+        let time_c = if glass { crate::theme::POLLEN } else { th.accent };
+        canvas.draw_text_styled(rx, y + 9, ts, time_c, rx + tw + 1, gfx::TextStyle::Strong);
+        let (day, d, mon) = today();
+        let mut dbuf = [b' '; 2];
+        two_digits(&mut dbuf, d);
+        let dd = if dbuf[0] == b'0' { core::str::from_utf8(&dbuf[1..]).unwrap() } else { core::str::from_utf8(&dbuf).unwrap() };
+        let date_c = if glass { crate::theme::LICHEN } else { th.text };
+        // "Sab 1 Nov" — the short day keeps the tray compact.
+        let short = &day[..3];
+        let date_w = gfx::text_width(short, gfx::TextStyle::Body)
+            + gfx::text_width(dd, gfx::TextStyle::Body)
+            + gfx::text_width(mon, gfx::TextStyle::Body)
+            + 2 * gfx::glyph_width() as i32;
+        rx -= date_w + 12;
+        let mut dx = canvas.draw_text_styled(rx, y + 9, short, date_c, rx + date_w, gfx::TextStyle::Body);
+        dx = canvas.draw_text_styled(dx + gfx::glyph_width() as i32, y + 9, dd, date_c, rx + date_w + 2, gfx::TextStyle::Body);
+        canvas.draw_text_styled(dx + gfx::glyph_width() as i32, y + 9, mon, date_c, rx + date_w + 4, gfx::TextStyle::Body);
+
+        // --- running windows: quiet labels, the focused one underlined -------
         let top_id = self
             .windows
             .iter()
             .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
             .next_back()
             .map(|w| w.id);
-        let start_x = 6 + START_W + 8;
+        let start_x = 6 + START_W + 8; // keep in sync with taskbar_click
         let mut bx = start_x;
         for win in self.windows.iter().filter(|w| w.workspace == self.workspace) {
             if bx + 116 > rx - 4 {
                 break; // no room before the tray
             }
             let active = Some(win.id) == top_id;
-            if active {
-                fill_rounded_gradient(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.win_title_active, 26), th.win_title_active);
-            } else if win.state == WinState::Minimized {
-                fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.taskbar_bg, 22));
+            if glass {
+                if active {
+                    fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 6, shift(th.taskbar_bg, 20));
+                    canvas.fill_rect(bx + 10, y + TASKBAR_H - 7, 90, 2, th.accent);
+                }
+                let tc = if active {
+                    th.text
+                } else if win.state == WinState::Minimized {
+                    darken(crate::theme::LICHEN, 50)
+                } else {
+                    crate::theme::LICHEN
+                };
+                canvas.draw_text(bx + 10, y + 9, &win.title, tc, bx + 104);
             } else {
-                fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, th.win_title_inactive);
+                if active {
+                    fill_rounded_gradient(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.win_title_active, 26), th.win_title_active);
+                } else if win.state == WinState::Minimized {
+                    fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.taskbar_bg, 22));
+                } else {
+                    fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, th.win_title_inactive);
+                }
+                let tc = if active { th.title_text } else { th.text };
+                canvas.draw_text(bx + 8, y + 9, &win.title, tc, bx + 108);
             }
-            let tc = if active { th.title_text } else { th.text };
-            canvas.draw_text(bx + 8, y + 9, &win.title, tc, bx + 108);
             bx += 116;
         }
     }
 
-    /// Draw the start menu (macOS/XP-blended launcher) above the Start button.
+    /// The start menu — a herbarium drawer: header (name + today), category
+    /// rail with each category's leaf color, the chosen category's apps as
+    /// icon cards, and power actions in the footer.
     fn draw_start_menu(&self, canvas: &mut Canvas, th: &theme::Theme) {
         if !self.start_open {
             return;
         }
-        let rows = LAUNCH.len() as i32;
-        let h = 40 + rows * SM_ROW + 34;
-        let x = 6;
-        let y = self.height - TASKBAR_H - h - 4;
-        // Shadow + panel.
-        fill_rounded(canvas, x + 3, y + 4, SM_W, h, 10, th.shadow);
-        fill_rounded(canvas, x, y, SM_W, h, 10, shift(th.win_body, 6));
-        canvas.rect_outline(x, y, SM_W, h, 1, th.win_border);
-        // Header band.
-        fill_rounded_gradient(canvas, x + 1, y + 1, SM_W - 2, 34, 9, th.win_title_active, darken(th.win_title_active, 20));
-        canvas.draw_text(x + 12, y + 7, "Buitenzorg OS", th.title_text, x + SM_W - 8);
-        canvas.draw_text(x + 12, y + 20, "Gravicode Studios", darken(th.title_text, 30), x + SM_W - 8);
-
-        // App rows.
+        let (x, y) = menu_origin(self.height);
         let (mx, my) = self.cursor;
-        let mut ry = y + 40;
-        for (i, (_, label)) in LAUNCH.iter().enumerate() {
-            let hot = mx >= x + 4 && mx < x + SM_W - 4 && my >= ry && my < ry + SM_ROW;
-            if hot {
-                fill_rounded(canvas, x + 4, ry, SM_W - 8, SM_ROW - 2, 4, darken(th.win_title_active, 10));
-            }
-            // The app's own icon.
-            let isz = crate::icons::size(false);
-            draw_app_icon(canvas, i, x + 10, ry + (SM_ROW - 2 - isz) / 2, false);
-            let tc = if hot { th.title_text } else { th.text };
-            canvas.draw_text(x + 36, ry + 5, label, tc, x + SM_W - 8);
-            ry += SM_ROW;
+        let glass = th.glass > 0;
+        let text = th.text;
+        let muted = if glass { crate::theme::LICHEN } else { darken(th.text, 40) };
+        let line = th.win_border;
+
+        // Panel with a soft shadow, then hairline frame.
+        blend_rounded(canvas, x + 4, y + 6, SM_W, SM_H, 12, th.shadow, 110);
+        panel(canvas, th, x, y, SM_W, SM_H, 12);
+        if glass {
+            // A second pass makes the menu denser than the taskbar, so app
+            // labels stay legible over any wallpaper.
+            blend_rounded(canvas, x, y, SM_W, SM_H, 12, th.taskbar_bg, 120);
         }
-        // Power row (shutdown / restart).
-        let py = y + h - 30;
-        canvas.fill_rect(x + 8, py - 4, SM_W - 16, 1, th.win_border);
-        let sd_hot = mx >= x + 8 && mx < x + SM_W / 2 && my >= py && my < py + 24;
-        let rs_hot = mx >= x + SM_W / 2 && mx < x + SM_W - 8 && my >= py && my < py + 24;
-        if sd_hot { fill_rounded(canvas, x + 8, py, SM_W / 2 - 10, 24, 4, gfx::rgb(0xC0, 0x39, 0x2B)); }
-        if rs_hot { fill_rounded(canvas, x + SM_W / 2, py, SM_W / 2 - 10, 24, 4, darken(th.win_title_active, 10)); }
-        canvas.draw_text(x + 18, py + 6, "Matikan", if sd_hot { gfx::rgb(0xFF, 0xFF, 0xFF) } else { th.text }, x + SM_W / 2);
-        canvas.draw_text(x + SM_W / 2 + 10, py + 6, "Restart", if rs_hot { th.title_text } else { th.text }, x + SM_W - 8);
+        outline_rounded(canvas, x, y, SM_W, SM_H, 12, 1, line);
+
+        // Header: OS name (strong) + today's date (muted), hairline below.
+        canvas.draw_text_styled(x + 18, y + 15, "Buitenzorg OS", text, x + SM_W / 2, gfx::TextStyle::Strong);
+        let (day, d, mon) = today();
+        let mut db = [0u8; 2];
+        two_digits(&mut db, d);
+        let dd = if db[0] == b'0' { core::str::from_utf8(&db[1..]).unwrap() } else { core::str::from_utf8(&db).unwrap() };
+        let date_w = gfx::text_width(day, gfx::TextStyle::Body) + gfx::text_width(dd, gfx::TextStyle::Body)
+            + gfx::text_width(mon, gfx::TextStyle::Body) + 2 * gfx::glyph_width() as i32 + 8;
+        let mut tx = x + SM_W - 18 - date_w;
+        tx = canvas.draw_text_styled(tx, y + 15, day, muted, x + SM_W, gfx::TextStyle::Body);
+        tx = canvas.draw_text_styled(tx, y + 15, ",", muted, x + SM_W, gfx::TextStyle::Body);
+        tx = canvas.draw_text_styled(tx + 8, y + 15, dd, muted, x + SM_W, gfx::TextStyle::Body);
+        canvas.draw_text_styled(tx + 8, y + 15, mon, muted, x + SM_W, gfx::TextStyle::Body);
+        canvas.fill_rect(x + 1, y + SM_HDR, SM_W - 2, 1, line);
+
+        // Category rail.
+        for (i, cat) in CATEGORIES.iter().enumerate() {
+            let (rx, ry, rw, rh) = rail_rect(self.height, i);
+            let sel = i == self.start_cat;
+            if sel {
+                fill_rounded(canvas, rx, ry, rw, rh, 7, shift(th.taskbar_bg, 26));
+                fill_rounded(canvas, rx, ry + 7, 4, rh - 14, 2, cat.leaf);
+            } else {
+                canvas.ellipse(rx + 2, ry + rh / 2 - 3, 6, 6, cat.leaf, true);
+            }
+            let style = if sel { gfx::TextStyle::Strong } else { gfx::TextStyle::Body };
+            canvas.draw_text_styled(rx + 16, ry + (rh - 16) / 2, cat.name, if sel { text } else { muted }, rx + rw - 22, style);
+            // How many apps the category holds.
+            let n = [b'0' + cat.apps.len() as u8];
+            let ns = core::str::from_utf8(&n).unwrap();
+            canvas.draw_text_styled(rx + rw - 14, ry + (rh - 16) / 2, ns, muted, rx + rw, gfx::TextStyle::Body);
+        }
+        canvas.fill_rect(x + SM_RAIL_W, y + SM_HDR + 10, 1, SM_H - SM_HDR - SM_FTR - 20, line);
+
+        // Content pane: the category name as a heading, ruled in its leaf color.
+        let cat = &CATEGORIES[self.start_cat];
+        let px = x + SM_RAIL_W + 20;
+        canvas.draw_text_styled(px, y + SM_HDR + 18, cat.name, text, x + SM_W - 16, gfx::TextStyle::Heading);
+        canvas.fill_rect(px + 1, y + SM_HDR + 50, 36, 3, cat.leaf);
+
+        for (j, (name, label)) in cat.apps.iter().enumerate() {
+            let (cx, cy, cw, ch) = card_rect(self.height, j);
+            let hot = hit(mx, my, (cx, cy, cw, ch));
+            if hot {
+                fill_rounded(canvas, cx, cy, cw, ch, 10, shift(th.taskbar_bg, 24));
+                outline_rounded(canvas, cx, cy, cw, ch, 10, 1, shift(line, 20));
+            }
+            let isz = crate::icons::size(true);
+            draw_app_icon(canvas, name, label, cx + (cw - isz) / 2, cy + 10, true);
+            let lw = gfx::text_width(label, gfx::TextStyle::Body).min(cw - 6);
+            canvas.draw_text(cx + (cw - lw) / 2, cy + 10 + isz + 10, label, if hot { text } else { muted }, cx + cw - 3);
+        }
+
+        // Footer: credit on the left, power actions on the right.
+        let fy = y + SM_H - SM_FTR;
+        canvas.fill_rect(x + 1, fy, SM_W - 2, 1, line);
+        canvas.draw_text_styled(x + 18, fy + 15, "Gravicode Studios", muted, x + SM_W / 2, gfx::TextStyle::Body);
+        for (bx, bw, code, label) in power_buttons(self.height) {
+            let by = fy + 10;
+            let hot = hit(mx, my, (bx, by, bw, 26));
+            if hot {
+                let c = if code == 1 { gfx::rgb(0xC0, 0x39, 0x2B) } else { shift(th.taskbar_bg, 30) };
+                fill_rounded(canvas, bx, by, bw, 26, 7, c);
+            } else {
+                outline_rounded(canvas, bx, by, bw, 26, 7, 1, line);
+            }
+            let c = if hot && code == 1 { gfx::rgb(0xFF, 0xFF, 0xFF) } else if hot { text } else { muted };
+            canvas.draw_text(bx + 10, by + 5, label, c, bx + bw - 4);
+        }
     }
 
-    /// Draw the desktop launcher icons down the top-left (macOS/GNOME feel).
+    /// Desktop launcher icons down the top-left, each label on a small glass
+    /// pill so it reads over bright or busy wallpapers.
     fn draw_desktop_icons(&self, canvas: &mut Canvas, th: &theme::Theme) {
         let (mx, my) = self.cursor;
-        for i in 0..DESKTOP_ICONS.min(LAUNCH.len()) {
+        for (i, (name, label)) in DESKTOP.iter().enumerate() {
             let (ix, iy) = icon_rect(i);
             let hot = mx >= ix && mx < ix + ICON_W && my >= iy && my < iy + ICON_H;
             if hot {
-                fill_rounded(canvas, ix, iy, ICON_W, ICON_H, 6, shift(th.desktop_top, 30));
+                blend_rounded(canvas, ix, iy, ICON_W, ICON_H, 8, th.taskbar_bg, 110);
             }
-            // The app's own icon, with a soft shadow under it.
             let isz = crate::icons::size(true);
             let tx = ix + (ICON_W - isz) / 2;
-            fill_rounded(canvas, tx + 2, iy + 5, isz, isz, 10, th.shadow);
-            draw_app_icon(canvas, i, tx, iy + 3, true);
-            // Label centered under the icon.
-            let label = LAUNCH[i].1;
-            let lw = label.len() as i32 * gfx::glyph_width() as i32;
-            canvas.draw_text(ix + (ICON_W - lw) / 2, iy + 3 + isz + 4, label, th.title_text, ix + ICON_W);
+            blend_rounded(canvas, tx + 1, iy + 6, isz, isz, 10, th.shadow, 120);
+            draw_app_icon(canvas, name, label, tx, iy + 3, true);
+            let lw = gfx::text_width(label, gfx::TextStyle::Body);
+            let lx = ix + (ICON_W - lw) / 2;
+            let ly = iy + 3 + isz + 4;
+            blend_rounded(canvas, lx - 5, ly - 1, lw + 10, 18, 8, th.taskbar_bg, if th.glass > 0 { 150 } else { 0 });
+            canvas.draw_text(lx, ly, label, if th.glass > 0 { th.text } else { th.title_text }, ix + ICON_W + 8);
         }
     }
 
@@ -1156,6 +1443,38 @@ fn fill_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32
             0
         };
         canvas.fill_rect(x + inset, y + row, w - 2 * inset, 1, color);
+    }
+}
+
+/// Blend a rounded rectangle of `color` at `alpha` over what is underneath —
+/// the glass panels of themes with `glass > 0`.
+fn blend_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color, alpha: u8) {
+    for row in 0..h {
+        let inset = if radius > 0 && row < radius {
+            corner_inset(row, radius)
+        } else if radius > 0 && row >= h - radius {
+            corner_inset(h - 1 - row, radius)
+        } else {
+            0
+        };
+        let py = y + row;
+        if py < 0 {
+            continue;
+        }
+        for px in (x + inset)..(x + w - inset) {
+            if px >= 0 {
+                canvas.blend(px as usize, py as usize, color, alpha);
+            }
+        }
+    }
+}
+
+/// A shell panel: glass over the wallpaper, or a solid fill on classic themes.
+fn panel(canvas: &mut Canvas, th: &theme::Theme, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+    if th.glass > 0 {
+        blend_rounded(canvas, x, y, w, h, radius, th.taskbar_bg, th.glass);
+    } else {
+        fill_rounded(canvas, x, y, w, h, radius, shift(th.win_body, 6));
     }
 }
 

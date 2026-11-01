@@ -50,6 +50,10 @@ pub struct Theme {
     pub accent: Color,
     pub cursor: Color,
     pub shadow: Color,
+    /// Opacity (0..=255) of the desktop shell's glass panels — taskbar, start
+    /// menu, icon labels — blended over the wallpaper. 0 = solid (classic
+    /// themes keep their opaque look).
+    pub glass: u8,
 }
 
 // --- The system dark/light themes (Buitenzorg leaf palette) -----------------
@@ -73,6 +77,7 @@ const DARK: Theme = Theme {
     accent: rgb(0x6F, 0xC1, 0x4E),
     cursor: rgb(0xF0, 0xFF, 0xE0),
     shadow: rgb(0x05, 0x08, 0x05),
+    glass: 0,
 };
 
 const LIGHT: Theme = Theme {
@@ -94,6 +99,7 @@ const LIGHT: Theme = Theme {
     accent: rgb(0x2F, 0x7A, 0x24),
     cursor: rgb(0x14, 0x20, 0x10),
     shadow: rgb(0xA8, 0xB8, 0x9E),
+    glass: 0,
 };
 
 // --- The 8 built-in styles (requirements.md §15) ----------------------------
@@ -117,6 +123,7 @@ const NEO_BRUTALISM: Theme = Theme {
     accent: rgb(0x2E, 0x5B, 0xFF), // bold blue
     cursor: rgb(0x00, 0x00, 0x00),
     shadow: rgb(0x00, 0x00, 0x00),
+    glass: 0,
 };
 
 const CLEAN: Theme = Theme {
@@ -138,6 +145,7 @@ const CLEAN: Theme = Theme {
     accent: rgb(0x4A, 0x90, 0xE2),
     cursor: rgb(0x33, 0x33, 0x33),
     shadow: rgb(0xE8, 0xE8, 0xE6),
+    glass: 0,
 };
 
 const MATERIAL: Theme = Theme {
@@ -159,6 +167,7 @@ const MATERIAL: Theme = Theme {
     accent: rgb(0xFF, 0x40, 0x81), // pink accent
     cursor: rgb(0x21, 0x21, 0x21),
     shadow: rgb(0x18, 0x18, 0x30),
+    glass: 0,
 };
 
 const BENTO: Theme = Theme {
@@ -180,6 +189,7 @@ const BENTO: Theme = Theme {
     accent: rgb(0x4E, 0xD1, 0xA1),
     cursor: rgb(0xFF, 0xFF, 0xFF),
     shadow: rgb(0x0E, 0x0E, 0x12),
+    glass: 0,
 };
 
 const CLASSIC_LINUX: Theme = Theme {
@@ -201,6 +211,7 @@ const CLASSIC_LINUX: Theme = Theme {
     accent: rgb(0x40, 0x60, 0x80),
     cursor: rgb(0x00, 0x00, 0x00),
     shadow: rgb(0x50, 0x50, 0x50),
+    glass: 0,
 };
 
 const CLASSIC_WINDOWS: Theme = Theme {
@@ -222,6 +233,7 @@ const CLASSIC_WINDOWS: Theme = Theme {
     accent: rgb(0x00, 0x00, 0x80),
     cursor: rgb(0x00, 0x00, 0x00),
     shadow: rgb(0x40, 0x40, 0x40),
+    glass: 0,
 };
 
 const SUN: Theme = Theme {
@@ -243,6 +255,7 @@ const SUN: Theme = Theme {
     accent: rgb(0xC8, 0x9B, 0x3C),
     cursor: rgb(0x10, 0x0C, 0x18),
     shadow: rgb(0x30, 0x28, 0x44),
+    glass: 0,
 };
 
 const BEOS: Theme = Theme {
@@ -264,10 +277,43 @@ const BEOS: Theme = Theme {
     accent: rgb(0xFF, 0xD5, 0x1E),
     cursor: rgb(0x00, 0x00, 0x00),
     shadow: rgb(0x70, 0x80, 0x90),
+    glass: 0,
 };
 
 /// All built-in themes in cycle order.
-pub const THEMES: [Theme; 10] = [
+/// "Kebun" — the default look, taken from the Bogor Botanical Gardens wallpaper:
+/// deep-moss glass panels, mist text, and the pink of the garden's lotus pond
+/// as the one accent (selection, the active window, the Start leaf).
+const KEBUN: Theme = Theme {
+    name: "kebun",
+    dark: true,
+    desktop_top: rgb(0x0F, 0x24, 0x1B),
+    desktop_bottom: rgb(0x1B, 0x3A, 0x2B),
+    gradient: true,
+    win_body: rgb(0x10, 0x20, 0x1A),
+    win_title_active: rgb(0x1E, 0x3B, 0x2E),
+    win_title_inactive: rgb(0x15, 0x29, 0x1F),
+    win_border: rgb(0x2E, 0x54, 0x42),
+    border_thickness: 1,
+    title_style: TitleStyle::Flat,
+    shadow_style: ShadowStyle::Soft,
+    text: rgb(0xE6, 0xEF, 0xE7),
+    title_text: rgb(0xE6, 0xEF, 0xE7),
+    taskbar_bg: rgb(0x0F, 0x24, 0x1B),
+    accent: rgb(0xEE, 0x8F, 0xB0),
+    cursor: rgb(0xF0, 0xFF, 0xE0),
+    shadow: rgb(0x05, 0x0D, 0x09),
+    glass: 205,
+};
+
+/// Secondary text on the kebun panels ("lichen") and the time ("pollen").
+pub const LICHEN: Color = rgb(0x9D, 0xB8, 0xA8);
+pub const POLLEN: Color = rgb(0xF3, 0xC9, 0x69);
+
+/// Index of the default theme in `THEMES`.
+const DEFAULT: usize = 10;
+
+pub const THEMES: [Theme; 11] = [
     DARK,
     LIGHT,
     NEO_BRUTALISM,
@@ -278,9 +324,10 @@ pub const THEMES: [Theme; 10] = [
     CLASSIC_WINDOWS,
     SUN,
     BEOS,
+    KEBUN,
 ];
 
-static CURRENT: Mutex<usize> = Mutex::new(0);
+static CURRENT: Mutex<usize> = Mutex::new(DEFAULT);
 
 pub fn current() -> Theme {
     THEMES[*CURRENT.lock()]
@@ -311,14 +358,20 @@ pub fn cycle() -> &'static str {
     THEMES[*cur].name
 }
 
-/// Toggle only between the dark and light system themes.
+/// Toggle between light and the default dark-ish look (light -> kebun,
+/// anything else -> light).
 pub fn toggle() -> &'static str {
     let mut cur = CURRENT.lock();
-    *cur = if *cur == 0 { 1 } else { 0 };
+    *cur = if *cur == 1 { DEFAULT } else { 1 };
     THEMES[*cur].name
 }
 
+/// Return to the default theme ("kebun").
+pub fn set_default() {
+    *CURRENT.lock() = DEFAULT;
+}
+
 /// All theme names, for `theme list`.
-pub fn names() -> &'static [Theme; 10] {
+pub fn names() -> &'static [Theme; 11] {
     &THEMES
 }

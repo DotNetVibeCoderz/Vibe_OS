@@ -16,6 +16,8 @@ pc-keyboard = "0.7"
 linked_list_allocator = "0.10"
 noto-sans-mono-bitmap = { version = "0.3", default-features = false, features = [
     "regular",
+    "bold",
     "size_16",
+    "size_24",
     "unicode-basic-latin",
 ] }

@@ -28,6 +28,15 @@ Hardening toward a stable x86-64 release.
   shell `ps` / `kill <pid>`; an idle `KEY_READ` yields the CPU for spawned
   processes instead of spinning.
 
+- **Desktop UI/UX overhaul.** New default theme "kebun" (from the lotus-pond
+  wallpaper: moss glass panels, mist text, a single lotus-pink accent, pollen
+  time). The start menu is organised by category (Kantor, Multimedia,
+  Permainan, Utilitas, Pengaturan) with a leaf-colored rail, icon cards, the
+  date, and Sleep/Restart/Shut down; Wallpaper and Tema are system actions.
+  Glass taskbar with a leaf Start button, quiet window labels and a date +
+  time tray; Bold/24 px type for hierarchy; legible desktop icon labels. The
+  session starts tidy: frozen boot-demo windows are closed and the terminal
+  opens fresh next to a Tips card.
 - **App icons.** Ten AI-generated icons in one style (files, editor, calc,
   store, image viewer, clock, piano, 2048, task manager, paint) replace the
   identical placeholder tiles on the desktop and in the start menu. `bzimage`

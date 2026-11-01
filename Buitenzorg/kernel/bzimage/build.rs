@@ -80,8 +80,10 @@ const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
 
 /// App icons, in launcher order: (asset name in assets/icons, launch name used
 /// by the kernel's `icons.rs` / `wm.rs` LAUNCH list).
-const APP_ICONS: [&str; 10] =
-    ["files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint"];
+const APP_ICONS: [&str; 14] = [
+    "files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint",
+    "xox", "audiopanel", "wallpaper", "theme",
+];
 /// Icon sizes in ICONS.BIN: desktop tile and start-menu row.
 const ICON_BIG: usize = 44;
 const ICON_SMALL: usize = 18;

@@ -113,7 +113,7 @@ USB)** via `MILESTONE: … OK` markers that the smoke test greps for.
 | | |
 |---|---|
 | **Desktop shell** — start menu, taskbar, live tray clock, app windows | **UI toolkit** — `Buitenzorg.UI` controls |
-| [![Desktop shell](docs/img/wallpapers/desktop-in-use.jpg)](docs/img/wallpapers/desktop-in-use.jpg) | [![UI toolkit](docs/img/desktop-ui.png)](docs/img/desktop-ui.png) |
+| [![Desktop shell](docs/img/desktop-session.jpg)](docs/img/desktop-session.jpg) | [![UI toolkit](docs/img/desktop-ui.png)](docs/img/desktop-ui.png) |
 | **Clock** — analog + digital, real CMOS time | **2048** — a preloaded game |
 | [![Clock](docs/img/desktop-clock.png)](docs/img/desktop-clock.png) | [![2048](docs/img/desktop-2048.png)](docs/img/desktop-2048.png) |
 | **AI subsystem** — local LLM + model gallery (v0.12 "Nalar") | **Screensaver** — Mystify, Win 3.1/98 style |

@@ -846,7 +846,7 @@ fn cahaya_demo() {
     }
 
     // Final desktop: a rounded theme + a wallpaper for the screenshot.
-    theme::set_by_name("dark");
+    theme::set_default();
     if user_img.is_none() && !default_ok {
         wallpaper::set_builtin("aurora");
     }
@@ -876,10 +876,11 @@ fn buah_demo() {
         }
         count += 1;
     }
-    println!("[theme] cycled {} themes: dark light neo-brutalism clean material bento classic-linux classic-windows sun beos", count);
-    if count >= 10 {
-        println!("[kernel] MILESTONE: THEMES OK (8 built-in styles + dark/light, live switch)");
+    println!("[theme] cycled {} themes: dark light neo-brutalism clean material bento classic-linux classic-windows sun beos kebun", count);
+    if count >= 11 {
+        println!("[kernel] MILESTONE: THEMES OK (8 built-in styles + dark/light + kebun default, live switch)");
     }
+    theme::set_default();
 
     // --- Package manager: install/remove from the registry ----------------
     // Demonstrate through the terminal so it is visible on the desktop too.
@@ -989,7 +990,39 @@ fn kembang_demo() {
 fn desktop_loop() -> ! {
     // From here on a real user can type: shell-launched apps may block on input.
     interactive::set_active();
+    // Start the session on a tidy desktop: drop the frozen windows the boot
+    // demos left behind (their programs have exited).
+    let tidied = wm::close_orphan_windows();
+    println!("[desktop] tidied {} window(s) left by boot demos", tidied);
     let (w, h) = framebuffer::dimensions().unwrap_or((0, 0));
+    // Lay the session out: the terminal on the left, the welcome card and the
+    // notes stacked on the right, nothing overlapping; the terminal has focus.
+    if w != 0 {
+        let (wi, he) = (w as i32, h as i32);
+        let right = wi - 24 - 380;
+        wm::switch_workspace(0);
+        let term_h = he - 34 - 80;
+        wm::place_window("Terminal", 112, 40, (right - 136).min(700), term_h);
+        terminal::start_session(((term_h - 24 - 14) / 19) as usize);
+        wm::place_window("Welcome", right, 40, 380, 190);
+        // The demo "Notes" window becomes a short how-to for the session.
+        if let Some(id) = wm::window_id("Notes") {
+            wm::set_title(id, "Tips");
+            let tips = [
+                "Mulai: semua app, per kategori",
+                "",
+                "help          daftar perintah",
+                "run <app>     buka app",
+                "bg list       pilih wallpaper",
+                "theme cycle   ganti tema",
+                "ps, kill <id> kelola proses",
+                "ws 1..4       pindah desktop",
+            ];
+            wm::set_window_lines(id, tips.iter().map(|s| alloc::string::String::from(*s)).collect());
+        }
+        wm::place_window("Tips", right, 250, 380, 214);
+        wm::focus_title("Terminal");
+    }
     mouse::set_bounds(w, h);
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];
     let mut last_packets = u64::MAX;
@@ -1043,17 +1076,35 @@ fn desktop_loop() -> ! {
         // app or trigger a power action.
         if !saver_active {
             if let Some(app_name) = wm::take_pending_launch() {
+                if let Some(action) = app_name.strip_prefix('@') {
+                    // Start-menu settings entries are system actions.
+                    match action {
+                        "wallpaper" => {
+                            let names: alloc::vec::Vec<&str> = wallpaper::OFFICIAL.iter().map(|(n, _, _)| *n).collect();
+                            let cur = wallpaper::label();
+                            let next = names.iter().position(|n| *n == cur).map(|i| (i + 1) % names.len()).unwrap_or(0);
+                            let _ = wallpaper::set_official(names[next]);
+                        }
+                        "theme" => {
+                            theme::cycle();
+                        }
+                        _ => {}
+                    }
+                    input = true;
+                } else {
                 // Start it as its own process; the desktop keeps running.
                 match app::spawn_named(&app_name) {
                     Ok(pid) => println!("[desktop] launched '{}' as pid {}", app_name, pid),
                     Err(e) => println!("[desktop] launch '{}' failed: {}", app_name, e),
                 }
                 input = true;
+                }
             }
             app::reap_closed_windows();
             match wm::take_pending_power() {
                 1 => power::shutdown(),
                 2 => power::restart(),
+                3 => power::sleep(),
                 _ => {}
             }
         }
@@ -1571,7 +1622,7 @@ fn kanopi_demo() {
     if was_dark && now_light {
         println!("[kernel] MILESTONE: THEME OK (dark <-> light switch)");
     }
-    theme::set_by_name("dark"); // back to dark for the final screenshot
+    theme::set_default(); // back to the default "kebun" look
 
     // --- Second window on workspace 2, then switch desktops (milestone) ---
     let notes = wm::create_window(
