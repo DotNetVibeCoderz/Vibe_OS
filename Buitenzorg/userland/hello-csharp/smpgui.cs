@@ -3,9 +3,9 @@
 // Like SMPSYS, the kernel boot test runs one copy per CPU at once, twice (all
 // syscalls behind the Big Kernel Lock, then fine-grained). Each copy opens a
 // small window and loops for ~1.5 s:
-//   fill rect + blit a 96x48 frame into its window -> SYS_STAT -> PROC_LIST,
-// counting rounds, then presents once (a full compose). Any failed call is an
-// error.
+//   fill rect + blit a 96x48 frame into its window -> SYS_STAT -> PROC_LIST
+//   (+ a full compose every 64 rounds),
+// counting rounds, then presents once more. Any failed call is an error.
 // Exit code: 100 + rounds = correct; 1 = wrong data; 2 = a syscall failed.
 // Built with bflat --stdlib:zero.
 
@@ -64,6 +64,10 @@ class SmpGui
                 n = bz_proc_list(pp, MAX_PROCS);
             if (n == 0 || n > MAX_PROCS)
                 return 1;
+            // A full compose now and then: with the split WM lock the other
+            // copies keep drawing into their windows while it runs.
+            if ((rounds & 63) == 63)
+                bz_win_present(win);
             rounds++;
         }
         // One full compose at the end (outside the timed loop: a compose of the

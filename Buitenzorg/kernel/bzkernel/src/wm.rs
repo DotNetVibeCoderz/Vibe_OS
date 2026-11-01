@@ -150,10 +150,43 @@ fn read_clock() -> (u8, u8) {
 
 /// Pixel canvas owned by an app window (v0.8): the client area apps draw
 /// into through the WIN_CMD syscall.
+///
+/// SMP: each canvas has its **own lock** (`SharedCanvas`), separate from the
+/// window-manager lock `WM`. `WM` guards the structure (window list, geometry,
+/// menus, cursor) and is held only briefly: drawing into a window looks the
+/// canvas up under `WM`, drops `WM`, then locks just that canvas; a compose
+/// clones the structure under `WM` (canvases are shared `Arc`s, so this is
+/// cheap), drops `WM`, and composites the snapshot, locking one canvas at a
+/// time. So apps keep drawing while another CPU composes the desktop. Lock
+/// order: never take `WM` while holding a canvas lock.
 pub struct AppCanvas {
     pub w: i32,
     pub h: i32,
     pub pixels: Vec<u32>,
+}
+
+/// A window's canvas, shared between the window list and in-flight composes.
+pub type SharedCanvas = alloc::sync::Arc<spin::Mutex<AppCanvas>>;
+
+fn shared(c: AppCanvas) -> SharedCanvas {
+    alloc::sync::Arc::new(spin::Mutex::new(c))
+}
+
+/// Draw calls that ran while a compose was in progress (evidence that the
+/// split lock lets them overlap).
+static COMPOSING: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DRAWS_DURING_COMPOSE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Number of window draw calls that overlapped a compose on another CPU.
+pub fn draws_during_compose() -> u64 {
+    DRAWS_DURING_COMPOSE.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+fn note_draw() {
+    use core::sync::atomic::Ordering;
+    if COMPOSING.load(Ordering::Relaxed) > 0 {
+        DRAWS_DURING_COMPOSE.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Window state (v0.11 window controls).
@@ -172,6 +205,7 @@ pub enum TitleButton {
     Close,
 }
 
+#[derive(Clone)]
 pub struct Window {
     pub id: u32,
     pub title: String,
@@ -181,7 +215,7 @@ pub struct Window {
     pub h: i32,
     pub lines: Vec<String>,
     pub workspace: u8,
-    pub canvas: Option<AppCanvas>,
+    pub canvas: Option<SharedCanvas>,
     pub state: WinState,
     pub saved: (i32, i32, i32, i32), // geometry to restore from max/min
     /// Process that created the window (0 = kernel/shell). Keyboard focus
@@ -196,6 +230,7 @@ enum Drag {
     Resize { id: u32 },
 }
 
+#[derive(Clone)]
 struct Wm {
     windows: Vec<Window>, // back-to-front z-order (last = top)
     next_id: u32,
@@ -531,11 +566,11 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             h,
             lines: Vec::new(),
             workspace,
-            canvas: Some(AppCanvas {
+            canvas: Some(shared(AppCanvas {
                 w: cw,
                 h: ch,
                 pixels: vec![body; (cw * ch) as usize],
-            }),
+            })),
             state: WinState::Normal,
             saved: (board_x, y, ww, h),
             owner: crate::aspace::current_id(),
@@ -559,11 +594,11 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         h,
         lines: Vec::new(),
         workspace,
-        canvas: Some(AppCanvas {
+        canvas: Some(shared(AppCanvas {
             w: cw,
             h: ch,
             pixels: vec![body; (cw * ch) as usize],
-        }),
+        })),
         state: WinState::Normal,
         saved: (x, y, w, h),
         owner: crate::aspace::current_id(),
@@ -576,7 +611,11 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
     let mut guard = WM.lock();
     let wm = guard.as_mut().ok_or("wm not initialized")?;
     let win = wm.windows.iter_mut().find(|w| w.id == id).ok_or("no such window")?;
-    let canvas = win.canvas.as_mut().ok_or("window has no canvas")?;
+    let shared = win.canvas.clone().ok_or("window has no canvas")?;
+    drop(guard); // draw with only this window's canvas locked
+    note_draw();
+    let mut canvas = shared.lock();
+    let canvas = &mut *canvas;
     let (cw, ch) = (canvas.w as usize, canvas.h as usize);
     let mut c = Canvas::new(&mut canvas.pixels, cw, ch);
     match cmd.op {
@@ -614,7 +653,10 @@ pub fn blit_on_window(
     let mut guard = WM.lock();
     let wm = guard.as_mut().ok_or("wm not initialized")?;
     let win = wm.windows.iter_mut().find(|w| w.id == id).ok_or("no such window")?;
-    let canvas = win.canvas.as_mut().ok_or("window has no canvas")?;
+    let shared = win.canvas.clone().ok_or("window has no canvas")?;
+    drop(guard); // blit with only this window's canvas locked
+    note_draw();
+    let mut canvas = shared.lock();
     let (cw, ch) = (canvas.w as i32, canvas.h as i32);
     let base = src_ptr as *const u32;
     for row in 0..bh {
@@ -1065,6 +1107,7 @@ impl Wm {
             self.draw_title_buttons(canvas, win, &th, title_color);
 
             if let Some(app) = &win.canvas {
+                let app = app.lock();
                 // Blit the app canvas into the client area, clipped to both
                 // the current window size and the screen.
                 let ox = win.x + BORDER;
@@ -1547,10 +1590,16 @@ fn outline_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: 
 }
 
 pub fn compose_into(back: &mut [u32], width: usize, height: usize) {
-    let guard = WM.lock();
-    if let Some(wm) = guard.as_ref() {
+    use core::sync::atomic::Ordering;
+    // Snapshot the structure (cheap: canvases are shared) and compose without
+    // holding `WM`, so other CPUs can create, move and draw into windows
+    // meanwhile.
+    let snapshot = WM.lock().clone();
+    if let Some(wm) = snapshot {
+        COMPOSING.fetch_add(1, Ordering::Relaxed);
         let mut canvas = Canvas::new(back, width, height);
         wm.compose(&mut canvas);
+        COMPOSING.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

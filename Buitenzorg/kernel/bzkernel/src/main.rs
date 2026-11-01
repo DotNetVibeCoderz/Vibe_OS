@@ -720,11 +720,16 @@ fn smp_sched_demo(image: &[u8]) {
 /// several CPUs at once and the BKL must stop being contended.
 fn smp_finelock_demo(aps: usize) {
     let mem = smp_finelock_run(aps, "SMPSYS", "memory/scheduler/console");
+    let draws0 = wm::draws_during_compose();
     let gui = smp_finelock_run(aps, "SMPGUI", "window system/process registry");
+    // The WM lock is split: window drawing must have overlapped a compose.
+    let overlap = wm::draws_during_compose() - draws0;
+    println!("[kernel] smp: window draws that ran during a compose on another CPU: {}", overlap);
+    let gui = gui.filter(|_| overlap > 0);
     match (mem, gui) {
         (Some((mp, mw0, mw1, mx)), Some((gp, gw0, gw1, gx))) => println!(
-            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02})",
-            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100
+            "[kernel] MILESTONE: SMP FINELOCK OK (syscalls without the BKL -- memory/scheduler/console: {} in the kernel at once, BKL waits {} -> {}, x{}.{:02}; window system/process registry: {} at once, BKL waits {} -> {}, x{}.{:02}; {} draws during another CPU's compose)",
+            mp, mw0, mw1, mx / 100, mx % 100, gp, gw0, gw1, gx / 100, gx % 100, overlap
         ),
         _ => println!("[kernel] smp fine-grained locking self-test FAILED"),
     }

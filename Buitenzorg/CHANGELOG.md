@@ -75,7 +75,9 @@ Hardening toward a stable x86-64 release.
   only after every CPU acknowledged; futex check-and-block is atomic under the
   scheduler lock. The window system (WIN_*, KEY_READ, FB_INFO), process registry (PROC_LIST,
   PROC_ARGS, SYS_STAT) and CLOCK_RTC followed (the CMOS port pair got its own
-  lock). New test programs SMPSYS and SMPGUI: `MILESTONE: SMP FINELOCK OK`
+  lock). The WM lock was then split: each window canvas has its own lock and a
+  compose works on a snapshot, so apps keep drawing while another CPU
+  composes. New test programs SMPSYS and SMPGUI: `MILESTONE: SMP FINELOCK OK`
   (4 syscalls in the kernel at once with `-smp 4`, BKL waits ~4000 -> ~8,
   throughput x2.25).
 - **SMP increment 4: symmetric SMP kernel.** Every CPU runs the same
