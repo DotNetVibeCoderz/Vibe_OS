@@ -24,7 +24,7 @@ log="$root/dist/bench-boot.log"
 
 BOOT_BUDGET_S="${BOOT_BUDGET_S:-90}"
 AIO_MIN_OPS="${AIO_MIN_OPS:-10000}"
-WAIT_S="${WAIT_S:-180}"
+WAIT_S="${WAIT_S:-420}"
 
 if [ ! -f "$img" ]; then
   echo "bench: $img not found — run scripts/build.sh first" >&2

@@ -16,6 +16,16 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Settings app.** *Pengaturan* changes the theme, wallpaper, screensaver (and
+  how long the desktop waits before it starts), window animations, cursor size
+  and the sound volume, and the desktop changes at once. Open it from the Start
+  menu, the right-click menu or *Managed Apps*.
+- **Right-click menu on the desktop**: Settings, next wallpaper, change theme,
+  tidy windows, Files, Task Manager, all apps.
+- **The Start menu and desktop icons open apps you can use.** Calculator, 2048,
+  Tic-Tac-Toe, Clock, Task Manager, Files and Notes now open the interactive
+  versions, on every computer (they used to open demo programs that closed
+  straight away). The demo programs still run from the terminal (`run calc`).
 - **Raspberry Pi 4: GPIO, I2C, SPI, serial ports, LEDs and board sensors for
   apps.** A library with the same API for managed apps (`Buitenzorg.Devices` in
   `BZAPP.DLL`, shaped after .NET IoT; a simulated board when run with `dotnet` on

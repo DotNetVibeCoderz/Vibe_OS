@@ -73,6 +73,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 50 | `HW_SPI` | ptr `HwTransfer` | — | `hw_status` |
 | 51 | `HW_UART` | `hw_uart` operation (0 open, 1 write, 2 read, 3 close) | ptr `HwTransfer` | bytes written / read (read does not block), 0 for open / close |
 | 52 | `HW_LED` | 0 activity (green) / 1 power (red) | 1 on / 0 off | 0 |
+| 53 | `SETTING` | `setting_op` (0 get, 1 set, 2 count, 3 name, 4 description) | `setting_key` (\| index << 16 for name / description) | value / count / text length; 0 after set (a2 = value or 64-byte buffer) |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
@@ -242,6 +243,11 @@ I2C/SPI bus or serial port; `addr` = I2C 7-bit address or SPI chip select;
 `speed_hz` 0 = the bus default (I2C 100 kHz, SPI 1 MHz) or the baud rate for
 UART OPEN; `mode` = SPI mode 0-3. I2C writes `tx` then reads `rx`; SPI clocks
 `max(tx_len, rx_len)` bytes full-duplex.
+
+**Settings keys** (`SETTING`): `0 THEME` (index into the theme list), `1 WALLPAPER`
+(index of an official wallpaper), `2 SCREENSAVER` (index; the last choice is
+"off"), `3 SCREENSAVER_DELAY` (idle seconds, 5-3600), `4 ANIMATIONS` (0/1),
+`5 LARGE_CURSOR` (0/1). A SET recomposes the desktop at once.
 
 **Board I/O codes.** `hw_query`: `0 BOARD` (1 = Raspberry Pi 4), `1 TEMPERATURE`
 (m°C), `2 TEMPERATURE_MAX` (m°C), `3 CLOCK` (Hz; a1 = firmware clock id: 3 ARM,

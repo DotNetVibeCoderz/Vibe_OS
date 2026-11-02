@@ -60,7 +60,7 @@ function Invoke-Boot {
     $qargs += @('-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                 '-display', 'none', '-serial', "file:$Log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
-    foreach ($i in 1..240) {
+    foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $Log) -and (Select-String -Path $Log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
@@ -218,7 +218,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
-    foreach ($i in 1..240) {
+    foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
@@ -242,7 +242,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
-    foreach ($i in 1..240) {
+    foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
@@ -355,7 +355,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
                '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0', '-device', 'ramfb',
                '-monitor', 'tcp:127.0.0.1:4484,server,nowait', '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemuRv -ArgumentList $qargs -PassThru
-    foreach ($i in 1..240) {
+    foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "RISCV READY" -Quiet)) { break }
     }

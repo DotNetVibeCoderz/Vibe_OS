@@ -65,7 +65,8 @@ public class AbiContractTests
         Assert.Equal(50ul, SyscallNumbers.HwSpi);
         Assert.Equal(51ul, SyscallNumbers.HwUart);
         Assert.Equal(52ul, SyscallNumbers.HwLed);
-        Assert.Equal(53ul, SyscallNumbers.Count);
+        Assert.Equal(53ul, SyscallNumbers.Setting);
+        Assert.Equal(54ul, SyscallNumbers.Count);
     }
 
     /// <summary>
@@ -78,7 +79,7 @@ public class AbiContractTests
     public void AbiV1IsFrozen()
     {
         Assert.Equal(1ul, Abi.Version);
-        Assert.Equal(53ul, SyscallNumbers.Count);
+        Assert.Equal(54ul, SyscallNumbers.Count);
 
         Assert.Equal(56, Marshal.SizeOf<FramebufferInfo>());
         Assert.Equal(48, Marshal.SizeOf<DrawCmd>());
@@ -97,6 +98,8 @@ public class AbiContractTests
         Assert.Equal(4ul, HwGpio.GetMode);
         Assert.Equal(3ul, HwUart.Close);
         Assert.Equal(3ul, HwStatus.Timeout);
+        Assert.Equal(4ul, SettingOp.Description);
+        Assert.Equal(5ul, SettingKey.LargeCursor);
 
         Assert.Equal(ulong.MaxValue, SyscallErrors.NoSys);
         Assert.Equal(ulong.MaxValue - 1, SyscallErrors.Invalid);

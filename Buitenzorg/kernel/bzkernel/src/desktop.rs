@@ -83,6 +83,7 @@ pub fn run() -> ! {
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];
     let mut last_packets = u64::MAX;
     let mut last_left = false;
+    let mut last_right = mouse::right_presses();
     let mut last_presses = mouse::presses();
     let mut last_input = interrupts::ticks();
     let mut last_keys = keyboard::pushed();
@@ -142,6 +143,14 @@ pub fn run() -> ! {
 
         let (mx, my, buttons, packets) = mouse::state();
         let left = buttons & 0x01 != 0;
+        // Right button: the desktop's context menu. Counted presses, so a press
+        // and release that both fell between two samples still open it.
+        let rp = mouse::right_presses();
+        if rp != last_right && !saver_active {
+            wm::right_click(mx as i32, my as i32);
+            input = true;
+        }
+        last_right = rp;
         let presses = mouse::presses();
         if presses != last_presses && !left && !last_left && !saver_active {
             // a whole click happened between two samples: replay it
@@ -175,6 +184,9 @@ pub fn run() -> ! {
                         }
                         "theme" => {
                             theme::cycle();
+                        }
+                        "tile" => {
+                            wm::tile();
                         }
                         _ => {}
                     }

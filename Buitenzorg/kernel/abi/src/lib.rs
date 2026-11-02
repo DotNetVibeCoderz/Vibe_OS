@@ -202,8 +202,43 @@ pub mod sysno {
     /// Built-in LEDs: `a0` = 0 activity (green) / 1 power (red), `a1` = 1 on,
     /// 0 off. Returns 0.
     pub const HW_LED: u64 = 52;
+    /// Desktop settings: `a0` = a [`crate::setting_op`], `a1` = a
+    /// [`crate::setting_key`] (for NAME / DESCRIPTION: `key | index << 16`),
+    /// `a2` = the value (SET) or a 64-byte buffer (NAME / DESCRIPTION).
+    /// Returns the value / count / text length, 0 after SET, `syserr::INVAL`.
+    pub const SETTING: u64 = 53;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 53;
+    pub const COUNT: u64 = 54;
+}
+
+/// Operations of the [`sysno::SETTING`] syscall.
+pub mod setting_op {
+    /// Current value (an index, seconds, or 0/1).
+    pub const GET: u64 = 0;
+    /// Change it (`a2` = the new value).
+    pub const SET: u64 = 1;
+    /// Number of choices of a list setting.
+    pub const COUNT: u64 = 2;
+    /// Name of choice `index` into a 64-byte buffer; returns its length.
+    pub const NAME: u64 = 3;
+    /// One-line description of choice `index` (wallpapers); returns its length.
+    pub const DESCRIPTION: u64 = 4;
+}
+
+/// Keys of the [`sysno::SETTING`] syscall.
+pub mod setting_key {
+    /// Desktop theme (an index into the theme list).
+    pub const THEME: u64 = 0;
+    /// Official wallpaper (an index).
+    pub const WALLPAPER: u64 = 1;
+    /// Screensaver (an index; the last choice is "off").
+    pub const SCREENSAVER: u64 = 2;
+    /// Idle seconds before the screensaver starts (5-3600).
+    pub const SCREENSAVER_DELAY: u64 = 3;
+    /// Window animations on (1) / off (0).
+    pub const ANIMATIONS: u64 = 4;
+    /// Large mouse cursor (1) / normal (0).
+    pub const LARGE_CURSOR: u64 = 5;
 }
 
 /// Queries of the [`sysno::HW_BOARD`] syscall.
@@ -662,7 +697,8 @@ mod tests {
         assert_eq!(sysno::HW_SPI, 50);
         assert_eq!(sysno::HW_UART, 51);
         assert_eq!(sysno::HW_LED, 52);
-        assert_eq!(sysno::COUNT, 53);
+        assert_eq!(sysno::SETTING, 53);
+        assert_eq!(sysno::COUNT, 54);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -678,7 +714,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 53, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 54, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);
@@ -714,6 +750,8 @@ mod tests {
         assert_eq!(hw_gpio::GET_MODE, 4);
         assert_eq!(hw_uart::CLOSE, 3);
         assert_eq!(hw_status::TIMEOUT, 3);
+        assert_eq!(setting_op::DESCRIPTION, 4);
+        assert_eq!(setting_key::LARGE_CURSOR, 5);
 
         // Error codes are part of the contract too.
         assert_eq!(syserr::NOSYS, u64::MAX);

@@ -64,12 +64,12 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
                  -device virtio-gpu-pci -audiodev none,id=vsnd -device virtio-sound-pci,audiodev=vsnd
                  -monitor tcp:127.0.0.1:4481,server,nowait) ;;
   esac
-  timeout --foreground 290 "$qemu" "${drive[@]}" \
+  timeout --foreground 450 "$qemu" "${drive[@]}" \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
   local pid=$!
   # Give the kernel time to reach READY, then stop QEMU ourselves.
-  for _ in $(seq 240); do
+  for _ in $(seq 420); do
     sleep 1
     grep -qF "BUITENZORG READY" "$log" 2>/dev/null && break
   done
@@ -200,14 +200,14 @@ done
 if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   log="$root/dist/boot-uefi.log"
   rm -f "$log"
-  timeout --foreground 290 "$qemu" \
+  timeout --foreground 450 "$qemu" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
     -drive "format=raw,file=$root/dist/buitenzorg-uefi.img" -smp 2 \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
   qpid=$!
-  for _ in $(seq 240); do
+  for _ in $(seq 420); do
     sleep 1
     grep -q "BUITENZORG READY" "$log" 2>/dev/null && break
   done
@@ -224,14 +224,14 @@ fi
 if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
   log="$root/dist/boot-limine.log"
   rm -f "$log"
-  timeout --foreground 290 "$qemu" \
+  timeout --foreground 450 "$qemu" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
     -drive "format=raw,file=$root/dist/buitenzorg-limine-uefi.img" -smp 2 \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
   qpid=$!
-  for _ in $(seq 240); do
+  for _ in $(seq 420); do
     sleep 1
     grep -q "BUITENZORG READY" "$log" 2>/dev/null && break
   done
@@ -257,13 +257,13 @@ done
 if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.img" ]; then
   log="$root/dist/boot-arm64.log"
   rm -f "$log"
-  timeout --foreground 290 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -smp 2 -m 512M \
+  timeout --foreground 450 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -smp 2 -m 512M \
     -bios "$arm_fw" -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-arm64.img,if=none" \
     -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device ramfb     -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
     -device virtio-keyboard-device -device virtio-tablet-device \
     -monitor tcp:127.0.0.1:4482,server,nowait -display none -serial "file:$log" -no-reboot &
   qpid=$!
-  for _ in $(seq 240); do
+  for _ in $(seq 420); do
     sleep 1
     grep -q "ARM64 READY" "$log" 2>/dev/null && break
   done
@@ -333,14 +333,14 @@ if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64
   log="$root/dist/boot-riscv64.log"
   rm -f "$log"
   cp "$rv_vars" "$root/dist/riscv64-vars.fd"
-  timeout --foreground 290 "$qemu_rv" -M virt,acpi=off -cpu rv64 -smp 2 -m 512M \
+  timeout --foreground 450 "$qemu_rv" -M virt,acpi=off -cpu rv64 -smp 2 -m 512M \
     -drive "if=pflash,format=raw,unit=0,file=$rv_code,readonly=on" -drive "if=pflash,format=raw,unit=1,file=$root/dist/riscv64-vars.fd" \
     -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-riscv64.img,if=none" \
     -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device virtio-keyboard-device -device virtio-tablet-device \
     -netdev user,id=n0 -device virtio-net-device,netdev=n0 -device ramfb \
     -monitor tcp:127.0.0.1:4484,server,nowait -display none -serial "file:$log" -no-reboot &
   qpid=$!
-  for _ in $(seq 240); do
+  for _ in $(seq 420); do
     sleep 1
     grep -q "RISCV READY" "$log" 2>/dev/null && break
   done

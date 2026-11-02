@@ -21,5 +21,6 @@
     <ProjectReference Include="..\MClock\MClock.csproj" />
     <ProjectReference Include="..\MGallery\MGallery.csproj" />
     <ProjectReference Include="..\MHwLab\MHwLab.csproj" />
+    <ProjectReference Include="..\MSetting\MSetting.csproj" />
   </ItemGroup>
 </Project>

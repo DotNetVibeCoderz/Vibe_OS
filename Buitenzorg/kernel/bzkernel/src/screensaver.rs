@@ -70,6 +70,16 @@ pub fn timeout() -> u64 {
     CONFIG.lock().timeout
 }
 
+/// Idle time before the screensaver, in seconds.
+pub fn timeout_seconds() -> u64 {
+    CONFIG.lock().timeout * 1000 / 18_206
+}
+
+/// Set the idle time before the screensaver (seconds; ticks are 18.2 Hz).
+pub fn set_timeout_seconds(s: u64) {
+    CONFIG.lock().timeout = (s * 18_206 / 1000).max(1);
+}
+
 /// Render one screensaver frame into `canvas` (full-screen) at `frame`.
 pub fn render(canvas: &mut Canvas, frame: u64) {
     let saver = CONFIG.lock().saver;

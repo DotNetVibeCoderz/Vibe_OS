@@ -59,6 +59,7 @@ mod terminal;
 mod theme;
 mod vfs;
 mod hwio;
+mod settings;
 mod usb;
 mod virtio;
 mod vmm;

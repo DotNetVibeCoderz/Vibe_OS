@@ -301,6 +301,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
             };
             ((crate::gfx::text_width("M", style) as u64) << 32) | crate::gfx::line_height(style) as u64
         }
+        sysno::SETTING => sys_setting(a0, a1, a2),
         sysno::HW_BOARD => crate::hwio::board(a0, a1),
         sysno::HW_GPIO => crate::hwio::gpio(a0, a1, a2),
         sysno::HW_LED => crate::hwio::led(a0, a1 != 0),
@@ -515,6 +516,33 @@ fn sys_net_send(handle: u64, buf_ptr: u64, len: u64) -> u64 {
 
 /// NET_RECV: fills the `abi::NetDatagram` header and the payload after it.
 /// Returns the payload length, or 0 when nothing is queued (non-blocking).
+/// SETTING: desktop settings (see `settings.rs`).
+fn sys_setting(op: u64, k: u64, v: u64) -> u64 {
+    use bz_abi::setting_op as o;
+    match op {
+        o::GET => crate::settings::get(k),
+        o::SET => crate::settings::set(k, v),
+        o::COUNT => crate::settings::count(k),
+        o::NAME | o::DESCRIPTION => {
+            if !user_write(v, 64) {
+                return syserr::INVAL;
+            }
+            let Some(text) = crate::settings::label(k & 0xFFFF, (k >> 16) as usize, op == o::DESCRIPTION) else {
+                return syserr::INVAL;
+            };
+            let b = text.as_bytes();
+            let n = b.len().min(63);
+            let out = v as *mut u8;
+            for (i, c) in b.iter().take(n).enumerate() {
+                unsafe { out.add(i).write_volatile(*c) };
+            }
+            unsafe { out.add(n).write_volatile(0) };
+            n as u64
+        }
+        _ => syserr::INVAL,
+    }
+}
+
 /// HW_I2C / HW_SPI / HW_UART: read the `HwTransfer`, copy `tx` in, run the
 /// bus operation on kernel buffers, copy `rx` out (validated, volatile).
 fn sys_hw_transfer(nr: u64, op: u64, t_ptr: u64) -> u64 {

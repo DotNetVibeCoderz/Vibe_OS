@@ -37,6 +37,10 @@ const HW_I2C: u64 = 49;
 const HW_SPI: u64 = 50;
 const HW_UART: u64 = 51;
 const HW_LED: u64 = 52;
+const SETTING: u64 = 53;
+const AUDIO_STAT: u64 = 23;
+const AUDIO_SET_VOLUME: u64 = 24;
+const AUDIO_TONE: u64 = 25;
 
 /// `bz_abi::HwTransfer`.
 #[repr(C)]
@@ -214,6 +218,57 @@ fn hw_uart(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
         store_bytes(i, a, 3, &rx[..(r as usize).min(rx.len())]);
     }
     ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `SettingGet(int key)` -> value, -1 when unknown.
+fn setting_get(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(SETTING, 0, int(a, 0) as u64, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `SettingSet(int key, int value)` -> 0 / -1.
+fn setting_set(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(SETTING, 1, int(a, 0) as u64, int(a, 1) as u64);
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
+}
+
+/// `SettingCount(int key)` -> number of choices.
+fn setting_count(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(SETTING, 2, int(a, 0) as u64, 0);
+    ret_i32(if sys::is_err(r) { 0 } else { r as i64 })
+}
+
+/// `SettingName(int key, int index, int description)` -> string ("" when none).
+fn setting_name(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let mut buf = [0u8; 64];
+    let op = if int(a, 2) != 0 { 4 } else { 3 };
+    let k = (int(a, 0) as u64 & 0xFFFF) | ((int(a, 1) as u64 & 0xFFFF) << 16);
+    let r = sys::syscall(SETTING, op, k, buf.as_mut_ptr() as u64);
+    let n = if sys::is_err(r) { 0 } else { (r as usize).min(63) };
+    let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
+    ret_string(i, text)
+}
+
+/// `AudioStat(int field)` -> AudioInfo field (0 present, 1 rate, 2 channels,
+/// 3 bits, 4 volume, 5 muted), -1 on failure.
+fn audio_stat(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let mut info = [0u64; 6];
+    let r = sys::syscall(AUDIO_STAT, info.as_mut_ptr() as u64, 0, 0);
+    let f = int(a, 0) as usize;
+    Ok(Some(Value::I64(if sys::is_err(r) || f >= 6 { -1 } else { info[f] as i64 })))
+}
+
+/// `AudioSetVolume(int percent)` -> 0 / -1.
+fn audio_set_volume(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(AUDIO_SET_VOLUME, int(a, 0).clamp(0, 100) as u64, 0, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
+}
+
+/// `AudioTone(int hz, int ms)` -> 0 / -1.
+fn audio_tone(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (hz, ms) = (int(a, 0).clamp(20, 20_000) as u64, int(a, 1).clamp(1, 5000) as u64);
+    let r = i.blocking(|_| sys::syscall(AUDIO_TONE, hz, ms, 0));
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
 }
 
 /// A NUL-terminated copy of `s` (PROC_SPAWN takes C strings).
@@ -449,7 +504,7 @@ fn wait(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 27] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 34] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -477,6 +532,13 @@ pub fn install(interp: &mut Interpreter) {
         ("HwI2c", hw_i2c),
         ("HwSpi", hw_spi),
         ("HwUart", hw_uart),
+        ("SettingGet", setting_get),
+        ("SettingSet", setting_set),
+        ("SettingCount", setting_count),
+        ("SettingName", setting_name),
+        ("AudioStat", audio_stat),
+        ("AudioSetVolume", audio_set_volume),
+        ("AudioTone", audio_tone),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);

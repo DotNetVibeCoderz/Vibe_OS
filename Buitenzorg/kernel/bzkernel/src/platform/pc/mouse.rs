@@ -180,16 +180,28 @@ pub fn inject_absolute(x: i64, y: i64, max_x: i64, max_y: i64, buttons: u8) {
 /// short click.
 static PRESSES: AtomicU64 = AtomicU64::new(0);
 
+/// Right-button presses, counted like `PRESSES` (the desktop's context menu).
+static RIGHT_PRESSES: AtomicU64 = AtomicU64::new(0);
+
 fn set_buttons(buttons: u8) {
     let old = BUTTONS.swap(buttons & 0x07, Ordering::Relaxed);
     if old & 1 == 0 && buttons & 1 != 0 {
         PRESSES.fetch_add(1, Ordering::Relaxed);
+    }
+    if old & 2 == 0 && buttons & 2 != 0 {
+        RIGHT_PRESSES.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 /// Number of left-button presses so far.
 pub fn presses() -> u64 {
     PRESSES.load(Ordering::Relaxed)
+}
+
+/// Number of right-button presses so far (a press and release between two
+/// samples of the desktop loop still counts).
+pub fn right_presses() -> u64 {
+    RIGHT_PRESSES.load(Ordering::Relaxed)
 }
 
 /// (x, y, buttons, packet count) — for diagnostics and the future compositor.

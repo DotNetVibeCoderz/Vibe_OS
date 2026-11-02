@@ -61,6 +61,7 @@ mod theme;
 mod vfs;
 mod dhcp;
 mod hwio;
+mod settings;
 mod sntp;
 mod usb;
 mod virtio;

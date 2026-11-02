@@ -166,8 +166,32 @@ public static class SyscallNumbers
     /// <summary>Built-in LEDs: a0 = 0 activity / 1 power, a1 = 1 on / 0 off.</summary>
     public const ulong HwLed = 52;
 
+    /// <summary>Desktop settings: a0 = <see cref="SettingOp"/>, a1 = <see cref="SettingKey"/> (| index &lt;&lt; 16 for names), a2 = value or 64-byte buffer.</summary>
+    public const ulong Setting = 53;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 53;
+    public const ulong Count = 54;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.Setting"/>.</summary>
+public static class SettingOp
+{
+    public const ulong Get = 0;
+    public const ulong Set = 1;
+    public const ulong Count = 2;
+    public const ulong Name = 3;
+    public const ulong Description = 4;
+}
+
+/// <summary>Keys of <see cref="SyscallNumbers.Setting"/>.</summary>
+public static class SettingKey
+{
+    public const ulong Theme = 0;
+    public const ulong Wallpaper = 1;
+    public const ulong Screensaver = 2;
+    public const ulong ScreensaverDelay = 3;
+    public const ulong Animations = 4;
+    public const ulong LargeCursor = 5;
 }
 
 /// <summary>Queries of <see cref="SyscallNumbers.HwBoard"/>.</summary>

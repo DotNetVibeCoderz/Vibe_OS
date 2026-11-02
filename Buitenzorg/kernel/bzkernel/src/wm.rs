@@ -51,37 +51,62 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Kantor",
         leaf: gfx::rgb(0x7F, 0xB3, 0xE0),
-        apps: &[("editor", "Editor"), ("calc", "Kalkulator"), ("files", "Files")],
+        // Interactive managed apps (RustCLR + Buitenzorg.UI, every architecture);
+        // the native boot-demo programs stay reachable from the terminal (`run calc`).
+        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas")],
     },
     Category {
         name: "Multimedia",
         leaf: gfx::rgb(0xC7, 0x92, 0xEA),
-        apps: &[("imgview", "Gambar"), ("piano", "Piano"), ("paint", "Paint")],
+        apps: &[("mgallery", "Galeri Kontrol")],
     },
     Category {
         name: "Permainan",
         leaf: gfx::rgb(0xF3, 0xC9, 0x69),
-        apps: &[("2048", "2048"), ("xox", "Tic-Tac-Toe")],
+        apps: &[("m2048", "2048"), ("mxox", "Tic-Tac-Toe")],
     },
     Category {
         name: "Utilitas",
         leaf: gfx::rgb(0x7C, 0xC4, 0xA4),
         // `hellogui` is a managed C# app (/disk/HELLOGUI.DLL, RustCLR).
-        apps: &[("clock", "Jam"), ("taskmgr", "Task Manager"), ("store", "App Store"), ("hellogui", "Jam C#")],
+        apps: &[("mclock", "Jam"), ("mtasks", "Task Manager"), ("mhwlab", "Lab Perangkat"), ("hellogui", "Jam C#")],
     },
     Category {
         name: "Pengaturan",
         leaf: gfx::rgb(0xD9, 0xB3, 0x8C),
-        apps: &[("audiopanel", "Audio"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
+        apps: &[("msetting", "Pengaturan"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
     },
 ];
 
+/// The desktop's right-click menu, as (launch-name or @action, label).
+const CTX_ITEMS: [(&str, &str); 7] = [
+    ("msetting", "Pengaturan"),
+    ("@wallpaper", "Wallpaper berikutnya"),
+    ("@theme", "Ganti tema"),
+    ("@tile", "Rapikan jendela"),
+    ("mfiles", "Berkas"),
+    ("mtasks", "Task Manager"),
+    ("managed", "Semua aplikasi"),
+];
+const CTX_W: i32 = 230;
+const CTX_ITEM_H: i32 = 30;
+const CTX_PAD: i32 = 6;
+
+/// Screen rectangle of right-click menu item `i` for a menu at (x, y).
+fn ctx_item_rect(x: i32, y: i32, i: usize) -> (i32, i32, i32, i32) {
+    (x + CTX_PAD, y + CTX_PAD + i as i32 * CTX_ITEM_H, CTX_W - 2 * CTX_PAD, CTX_ITEM_H)
+}
+
+fn ctx_height() -> i32 {
+    2 * CTX_PAD + CTX_ITEMS.len() as i32 * CTX_ITEM_H
+}
+
 /// Desktop launcher icons (top-left), as (launch-name, label).
 const DESKTOP: [(&str, &str); 5] = [
-    ("files", "Files"),
-    ("editor", "Editor"),
-    ("calc", "Kalkulator"),
-    ("store", "App Store"),
+    ("mfiles", "Berkas"),
+    ("mnotes", "Catatan"),
+    ("mcalc", "Kalkulator"),
+    ("mtasks", "Task Manager"),
     // the folder of managed (RustCLR + Buitenzorg.UI) apps: /disk/MANAGED.DLL
     ("managed", "Managed Apps"),
 ];
@@ -111,8 +136,25 @@ fn fallback_color(name: &str) -> Color {
 
 /// Draw an app's icon (from the icon pack — keyed by launch name without the
 /// '@' — or a colored tile with its initial).
+/// The icon-pack name for a launch name: a managed app uses the picture of
+/// the native app it stands in for.
+fn icon_name(name: &str) -> &str {
+    match name {
+        "mnotes" => "editor",
+        "mcalc" => "calc",
+        "mfiles" => "files",
+        "m2048" => "2048",
+        "mxox" => "xox",
+        "mclock" | "hellogui" => "clock",
+        "mtasks" => "taskmgr",
+        "mgallery" => "paint",
+        "msetting" => "audiopanel",
+        n => n.trim_start_matches('@'),
+    }
+}
+
 fn draw_app_icon(canvas: &mut Canvas, name: &str, label: &str, x: i32, y: i32, big: bool) {
-    if crate::icons::draw(canvas, name.trim_start_matches('@'), x, y, big) {
+    if crate::icons::draw(canvas, icon_name(name), x, y, big) {
         return;
     }
     let sz = crate::icons::size(big);
@@ -319,6 +361,8 @@ struct Wm {
     closed_owners: Vec<u64>,
     /// (desktop-icon index, frame) of the last icon click, for double-click.
     last_icon: (usize, u64),
+    /// The open right-click menu's top-left corner.
+    ctx_menu: Option<(i32, i32)>,
 }
 
 static WM: Mutex<Option<Wm>> = Mutex::new(None);
@@ -347,6 +391,7 @@ pub fn init(width: usize, height: usize) {
         pending_power: 0,
         closed_owners: Vec::new(),
         last_icon: (usize::MAX, 0),
+        ctx_menu: None,
     });
 }
 
@@ -483,6 +528,22 @@ pub fn take_pending_power() -> u8 {
 }
 
 /// Is the start menu open? (The desktop loop re-renders while it is.)
+/// A right-button press at (x, y): on the empty desktop it opens the
+/// right-click menu there (kept on screen); anywhere else it closes menus.
+pub fn right_click(x: i32, y: i32) {
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return };
+    wm.start_open = false;
+    let on_desktop = y < wm.height - TASKBAR_H && wm.window_at(x, y).is_none();
+    wm.ctx_menu = if on_desktop {
+        let mx = x.min(wm.width - CTX_W - 4).max(0);
+        let my = y.min(wm.height - TASKBAR_H - ctx_height() - 4).max(0);
+        Some((mx, my))
+    } else {
+        None
+    };
+}
+
 pub fn start_menu_open() -> bool {
     WM.lock().as_ref().map(|wm| wm.start_open).unwrap_or(false)
 }
@@ -505,7 +566,7 @@ pub fn self_test() -> bool {
     let (cx0, cy0) = card_center(height, 0);
     handle_mouse(cx0, cy0, true);
     handle_mouse(cx0, cy0, false);
-    let first = matches!(take_pending_launch().as_deref(), Some("editor"));
+    let first = matches!(take_pending_launch().as_deref(), Some("mnotes"));
     handle_mouse(40, height - 4, true);
     handle_mouse(40, height - 4, false);
     let (rx, ry) = rail_center(height, 2);
@@ -513,7 +574,7 @@ pub fn self_test() -> bool {
     handle_mouse(rx, ry, false);
     handle_mouse(cx0, cy0, true);
     handle_mouse(cx0, cy0, false);
-    let game = matches!(take_pending_launch().as_deref(), Some("2048"));
+    let game = matches!(take_pending_launch().as_deref(), Some("m2048"));
     // "Utilitas" -> its fourth card, on the second row: the managed C# app.
     handle_mouse(40, height - 4, true);
     handle_mouse(40, height - 4, false);
@@ -524,13 +585,31 @@ pub fn self_test() -> bool {
     handle_mouse(c3x, c3y, true);
     handle_mouse(c3x, c3y, false);
     let managed = matches!(take_pending_launch().as_deref(), Some("hellogui"));
-    let launched = first && game && managed;
+    // Right-click on the desktop opens the menu; its fourth item tidies windows.
+    // (Boot demos leave many windows: find a spot of bare desktop first.)
+    let spot = {
+        let g = WM.lock();
+        g.as_ref().and_then(|w| {
+            (1..(w.height - TASKBAR_H) / 24).flat_map(|r| (4..w.width / 24).map(move |c| (c * 24, r * 24)))
+                .find(|&(x, y)| w.window_at(x, y).is_none() && !(0..DESKTOP.len()).any(|i| { let (ix, iy) = icon_rect(i); x >= ix && x < ix + ICON_W && y >= iy && y < iy + ICON_H }))
+        })
+    };
+    let (sx, sy) = spot.unwrap_or((400, 300));
+    right_click(sx, sy);
+    let ctx_open = WM.lock().as_ref().map_or(false, |w| w.ctx_menu.is_some());
+    let (ix, iy, iw, ih) = WM.lock().as_ref().and_then(|w| w.ctx_menu).map(|(x, y)| ctx_item_rect(x, y, 3)).unwrap_or((0, 0, 0, 0));
+    handle_mouse(ix + iw / 2, iy + ih / 2, true);
+    handle_mouse(ix + iw / 2, iy + ih / 2, false);
+    let ctx = ctx_open && matches!(take_pending_launch().as_deref(), Some("@tile"));
+    crate::println!("[wm] self-test: start menu {} / {} / {}, right-click menu {}", first, game, managed, ctx);
+    let launched = first && game && managed && ctx;
     // Reset shell state so the real desktop starts clean.
     if let Some(wm) = WM.lock().as_mut() {
         wm.start_open = false;
         wm.start_cat = 0;
         wm.pending = None;
         wm.last_icon = (usize::MAX, 0);
+        wm.ctx_menu = None;
     }
     opened && launched
 }
@@ -581,6 +660,11 @@ fn power_buttons(height: i32) -> [(i32, i32, u8, &'static str); 3] {
 
 fn hit(px: i32, py: i32, (x, y, w, h): (i32, i32, i32, i32)) -> bool {
     px >= x && px < x + w && py >= y && py < y + h
+}
+
+/// Current cursor size (1 = normal, 2 = large).
+pub fn cursor_scale() -> i32 {
+    WM.lock().as_ref().map_or(1, |w| w.cursor_scale)
 }
 
 /// Set cursor size (1 = normal, 2 = large) — Personalization.
@@ -1116,6 +1200,13 @@ impl Wm {
     /// desktop icon). Returns true if the click was consumed. Launch/power
     /// requests are queued in `pending`/`pending_power` for the desktop loop.
     fn shell_click(&mut self, cx: i32, cy: i32) -> bool {
+        // Right-click menu open: an item runs, anywhere else just closes it.
+        if let Some((mx, my)) = self.ctx_menu.take() {
+            if let Some(i) = (0..CTX_ITEMS.len()).find(|&i| hit(cx, cy, ctx_item_rect(mx, my, i))) {
+                self.pending = Some(String::from(CTX_ITEMS[i].0));
+            }
+            return true;
+        }
         // Start menu open: route the click into it, or close on an outside click.
         if self.start_open {
             let (x, y) = menu_origin(self.height);
@@ -1391,6 +1482,7 @@ impl Wm {
 
         self.draw_taskbar(canvas, &th);
         self.draw_start_menu(canvas, &th);
+        self.draw_ctx_menu(canvas, &th);
         self.draw_ripple(canvas, &th);
         self.draw_cursor(canvas, &th);
     }
@@ -1547,6 +1639,33 @@ impl Wm {
     /// The start menu — a herbarium drawer: header (name + today), category
     /// rail with each category's leaf color, the chosen category's apps as
     /// icon cards, and power actions in the footer.
+    /// The desktop's right-click menu: a panel of rows, the one under the
+    /// pointer highlighted.
+    fn draw_ctx_menu(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        let Some((x, y)) = self.ctx_menu else { return };
+        let h = ctx_height();
+        blend_rounded(canvas, x + 3, y + 4, CTX_W, h, 10, th.shadow, 100);
+        panel(canvas, th, x, y, CTX_W, h, 10);
+        if th.glass > 0 {
+            blend_rounded(canvas, x, y, CTX_W, h, 10, th.taskbar_bg, 120);
+        }
+        outline_rounded(canvas, x, y, CTX_W, h, 10, 1, th.win_border);
+        let (cx, cy) = self.cursor;
+        for (i, (name, label)) in CTX_ITEMS.iter().enumerate() {
+            let (rx, ry, rw, rh) = ctx_item_rect(x, y, i);
+            if hit(cx, cy, (rx, ry, rw, rh)) {
+                fill_rounded(canvas, rx, ry, rw, rh, 6, shift(th.taskbar_bg, 40));
+            }
+            if !name.starts_with('@') {
+                draw_app_icon(canvas, name, label, rx + 6, ry + (rh - crate::icons::size(false)) / 2, false);
+            }
+            canvas.draw_text(rx + 34, ry + (rh - 16) / 2, label, th.text, rx + rw);
+            if i == 0 || i == 3 {
+                canvas.fill_rect(rx + 4, ry + rh - 1, rw - 8, 1, th.win_border);
+            }
+        }
+    }
+
     fn draw_start_menu(&self, canvas: &mut Canvas, th: &theme::Theme) {
         if !self.start_open {
             return;
