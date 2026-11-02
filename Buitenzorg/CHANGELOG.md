@@ -16,6 +16,11 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Raspberry Pi 4: first boot.** The ARM64 kernel now boots to a serial console
+  on QEMU's Raspberry Pi 4 machine, using the real Pi Device Tree. There is an SD
+  card image too, but **it has not been tested on a physical board yet**, and
+  there's no screen, disk or keyboard support on the Pi yet. See
+  [docs/install-raspberry-pi.md](docs/install-raspberry-pi.md).
 - **Managed Apps and a new UI toolkit.** The desktop has a **Managed Apps**
   icon that opens a folder of apps written in ordinary .NET C#: a calculator
   with history, 2048, notes, a file browser, a task monitor, XOX, a clock with

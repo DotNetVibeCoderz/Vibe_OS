@@ -229,7 +229,36 @@ impl<'a> Fdt<'a> {
         (0..self.nodes.len()).filter(move |&i| self.nodes[i].is_compatible(compat))
     }
 
-    /// `reg` of node `i` as (address, size) pairs, using its parent's cells.
+    /// Map a bus address on the bus `bus` to its parent address space, up to
+    /// the root, through each bus's `ranges` (a Raspberry Pi's peripherals sit
+    /// at 0x7e00_0000 on /soc and 0xfe00_0000 physically). An empty `ranges` is
+    /// the identity; a node with none (/cpus: `reg` is an id) is left alone.
+    fn translate(&self, bus: usize, mut addr: u64) -> u64 {
+        let mut cur = bus;
+        while let Some(up) = self.nodes[cur].parent {
+            let n = &self.nodes[cur];
+            let Some(r) = n.prop("ranges") else { break };
+            if !r.is_empty() {
+                let (ca, pa, sc) = (n.addr_cells as usize, self.nodes[up].addr_cells as usize, n.size_cells as usize);
+                if ca == 0 || ca > 2 || pa == 0 || pa > 2 || sc > 2 {
+                    break;
+                }
+                let cell = |off: usize, cells: usize| (0..cells).fold(0u64, |acc, k| (acc << 32) | be32(r, off + k * 4) as u64);
+                let hit = (0..r.len() / ((ca + pa + sc) * 4)).find_map(|e| {
+                    let off = e * (ca + pa + sc) * 4;
+                    let (child, parent, size) = (cell(off, ca), cell(off + ca * 4, pa), cell(off + (ca + pa) * 4, sc));
+                    (addr >= child && addr - child < size).then(|| parent + (addr - child))
+                });
+                let Some(mapped) = hit else { break };
+                addr = mapped;
+            }
+            cur = up;
+        }
+        addr
+    }
+
+    /// `reg` of node `i` as (physical address, size) pairs, using its parent's
+    /// cells and translated through the buses above it.
     pub fn reg(&self, i: usize) -> Vec<(u64, u64)> {
         let n = &self.nodes[i];
         let (ac, sc) = match n.parent {
@@ -247,7 +276,11 @@ impl<'a> Fdt<'a> {
         };
         let mut off = 0;
         while off + step <= v.len() {
-            out.push((cell(off, ac), cell(off + ac * 4, sc)));
+            let addr = match n.parent {
+                Some(p) => self.translate(p, cell(off, ac)),
+                None => cell(off, ac),
+            };
+            out.push((addr, cell(off + ac * 4, sc)));
             off += step;
         }
         out
@@ -273,6 +306,18 @@ impl<'a> Fdt<'a> {
         let aliases = self.find_path("/aliases")?;
         let target = self.nodes[aliases].strings(path).next()?;
         self.find_path(target)
+    }
+
+    /// The UART to talk to: `stdout-path`, unless that is missing or names the
+    /// Raspberry Pi's mini-UART (no driver; its baud rate follows the core
+    /// clock), then the `uart0` alias -- the Pi's PL011, which our config.txt
+    /// routes to the header pins.
+    pub fn console(&self) -> Option<usize> {
+        self.stdout().filter(|&i| !self.nodes[i].is_compatible("brcm,bcm2835-aux-uart")).or_else(|| {
+            let aliases = self.find_path("/aliases")?;
+            let target = self.nodes[aliases].strings("uart0").next()?;
+            self.find_path(target)
+        })
     }
 
     /// CPUs: `/cpus` children with `device_type = "cpu"`.
@@ -315,7 +360,7 @@ impl Platform {
             model: alloc::string::String::from(model),
             memory: fdt.memory(),
             cpus: fdt.cpu_count(),
-            uart: fdt.stdout().map(|i| (compat0(i), first(i))),
+            uart: fdt.console().map(|i| (compat0(i), first(i))),
             irq: IRQ_CONTROLLERS.iter().find_map(|c| fdt.compatible(c).next()).map(|i| (compat0(i), first(i))),
             timer: ["arm,armv8-timer", "riscv,clint0", "sifive,clint0"]
                 .iter()
@@ -364,6 +409,71 @@ impl Platform {
 // padding). They are what the ARM64/RISC-V ports will receive at boot.
 static VIRT_AARCH64: &[u8] = include_bytes!("../testdata/virt-aarch64.dtb");
 static VIRT_RISCV64: &[u8] = include_bytes!("../testdata/virt-riscv64.dtb");
+// The tree the Raspberry Pi firmware ships for a Pi 4 (RPi4 UEFI firmware v1.53).
+#[cfg(target_arch = "aarch64")]
+static RPI4: &[u8] = include_bytes!("../testdata/bcm2711-rpi-4-b.dtb");
+
+/// The size of a flattened tree at `blob`, trusting nothing but its header.
+///
+/// # Safety
+/// `blob` must point to at least 8 readable bytes.
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+pub unsafe fn total_size(blob: *const u8) -> usize {
+    let word = unsafe { core::ptr::read_unaligned(blob.add(4) as *const u32) };
+    u32::from_be(word) as usize
+}
+
+/// RAM ranges of the tree at `blob`, without a heap: the direct boot needs
+/// them to build the memory map the heap itself comes from.
+///
+/// # Safety
+/// `blob` must point to a whole flattened tree (the entry code checked the magic).
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+pub unsafe fn scan_memory(blob: *const u8, found: &mut dyn FnMut(u64, u64)) {
+    let b = unsafe { core::slice::from_raw_parts(blob, total_size(blob)) };
+    let (st, strings) = (be32(b, 8) as usize, be32(b, 12) as usize);
+    let (mut p, mut depth, mut in_memory) = (st, 0usize, false);
+    let (mut ac, mut sc) = (2usize, 1usize);
+    while p + 4 <= b.len() {
+        let token = be32(b, p);
+        p += 4;
+        match token {
+            BEGIN_NODE => {
+                let len = b[p..].iter().position(|&c| c == 0).unwrap_or(0);
+                depth += 1;
+                if depth == 2 {
+                    in_memory = b[p..p + len].starts_with(b"memory");
+                }
+                p = (p + len + 4) & !3;
+            }
+            END_NODE => {
+                depth = depth.saturating_sub(1);
+                if depth < 2 {
+                    in_memory = false;
+                }
+            }
+            PROP => {
+                let (len, name) = (be32(b, p) as usize, be32(b, p + 4) as usize);
+                let (v, name) = (&b[p + 8..p + 8 + len], &b[strings + name..]);
+                let is = |s: &[u8]| name.starts_with(s) && name.get(s.len()) == Some(&0);
+                if depth == 1 && is(b"#address-cells") {
+                    ac = be32(v, 0) as usize;
+                } else if depth == 1 && is(b"#size-cells") {
+                    sc = be32(v, 0) as usize;
+                } else if depth == 2 && in_memory && is(b"reg") {
+                    let cell = |off: usize, n: usize| (0..n).fold(0u64, |a, k| (a << 32) | be32(v, off + k * 4) as u64);
+                    for e in 0..len / ((ac + sc) * 4) {
+                        let off = e * (ac + sc) * 4;
+                        found(cell(off, ac), cell(off + ac * 4, sc));
+                    }
+                }
+                p = (p + 8 + len + 3) & !3;
+            }
+            NOP => {}
+            _ => return,
+        }
+    }
+}
 
 /// Parse both QEMU `virt` trees and check what discovery finds against the
 /// known machine layout; also feed corrupted blobs and require clean errors.
@@ -404,6 +514,23 @@ pub fn self_test() -> bool {
             check("rv virtio", p.virtio_mmio.len() == 8 && p.virtio_mmio[0] == 0x1000_1000);
             check("rv timer", p.timer.is_some());
             check("rv path", fdt.stdout().map(|i| fdt.path(i)).as_deref() == Some("/soc/serial@10000000"));
+        }
+        Err(e) => check(e, false),
+    }
+
+    // A Raspberry Pi 4: everything behind /soc `ranges`, no stdout-path, a GICv2.
+    #[cfg(target_arch = "aarch64")]
+    match Fdt::parse(RPI4) {
+        Ok(fdt) => {
+            let p = Platform::discover(&fdt);
+            crate::println!("[dtb] rpi4 {}", p.summary());
+            check("rpi cpus", p.cpus == 4);
+            check("rpi console = PL011 through ranges", p.uart == Some(("arm,pl011".into(), 0xfe20_1000)));
+            check("rpi gic-400", p.irq == Some(("arm,gic-400".into(), 0xff84_1000)));
+            let gic = fdt.compatible("arm,gic-400").next().map(|i| fdt.reg(i));
+            check("rpi gicc", gic.as_ref().and_then(|r| r.get(1)).map(|r| r.0) == Some(0xff84_2000));
+            check("rpi cpu ids untranslated", fdt.find_path("/cpus/cpu@3").map(|i| fdt.reg(i)[0].0) == Some(3));
+            check("rpi timer", p.timer.as_deref() == Some("arm,armv8-timer"));
         }
         Err(e) => check(e, false),
     }

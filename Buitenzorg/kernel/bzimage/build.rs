@@ -228,12 +228,12 @@ fn limine_image(limine: &std::path::Path, kernel: &std::path::Path, files: &[(St
 /// [`limine_image`] for any architecture: `efi_name` is the removable-media
 /// loader name (BOOTX64.EFI, BOOTAA64.EFI, BOOTRISCV64.EFI).
 fn limine_image_for(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
-    limine_image_with(efi_name, limine, kernel, files, "", out)
+    limine_image_with(efi_name, limine, kernel, files, "", &[], out)
 }
 
 /// The general form: `extra_conf` is appended to the boot entry (e.g.
 /// `module_path:` lines).
-fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], extra_conf: &str, out: &std::path::Path) -> std::io::Result<bool> {
+fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], extra_conf: &str, raw: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
     use std::io::{Read, Seek, SeekFrom, Write};
     let Ok(efi) = std::fs::read(limine.join(efi_name)) else { return Ok(false) };
     let kernel_elf = std::fs::read(kernel)?;
@@ -244,7 +244,12 @@ fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::pat
     {
         let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&part_path)?;
         f.set_len(part_bytes)?;
-        fatfs::format_volume(&mut f, fatfs::FormatVolumeOptions::new().volume_label(*b"BUITENZORG "))?;
+        let mut format = fatfs::FormatVolumeOptions::new().volume_label(*b"BUITENZORG ");
+        if !raw.is_empty() {
+            // The Raspberry Pi boot ROM goes by the partition type, which says FAT32.
+            format = format.fat_type(fatfs::FatType::Fat32);
+        }
+        fatfs::format_volume(&mut f, format)?;
         let fs = fatfs::FileSystem::new(&mut f, fatfs::FsOptions::new())?;
         let root = fs.root_dir();
         let put = |dir: &fatfs::Dir<'_, &mut std::fs::File>, name: &str, bytes: &[u8]| -> std::io::Result<()> {
@@ -261,6 +266,16 @@ fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::pat
         put(&root.create_dir("boot")?, "bzkernel", &kernel_elf)?;
         for (name, bytes) in files {
             put(&root, &name.to_uppercase(), bytes)?;
+        }
+        // Files that keep their name and folder (the Raspberry Pi's).
+        for (name, bytes) in raw {
+            match name.split_once('/') {
+                Some((dir, file)) => {
+                    let d = root.create_dir(dir)?;
+                    put(&d, file, bytes)?;
+                }
+                None => put(&root, name, bytes)?,
+            }
         }
     }
     let mut part = Vec::new();
@@ -283,6 +298,75 @@ fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::pat
     disk.seek(SeekFrom::Start(START_LBA * 512))?;
     disk.write_all(&part)?;
     Ok(true)
+}
+
+/// Flatten a static ELF64 into the memory image of its PT_LOAD segments:
+/// the first byte is the lowest load address.
+fn flatten_elf(elf: &[u8]) -> Option<Vec<u8>> {
+    let u16_at = |o: usize| Some(u16::from_le_bytes(elf.get(o..o + 2)?.try_into().ok()?));
+    let u32_at = |o: usize| Some(u32::from_le_bytes(elf.get(o..o + 4)?.try_into().ok()?));
+    let u64_at = |o: usize| Some(u64::from_le_bytes(elf.get(o..o + 8)?.try_into().ok()?));
+    let (phoff, phentsize, phnum) = (u64_at(32)? as usize, u16_at(54)? as usize, u16_at(56)? as usize);
+    let mut segments = Vec::new();
+    for i in 0..phnum {
+        let ph = phoff + i * phentsize;
+        if u32_at(ph)? == 1 {
+            segments.push((u64_at(ph + 16)?, u64_at(ph + 8)? as usize, u64_at(ph + 32)? as usize));
+        }
+    }
+    let base = segments.iter().map(|s| s.0).min()?;
+    let end = segments.iter().map(|s| s.0 + s.2 as u64).max()?;
+    let mut image = vec![0u8; (end - base) as usize];
+    for (vaddr, offset, filesz) in segments {
+        let at = (vaddr - base) as usize;
+        image[at..at + filesz].copy_from_slice(elf.get(offset..offset + filesz)?);
+    }
+    Some(image)
+}
+
+/// The boot route lives in config.txt. By default the Pi firmware starts
+/// kernel8.img directly: the route `smoke [rpi4]` runs under QEMU. The block at
+/// the end switches to UEFI + Limine (not testable under QEMU: see
+/// docs/install-raspberry-pi.md).
+const RPI4_CONFIG: &str = "# Buitenzorg OS on a Raspberry Pi 4
+arm_64bit=1
+kernel=kernel8.img
+enable_gic=1
+# Serial console: PL011 on GPIO 14 (TX) / 15 (RX), 115200 8N1.
+enable_uart=1
+uart_2ndstage=1
+dtoverlay=miniuart-bt
+
+# UEFI + Limine instead: uncomment these four lines.
+#armstub=RPI_EFI.fd
+#device_tree_address=0x3e0000
+#device_tree_end=0x400000
+#dtoverlay=upstream-pi4
+";
+
+/// Pi UEFI enforces ACPI by default and hides the Device Tree, so Limine hands
+/// the kernel this file instead.
+const RPI4_LIMINE_CONF: &str = "    dtb_path: boot():/bcm2711-rpi-4-b.dtb\n";
+
+/// What the SD card needs next to the kernel, from the fetched firmware
+/// (scripts/fetch-rpi4-firmware.*); None when it was not fetched.
+fn rpi4_files(dir: &std::path::Path) -> Option<Vec<(String, Vec<u8>)>> {
+    println!("cargo:rerun-if-changed={}", dir.join("VERSION").display());
+    let mut raw = vec![("config.txt".to_string(), RPI4_CONFIG.as_bytes().to_vec())];
+    for name in [
+        "start4.elf",
+        "fixup4.dat",
+        "RPI_EFI.fd",
+        "bcm2711-rpi-4-b.dtb",
+        "bcm2711-rpi-400.dtb",
+        "bcm2711-rpi-cm4.dtb",
+    ] {
+        raw.push((name.to_string(), std::fs::read(dir.join(name)).ok()?));
+    }
+    for name in ["miniuart-bt.dtbo", "upstream-pi4.dtbo"] {
+        raw.push((format!("overlays/{name}"), std::fs::read(dir.join("overlays").join(name)).ok()?));
+    }
+    Some(raw)
 }
 
 fn main() {
@@ -448,8 +532,24 @@ fn main() {
     }
     println!("cargo:rerun-if-changed={}", arm_progs.display());
     let arm_ok = arm_kernel.exists()
-        && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &arm_path).unwrap_or(false);
+        && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &[], &arm_path).unwrap_or(false);
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
+
+    // Raspberry Pi 4 (roadmap R1): the same ARM64 kernel as a flat kernel8.img,
+    // and the SD card image when the firmware is there.
+    let kernel8_path = out_dir.join("kernel8.img");
+    let kernel8 = std::fs::read(&arm_kernel).ok().and_then(|elf| flatten_elf(&elf));
+    let kernel8_ok = kernel8.as_ref().is_some_and(|k| std::fs::write(&kernel8_path, k).is_ok());
+    println!("cargo:rustc-env=KERNEL8_IMAGE={}", if kernel8_ok { kernel8_path.display().to_string() } else { String::new() });
+    let rpi_path = out_dir.join("buitenzorg-rpi4.img");
+    let rpi_ok = match (&kernel8, rpi4_files(&manifest_dir().join("..").join("target").join("rpi4-uefi"))) {
+        (Some(k), Some(mut raw)) => {
+            raw.push(("kernel8.img".into(), k.clone()));
+            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &[], RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
+        }
+        _ => false,
+    };
+    println!("cargo:rustc-env=RPI4_IMAGE={}", if rpi_ok { rpi_path.display().to_string() } else { String::new() });
 
     // Multi-arch M4: the RISC-V kernel (riscv64imac-unknown-none-elf) on a
     // Limine image for QEMU `virt` + OpenSBI + edk2. Optional. The /disk
@@ -472,7 +572,7 @@ fn main() {
         rv_files.push((file, bytes));
     }
     let rv_ok = rv_kernel.exists()
-        && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, &rv_modules, &rv_path).unwrap_or(false);
+        && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, &rv_modules, &[], &rv_path).unwrap_or(false);
     println!("cargo:rustc-env=RISCV64_IMAGE={}", if rv_ok { rv_path.display().to_string() } else { String::new() });
 
     println!("cargo:rustc-env=UEFI_IMAGE={}", uefi_path.display());

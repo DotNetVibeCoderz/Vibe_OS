@@ -263,6 +263,28 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
 else
   skip "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
 fi
+# Raspberry Pi 4 (roadmap R1): kernel8.img as the Pi firmware would start it
+# (flat image, EL2, MMU off, x0 = the real Pi Device Tree) on QEMU `raspi4b`:
+# GIC-400, PL011, the /soc address translation. An older QEMU has no such board.
+kernel8="$root/dist/kernel8.img"
+if [ -n "$qemu_arm" ] && [ -f "$kernel8" ] && "$qemu_arm" -M help | grep -q '^raspi4b'; then
+  log="$root/dist/boot-rpi4.log"
+  rm -f "$log"
+  timeout --foreground 100 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" \
+    -dtb "$root/kernel/bzkernel/testdata/bcm2711-rpi-4-b.dtb" -display none -serial "file:$log" -serial null -no-reboot 2>/dev/null &
+  qpid=$!
+  for _ in $(seq 90); do
+    sleep 1
+    grep -q "ARM64 READY" "$log" 2>/dev/null && break
+  done
+  kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
+  require "$log" "BREM" "MILESTONE: HELLO KERNEL OK" "loader=rpi-direct" "MILESTONE: DTB OK" "MILESTONE: ARM64 MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "GICv2 at 0xff841000/0xff842000" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 EL0 OK" "MILESTONE: SECURITY OK" "MILESTONE: RPI4 BOOT OK" "BUITENZORG ARM64 READY"
+  echo "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs"
+elif [ -n "$qemu_arm" ] && [ -f "$kernel8" ]; then
+  echo "smoke [rpi4]: not run: this QEMU has no raspi4b board (added in QEMU 9.0)"
+else
+  skip "smoke [rpi4]: skipped (needs qemu-system-aarch64 and dist/kernel8.img)"
+fi
 fi # aarch64
 
 if want riscv64; then

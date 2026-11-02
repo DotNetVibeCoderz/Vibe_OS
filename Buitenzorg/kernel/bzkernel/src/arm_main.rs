@@ -159,18 +159,29 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     rtc_self_test();
     storage_self_test();
 
-    // Interrupts: GICv3 + the virtual timer at 100 Hz.
+    // Interrupts: the GIC (v3 on `virt`, v2 on a Raspberry Pi) + the virtual
+    // timer at 100 Hz.
     let gic_regs = fdt.as_ref().and_then(|f| {
-        let i = f.compatible("arm,gic-v3").next()?;
+        if let Some(i) = f.compatible("arm,gic-v3").next() {
+            let r = f.reg(i);
+            return Some((3, r.first()?.0, r.get(1)?.0, r.get(1)?.1));
+        }
+        let i = f.compatible("arm,gic-400").next().or_else(|| f.compatible("arm,cortex-a15-gic").next())?;
         let r = f.reg(i);
-        Some((r.first()?.0, r.get(1)?.0, r.get(1)?.1))
+        Some((2, r.first()?.0, r.get(1)?.0, 0x2000))
     });
     let mut timer_ok = false;
-    if let Some((gicd_pa, gicr_pa, gicr_len)) = gic_regs {
-        // Every CPU's redistributor (0x20000 each), not just the boot CPU's.
-        let gicr_len = gicr_len.min(0x2_0000 * arch::cpu::MAX_CPUS as u64);
-        let mapped = memory::map_mmio(gicd_pa, 0x1_0000).zip(memory::map_mmio(gicr_pa, gicr_len)).ok_or("cannot map the GIC");
-        match mapped.and_then(|(d, r)| gic::init(d, r)) {
+    let mut gic_name = "no GIC";
+    if let Some((version, gicd_pa, gicr_pa, gicr_len)) = gic_regs {
+        gic_name = if version == 3 { "GICv3" } else { "GICv2" };
+        let up = if version == 3 {
+            // Every CPU's redistributor (0x20000 each), not just the boot CPU's.
+            let gicr_len = gicr_len.min(0x2_0000 * arch::cpu::MAX_CPUS as u64);
+            memory::map_mmio(gicd_pa, 0x1_0000).zip(memory::map_mmio(gicr_pa, gicr_len)).ok_or("cannot map the GIC").and_then(|(d, r)| gic::init(d, r))
+        } else {
+            memory::map_mmio(gicd_pa, 0x1000).zip(memory::map_mmio(gicr_pa, gicr_len)).ok_or("cannot map the GIC").and_then(|(d, c)| gic::init_v2(d, c))
+        };
+        match up {
             Ok(()) => {
                 gic::enable_ppi(timer::INTID);
                 timer::start(100);
@@ -183,20 +194,20 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
                 let ms = (cpu::timestamp() - t0) * 1000 / hz.max(1);
                 let n = timer::ticks();
                 println!(
-                    "[arm64] GICv3 at {:#x}/{:#x}: {} timer interrupts in {} ms ({} IRQs taken)",
-                    gicd_pa, gicr_pa, n, ms, exceptions::irq_count()
+                    "[arm64] {} at {:#x}/{:#x}: {} timer interrupts in {} ms ({} IRQs taken)",
+                    gic_name, gicd_pa, gicr_pa, n, ms, exceptions::irq_count()
                 );
                 // 50 ticks at 100 Hz = 500 ms of counter time; never faster,
                 // but under TCG on a busy host interrupts can arrive late.
                 timer_ok = n >= 50 && (450..=2000).contains(&ms);
                 if timer_ok {
-                    println!("[kernel] MILESTONE: ARM64 TIMER OK (GICv3 distributor + redistributor + ICC sysregs; EL1 virtual timer PPI 27 at 100 Hz)");
+                    println!("[kernel] MILESTONE: ARM64 TIMER OK ({}; EL1 virtual timer PPI 27 at 100 Hz)", gic_name);
                 }
             }
             Err(e) => println!("[arm64] GIC: {}", e),
         }
     } else {
-        println!("[arm64] no arm,gic-v3 in the Device Tree");
+        println!("[arm64] no GIC in the Device Tree");
     }
 
     el0_self_test();
@@ -214,10 +225,22 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();
     if timer_ok && !uart.is_empty() && info.loader == "limine" {
         println!(
-            "[kernel] MILESTONE: ARM64 BOOT OK (Limine -> EL{} kernel; live DTB -> {} console + GICv3 + timer; framebuffer {})",
+            "[kernel] MILESTONE: ARM64 BOOT OK (Limine -> EL{} kernel; live DTB -> {} console + {} + timer; framebuffer {})",
             cpu::current_el(),
             uart,
+            gic_name,
             if info.framebuffer.is_some() { "on" } else { "absent" }
+        );
+    }
+    let raspberry_pi = fdt.as_ref().is_some_and(|f| f.root().is_compatible("brcm,bcm2711"));
+    if timer_ok && !uart.is_empty() && raspberry_pi {
+        println!(
+            "[kernel] MILESTONE: RPI4 BOOT OK ({} via {} -> EL{} kernel; {} console, {} + generic timer from the DTB)",
+            platform.as_ref().map(|p| p.model.as_str()).unwrap_or("?"),
+            info.loader,
+            cpu::current_el(),
+            uart,
+            gic_name
         );
     }
     println!("[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows");

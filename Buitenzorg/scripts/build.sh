@@ -15,6 +15,7 @@ fi
 # Multi-arch M1: Limine binaries (pinned + SHA-256) so bzimage also builds the
 # Limine-protocol UEFI image. Optional: a download failure only skips it.
 "$root/scripts/fetch-limine.sh" || echo "==> Limine not fetched; no Limine image"
+"$root/scripts/fetch-rpi4-firmware.sh" || echo "==> Raspberry Pi firmware not fetched; no SD image"
 
 echo "==> kernel (Rust)"
 # Multi-arch M3: the ARM64 kernel first (bzimage packs it into

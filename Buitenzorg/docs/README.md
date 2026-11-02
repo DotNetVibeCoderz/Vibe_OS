@@ -19,6 +19,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | Doc | What it covers |
 |---|---|
 | [Run in a VM](run-in-vm.md) | Convert the image and run it in VMware Player, VirtualBox, or Hyper-V. |
+| [Raspberry Pi 4](install-raspberry-pi.md) | Boot to a serial console on a Pi 4: QEMU verified, not yet tested on a physical board. |
 | [Install on Hardware](install-hardware.md) | Flash the image to a USB stick and boot a physical machine (BIOS/UEFI), with an honest capability matrix. |
 | [Debugging & Profiling](debugging.md) | Attach GDB to the running kernel, and the instrumented TSC zone profiler. |
 

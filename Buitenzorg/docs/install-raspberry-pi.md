@@ -1,0 +1,106 @@
+# Raspberry Pi 4
+
+> **Not yet tested on a physical board.** Everything below `dist/kernel8.img`
+> is verified on QEMU's `raspi4b` machine, using the Device Tree the real
+> firmware ships. A real Pi may behave differently. If you try it, the
+> [stage letters](#reading-the-serial-output) tell you how far it got.
+
+## What works today
+
+This is milestone R1: the kernel boots to a serial console.
+
+| | Status |
+|---|---|
+| Boot on the Pi firmware | Yes (QEMU), direct `kernel8.img` |
+| Serial console | PL011 on the GPIO header |
+| Interrupts and timer | GIC-400 + the ARM generic timer |
+| Memory, address spaces, built-in user-mode test programs | Yes, on one CPU |
+| Screen | No (R2): nothing appears on HDMI |
+| Other CPU cores | No (R2): one core |
+| SD card as `/disk`, apps | No (R3): the kernel can't read the card yet |
+| USB keyboard and mouse, Ethernet | No (R4) |
+
+So today the Pi boots and reports on the serial port, and that's all. You need a
+**USB-to-serial (3.3 V) adapter** to see anything.
+
+## Try it under QEMU
+
+No board needed. This needs QEMU 9.0 or newer:
+
+```powershell
+.\scripts\build.ps1
+qemu-system-aarch64 -M raspi4b -m 2G -kernel dist\kernel8.img `
+    -dtb kernel\bzkernel\testdata\bcm2711-rpi-4-b.dtb -display none -serial stdio -serial null
+```
+
+`scripts/smoke-test.ps1` runs the same boot and checks it.
+
+## Put it on an SD card
+
+`scripts/build.ps1` fetches the Pi firmware and writes the card image,
+`dist/buitenzorg-rpi4.img`. **Writing it erases the card.**
+
+```powershell
+.\scripts\flash-usb.ps1 -List
+.\scripts\flash-usb.ps1 -Image dist\buitenzorg-rpi4.img
+```
+
+```bash
+sudo ./scripts/flash-usb.sh --list
+sudo ./scripts/flash-usb.sh /dev/sdX --image dist/buitenzorg-rpi4.img
+```
+
+## Connect the serial port
+
+| Pi header pin | Signal | Adapter |
+|---|---|---|
+| 6 | GND | GND |
+| 8 | GPIO 14 (TX) | RX |
+| 10 | GPIO 15 (RX) | TX |
+
+Use 3.3 V logic: **a 5 V adapter can damage the Pi.** Don't connect the adapter's
+power pin. Open the port at **115200 8N1**, then power the Pi on.
+
+## Reading the serial output
+
+The first letters come from the boot code, before the kernel's normal log starts.
+A board has no debugger attached, so these are your first clue.
+
+| You see | Meaning | Look at |
+|---|---|---|
+| Nothing | The kernel never ran, or the wiring is wrong | TX and RX swapped? Green LED blinking an error code? Are `start4.elf` and `config.txt` on the card? |
+| `B` only, then silence | Stopped between entry and the move to 2 MiB | Report it: this shouldn't happen |
+| `BD` | No Device Tree from the firmware | `bcm2711-rpi-4-b.dtb` on the card? |
+| `BR3` | Entered at EL3, which isn't expected | Remove any `armstub` line you added |
+| `BREM`, then silence | Stopped as the MMU came on | Report it, with the board's RAM size |
+| `BREM`, then the logo | The kernel is running | Look for `MILESTONE:` lines |
+
+A good boot ends with:
+
+```text
+[kernel] MILESTONE: RPI4 BOOT OK (raspberrypi,4-model-b via rpi-direct -> EL1 kernel; ...)
+[kernel] BUITENZORG ARM64 READY ...
+```
+
+## Two boot routes
+
+The card holds both, and `config.txt` picks one.
+
+- **Direct (the default):** the Pi firmware starts `kernel8.img` itself. This is
+  the route verified under QEMU.
+- **UEFI + Limine:** community UEFI firmware (`RPI_EFI.fd`), then Limine, as on
+  the other ARM64 images. Uncomment the four lines at the end of `config.txt`.
+  **This route has never run:** QEMU stops inside the UEFI firmware, at a random
+  number generator register it doesn't model, and it has no SD card or PCIe for
+  UEFI to read from. The firmware hides the Device Tree by default, so Limine
+  passes `bcm2711-rpi-4-b.dtb` from the card instead.
+
+## Limits
+
+- RAM above 0xFC00_0000 (just under 4 GiB) is ignored for now, so an 8 GiB board
+  uses a little under 4 GiB.
+- With the direct route the kernel image is mapped read-write-execute; the
+  Limine route has separate permissions.
+- The Pi firmware files are third-party binaries. They're downloaded at build
+  time (pinned by SHA-256) and aren't part of this repository; see `Readme.md`
+  in `kernel/target/rpi4-uefi`.

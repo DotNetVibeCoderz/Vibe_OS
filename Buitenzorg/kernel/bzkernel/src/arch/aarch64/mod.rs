@@ -5,7 +5,9 @@
 //! - `exceptions`: the EL1 vector table (VBAR_EL1) and its Rust dispatcher;
 //! - `paging`: the `arch::paging` HAL (TTBR1 kernel half, TTBR0 user half);
 //! - `aspace`: per-process address spaces (one TTBR0 root each);
-//! - `gic`: GICv3 distributor + redistributor + system-register CPU interface;
+//! - `gic`: GICv3 (distributor + redistributors + system registers) and
+//!   GICv2 (GIC-400: banked distributor + memory-mapped CPU interface);
+//! - `rpi`: the Raspberry Pi 4 direct boot (`kernel8.img`, no Limine);
 //! - `timer`: the EL1 virtual generic timer (PPI 27) as the periodic tick.
 
 pub mod aspace;
@@ -17,6 +19,7 @@ pub mod gic;
 pub mod interrupts;
 pub mod paging;
 pub mod psci;
+pub mod rpi;
 pub mod smp;
 pub mod timer;
 pub mod usermode;

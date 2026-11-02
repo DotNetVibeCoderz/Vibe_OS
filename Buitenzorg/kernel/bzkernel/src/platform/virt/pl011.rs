@@ -9,6 +9,10 @@ use spin::Mutex;
 const UARTDR: u64 = 0x00;
 const UARTFR: u64 = 0x18;
 const FR_TXFF: u32 = 1 << 5;
+const UARTCR: u64 = 0x30;
+const CR_UARTEN: u32 = 1 << 0;
+const CR_TXE: u32 = 1 << 8;
+const CR_RXE: u32 = 1 << 9;
 
 static BASE: AtomicU64 = AtomicU64::new(0);
 static LOCK: Mutex<()> = Mutex::new(());
@@ -18,6 +22,13 @@ pub fn init() {}
 
 /// Start using the UART mapped at virtual address `va`.
 pub fn set_base(va: u64) {
+    // Firmware normally leaves it running; QEMU `raspi4b` boots it disabled.
+    unsafe {
+        let cr = (va + UARTCR) as *mut u32;
+        if cr.read_volatile() & CR_UARTEN == 0 {
+            cr.write_volatile(cr.read_volatile() | CR_UARTEN | CR_TXE | CR_RXE);
+        }
+    }
     BASE.store(va, Ordering::SeqCst);
 }
 

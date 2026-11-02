@@ -35,7 +35,7 @@
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |
-| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | ⏳ Rencana (R1–R6) |
+| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1 di QEMU `raspi4b`; papan fisik belum (R1–R6) |
 
 Legend: ✅ selesai · 🟡 sebagian · 🔜 sedang/berikutnya · ⏳ direncanakan *(status dirapikan 2026-11-01)*
 
@@ -945,6 +945,14 @@ modelnya sama sekali).
    **GICv2** (distributor + CPU interface; kernel saat ini hanya GICv3),
    PL011/mini-UART dari DTB, timer generik ARM. Marker: `RPI4 BOOT OK` lewat
    UART serial ke host. Uji awal di QEMU `-M raspi4b` (sebatas yang dimodelkan).
+   *(Status 2026-11-02: `RPI4 BOOT OK` tercapai di QEMU `raspi4b`; **belum diuji
+   di papan fisik**. Perubahan dari rencana: rute UEFI tidak bisa diuji di QEMU
+   -- firmware berhenti di register RNG yang tidak dimodelkan, dan `raspi4b`
+   tidak punya SD/PCIe -- jadi jalur "cadangan" `kernel8.img` dibangun dan
+   menjadi bawaan image SD. Rute UEFI + Limine tetap ada di image, tinggal
+   diaktifkan di `config.txt`, tetapi belum pernah berjalan. R2 harus memutuskan
+   ulang: tanpa UEFI tidak ada GOP dan PSCI, jadi layar butuh mailbox VideoCore
+   dan SMP butuh spin-table. Panduan: `docs/install-raspberry-pi.md`.)*
 2. **R2 — Desktop di layar Pi 4.** Framebuffer GOP dari UEFI → window manager +
    desktop yang sama; SMP 4 core lewat PSCI (firmware UEFI menyediakannya).
 3. **R3 — Penyimpanan Pi 4.** Driver **SDHCI/EMMC2** (baca-tulis kartu SD) →
@@ -966,7 +974,8 @@ modelnya sama sekali).
 Pi adalah proyek komunitas (bukan Raspberry Pi Ltd.); bila suatu saat tidak
 memadai, jalur cadangannya adalah boot langsung dari firmware GPU
 (`kernel8.img` + `config.txt`, entri ARM64 tanpa UEFI) — butuh entry point
-sendiri tetapi tidak mengubah sisa kernel.
+sendiri tetapi tidak mengubah sisa kernel. *(Jalur ini kini sudah ada:
+`arch/aarch64/rpi.rs`, dan menjadi bawaan sejak R1.)*
 
 ## 🔮 Pasca-1.x (jangka panjang)
 SMP/NUMA matang · driver GPU modern + NPU · WiFi/Bluetooth/USB luas ·

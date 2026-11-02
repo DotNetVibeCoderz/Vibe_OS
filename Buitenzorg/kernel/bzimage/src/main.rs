@@ -19,6 +19,8 @@ const LIMINE_IMAGE: &str = env!("LIMINE_IMAGE");
 const ARM64_IMAGE: &str = env!("ARM64_IMAGE");
 /// The RISC-V kernel on a Limine UEFI image (empty unless it was built).
 const RISCV64_IMAGE: &str = env!("RISCV64_IMAGE");
+const KERNEL8_IMAGE: &str = env!("KERNEL8_IMAGE");
+const RPI4_IMAGE: &str = env!("RPI4_IMAGE");
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,6 +49,16 @@ fn main() {
             let rv = dir.join("buitenzorg-riscv64.img");
             std::fs::copy(RISCV64_IMAGE, &rv).expect("copy riscv64 image");
             println!("RISC-V (Limine, UEFI) image: {}", rv.display());
+        }
+        if !KERNEL8_IMAGE.is_empty() {
+            let k = dir.join("kernel8.img");
+            std::fs::copy(KERNEL8_IMAGE, &k).expect("copy kernel8.img");
+            println!("Raspberry Pi 4 kernel: {}", k.display());
+        }
+        if !RPI4_IMAGE.is_empty() {
+            let rpi = dir.join("buitenzorg-rpi4.img");
+            std::fs::copy(RPI4_IMAGE, &rpi).expect("copy rpi4 image");
+            println!("Raspberry Pi 4 SD image: {}", rpi.display());
         }
         return;
     }

@@ -294,6 +294,27 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
 } else {
     Skip-Step "smoke [arm64]: skipped (needs qemu-system-aarch64, edk2-aarch64-code.fd and dist\buitenzorg-arm64.img)"
 }
+# Raspberry Pi 4 (roadmap R1): kernel8.img as the Pi firmware would start it
+# (flat image, EL2, MMU off, x0 = the real Pi Device Tree) on QEMU `raspi4b`:
+# GIC-400, PL011, the /soc address translation.
+$kernel8 = Join-Path $root "dist\kernel8.img"
+if ((Test-Path $qemuArm) -and (Test-Path $kernel8)) {
+    $log = Join-Path $root "dist\boot-rpi4.log"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    $piDtb = Join-Path $root "kernel\bzkernel\testdata\bcm2711-rpi-4-b.dtb"
+    $qargs = @('-M', 'raspi4b', '-m', '2G', '-kernel', "`"$kernel8`"", '-dtb', "`"$piDtb`"",
+               '-display', 'none', '-serial', "`"file:$log`"", '-serial', 'null', '-no-reboot')
+    $p = Start-Process -FilePath $qemuArm -ArgumentList $qargs -PassThru -RedirectStandardError (Join-Path $root "dist\boot-rpi4.err")
+    foreach ($i in 1..90) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "ARM64 READY" -Quiet)) { break }
+    }
+    Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
+    Assert-Markers -Log $log -Markers @("BREM", "MILESTONE: HELLO KERNEL OK", "loader=rpi-direct", "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "GICv2 at 0xff841000/0xff842000", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 EL0 OK", "MILESTONE: SECURITY OK", "MILESTONE: RPI4 BOOT OK", "BUITENZORG ARM64 READY")
+    Write-Host "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs"
+} else {
+    Skip-Step "smoke [rpi4]: skipped (needs qemu-system-aarch64 and dist\kernel8.img)"
+}
 } # aarch64
 
 if (Test-Arch "riscv64") {

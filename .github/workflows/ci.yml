@@ -46,6 +46,11 @@ jobs:
       - name: Fetch Limine
         run: bash scripts/fetch-limine.sh
 
+      # Raspberry Pi firmware (pinned + SHA-256): bzimage then also builds the
+      # SD card image.
+      - name: Fetch Raspberry Pi firmware
+        run: bash scripts/fetch-rpi4-firmware.sh
+
       - name: Build ARM64 kernel
         working-directory: Buitenzorg/kernel
         run: cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat
