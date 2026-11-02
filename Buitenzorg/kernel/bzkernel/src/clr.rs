@@ -23,7 +23,12 @@ pub const HOST: &str = "/disk/CLRHOST.ELF";
 /// process: `CLRHOST.ELF <dll> <args>`. Its pid.
 pub fn spawn(dll: &str, args: &str) -> Result<u64, &'static str> {
     let line = if args.is_empty() { alloc::string::String::from(dll) } else { format!("{} {}", dll, args) };
-    crate::app::spawn_with_args(HOST, &line)
+    // The process is named after the assembly (`/disk/MCALC.DLL` -> `mcalc`),
+    // not the host, so `ps`, the task managers and PROC_LIST tell apps apart.
+    let file = dll.rsplit('/').next().unwrap_or(dll);
+    let name = file.split('.').next().unwrap_or(file).to_lowercase();
+    let image = crate::vfs::read(HOST).map_err(|_| "managed runtime (CLRHOST.ELF) not found")?;
+    crate::app::spawn_image_args(&name, &image, &line)
 }
 
 /// Run the assembly at `dll` (a VFS path) with `args` as a managed process
@@ -85,6 +90,21 @@ pub fn boot_demo(arch: &str) {
             ),
             Ok(code) => crate::println!("[clr] hellogui failed (exit {:#x})", code),
             Err(e) => crate::println!("[clr] cannot start hellogui: {}", e),
+        }
+    }
+    // The managed app suite (Buitenzorg.UI): the "Aplikasi Managed" folder
+    // renders a real window with the toolkit's draw ops, then runs every
+    // app's own self-test in the same process (it prints MANAGED UI OK and
+    // MANAGED APPS OK itself).
+    if crate::vfs::read("/disk/MANAGED.DLL").is_ok() {
+        let m0 = crate::interrupts::ticks();
+        match crate::app::spawn_with_args("managed", "--selftest").map(crate::app::wait) {
+            Ok(0) => {
+                let s10 = (crate::interrupts::ticks() - m0) * 10 / 18;
+                crate::println!("[clr] managed app suite checked in {}.{} s", s10 / 10, s10 % 10);
+            }
+            Ok(code) => crate::println!("[clr] managed app suite: {} app(s) failed their self-test", code),
+            Err(e) => crate::println!("[clr] cannot start the managed app suite: {}", e),
         }
     }
     match run("/disk/HELLOCLR.DLL", "") {

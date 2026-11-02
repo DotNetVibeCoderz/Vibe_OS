@@ -76,6 +76,8 @@ pub fn feed_char(c: char) -> Effect {
             '\u{8}' | '\u{7f}' => {
                 term.input.pop();
             }
+            // Navigation keys (U+F700.., keyboard::nav_char) are for apps.
+            c if ('\u{F700}'..='\u{F7FF}').contains(&c) => {}
             c if !c.is_control() => {
                 term.input.push(c);
             }

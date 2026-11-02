@@ -16,6 +16,20 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Managed Apps and a new UI toolkit.** The desktop has a **Managed Apps**
+  icon that opens a folder of apps written in ordinary .NET C#: a calculator
+  with history, 2048, notes, a file browser, a task monitor, XOX, a clock with
+  stopwatch, timer and calendar, and a gallery of every control. They are built
+  on **Buitenzorg.UI**, a toolkit modelled on Avalonia: styles with selectors
+  and hover/press states, color transitions, data binding, commands, Grid and
+  the other panels, menus, flyouts, tooltips, dialogs, notifications, and a
+  light and a dark theme. See [docs/managed-apps.md](docs/managed-apps.md).
+- **Apps can use the mouse.** A window now receives clicks, drags and pointer
+  movement over its content; before, apps could only read the keyboard. Arrow,
+  Home, End, Page and Delete keys and Ctrl+letter shortcuts now reach apps too.
+- **Windows can be drawn with rounded corners, gradients, bold and large text,
+  and translucent shadows,** and sized by their content area.
+- **Accented Latin text and symbols** such as × ÷ ° ± now display.
 - **Preemptive multi-process ring 3 (increment 1).** Several ring-3 programs
   run at once, timer-preempted, each in its own address space (`aspace.rs`:
   two private page directories per process covering the 2 GiB user half,
@@ -280,6 +294,17 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **A quick click could be lost while an app was busy redrawing.** The desktop
+  only looked at the current button state; a press and release between two
+  looks went unnoticed. Clicks are now counted, so none are missed.
+- **Managed C# could hang or fail on common code.** Several gaps in the managed
+  runtime are fixed: casting with `as` in generic code, types nested in a
+  library, more string search overloads, sorting boxed numbers, and a hang when
+  a thread ended during garbage collection. Call-heavy managed code also runs
+  faster, because the runtime allocates far less on each call.
+- **An app that exited left a frozen window on the desktop.** It now closes.
+- **Every managed app appeared as `clrhost` in task lists.** Each is now listed
+  under its own name.
 - **On a single processor, a sleeping program could sleep for ever.** A
   program's timed wait was only checked when the processor switched tasks,
   which the idle desktop does not do; it is now checked on every timer tick.

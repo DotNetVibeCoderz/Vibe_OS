@@ -83,6 +83,7 @@ pub fn run() -> ! {
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];
     let mut last_packets = u64::MAX;
     let mut last_left = false;
+    let mut last_presses = mouse::presses();
     let mut last_input = interrupts::ticks();
     let mut last_keys = keyboard::pushed();
     let mut saver_active = false;
@@ -134,6 +135,14 @@ pub fn run() -> ! {
 
         let (mx, my, buttons, packets) = mouse::state();
         let left = buttons & 0x01 != 0;
+        let presses = mouse::presses();
+        if presses != last_presses && !left && !last_left && !saver_active {
+            // a whole click happened between two samples: replay it
+            wm::handle_mouse(mx as i32, my as i32, true);
+            wm::handle_mouse(mx as i32, my as i32, false);
+            input = true;
+        }
+        last_presses = presses;
         if packets != last_packets || left != last_left {
             last_packets = packets;
             last_left = left;
@@ -173,6 +182,10 @@ pub fn run() -> ! {
                 }
             }
             app::reap_closed_windows();
+            // An app that exited leaves no frozen window behind.
+            if wm::close_orphan_windows() > 0 {
+                input = true;
+            }
             match wm::take_pending_power() {
                 1 => power::shutdown(),
                 2 => power::restart(),

@@ -210,6 +210,12 @@ impl TextStyle {
     }
 }
 
+/// Line height of `style` in pixels (the raster height).
+pub fn line_height(style: TextStyle) -> i32 {
+    let (_, h) = style.font();
+    h.val() as i32
+}
+
 /// Pixel width of `text` in `style`.
 pub fn text_width(text: &str, style: TextStyle) -> i32 {
     let (w, h) = style.font();

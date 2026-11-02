@@ -77,11 +77,13 @@ const CATEGORIES: [Category; 5] = [
 ];
 
 /// Desktop launcher icons (top-left), as (launch-name, label).
-const DESKTOP: [(&str, &str); 4] = [
+const DESKTOP: [(&str, &str); 5] = [
     ("files", "Files"),
     ("editor", "Editor"),
     ("calc", "Kalkulator"),
     ("store", "App Store"),
+    // the folder of managed (RustCLR + Buitenzorg.UI) apps: /disk/MANAGED.DLL
+    ("managed", "Managed Apps"),
 ];
 
 /// Fallback tile colors when the icon pack is unavailable (no /disk driver on
@@ -89,6 +91,7 @@ const DESKTOP: [(&str, &str); 4] = [
 fn fallback_color(name: &str) -> Color {
     match name {
         "files" => gfx::rgb(0xF5, 0x8A, 0x1F),
+        "managed" => gfx::rgb(0x3F, 0x7A, 0x58),
         "editor" => gfx::rgb(0x2F, 0x7B, 0xE8),
         "calc" => gfx::rgb(0x3A, 0x3F, 0x47),
         "store" => gfx::rgb(0x12, 0x9E, 0x6E),
@@ -222,6 +225,46 @@ pub struct Window {
     /// Process that created the window (0 = kernel/shell). Keyboard focus
     /// follows the topmost window's owner (multi-process increment 1).
     pub owner: u64,
+    /// Pointer events for the owning program (WIN_EVENT), packed as
+    /// `bz_abi::pointer_event` describes; consecutive moves are coalesced.
+    pub events: alloc::collections::VecDeque<u64>,
+}
+
+/// Pack a pointer event (see `bz_abi::pointer_event`).
+fn pack_event(kind: u64, x: i32, y: i32, buttons: u64) -> u64 {
+    (kind << 56) | ((buttons & 0xFF) << 32) | (((y as i16) as u16 as u64) << 16) | ((x as i16) as u16 as u64)
+}
+
+impl Window {
+    /// Queue a pointer event (64 at most; a move replaces a queued move).
+    fn push_event(&mut self, ev: u64) {
+        let kind = ev >> 56;
+        if kind == bz_abi::pointer_event::MOVE {
+            if let Some(last) = self.events.back_mut() {
+                if *last >> 56 == bz_abi::pointer_event::MOVE {
+                    *last = ev;
+                    return;
+                }
+            }
+        }
+        if self.events.len() >= 64 {
+            self.events.pop_front();
+        }
+        self.events.push_back(ev);
+    }
+
+    /// Client-area origin on the screen.
+    fn client_origin(&self) -> (i32, i32) {
+        (self.x + BORDER, self.y + BORDER + TITLE_H)
+    }
+
+    /// (x, y) relative to the client area, if it lies inside it.
+    fn client_point(&self, x: i32, y: i32) -> Option<(i32, i32)> {
+        let (ox, oy) = self.client_origin();
+        let (cw, ch) = (self.w - 2 * BORDER, self.h - TITLE_H - 2 * BORDER);
+        let (lx, ly) = (x - ox, y - oy);
+        (self.canvas.is_some() && lx >= 0 && ly >= 0 && lx < cw && ly < ch).then_some((lx, ly))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -243,6 +286,11 @@ struct Wm {
     workspace: u8,
     /// (window id, button) currently hovered, for micro-interaction highlight.
     hover: Option<(u32, TitleButton)>,
+    /// App window holding the pointer capture (a press in its client area,
+    /// until the release).
+    capture: Option<u32>,
+    /// App window the pointer was last over (for LEAVE).
+    pointer_in: Option<u32>,
     /// Active click ripple: (x, y, start_frame).
     ripple: Option<(i32, i32, u64)>,
     /// Animation frame counter (advanced by the desktop loop).
@@ -279,6 +327,8 @@ pub fn init(width: usize, height: usize) {
         height: height as i32,
         workspace: 0,
         hover: None,
+        capture: None,
+        pointer_in: None,
         ripple: None,
         frame: 0,
         animations: true,
@@ -579,6 +629,7 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
         state: WinState::Normal,
         saved: (x, y, w, h),
         owner: crate::aspace::current_id(),
+        events: alloc::collections::VecDeque::new(),
     });
     id
 }
@@ -637,6 +688,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             state: WinState::Normal,
             saved: (board_x, y, ww, h),
             owner: crate::aspace::current_id(),
+            events: alloc::collections::VecDeque::new(),
         });
         return id;
     }
@@ -665,6 +717,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         state: WinState::Normal,
         saved: (x, y, w, h),
         owner: crate::aspace::current_id(),
+        events: alloc::collections::VecDeque::new(),
     });
     id
 }
@@ -692,6 +745,26 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
         bz_abi::draw_op::ELLIPSE => c.ellipse(cmd.x, cmd.y, cmd.w, cmd.h, cmd.color, false),
         bz_abi::draw_op::FILL_ELLIPSE => c.ellipse(cmd.x, cmd.y, cmd.w, cmd.h, cmd.color, true),
         bz_abi::draw_op::RECT => c.rect_outline(cmd.x, cmd.y, cmd.w, cmd.h, 1, cmd.color),
+        // Toolkit ops (managed Buitenzorg.UI): `_pad` is the second parameter.
+        bz_abi::draw_op::FILL_ROUND_RECT => fill_rounded(&mut c, cmd.x, cmd.y, cmd.w, cmd.h, cmd._pad as i32, cmd.color),
+        bz_abi::draw_op::ROUND_RECT => outline_rounded(&mut c, cmd.x, cmd.y, cmd.w, cmd.h, cmd._pad as i32, 1, cmd.color),
+        bz_abi::draw_op::GRADIENT_V => gradient_v(&mut c, cmd.x, cmd.y, cmd.w, cmd.h, cmd.color, cmd._pad),
+        bz_abi::draw_op::FILL_ROUND_GRADIENT_V => {
+            fill_rounded_gradient(&mut c, cmd.x, cmd.y, cmd.w, cmd.h, cmd.text_len as i32, cmd.color, cmd._pad)
+        }
+        bz_abi::draw_op::DRAW_TEXT_STYLED => {
+            let text = text.ok_or("draw_text without text")?;
+            let style = match cmd._pad {
+                1 => gfx::TextStyle::Strong,
+                2 => gfx::TextStyle::Heading,
+                _ => gfx::TextStyle::Body,
+            };
+            c.draw_text_styled(cmd.x, cmd.y, text, cmd.color, cw as i32, style);
+        }
+        bz_abi::draw_op::BLEND_ROUND_RECT => {
+            let (radius, alpha) = ((cmd._pad & 0xFFFF) as i32, ((cmd._pad >> 16) & 0xFF) as u8);
+            blend_rounded(&mut c, cmd.x, cmd.y, cmd.w, cmd.h, radius, cmd.color, alpha)
+        }
         _ => return Err("unknown draw op"),
     }
     Ok(())
@@ -876,6 +949,7 @@ pub fn handle_mouse(x: i32, y: i32, left: bool) {
     let pressed = left && !wm.prev_left;
     let released = !left && wm.prev_left;
     wm.prev_left = left;
+    wm.route_pointer(cx, cy, left, pressed, released, (mdx, mdy) != (0, 0));
 
     if pressed {
         let frame = wm.frame;
@@ -897,6 +971,55 @@ pub fn handle_mouse(x: i32, y: i32, left: bool) {
 }
 
 impl Wm {
+    /// Deliver the pointer to app windows (WIN_EVENT): moves and presses
+    /// over a client area go to the top-most window there, a press captures
+    /// the pointer until the release, and leaving a client area is reported.
+    fn route_pointer(&mut self, cx: i32, cy: i32, left: bool, pressed: bool, released: bool, moved: bool) {
+        use bz_abi::pointer_event::{DOWN, LEAVE, MOVE, UP};
+        let buttons = left as u64;
+        if let Some(id) = self.capture {
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                let (ox, oy) = w.client_origin();
+                let (lx, ly) = (cx - ox, cy - oy);
+                if released {
+                    w.push_event(pack_event(UP, lx, ly, 0));
+                } else if moved {
+                    w.push_event(pack_event(MOVE, lx, ly, buttons));
+                }
+            }
+            if released {
+                self.capture = None;
+            }
+            return;
+        }
+        let over_shell = self.start_open || cy >= self.height - TASKBAR_H;
+        let target = if over_shell {
+            None
+        } else {
+            self.window_at(cx, cy).and_then(|i| {
+                let w = &self.windows[i];
+                (w.owner != 0).then(|| w.client_point(cx, cy).map(|p| (w.id, p))).flatten()
+            })
+        };
+        let now_in = target.map(|(id, _)| id);
+        if self.pointer_in != now_in {
+            if let Some(old) = self.pointer_in {
+                if let Some(w) = self.windows.iter_mut().find(|w| w.id == old) {
+                    w.push_event(pack_event(LEAVE, 0, 0, buttons));
+                }
+            }
+            self.pointer_in = now_in;
+        }
+        let Some((id, (lx, ly))) = target else { return };
+        let Some(w) = self.windows.iter_mut().find(|w| w.id == id) else { return };
+        if pressed {
+            w.push_event(pack_event(DOWN, lx, ly, buttons));
+            self.capture = Some(id);
+        } else if moved || released {
+            w.push_event(pack_event(if released { UP } else { MOVE }, lx, ly, buttons));
+        }
+    }
+
     /// Index of the top-most window on the current workspace at (x, y).
     fn window_at(&self, x: i32, y: i32) -> Option<usize> {
         self.windows.iter().rposition(|w| {
@@ -1695,4 +1818,18 @@ pub fn render_frame(back: &mut Vec<u32>, width: usize, height: usize) {
     }
     compose_into(back, width, height);
     crate::framebuffer::present(back);
+}
+
+/// WIN_EVENT: the next pointer event of window `id`, if `owner` owns it.
+pub fn take_event(id: u32, owner: u64) -> Option<u64> {
+    let mut guard = WM.lock();
+    let wm = guard.as_mut()?;
+    let w = wm.windows.iter_mut().find(|w| w.id == id && w.owner == owner)?;
+    Some(w.events.pop_front().unwrap_or(0))
+}
+
+/// The (outer width, outer height) of a window whose client area is
+/// `cw` x `ch` (WIN_CREATE with `win_flags::CLIENT_SIZE`).
+pub fn outer_size(cw: i32, ch: i32) -> (i32, i32) {
+    (cw + 2 * BORDER, ch + TITLE_H + 2 * BORDER)
 }

@@ -27,18 +27,51 @@ pub fn feed_scancode(byte: u8) {
     crate::arch::cpu::without_interrupts(|| {
         let mut guard = DECODER.lock();
         let kb = guard.get_or_insert_with(|| {
-            Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore)
+            Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::MapLettersToUnicode)
         });
         if let Ok(Some(event)) = kb.add_byte(byte) {
-            if let Some(DecodedKey::Unicode(c)) = kb.process_keyevent(event) {
-                if crate::terminal::is_active() {
-                    push(c);
-                } else {
-                    crate::print!("{}", c);
+            match kb.process_keyevent(event) {
+                Some(DecodedKey::Unicode(c)) => {
+                    if crate::terminal::is_active() {
+                        push(c);
+                    } else {
+                        crate::print!("{}", c);
+                    }
                 }
+                // Keys with no character reach apps as private-use code
+                // points (U+F700..), so KEY_READ can deliver navigation.
+                Some(DecodedKey::RawKey(code)) => {
+                    if let Some(c) = nav_char(code) {
+                        if crate::terminal::is_active() {
+                            push(c);
+                        }
+                    }
+                }
+                None => {}
             }
         }
     })
+}
+
+/// Navigation keys as private-use characters (KEY_READ): U+F700 up, F701
+/// down, F702 left, F703 right, F704 home, F705 end, F706 delete, F707 page
+/// up, F708 page down.
+pub const NAV_FIRST: char = '\u{F700}';
+fn nav_char(code: pc_keyboard::KeyCode) -> Option<char> {
+    use pc_keyboard::KeyCode as K;
+    let n = match code {
+        K::ArrowUp => 0,
+        K::ArrowDown => 1,
+        K::ArrowLeft => 2,
+        K::ArrowRight => 3,
+        K::Home => 4,
+        K::End => 5,
+        K::Delete => 6,
+        K::PageUp => 7,
+        K::PageDown => 8,
+        _ => return None,
+    };
+    char::from_u32(NAV_FIRST as u32 + n)
 }
 
 /// Called from the keyboard IRQ handler with a decoded character.

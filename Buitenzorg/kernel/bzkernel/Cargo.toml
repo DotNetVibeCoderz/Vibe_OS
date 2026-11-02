@@ -17,6 +17,7 @@ noto-sans-mono-bitmap = { version = "0.3", default-features = false, features = 
     "size_16",
     "size_24",
     "unicode-basic-latin",
+    "unicode-latin-1-supplement",
 ] }
 
 # PC-only crates (the x86-64 kernel: bootloader hand-off, CPU structures, 8259).

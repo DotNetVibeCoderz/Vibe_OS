@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- XOX (managed tic-tac-toe): /disk/MXOX.DLL, `run mxox`. Buitenzorg.UI app. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MXox</AssemblyName>
+    <RootNamespace>MXox</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+  </ItemGroup>
+</Project>

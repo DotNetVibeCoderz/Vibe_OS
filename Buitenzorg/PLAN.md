@@ -328,7 +328,9 @@ yang "matang". Ini "make-or-break" Layer 4 dan **prasyarat** preloaded suite
   `FUTEX_WAIT_TIMEOUT`/`CLOCK_NANOS`; futex per address space) → Conformance
   488/488 di ARM64/RISC-V. Increment 3 ✓: interop GUI lewat `Buitenzorg.App`
   (P/Invoke → host CLR, marshalling di host), `run app.dll` + menu Mulai, app
-  jam `HELLOGUI.DLL` — `CLR GUI OK` di ketiga arsitektur.)*
+  jam `HELLOGUI.DLL` — `CLR GUI OK` di ketiga arsitektur. Buitenzorg.UI ✓:
+  toolkit gaya Avalonia + folder **Managed Apps** berisi versi managed dari app
+  contoh — `MANAGED UI OK` + `MANAGED APPS OK`; lihat `docs/managed-apps.md`.)*
 
 **Milestone:** app C# ber-GC memakai LINQ/Regex/StringBuilder/Base64/
 Collections/Tasks-async/Streams berjalan & terverifikasi di QEMU.

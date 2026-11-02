@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Buitenzorg.UI: an Avalonia-style retained-mode UI toolkit for managed C#
+       apps on the RustCLR path (/disk/BZUI.DLL). Controls, panels, layout
+       (Measure/Arrange), styles with selectors and pseudo-classes, a styled
+       property system with transitions, data binding, commands, popups and
+       an event loop. It renders through the kernel's window draw ops, never
+       per pixel in C#, because the managed code is interpreted. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Buitenzorg.UI</AssemblyName>
+    <RootNamespace>Buitenzorg.UI</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.App\Buitenzorg.App.csproj" />
+  </ItemGroup>
+</Project>

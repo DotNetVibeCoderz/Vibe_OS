@@ -65,6 +65,8 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 42 | `PROC_ARGS` | ptr buffer | max bytes | full length of the caller's argument string |
 | 43 | `FUTEX_WAIT_TIMEOUT` | ptr u32 word | expected value | 0 woken / word changed, 1 timed out (a2 = timeout in ns, 0 = none) |
 | 44 | `CLOCK_NANOS` | — | — | monotonic nanoseconds since boot |
+| 45 | `WIN_EVENT` | window id | — | next pointer event, 0 = none (packed: x bits 0-15, y 16-31, buttons 32-39, kind 56-63: 1 move, 2 down, 3 up, 4 leave) |
+| 46 | `TEXT_METRICS` | style (0 body, 1 strong, 2 heading) | — | `(glyph width << 32) \| line height` |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
@@ -191,7 +193,15 @@ Pixel format: `0 = RGB`, `1 = BGR`, `2 = GRAY`, `255 = UNKNOWN`.
 `DrawCmd` (v0.8) — `#[repr(C)]`, **48 bytes**:
 `op:u64, x,y,w,h:i32, color:u32, _pad:u32, text_ptr:u64, text_len:u64`.
 Op: `0 = fill_rect`, `1 = draw_text`, `2 = clear`, `3 = line`, `4 = ellipse`,
-`5 = fill_ellipse`, `6 = rect` (v0.9), `7 = blit` (v0.16). Color is `0x00RRGGBB`.
+`5 = fill_ellipse`, `6 = rect` (v0.9), `7 = blit` (v0.16), and the toolkit ops:
+`8 = fill_round_rect` (radius in `_pad`), `9 = round_rect` (radius in `_pad`),
+`10 = gradient_v` (`color` top, `_pad` bottom), `11 = fill_round_gradient_v`
+(`color` top, `_pad` bottom, radius in `text_len`, `text_ptr` = 0),
+`12 = draw_text_styled` (`_pad`: 0 body, 1 strong, 2 heading),
+`13 = blend_round_rect` (`_pad` = alpha << 16 | radius). Color is `0x00RRGGBB`.
+`WIN_CREATE`'s `a2` (dims) takes the flag `win_flags::CLIENT_SIZE` (bit 63): the
+width and height are then the client area, and the window grows by its title
+bar and borders.
 **`blit`**: `text_ptr` is the client's ARGB pixel buffer (`w`×`h` `u32`,
 `text_len` bytes), copied to the window canvas at (x,y). This backs the
 client-side `Buitenzorg.Drawing` software renderer (the WPF/Avalonia compositor

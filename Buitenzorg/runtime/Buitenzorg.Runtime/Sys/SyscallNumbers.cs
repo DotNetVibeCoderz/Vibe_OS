@@ -142,8 +142,14 @@ public static class SyscallNumbers
     /// <summary>Monotonic nanoseconds since boot. No arguments.</summary>
     public const ulong ClockNanos = 44;
 
+    /// <summary>Next pointer event of a window the caller owns (a0 = window id); 0 = none, else packed: x bits 0-15, y 16-31, buttons 32-39, kind 56-63 (1 move, 2 down, 3 up, 4 leave).</summary>
+    public const ulong WinEvent = 45;
+
+    /// <summary>Metrics of a text style (a0 = 0 body, 1 strong, 2 heading): (glyph width &lt;&lt; 32) | line height.</summary>
+    public const ulong TextMetrics = 46;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 45;
+    public const ulong Count = 47;
 }
 
 /// <summary>Socket kinds for <see cref="SyscallNumbers.NetSocket"/>. Only UDP is implemented;

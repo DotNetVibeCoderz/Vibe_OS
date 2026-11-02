@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Galeri Kontrol (the Buitenzorg.UI control catalog): /disk/MGALLERY.DLL, `run mgallery`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MGallery</AssemblyName>
+    <RootNamespace>MGallery</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+  </ItemGroup>
+</Project>

@@ -21,8 +21,18 @@ const WIN_CMD: u64 = 7;
 const WIN_PRESENT: u64 = 8;
 const KEY_READ: u64 = 9;
 const IS_INTERACTIVE: u64 = 31;
+const PROC_LIST: u64 = 10;
+const PROC_KILL: u64 = 11;
+const SYS_STAT: u64 = 12;
+const FS_LIST: u64 = 29;
+const FS_READ: u64 = 30;
+const FS_WRITE: u64 = 32;
 const PROC_SPAWN: u64 = 40;
 const PROC_WAIT: u64 = 41;
+const WIN_EVENT: u64 = 45;
+const TEXT_METRICS: u64 = 46;
+/// `bz_abi::win_flags::CLIENT_SIZE`.
+const CLIENT_SIZE: u64 = 1 << 63;
 
 /// `bz_abi::draw_op::BLIT`.
 const BLIT: u64 = 7;
@@ -132,6 +142,130 @@ fn win_blit(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_i32(win_cmd(int(a, 0) as u64, &cmd))
 }
 
+/// `WinCreateEx(string title, int width, int height, int flags)`: flags bit 0
+/// = width/height are the client area (the window adds its title bar).
+fn win_create_ex(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let title = string(i, a, 0);
+    let (w, h) = (int(a, 1).clamp(1, 4096) as u64, int(a, 2).clamp(1, 4096) as u64);
+    let flags = if int(a, 3) & 1 != 0 { CLIENT_SIZE } else { 0 };
+    let id = sys::syscall(WIN_CREATE, title.as_ptr() as u64, title.len() as u64, flags | (w << 32) | h);
+    ret_i32(if sys::is_err(id) { 0 } else { id as i64 })
+}
+
+/// `WinDrawEx(int window, int op, int x, int y, int w, int h, int color,
+/// int param, int param2, string text)`: the toolkit ops (8-13), where
+/// `param` is the second parameter (`_pad`) and `param2` the radius of
+/// FILL_ROUND_GRADIENT_V (carried in `text_len`, as no text goes with it).
+fn win_draw_ex(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let text = string(i, a, 9);
+    let cmd = DrawCmd {
+        op: int(a, 1) as u64,
+        x: int(a, 2) as i32,
+        y: int(a, 3) as i32,
+        w: int(a, 4) as i32,
+        h: int(a, 5) as i32,
+        color: int(a, 6) as u32 & 0x00FF_FFFF,
+        _pad: int(a, 7) as u32,
+        text_ptr: if text.is_empty() { 0 } else { text.as_ptr() as u64 },
+        text_len: if text.is_empty() { int(a, 8) as u64 } else { text.len() as u64 },
+    };
+    ret_i32(win_cmd(int(a, 0) as u64, &cmd))
+}
+
+/// `WinEvent(int window)` -> the next packed pointer event, 0 = none.
+fn win_event(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let ev = sys::syscall(WIN_EVENT, int(a, 0) as u64, 0, 0);
+    Ok(Some(Value::I64(if sys::is_err(ev) { 0 } else { ev as i64 })))
+}
+
+/// `TextMetrics(int style)` -> (glyph width << 32) | line height.
+fn text_metrics(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    Ok(Some(Value::I64(sys::syscall(TEXT_METRICS, int(a, 0) as u64, 0, 0) as i64)))
+}
+
+fn ret_string(i: &mut Interpreter, s: &str) -> ExecResult<Option<Value>> {
+    Ok(Some(Value::Obj(i.alloc_string(s))))
+}
+
+/// `FsList(string path)` -> one entry per line, `name` + `/` for a directory
+/// ("" lists the mounts).
+fn fs_list(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    // bz_abi::FsEntry: 24-byte name + u64 is_dir.
+    let mut buf = alloc::vec![0u8; 32 * 128];
+    let n = sys::syscall(FS_LIST, path.as_ptr() as u64, buf.as_mut_ptr() as u64, 128);
+    let mut out = String::new();
+    if !sys::is_err(n) {
+        for e in buf.chunks(32).take(n as usize) {
+            let len = e[..24].iter().position(|&b| b == 0).unwrap_or(24);
+            out.push_str(core::str::from_utf8(&e[..len]).unwrap_or("?"));
+            if e[24] != 0 {
+                out.push('/');
+            }
+            out.push('\n');
+        }
+    }
+    ret_string(i, &out)
+}
+
+/// `FsReadText(string path)` -> the file as text (invalid UTF-8 replaced),
+/// at most 256 KiB; "" if missing.
+fn fs_read_text(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    let mut buf = alloc::vec![0u8; 256 * 1024];
+    let n = sys::syscall(FS_READ, path.as_ptr() as u64, buf.as_mut_ptr() as u64, buf.len() as u64);
+    let n = if sys::is_err(n) { 0 } else { n as usize };
+    let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+    ret_string(i, &text)
+}
+
+/// `FsSize(string path)` -> the file's size in bytes (read up to 16 MiB),
+/// -1 if unreadable.
+fn fs_size(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    let mut buf = alloc::vec![0u8; 16 << 20];
+    let n = sys::syscall(FS_READ, path.as_ptr() as u64, buf.as_mut_ptr() as u64, buf.len() as u64);
+    Ok(Some(Value::I64(if sys::is_err(n) { -1 } else { n as i64 })))
+}
+
+/// `FsWriteText(string path, string text)` -> bytes written (0 = failed).
+fn fs_write_text(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (path, text) = (cstr(&string(i, a, 0)), string(i, a, 1));
+    let n = sys::syscall(FS_WRITE, path.as_ptr() as u64, text.as_ptr() as u64, text.len() as u64);
+    ret_i32(if sys::is_err(n) { 0 } else { n as i64 })
+}
+
+/// `ProcList()` -> one process per line: `pid,state,cpu_ticks,kind,name`.
+fn proc_list(i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
+    // bz_abi::ProcInfo: 4 x u64 + a 32-byte name = 8 words.
+    let mut buf = alloc::vec![0u64; 8 * 128];
+    let n = sys::syscall(PROC_LIST, buf.as_mut_ptr() as u64, 128, 0);
+    let mut out = String::new();
+    if !sys::is_err(n) {
+        for e in buf.chunks(8).take(n as usize) {
+            let name_bytes: Vec<u8> = e[4..].iter().flat_map(|w| w.to_le_bytes()).collect();
+            let len = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+            let name = core::str::from_utf8(&name_bytes[..len]).unwrap_or("?");
+            out.push_str(&alloc::format!("{},{},{},{},{}\n", e[0], e[1], e[2], e[3], name));
+        }
+    }
+    ret_string(i, &out)
+}
+
+/// `ProcKill(long pid)` -> 0 on success.
+fn proc_kill(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(PROC_KILL, int(a, 0) as u64, 0, 0);
+    ret_i32(if r == 0 { 0 } else { -1 })
+}
+
+/// `SysStat(int field)` -> one field of `bz_abi::SysStat` (0 uptime ticks,
+/// 1 tick Hz, 2 heap used, 3 heap total, 4 tasks, 5 memory MiB).
+fn sys_stat(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let mut st = [0u64; 6];
+    sys::syscall(SYS_STAT, st.as_mut_ptr() as u64, 0, 0);
+    Ok(Some(Value::I64(st.get(int(a, 0) as usize).copied().unwrap_or(0) as i64)))
+}
+
 fn win_present(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     sys::syscall(WIN_PRESENT, int(a, 0) as u64, 0, 0);
     ret_i32(0)
@@ -178,7 +312,7 @@ fn wait(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 10] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 21] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -189,6 +323,17 @@ pub fn install(interp: &mut Interpreter) {
         ("IsInteractive", is_interactive),
         ("Spawn", spawn),
         ("Wait", wait),
+        ("WinCreateEx", win_create_ex),
+        ("WinDrawEx", win_draw_ex),
+        ("WinEvent", win_event),
+        ("TextMetrics", text_metrics),
+        ("FsList", fs_list),
+        ("FsReadText", fs_read_text),
+        ("FsSize", fs_size),
+        ("FsWriteText", fs_write_text),
+        ("ProcList", proc_list),
+        ("ProcKill", proc_kill),
+        ("SysStat", sys_stat),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);

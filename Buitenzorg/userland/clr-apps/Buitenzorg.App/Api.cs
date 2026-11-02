@@ -24,6 +24,13 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int IsInteractive();
     [DllImport("buitenzorg")] internal static extern long Spawn(string path, string args);
     [DllImport("buitenzorg")] internal static extern long Wait(long pid);
+    [DllImport("buitenzorg")] internal static extern string FsList(string path);
+    [DllImport("buitenzorg")] internal static extern string FsReadText(string path);
+    [DllImport("buitenzorg")] internal static extern long FsSize(string path);
+    [DllImport("buitenzorg")] internal static extern int FsWriteText(string path, string text);
+    [DllImport("buitenzorg")] internal static extern string ProcList();
+    [DllImport("buitenzorg")] internal static extern int ProcKill(long pid);
+    [DllImport("buitenzorg")] internal static extern long SysStat(int field);
 }
 
 /// <summary>Colors as 0xRRGGBB.</summary>
@@ -129,4 +136,148 @@ public static class Programs
 
     /// <summary>Wait for a program to exit; its exit code.</summary>
     public static long WaitForExit(long pid) => Native.Wait(pid);
+}
+
+/// <summary>An entry of a directory listing.</summary>
+public sealed class FileEntry
+{
+    public string Name { get; }
+    public string Path { get; }
+    public bool IsDirectory { get; }
+    public FileEntry(string name, string path, bool isDirectory) { Name = name; Path = path; IsDirectory = isDirectory; }
+    public override string ToString() => Name;
+}
+
+/// <summary>The virtual file system: /disk (FAT, persistent), /ram, ... (8.3 names, root directories).
+/// Off the device (tests on a development machine) it falls back to an in-memory /ram.</summary>
+public static class Files
+{
+    static Dictionary<string, string>? _sim;
+
+    static bool Sim(Exception e)
+    {
+        if (e is OutOfMemoryException) return false;
+        _sim ??= new Dictionary<string, string>();
+        return true;
+    }
+
+    /// <summary>The mounts ("") or the files of a mount ("/disk").</summary>
+    public static List<FileEntry> List(string path)
+    {
+        string text;
+        if (_sim != null) text = SimList(path);
+        else
+        {
+            try { text = Native.FsList(path); }
+            catch (Exception e) when (Sim(e)) { text = SimList(path); }
+        }
+        var result = new List<FileEntry>();
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Length == 0) continue;
+            bool dir = line.EndsWith("/");
+            string name = dir ? line.Substring(0, line.Length - 1) : line;
+            string full = path.Length == 0 ? "/" + name : path.TrimEnd('/') + "/" + name;
+            result.Add(new FileEntry(name, full, dir || path.Length == 0));
+        }
+        return result;
+    }
+
+    static string SimList(string path)
+    {
+        if (path.Length == 0) return "ram/\n";
+        var sb = new System.Text.StringBuilder();
+        foreach (var k in _sim!.Keys)
+            if (k.StartsWith(path.TrimEnd('/') + "/")) sb.Append(k.Substring(path.TrimEnd('/').Length + 1)).Append('\n');
+        return sb.ToString();
+    }
+
+    /// <summary>A writable place for scratch files: /ram when it is mounted (PC), else /disk.</summary>
+    public static string ScratchDirectory
+    {
+        get
+        {
+            foreach (var m in List("")) if (m.Name == "ram") return "/ram";
+            return "/disk";
+        }
+    }
+
+    public static string ReadAllText(string path)
+    {
+        if (_sim != null) return _sim.TryGetValue(path, out var t) ? t : "";
+        try { return Native.FsReadText(path); }
+        catch (Exception e) when (Sim(e)) { return ReadAllText(path); }
+    }
+
+    /// <summary>The size in bytes, -1 when it cannot be read.</summary>
+    public static long Size(string path)
+    {
+        if (_sim != null) return _sim.TryGetValue(path, out var t) ? t.Length : -1;
+        try { return Native.FsSize(path); }
+        catch (Exception e) when (Sim(e)) { return Size(path); }
+    }
+
+    /// <summary>Create or replace a file; false when the mount refused it.</summary>
+    public static bool WriteAllText(string path, string text)
+    {
+        if (_sim != null) { _sim[path] = text; return true; }
+        try { return Native.FsWriteText(path, text) == System.Text.Encoding.UTF8.GetByteCount(text) || text.Length == 0; }
+        catch (Exception e) when (Sim(e)) { return WriteAllText(path, text); }
+    }
+}
+
+/// <summary>A process or kernel task (PROC_LIST).</summary>
+public sealed class ProcessInfo
+{
+    public long Pid { get; }
+    public string Name { get; }
+    /// <summary>0 runnable, 1 running, 2 finished.</summary>
+    public int State { get; }
+    public long CpuTicks { get; }
+    public bool IsApp { get; }
+
+    public ProcessInfo(long pid, string name, int state, long cpu, bool app) { Pid = pid; Name = name; State = state; CpuTicks = cpu; IsApp = app; }
+
+    public string StateText => State == 1 ? "berjalan" : State == 0 ? "siap" : "selesai";
+}
+
+public static class Processes
+{
+    /// <summary>Off the device: a fixed sample, so apps can be tested on a development machine.</summary>
+    const string Sample = "0,1,812,0,boot\n1,0,40,0,dahan\n7,1,95,1,clrhost\n9,0,12,1,files\n";
+
+    public static List<ProcessInfo> List()
+    {
+        var l = new List<ProcessInfo>();
+        string text;
+        try { text = Native.ProcList(); } catch (Exception e) when (e is not OutOfMemoryException) { text = Sample; }
+        foreach (var line in text.Split('\n'))
+        {
+            var f = line.Split(',');
+            if (f.Length < 5) continue;
+            l.Add(new ProcessInfo(long.Parse(f[0]), f[4], int.Parse(f[1]), long.Parse(f[2]), f[3] == "1"));
+        }
+        return l;
+    }
+
+    public static bool Kill(long pid)
+    {
+        try { return Native.ProcKill(pid) == 0; } catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+    }
+}
+
+/// <summary>Live system figures (SYS_STAT).</summary>
+public static class SystemInfo
+{
+    static long Stat(int field)
+    {
+        try { return Native.SysStat(field); }
+        catch (Exception e) when (e is not OutOfMemoryException) { return field switch { 0 => 1820, 1 => 18, 2 => 9 << 20, 3 => 32 << 20, 4 => 12, _ => 512 }; }
+    }
+
+    public static long UptimeSeconds { get { long hz = Stat(1); return hz > 0 ? Stat(0) / hz : 0; } }
+    public static long KernelHeapUsed => Stat(2);
+    public static long KernelHeapTotal => Stat(3);
+    public static long TaskCount => Stat(4);
+    public static long MemoryMiB => Stat(5);
 }

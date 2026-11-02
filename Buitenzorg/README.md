@@ -119,6 +119,21 @@ USB)** via `MILESTONE: … OK` markers that the smoke test greps for.
 | **AI subsystem** — local LLM + model gallery (v0.12 "Nalar") | **Screensaver** — Mystify, Win 3.1/98 style |
 | [![AI subsystem](docs/img/desktop-nalar.png)](docs/img/desktop-nalar.png) | [![Screensaver](docs/img/screensaver-mystify.png)](docs/img/screensaver-mystify.png) |
 
+### Managed Apps
+
+Apps in ordinary .NET C#, run by RustCLR and built on **Buitenzorg.UI**, an
+Avalonia-style toolkit. Double-click **Managed Apps** on the desktop, or see
+**[docs/managed-apps.md](docs/managed-apps.md)**.
+
+| | |
+|---|---|
+| **Managed Apps** — the folder on the desktop | **Galeri Kontrol** — every control, light and dark |
+| [![Managed Apps folder](docs/img/managed-apps-folder.png)](docs/img/managed-apps-folder.png) | [![Control gallery](docs/img/managed-gallery.png)](docs/img/managed-gallery.png) |
+| **Kalkulator** — keypad, bindings, history | **2048** — custom board, swipe and keys |
+| [![Calculator](docs/img/managed-calc.png)](docs/img/managed-calc.png) | [![2048](docs/img/managed-2048.png)](docs/img/managed-2048.png) |
+| **Berkas** — tree, sortable grid, preview | **Pemantau** — live stats, processes, end task |
+| [![Files](docs/img/managed-files.png)](docs/img/managed-files.png) | [![Task monitor](docs/img/managed-tasks.png)](docs/img/managed-tasks.png) |
+
 ### Official wallpapers
 
 Eight built-in wallpapers ship with the OS — AI-generated artwork in different
@@ -189,6 +204,7 @@ Highlights:
 | [Run in a VM](docs/run-in-vm.md) | VMware, VirtualBox, Hyper-V |
 | [Install on Hardware](docs/install-hardware.md) | Flash to USB and boot a physical machine |
 | [Debugging & Profiling](docs/debugging.md) | GDB attach + the TSC zone profiler |
+| [Managed Apps + Buitenzorg.UI](docs/managed-apps.md) | The managed app folder and the Avalonia-style UI toolkit |
 | [Syscall ABI](docs/abi.md) | The v1 ABI table and evolution rules |
 | [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) | Release history · how to contribute |
 

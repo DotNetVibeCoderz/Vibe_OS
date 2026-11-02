@@ -147,6 +147,13 @@ jobs:
       - name: Test
         run: dotnet test Buitenzorg.slnx -c Release --no-build
 
+      - name: Managed apps (Buitenzorg.UI) self-tests on .NET
+        # Every managed app drives its own UI headlessly (clicks, keys,
+        # bindings, popups); on the device the boot runs a subset under RustCLR.
+        run: |
+          dotnet build userland/clr-apps/Managed/Managed.csproj -c Release -nologo -v q
+          dotnet userland/clr-apps/Managed/bin/Release/net10.0/Managed.dll --selftest all
+
       - name: bz CLI self-check
         run: |
           dotnet run --project sdk/bz -c Release -- version

@@ -144,7 +144,7 @@ pub fn handle_byte(byte: u8) {
             let dy = byte as i64 - if flags & 0x20 != 0 { 256 } else { 0 };
             move_axis(&X, dx, &MAX_X);
             move_axis(&Y, -dy, &MAX_Y); // screen y grows downward
-            BUTTONS.store(flags & 0x07, Ordering::Relaxed);
+            set_buttons(flags);
             PACKETS.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -155,7 +155,7 @@ pub fn handle_byte(byte: u8) {
 pub fn inject_relative(dx: i64, dy: i64, buttons: u8) {
     move_axis(&X, dx, &MAX_X);
     move_axis(&Y, dy, &MAX_Y);
-    BUTTONS.store(buttons & 0x07, Ordering::Relaxed);
+    set_buttons(buttons);
     PACKETS.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -170,8 +170,26 @@ pub fn inject_absolute(x: i64, y: i64, max_x: i64, max_y: i64, buttons: u8) {
     if max_y > 0 && sy > 0 {
         Y.store((y.clamp(0, max_y) * sy) / max_y, Ordering::Relaxed);
     }
-    BUTTONS.store(buttons & 0x07, Ordering::Relaxed);
+    set_buttons(buttons);
     PACKETS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Left-button presses seen (0 -> 1 transitions), so the desktop loop can
+/// replay a click that went down and up between two of its samples -- a busy
+/// app (a managed one redrawing a blinking caret) can delay the loop past a
+/// short click.
+static PRESSES: AtomicU64 = AtomicU64::new(0);
+
+fn set_buttons(buttons: u8) {
+    let old = BUTTONS.swap(buttons & 0x07, Ordering::Relaxed);
+    if old & 1 == 0 && buttons & 1 != 0 {
+        PRESSES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Number of left-button presses so far.
+pub fn presses() -> u64 {
+    PRESSES.load(Ordering::Relaxed)
 }
 
 /// (x, y, buttons, packet count) — for diagnostics and the future compositor.

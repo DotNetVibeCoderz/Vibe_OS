@@ -181,7 +181,10 @@ extern "C" fn clr_main() -> ! {
 /// The 8.3 file a referenced assembly lives in on /disk.
 fn library_file(dir: &str, name: &str) -> String {
     match name {
-        "Buitenzorg.App" => format!("{}/BZAPP.DLL", dir),
+        // Buitenzorg.App -> BZAPP.DLL, Buitenzorg.UI -> BZUI.DLL
+        _ if name.starts_with("Buitenzorg.") => {
+            format!("{}/BZ{}.DLL", dir, name["Buitenzorg.".len()..].chars().take(6).collect::<String>().to_uppercase())
+        }
         _ => format!("{}/{}.DLL", dir, name.chars().take(8).collect::<String>().to_uppercase()),
     }
 }

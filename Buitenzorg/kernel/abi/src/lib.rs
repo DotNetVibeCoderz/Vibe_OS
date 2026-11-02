@@ -168,8 +168,17 @@ pub mod sysno {
     /// Monotonic nanoseconds since boot (CLOCK_MONO is raw counter ticks of
     /// an unspecified frequency). No arguments.
     pub const CLOCK_NANOS: u64 = 44;
+    /// Next pointer event of a window the caller owns: `a0 = window id`.
+    /// Returns 0 when none is queued, else a packed event (see
+    /// [`crate::pointer_event`]). Events arrive while the pointer is over the
+    /// window's client area, and a press is captured until its release.
+    pub const WIN_EVENT: u64 = 45;
+    /// Metrics of a text style (`a0` = 0 body, 1 strong, 2 heading):
+    /// returns `(glyph width << 32) | line height`, in pixels (the font is
+    /// monospaced).
+    pub const TEXT_METRICS: u64 = 46;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 45;
+    pub const COUNT: u64 = 47;
 }
 
 /// Socket kinds for the [`sysno::NET_SOCKET`] syscall.
@@ -248,12 +257,34 @@ pub struct DrawCmd {
     pub h: i32,
     /// Color as 0x00RRGGBB.
     pub color: u32,
-    /// Reserved, keeps 8-byte alignment for the pointer below.
+    /// Second parameter of draw ops 8-13 (radius / second color / text
+    /// style, see [`draw_op`]); 0 for the others. Keeps 8-byte alignment.
     pub _pad: u32,
     /// UTF-8 text pointer (draw_text), else 0.
     pub text_ptr: u64,
     /// UTF-8 text length in bytes (draw_text), else 0.
     pub text_len: u64,
+}
+
+/// Flags in the `a2` (dims) argument of [`sysno::WIN_CREATE`].
+pub mod win_flags {
+    /// The requested width/height are the *client* area (the window grows by
+    /// its title bar and borders); without it they are the outer size.
+    pub const CLIENT_SIZE: u64 = 1 << 63;
+}
+
+/// Packed pointer events returned by [`sysno::WIN_EVENT`]:
+/// bits 0-15 x, 16-31 y (client coordinates, signed 16-bit), 32-39 buttons
+/// (bit 0 = left), 56-63 kind.
+pub mod pointer_event {
+    /// The pointer moved over the client area.
+    pub const MOVE: u64 = 1;
+    /// A button went down over the client area (the window captures).
+    pub const DOWN: u64 = 2;
+    /// The captured button went up (anywhere).
+    pub const UP: u64 = 3;
+    /// The pointer left the client area.
+    pub const LEAVE: u64 = 4;
 }
 
 /// Operations for [`DrawCmd::op`].
@@ -275,7 +306,22 @@ pub mod draw_op {
     /// Blit a client ARGB pixel buffer (`text_ptr`, `w`×`h` `u32` pixels,
     /// `text_len` bytes) into the window canvas at (x,y). Enables full
     /// client-side software rendering (v0.16 "Panen" `Buitenzorg.Drawing`).
-    pub const BLIT: u64 = 7;
+    pub const BLIT: u64 = 7;
+    /// Fill a rounded rectangle x,y,w,h with `color`; radius = `_pad`.
+    pub const FILL_ROUND_RECT: u64 = 8;
+    /// Outline a rounded rectangle (1 px) with `color`; radius = `_pad`.
+    pub const ROUND_RECT: u64 = 9;
+    /// Fill x,y,w,h with a vertical gradient from `color` (top) to `_pad`.
+    pub const GRADIENT_V: u64 = 10;
+    /// A rounded rectangle filled with a vertical gradient: `color` top,
+    /// `_pad` bottom, radius = `text_len` (`text_ptr` must be 0).
+    pub const FILL_ROUND_GRADIENT_V: u64 = 11;
+    /// Draw UTF-8 text in a style: `_pad` = 0 body, 1 strong (bold), 2
+    /// heading (bold, 24 px).
+    pub const DRAW_TEXT_STYLED: u64 = 12;
+    /// Blend a translucent rounded rectangle: `color`, `_pad` bits 0-15 =
+    /// radius, bits 16-23 = alpha (0-255) -- shadows, overlays, focus rings.
+    pub const BLEND_ROUND_RECT: u64 = 13;
 }
 
 /// Process/task descriptor for the PROC_LIST syscall (v0.9 "Serbuk").
@@ -493,7 +539,9 @@ mod tests {
         assert_eq!(sysno::PROC_ARGS, 42);
         assert_eq!(sysno::FUTEX_WAIT_TIMEOUT, 43);
         assert_eq!(sysno::CLOCK_NANOS, 44);
-        assert_eq!(sysno::COUNT, 45);
+        assert_eq!(sysno::WIN_EVENT, 45);
+        assert_eq!(sysno::TEXT_METRICS, 46);
+        assert_eq!(sysno::COUNT, 47);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -509,7 +557,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 45, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 47, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

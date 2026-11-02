@@ -12,11 +12,11 @@ publish = false
 # the clock and the file access through Buitenzorg syscalls -- and, through
 # RustCLR's `threads` feature + `rustclr-thread`'s hooks, real threads.
 [dependencies]
-rustclr-metadata = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "6e31a5a4a831a2994f47de64373f2f5ec5282b45", default-features = false }
-rustclr-gc = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "6e31a5a4a831a2994f47de64373f2f5ec5282b45", default-features = false, features = ["threads"] }
-rustclr-core = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "6e31a5a4a831a2994f47de64373f2f5ec5282b45", default-features = false, features = ["threads"] }
-rustclr-bcl = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "6e31a5a4a831a2994f47de64373f2f5ec5282b45", default-features = false, features = ["libm-math", "threads"] }
-rustclr-thread = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "6e31a5a4a831a2994f47de64373f2f5ec5282b45", default-features = false }
+rustclr-metadata = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "5ece7389d6e49c3ffe658a76204a2b6f39cc79c5", default-features = false }
+rustclr-gc = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "5ece7389d6e49c3ffe658a76204a2b6f39cc79c5", default-features = false, features = ["threads"] }
+rustclr-core = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "5ece7389d6e49c3ffe658a76204a2b6f39cc79c5", default-features = false, features = ["threads"] }
+rustclr-bcl = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "5ece7389d6e49c3ffe658a76204a2b6f39cc79c5", default-features = false, features = ["libm-math", "threads"] }
+rustclr-thread = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "5ece7389d6e49c3ffe658a76204a2b6f39cc79c5", default-features = false }
 linked_list_allocator = { version = "0.10", default-features = false }
 
 [profile.release]

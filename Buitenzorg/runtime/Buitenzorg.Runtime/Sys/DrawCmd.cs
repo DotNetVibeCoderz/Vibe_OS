@@ -48,4 +48,16 @@ public static class DrawOp
     public const ulong FillEllipse = 5;
     public const ulong Rect = 6;
     public const ulong Blit = 7;
+    /// <summary>Filled rounded rectangle; radius in the reserved field.</summary>
+    public const ulong FillRoundRect = 8;
+    /// <summary>Rounded rectangle outline; radius in the reserved field.</summary>
+    public const ulong RoundRect = 9;
+    /// <summary>Vertical gradient: color (top) to the reserved field (bottom).</summary>
+    public const ulong GradientV = 10;
+    /// <summary>Rounded vertical gradient: color top, reserved field bottom, radius in TextLen.</summary>
+    public const ulong FillRoundGradientV = 11;
+    /// <summary>Text in a style: reserved field 0 body, 1 strong, 2 heading.</summary>
+    public const ulong DrawTextStyled = 12;
+    /// <summary>Translucent rounded rectangle: reserved field = alpha &lt;&lt; 16 | radius.</summary>
+    public const ulong BlendRoundRect = 13;
 }

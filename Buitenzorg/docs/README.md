@@ -26,6 +26,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 
 | Doc | What it covers |
 |---|---|
+| [Managed Apps + Buitenzorg.UI](managed-apps.md) | The managed app folder, the Avalonia-style UI toolkit, how it draws, and how apps are tested. |
 | [Syscall ABI](abi.md) | The v1 syscall table, cross-boundary structs, the pointer security model, and the evolution rules. |
 | [C# in Ring 3](csharp-userland.md) | How C# runs in user-space: the bflat pipeline, the ELF loader, and the `bzstart` shim. |
 | [App Framework](app-framework.md) | The app model, manifest, SDK, and window syscalls. |

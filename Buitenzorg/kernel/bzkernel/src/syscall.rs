@@ -113,6 +113,8 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FUTEX_WAIT
             | sysno::FUTEX_WAIT_TIMEOUT
             | sysno::CLOCK_NANOS
+            | sysno::WIN_EVENT
+            | sysno::TEXT_METRICS
             | sysno::FUTEX_WAKE
             | sysno::THREAD_SELF
             | sysno::IS_INTERACTIVE
@@ -289,6 +291,15 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FUTEX_WAIT => sys_futex_wait(a0, a1),
         sysno::FUTEX_WAIT_TIMEOUT => sys_futex_wait_timeout(a0, a1, a2),
         sysno::CLOCK_NANOS => crate::arch::cpu::nanos(),
+        sysno::WIN_EVENT => crate::wm::take_event(a0 as u32, crate::aspace::current_id()).unwrap_or(syserr::INVAL),
+        sysno::TEXT_METRICS => {
+            let style = match a0 {
+                1 => crate::gfx::TextStyle::Strong,
+                2 => crate::gfx::TextStyle::Heading,
+                _ => crate::gfx::TextStyle::Body,
+            };
+            ((crate::gfx::text_width("M", style) as u64) << 32) | crate::gfx::line_height(style) as u64
+        }
         sysno::FUTEX_WAKE => task::futex_wake_user(a0, a1),
         sysno::THREAD_SELF => task::current_id(),
         sysno::CLOCK_MONO => crate::arch::cpu::timestamp(),
@@ -780,8 +791,13 @@ fn sys_win_create(title_ptr: u64, title_len: u64, dims: u64) -> u64 {
     let Ok(title) = core::str::from_utf8(&bytes) else {
         return 0;
     };
-    let w = ((dims >> 32) as i32).clamp(80, 2000);
-    let h = ((dims & 0xFFFF_FFFF) as i32).clamp(60, 2000);
+    let client = dims & bz_abi::win_flags::CLIENT_SIZE != 0;
+    let (mut w, mut h) = (((dims >> 32) & 0x7FFF_FFFF) as i32, (dims & 0xFFFF_FFFF) as i32);
+    if client {
+        (w, h) = crate::wm::outer_size(w, h);
+    }
+    let w = w.clamp(80, 2000);
+    let h = h.clamp(60, 2000);
     crate::wm::create_app_window(title, w, h) as u64
 }
 
@@ -815,7 +831,8 @@ fn sys_win_cmd(win_id: u64, cmd_ptr: u64) -> u64 {
             Err(_) => syserr::INVAL,
         };
     }
-    let text_buf = if cmd.op == bz_abi::draw_op::DRAW_TEXT {
+    let has_text = cmd.op == bz_abi::draw_op::DRAW_TEXT || cmd.op == bz_abi::draw_op::DRAW_TEXT_STYLED;
+    let text_buf = if has_text {
         if cmd.text_len == 0 || cmd.text_len > 4096 {
             return syserr::INVAL;
         }
@@ -826,7 +843,7 @@ fn sys_win_cmd(win_id: u64, cmd_ptr: u64) -> u64 {
     } else {
         alloc::vec::Vec::new()
     };
-    let text = if cmd.op == bz_abi::draw_op::DRAW_TEXT {
+    let text = if has_text {
         match core::str::from_utf8(&text_buf) {
             Ok(s) => Some(s),
             Err(_) => return syserr::INVAL,
