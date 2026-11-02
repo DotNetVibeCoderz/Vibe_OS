@@ -985,6 +985,23 @@ pub fn yield_now() {
     interrupts::without_interrupts(|| switch_with(|_| ()));
 }
 
+/// Make tasks whose timed wait ran out runnable, from the timer tick. Without
+/// this a deadline was only noticed inside `switch_with` -- and a CPU running
+/// kernel code that halts until the next interrupt when no *runnable* user
+/// work exists (the desktop loop on CPU 0) never switches: with one CPU a
+/// managed app's `Thread.Sleep` never woke on the live desktop. A blocked
+/// task that becomes runnable here is what `user_work_pending` then sees.
+fn expire_timed_waits() {
+    if TIMED_WAITERS.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    if let Some(mut guard) = SCHEDULER.try_lock() {
+        if let Some(sched) = guard.as_mut() {
+            sched.wake_expired();
+        }
+    }
+}
+
 /// Called from a timer interrupt (interrupts disabled, EOI already sent) on
 /// any CPU. Ring-3 code is always preemptible; kernel code only while the v0.2
 /// demo has kernel preemption switched on.
@@ -992,6 +1009,7 @@ pub fn preempt(from_user: bool) {
     if !STARTED.load(Ordering::SeqCst) {
         return;
     }
+    expire_timed_waits();
     if from_user || (PREEMPT_ENABLED.load(Ordering::SeqCst) && !BKL_ACQUIRING[cpu()].load(Ordering::Relaxed)) {
         if switch_with(|_| ()) && from_user {
             USER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);

@@ -113,6 +113,9 @@ fn yield_now() {
     sys::syscall(YIELD, 0, 0, 0);
 }
 
+/// A sizing hint for RustCLR's task pool (it starts this many workers and
+/// grows on blocking), not a processor count: no syscall reports the CPUs
+/// yet, so `Environment.ProcessorCount` reads 2 on every machine.
 fn parallelism() -> usize {
     2
 }

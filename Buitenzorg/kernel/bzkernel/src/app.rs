@@ -173,6 +173,13 @@ pub fn spawn_named(name: &str) -> Result<u64, &'static str> {
 /// Start a program with an argument string. `target` is an app name
 /// (`"calc"`) or an absolute VFS path to an ELF (`"/disk/MYAPP.ELF"`).
 pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
+    // A managed (.NET) app: `x.dll`, or a name with no native ELF whose
+    // /disk/<NAME>.DLL exists. It runs in the RustCLR host, CLRHOST.ELF.
+    if app_file(target).is_none() {
+        if let Some(dll) = crate::clr::dll_for(target) {
+            return crate::clr::spawn(&dll, args);
+        }
+    }
     let (name, bytes) = if target.starts_with('/') {
         let file = target.rsplit('/').next().unwrap_or(target);
         let name = file.split('.').next().unwrap_or(file);
@@ -233,5 +240,5 @@ fn app_file(name: &str) -> Option<&'static str> {
 
 /// True if `name` is a launchable app.
 pub fn is_app(name: &str) -> bool {
-    app_file(name).is_some()
+    app_file(name).is_some() || crate::clr::dll_for(name).is_some()
 }

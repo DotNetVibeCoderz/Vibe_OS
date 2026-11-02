@@ -22,6 +22,7 @@
 
 extern crate alloc;
 
+mod bzapi;
 mod heap;
 mod sys;
 mod threads;
@@ -34,7 +35,7 @@ use core::arch::global_asm;
 
 use rustclr_core::host::Host;
 use rustclr_core::{ClrExceptionKind, ClrObject, ExecResult, ExecutionError, Interpreter, Value};
-use rustclr_metadata::Image;
+use rustclr_metadata::{Image, TableId};
 
 /// Stack for the interpreter (the loader's stack is 128 KiB).
 const STACK: u64 = 16 << 20;
@@ -125,6 +126,16 @@ extern "C" fn clr_main() -> ! {
     for member in ["Load(string)", "Load/1", "LoadFrom(string)"] {
         interp.register_native(format!("System.Reflection.Assembly::{}", member), assembly_load);
     }
+    // The OS API for managed apps (Buitenzorg.App's [DllImport("buitenzorg")]).
+    bzapi::install(&mut interp);
+    // Libraries the program references, from /disk, before the program: a
+    // TypeRef binds only to a type the loader already has.
+    let dir = path.rsplit_once('/').map(|(d, _)| String::from(d)).unwrap_or_else(|| String::from("/disk"));
+    if let Err(e) = load_references(&mut interp, &image, &dir, 0) {
+        sys::print(&format!("[clr] {}: {}
+", name, e));
+        sys::exit(6);
+    }
     let id = match interp.loader.load_image(image) {
         Ok(id) => id,
         Err(e) => {
@@ -165,6 +176,45 @@ extern "C" fn clr_main() -> ! {
         sys::syscall(threads::CLOCK_NANOS, 0, 0, 0) / 1_000_000 - t0
     ));
     sys::exit(code)
+}
+
+/// The 8.3 file a referenced assembly lives in on /disk.
+fn library_file(dir: &str, name: &str) -> String {
+    match name {
+        "Buitenzorg.App" => format!("{}/BZAPP.DLL", dir),
+        _ => format!("{}/{}.DLL", dir, name.chars().take(8).collect::<String>().to_uppercase()),
+    }
+}
+
+/// Load every assembly `image` references that is not part of the framework
+/// (System.*, Microsoft.*, netstandard, mscorlib -- RustBCL implements those)
+/// and is not loaded yet, depth-first, so a library's own references come
+/// before it.
+fn load_references(interp: &mut Interpreter, image: &Image, dir: &str, depth: u32) -> Result<(), String> {
+    if depth > 8 {
+        return Err(String::from("assembly references nest too deep"));
+    }
+    let md = image.metadata();
+    let mut names = Vec::new();
+    for row in 1..=md.row_count(TableId::AssemblyRef) {
+        if let Ok(r) = md.assembly_ref(row) {
+            names.push(String::from(r.name));
+        }
+    }
+    for name in names {
+        let framework = name.starts_with("System") || name.starts_with("Microsoft") || name == "netstandard" || name == "mscorlib";
+        if framework || interp.loader.find_assembly(&name).is_some() {
+            continue;
+        }
+        let file = library_file(dir, &name);
+        let Some(bytes) = sys::read_file(&file) else {
+            return Err(format!("references '{}', not found as {}", name, file));
+        };
+        let lib = Image::from_bytes(bytes).map_err(|e| format!("{}: not a .NET assembly ({})", file, e))?;
+        load_references(interp, &lib, dir, depth + 1)?;
+        interp.loader.load_image(lib).map_err(|e| format!("{}: load failed: {}", file, e))?;
+    }
+    Ok(())
 }
 
 /// `Assembly.Load(name)` / `Assembly.LoadFrom(path)`: an assembly already

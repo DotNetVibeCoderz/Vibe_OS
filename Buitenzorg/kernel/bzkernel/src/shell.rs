@@ -125,6 +125,7 @@ fn help() -> Vec<String> {
      "  tile|susun        susun jendela desktop ini berdampingan",
      "  tutup|closeall    tutup semua jendela desktop ini (kecuali terminal)",
      "  run <app> [arg..] jalankan app sebagai proses (xox, paint, taskmgr)",
+     "  run <app>.dll     app C# managed (RustCLR), mis. 'run hellogui'",
      "  ps                daftar proses (task kernel + app)",
      "  cpu [on|off]      daftar CPU; on/off = proses ring-3 boleh jalan di AP",
      "  echo <teks> > f   tulis teks ke file (>> = tambahkan); /disk persisten",

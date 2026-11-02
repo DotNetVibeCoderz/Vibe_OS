@@ -84,6 +84,7 @@ pub fn run() -> ! {
     let mut last_packets = u64::MAX;
     let mut last_left = false;
     let mut last_input = interrupts::ticks();
+    let mut last_keys = keyboard::pushed();
     let mut saver_active = false;
 
     if w != 0 {
@@ -106,6 +107,19 @@ pub fn run() -> ! {
         virtio::input::poll();
         let now = interrupts::ticks();
         let mut input = false;
+
+        // Typing is activity even when the keys are not ours: they stay
+        // queued for the focused program's KEY_READ, and used to leave the
+        // idle timer running (the screensaver came on while someone typed into
+        // an app). A key that wakes the screensaver is swallowed, not passed on.
+        let keys = keyboard::pushed();
+        if keys != last_keys {
+            last_keys = keys;
+            input = true;
+            if saver_active {
+                while keyboard::pop().is_some() {}
+            }
+        }
 
         // Keys go to the terminal unless the focused window belongs to a
         // running program — then they stay queued for its KEY_READ.

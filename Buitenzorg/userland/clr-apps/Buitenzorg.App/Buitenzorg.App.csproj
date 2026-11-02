@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Buitenzorg.App: the OS API for managed C# apps on the RustCLR path
+       (/disk/BZAPP.DLL). Every member ends in a [DllImport("buitenzorg")]
+       that CLRHOST.ELF implements: windows, drawing, keyboard, screen,
+       processes. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Buitenzorg.App</AssemblyName>
+    <RootNamespace>Buitenzorg.App</RootNamespace>
+  </PropertyGroup>
+</Project>

@@ -325,8 +325,9 @@ yang "matang". Ini "make-or-break" Layer 4 dan **prasyarat** preloaded suite
   x86-64/ARM64/RISC-V, `CLR OK` + suite ModernSyntax 35/35. Increment 2 ✓:
   thread sungguhan (RustCLR `threads` + `rustclr-thread`; syscall
   `FUTEX_WAIT_TIMEOUT`/`CLOCK_NANOS`; futex per address space) → Conformance
-  488/488 di ARM64/RISC-V. Berikutnya: interop
-  `Buitenzorg.Runtime` (jendela/grafik); `run app.dll` dari shell/desktop.)*
+  488/488 di ARM64/RISC-V. Increment 3 ✓: interop GUI lewat `Buitenzorg.App`
+  (P/Invoke → host CLR, marshalling di host), `run app.dll` + menu Mulai, app
+  jam `HELLOGUI.DLL` — `CLR GUI OK` di ketiga arsitektur.)*
 
 **Milestone:** app C# ber-GC memakai LINQ/Regex/StringBuilder/Base64/
 Collections/Tasks-async/Streams berjalan & terverifikasi di QEMU.

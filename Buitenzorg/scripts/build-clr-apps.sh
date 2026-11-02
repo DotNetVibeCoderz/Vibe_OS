@@ -10,7 +10,7 @@ apps="$root/userland/clr-apps"
 dist="$apps/dist"
 mkdir -p "$dist"
 # project name -> 8.3 file name on /disk
-declare -A names=([HelloClr]=HELLOCLR.DLL)
+declare -A names=([HelloClr]=HELLOCLR.DLL [Buitenzorg.App]=BZAPP.DLL [HelloGui]=HELLOGUI.DLL)
 for proj in "$apps"/*/*.csproj; do
     name="$(basename "$proj" .csproj)"
     out="${names[$name]:-$(echo "${name:0:8}" | tr '[:lower:]' '[:upper:]').DLL}"

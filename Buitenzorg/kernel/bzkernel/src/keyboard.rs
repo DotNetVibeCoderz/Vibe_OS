@@ -8,6 +8,14 @@ use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 use spin::Mutex;
 
 static QUEUE: Mutex<VecDeque<char>> = Mutex::new(VecDeque::new());
+/// Characters ever queued. The desktop compares it with what it last saw to
+/// notice typing even when the keys stay queued for an app's KEY_READ.
+static PUSHED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Characters queued since boot (see [`PUSHED`]).
+pub fn pushed() -> u64 {
+    PUSHED.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 static DECODER: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Mutex::new(None);
 
@@ -38,6 +46,7 @@ pub fn push(c: char) {
     let mut q = QUEUE.lock();
     if q.len() < 256 {
         q.push_back(c);
+        PUSHED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     }
 }
 

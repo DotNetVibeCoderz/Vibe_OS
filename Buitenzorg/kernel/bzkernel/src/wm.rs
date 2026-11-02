@@ -27,7 +27,7 @@ const START_W: i32 = 76; // Start button width on the taskbar
 // Start menu ("herbarium drawer"): a category rail on the left, the chosen
 // category's apps as icon cards on the right, power actions in the footer.
 const SM_W: i32 = 528; // start-menu width
-const SM_H: i32 = 316; // start-menu height
+const SM_H: i32 = 412; // start-menu height (two rows of app cards)
 const SM_HDR: i32 = 46; // header band height
 const SM_FTR: i32 = 46; // footer band height
 const SM_RAIL_W: i32 = 168; // category rail width
@@ -66,7 +66,8 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Utilitas",
         leaf: gfx::rgb(0x7C, 0xC4, 0xA4),
-        apps: &[("clock", "Jam"), ("taskmgr", "Task Manager"), ("store", "App Store")],
+        // `hellogui` is a managed C# app (/disk/HELLOGUI.DLL, RustCLR).
+        apps: &[("clock", "Jam"), ("taskmgr", "Task Manager"), ("store", "App Store"), ("hellogui", "Jam C#")],
     },
     Category {
         name: "Pengaturan",
@@ -456,7 +457,17 @@ pub fn self_test() -> bool {
     handle_mouse(cx0, cy0, true);
     handle_mouse(cx0, cy0, false);
     let game = matches!(take_pending_launch().as_deref(), Some("2048"));
-    let launched = first && game;
+    // "Utilitas" -> its fourth card, on the second row: the managed C# app.
+    handle_mouse(40, height - 4, true);
+    handle_mouse(40, height - 4, false);
+    let (ux, uy) = rail_center(height, 3);
+    handle_mouse(ux, uy, true);
+    handle_mouse(ux, uy, false);
+    let (c3x, c3y) = card_center(height, 3);
+    handle_mouse(c3x, c3y, true);
+    handle_mouse(c3x, c3y, false);
+    let managed = matches!(take_pending_launch().as_deref(), Some("hellogui"));
+    let launched = first && game && managed;
     // Reset shell state so the real desktop starts clean.
     if let Some(wm) = WM.lock().as_mut() {
         wm.start_open = false;

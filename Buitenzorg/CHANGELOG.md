@@ -35,6 +35,12 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Managed C# (increment 3): windows, and starting managed apps like any
+  other.** Managed C# apps can open windows, draw shapes, text and images, and
+  read the keyboard through a small `Buitenzorg.App` library. `run <name>`,
+  `run file.dll` and the Start menu start them; the Start menu has a managed
+  analog clock, "Jam C#", that keeps time on a background thread and closes on
+  Esc.
 - **Managed C# (increment 2): real threads.** Managed programs can start
   threads, use `lock`, `Monitor.Wait`/`Pulse`, `Task.Run`, `Parallel` and
   `async`/`await`, and the garbage collector stops every thread safely. RustCLR's
@@ -274,6 +280,12 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **On a single processor, a sleeping program could sleep for ever.** A
+  program's timed wait was only checked when the processor switched tasks,
+  which the idle desktop does not do; it is now checked on every timer tick.
+- **The screensaver started while someone was typing into an app.** Keys meant
+  for an app did not count as activity on the desktop; they do now, and the
+  key that wakes the screensaver no longer reaches the app.
 - **A futex wake-up could reach the wrong program.** Futex keys were plain
   user addresses, which are the same in every process, so waking one
   program's waiting thread could wake another program's thread instead and
