@@ -266,6 +266,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::WIN_CREATE => sys_win_create(a0, a1, a2),
         sysno::WIN_CMD => sys_win_cmd(a0, a1),
         sysno::WIN_PRESENT => {
+            crate::wm::flip_owned(crate::aspace::current_id());
             crate::wm::present_now();
             0
         }

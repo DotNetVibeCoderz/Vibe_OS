@@ -35,7 +35,7 @@
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |
-| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1 + R2 + R3 ✓ di Pi 4 fisik; R4–R6 berikutnya |
+| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1–R4 ✓ di Pi 4 fisik; R5–R6 berikutnya |
 
 Legend: ✅ selesai · 🟡 sebagian · 🔜 sedang/berikutnya · ⏳ direncanakan *(status dirapikan 2026-11-01)*
 
@@ -966,6 +966,10 @@ modelnya sama sekali).
    program C# dan app managed dimuat dari kartu.)*
 4. **R4 — Input + jaringan Pi 4.** **PCIe** (bridge BCM2711) + **xHCI** (VL805) +
    **USB HID** keyboard/mouse; **GENET** Ethernet → stack jaringan yang ada.
+   *(Selesai 2026-11-02, terverifikasi di Pi 4 fisik: PCIe gen 2 x1, VL805 +
+   hub USB 2.0, keyboard full-speed + mouse; GENET 100 Mb/s, alamat dari DHCP,
+   ping ke router; restart/shutdown lewat watchdog PM, sleep. Belum: perangkat
+   USB low-speed di belakang hub VL805, hot-plug USB.)*
 5. **R5 — Raspberry Pi 5.** Image `buitenzorg-rpi5.img` (EEPROM bootloader →
    rpi5-uefi → Limine), CPU Cortex-A76, **RP1** lewat PCIe (UART, USB, Ethernet
    GEM), SDHCI, RTC bawaan; NVMe lewat PCIe memakai driver NVMe yang dirancang

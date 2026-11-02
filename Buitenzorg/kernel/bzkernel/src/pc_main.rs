@@ -58,6 +58,7 @@ mod task;
 mod terminal;
 mod theme;
 mod vfs;
+mod usb;
 mod virtio;
 mod vmm;
 mod wallpaper;
@@ -1337,6 +1338,8 @@ fn batang_demo() {
 
     // virtio input devices (keyboard, mouse, tablet), if the machine has any.
     virtio::input::init();
+    // USB keyboards and mice on xHCI controllers (roadmap R4).
+    usb::init_pci();
     // A virtio GPU mirrors the desktop (the boot framebuffer stays the console).
     if let Some((w, h)) = framebuffer::dimensions() {
         virtio::gpu::init(w, h);

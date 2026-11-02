@@ -59,6 +59,8 @@ mod task;
 mod terminal;
 mod theme;
 mod vfs;
+mod dhcp;
+mod usb;
 mod virtio;
 mod vmm;
 mod wallpaper;
@@ -248,6 +250,59 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // keyboard / tablet -> terminal + window manager, frames through the
     // framebuffer and the virtio GPU.
     desktop::run()
+}
+
+fn print_lease(dev: &str, l: &dhcp::Lease) {
+    let d = |a: [u8; 4]| alloc::format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]);
+    println!(
+        "[net] {}: DHCP lease {} mask {} router {} dns {} from {} for {} s",
+        dev,
+        d(l.ip),
+        d(l.mask),
+        d(l.router),
+        d(l.dns),
+        d(l.server),
+        l.seconds
+    );
+    println!("[kernel] MILESTONE: DHCP OK ({}: address {} from the DHCP server {})", dev, d(l.ip), d(l.server));
+}
+
+/// USB on a Raspberry Pi 4 (roadmap R4): the PCIe root complex from the DTB,
+/// the VL805 xHCI controller behind it, then the shared USB stack (hubs, HID
+/// keyboards and mice). Machines without `brcm,bcm2711-pcie` skip it.
+fn usb_init() {
+    let Some(phys) = boot::info().firmware.dtb else { return };
+    let Ok(f) = (unsafe { dtb::Fdt::from_phys(phys) }) else { return };
+    let Some(i) = f.compatible("brcm,bcm2711-pcie").next() else { return };
+    let Some(&(pa, len)) = f.reg(i).first() else {
+        println!("[arm64] PCIe: the brcm,bcm2711-pcie node has no reg");
+        return;
+    };
+    println!("[arm64] PCIe root complex at {:#x} (from the DTB)", pa);
+    // Outbound window from `ranges` (3 PCI address cells, 2 CPU, 2 size);
+    // the Pi 4 values as a fallback.
+    let (mut pci, mut cpu_addr, mut size) = (0xC000_0000u64, 0x6_0000_0000u64, 0x4000_0000u64);
+    if let Some(r) = f.nodes[i].prop("ranges") {
+        if r.len() >= 28 {
+            let c = |k: usize| u32::from_be_bytes([r[k * 4], r[k * 4 + 1], r[k * 4 + 2], r[k * 4 + 3]]) as u64;
+            pci = c(1) << 32 | c(2);
+            cpu_addr = c(3) << 32 | c(4);
+            size = c(5) << 32 | c(6);
+        }
+    }
+    let Some(regs) = memory::map_mmio(pa, len.max(0x9310)) else {
+        println!("[arm64] PCIe: could not map its registers");
+        return;
+    };
+    match platform::virt::brcm_pcie::init_vl805(regs, cpu_addr, pci, size, &arch::aarch64::rpi::notify_xhci_reset) {
+        Ok((xhci, xlen)) => {
+            let Some(va) = memory::map_mmio(xhci, xlen) else { return };
+            if let Err(e) = usb::add_controller(va, platform::virt::brcm_pcie::DMA_LIMIT, "vl805") {
+                println!("[arm64] USB: {}", e);
+            }
+        }
+        Err(e) => println!("[arm64] PCIe at {:#x}: {} (no USB)", pa, e),
+    }
 }
 
 /// An SD card on an SDHCI controller from the DTB (roadmap R3): the Raspberry
@@ -859,6 +914,23 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         );
     }
 
+    // A Raspberry Pi on the direct route has no PSCI: its PM watchdog resets / halts it.
+    if !arch::aarch64::psci::available() {
+        if let Some(f) = fdt {
+            if let Some(i) = f.compatible("brcm,bcm2835-pm-wdt").next() {
+                if let Some(&(pa, _)) = f.reg(i).first() {
+                    if let Some(va) = memory::map_mmio(pa, 0x1000) {
+                        power::use_pm_watchdog(va);
+                        println!(
+                            "[kernel] MILESTONE: RPI4 POWER OK (PM watchdog at {:#x}: restart = full reset, shutdown = firmware halt partition 63)",
+                            pa
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(fb) = info.framebuffer {
         wm::init(fb.width, fb.height);
         mouse::set_bounds(fb.width, fb.height);
@@ -868,6 +940,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         println!("[arm64] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
     }
     virtio::input::init();
+    usb_init();
 
     net::init([10, 0, 0, 1]);
     net::send_ping([10, 0, 0, 1], 0xA64, 1);
@@ -879,10 +952,16 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     if net::counters().0 > 0 {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)");
     }
-    if let Some(nic) = virtio::net::probe() {
-        const ME: [u8; 4] = [10, 0, 2, 15];
-        const GW: [u8; 4] = [10, 0, 2, 2];
-        net::attach(alloc::boxed::Box::new(nic), ME);
+    if let Some(mut nic) = virtio::net::probe() {
+        // The address from DHCP (QEMU's user network serves one), else QEMU's defaults.
+        let (me, gw) = match dhcp::lease(&mut nic, 6) {
+            Some(l) => {
+                print_lease("virtio-net", &l);
+                (l.ip, l.router)
+            }
+            None => ([10, 0, 2, 15], [10, 0, 2, 2]),
+        };
+        net::attach(alloc::boxed::Box::new(nic), me);
         let icmp0 = net::counters().0;
         let wait = |done: &dyn Fn() -> bool| {
             let t0 = interrupts::ticks();
@@ -892,13 +971,85 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
             }
             done()
         };
-        net::arp_request(GW);
-        if wait(&|| net::resolve(GW).is_some()) {
-            net::send_ping(GW, 0xA64, 2);
+        net::arp_request(gw);
+        if wait(&|| net::resolve(gw).is_some()) {
+            net::send_ping(gw, 0xA64, 2);
             if wait(&|| net::counters().0 > icmp0) {
                 println!("[kernel] MILESTONE: VIRTIO NET OK (virtio-net over virtio-mmio: ARP + ICMP echo with the gateway 10.0.2.2)");
             }
         }
+    }
+    ethernet_init();
+}
+
+/// The Raspberry Pi 4's Ethernet (roadmap R4): GENET v5 + its PHY from the
+/// DTB, an address from DHCP, then ARP + ping to the router. Machines without
+/// `brcm,bcm2711-genet-v5` skip it.
+fn ethernet_init() {
+    let Some(phys) = boot::info().firmware.dtb else { return };
+    let Ok(f) = (unsafe { dtb::Fdt::from_phys(phys) }) else { return };
+    let okay = |i: usize| f.nodes[i].strings("status").next().map_or(true, |s| s == "okay");
+    let Some(i) = f.compatible("brcm,bcm2711-genet-v5").find(|&i| okay(i)) else { return };
+    let Some(&(pa, len)) = f.reg(i).first() else { return };
+    let mode = f.nodes[i].strings("phy-mode").next().unwrap_or("rgmii");
+    let rx_delay = mode == "rgmii-rxid" || mode == "rgmii-id";
+    let tx_delay = mode == "rgmii-txid" || mode == "rgmii-id";
+    // The PHY: an `ethernet-phy@N` node under this MAC's mdio node.
+    let me = f.path(i);
+    let phy = (0..f.nodes.len())
+        .find(|&k| f.nodes[k].name.starts_with("ethernet-phy") && f.path(k).starts_with(me.as_str()))
+        .and_then(|k| f.nodes[k].u32_prop("reg"))
+        .unwrap_or(1);
+    // The MAC address the firmware put in the DT, else ask it directly.
+    let mac = f.nodes[i]
+        .prop("local-mac-address")
+        .filter(|m| m.len() >= 6 && m[..6] != [0; 6])
+        .map(|m| [m[0], m[1], m[2], m[3], m[4], m[5]])
+        .or_else(arch::aarch64::rpi::board_mac)
+        .unwrap_or([0x02, 0xB2, 0x00, 0x00, 0x00, 0x04]);
+    println!(
+        "[arm64] Ethernet: GENET v5 at {:#x}, PHY at MDIO {}, {}, MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        pa, phy, mode, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+    let Some(regs) = memory::map_mmio(pa, len.max(0x10000)) else { return };
+    let mut nic = match platform::virt::genet::Genet::new(regs, mac, phy, rx_delay, tx_delay) {
+        Ok(n) => n,
+        Err(e) => {
+            println!("[arm64] {}", e);
+            return;
+        }
+    };
+    let (speed, full) = (nic.speed, nic.full_duplex);
+    println!("[arm64] Ethernet link up: {} Mb/s, {} duplex", speed, if full { "full" } else { "half" });
+    let Some(lease) = dhcp::lease(&mut nic, 10) else {
+        println!("[arm64] Ethernet: no answer from a DHCP server (rx {} frames, tx {})", nic.rx_frames, nic.tx_frames);
+        return;
+    };
+    print_lease("genet", &lease);
+    let gw = lease.router;
+    net::attach(alloc::boxed::Box::new(nic), lease.ip);
+    let icmp0 = net::counters().0;
+    let wait = |done: &dyn Fn() -> bool| {
+        let t0 = interrupts::ticks();
+        while !done() && interrupts::ticks() - t0 < 36 {
+            net::poll();
+            task::yield_now();
+        }
+        done()
+    };
+    net::arp_request(gw);
+    let arp = wait(&|| net::resolve(gw).is_some());
+    let mut ping = false;
+    if arp {
+        net::send_ping(gw, 0xA64, 3);
+        ping = wait(&|| net::counters().0 > icmp0);
+    }
+    println!("[arm64] Ethernet: router {}.{}.{}.{} ARP {}, ping {}", gw[0], gw[1], gw[2], gw[3], arp, ping);
+    if ping {
+        println!(
+            "[kernel] MILESTONE: RPI4 ETHERNET OK (GENET v5 + PHY, {} Mb/s; DHCP address {}.{}.{}.{}; ARP + ICMP echo with the router)",
+            speed, lease.ip[0], lease.ip[1], lease.ip[2], lease.ip[3]
+        );
     }
 }
 

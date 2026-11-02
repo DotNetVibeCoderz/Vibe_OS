@@ -166,7 +166,14 @@ fn read_clock() -> (u8, u8) {
 pub struct AppCanvas {
     pub w: i32,
     pub h: i32,
+    /// What the app draws into.
     pub pixels: Vec<u32>,
+    /// What the compositor shows, when the window is double-buffered: a
+    /// process window becomes so on its first CLEAR (a toolkit redrawing the
+    /// whole frame, e.g. the managed Buitenzorg.UI), and WIN_PRESENT copies
+    /// `pixels` here. Without it a compose on another CPU could catch the
+    /// frame half drawn -- the window flickered on a 4-core Raspberry Pi.
+    pub front: Option<Vec<u32>>,
 }
 
 /// A window's canvas, shared between the window list and in-flight composes.
@@ -684,6 +691,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
                 w: cw,
                 h: ch,
                 pixels: vec![body; (cw * ch) as usize],
+                front: None,
             })),
             state: WinState::Normal,
             saved: (board_x, y, ww, h),
@@ -713,6 +721,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             w: cw,
             h: ch,
             pixels: vec![body; (cw * ch) as usize],
+            front: None,
         })),
         state: WinState::Normal,
         saved: (x, y, w, h),
@@ -722,16 +731,41 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
     id
 }
 
+/// WIN_PRESENT: the double-buffered windows of process `owner` show what
+/// was drawn since the last present.
+pub fn flip_owned(owner: u64) {
+    let canvases: Vec<SharedCanvas> = match WM.lock().as_ref() {
+        Some(wm) => wm.windows.iter().filter(|w| w.owner == owner).filter_map(|w| w.canvas.clone()).collect(),
+        None => return,
+    };
+    for c in canvases {
+        let mut c = c.lock();
+        let c = &mut *c;
+        if let Some(front) = c.front.as_mut() {
+            if front.len() == c.pixels.len() {
+                front.copy_from_slice(&c.pixels);
+            } else {
+                *front = c.pixels.clone();
+            }
+        }
+    }
+}
+
 /// Apply a draw command to an app window's canvas (v0.8 WIN_CMD).
 pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Result<(), &'static str> {
     let mut guard = WM.lock();
     let wm = guard.as_mut().ok_or("wm not initialized")?;
     let win = wm.windows.iter_mut().find(|w| w.id == id).ok_or("no such window")?;
     let shared = win.canvas.clone().ok_or("window has no canvas")?;
+    let owner = win.owner;
     drop(guard); // draw with only this window's canvas locked
     note_draw();
     let mut canvas = shared.lock();
     let canvas = &mut *canvas;
+    if cmd.op == bz_abi::draw_op::CLEAR && canvas.front.is_none() && owner != 0 {
+        // a full redraw starts: from now on show only presented frames
+        canvas.front = Some(canvas.pixels.clone());
+    }
     let (cw, ch) = (canvas.w as usize, canvas.h as usize);
     let mut c = Canvas::new(&mut canvas.pixels, cw, ch);
     match cmd.op {
@@ -1317,6 +1351,7 @@ impl Wm {
 
             if let Some(app) = &win.canvas {
                 let app = app.lock();
+                let shown = app.front.as_ref().unwrap_or(&app.pixels);
                 // Blit the app canvas into the client area, clipped to both
                 // the current window size and the screen.
                 let ox = win.x + BORDER;
@@ -1331,7 +1366,7 @@ impl Wm {
                             canvas.put(
                                 px as usize,
                                 py as usize,
-                                app.pixels[row * app.w as usize + col],
+                                shown[row * app.w as usize + col],
                             );
                         }
                     }

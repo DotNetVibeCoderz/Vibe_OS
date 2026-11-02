@@ -102,6 +102,23 @@ pub fn midr() -> u64 {
 /// Clean `[va, va + len)` from the data cache to the point of unification and
 /// invalidate the instruction cache (all CPUs: `ic ialluis` broadcasts), so
 /// instruction fetch sees what was just written.
+/// Make `len` bytes at `va` coherent with a device that is not cache-coherent
+/// (the Raspberry Pi 4's PCIe): clean + invalidate every data-cache line to the
+/// point of coherency, then a full barrier. Call it after the CPU wrote a buffer
+/// the device will read, and before the CPU reads what the device wrote.
+pub fn dma_sync(va: u64, len: usize) {
+    let ctr: u64;
+    unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack)) };
+    let line = 4u64 << ((ctr >> 16) & 0xF);
+    let mut a = va & !(line - 1);
+    unsafe { core::arch::asm!("dsb sy", options(nostack)) };
+    while a < va + len as u64 {
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) a, options(nostack)) };
+        a += line;
+    }
+    unsafe { core::arch::asm!("dsb sy", options(nostack)) };
+}
+
 pub fn sync_code(va: u64, len: usize) {
     let ctr: u64;
     unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack)) };

@@ -43,8 +43,11 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     ide)  drive=(-smp 2 -drive "format=raw,file=$img") ;;
     ide1) drive=(-drive "format=raw,file=$img") ;;
     # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
+    # It also carries an xHCI with a hub and a USB keyboard + mouse behind it (R4).
     ahci) drive=(-smp 2 -drive "id=bzdisk,format=raw,file=$img,if=none"
-                 -device ahci,id=ahci0 -device ide-hd,drive=bzdisk,bus=ahci0.0) ;;
+                 -device ahci,id=ahci0 -device ide-hd,drive=bzdisk,bus=ahci0.0
+                 -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1
+                 -device usb-kbd,bus=xhci.0,port=1.1 -device usb-mouse,bus=xhci.0,port=1.2) ;;
     nvme) drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device nvme,drive=bzdisk,serial=bz0001) ;;
     usb)  drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
@@ -161,8 +164,8 @@ for media in ahci nvme usb; do
   boot "$media" "$root/dist/boot-$media.log"
   require "$root/dist/boot-$media.log" "${basic[@]}"
   if [ "$media" = ahci ]; then
-    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"
-    echo "smoke [ahci]: second CPU started (SMP)"
+    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"       "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse"
+    echo "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
   fi
   echo "smoke [$media]: boots to READY"
 done
@@ -254,7 +257,7 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
   virtio_input "$log" 4482
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" \
-    "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "MILESTONE: ARM64 EL0 OK" "Hello from EL0" "MILESTONE: ARM64 RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: ARM64 DISK OK" "MILESTONE: VIRTIO GPU OK"     "MILESTONE: SECURITY OK" "MILESTONE: ARM64 PSCI OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" \
+    "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "MILESTONE: ARM64 EL0 OK" "Hello from EL0" "MILESTONE: ARM64 RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: ARM64 DISK OK" "MILESTONE: VIRTIO GPU OK" "MILESTONE: DHCP OK"     "MILESTONE: SECURITY OK" "MILESTONE: ARM64 PSCI OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" \
     "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: ARM64 SMP OK (2 CPUs" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=499 failures=" "checks=35 failures=0"
   if grep -qF "program 'hello'" "$log"; then
     require "$log" "Hello from C#!" "MILESTONE: ARM64 CSHARP OK" "MILESTONE: MATANG OK" "MILESTONE: HEAP OK" "MILESTONE: GCMEM OK" "MILESTONE: ARM64 MULTIPROC OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "frames leaked: 0" "from /disk"       "MILESTONE: BCL OK" "MILESTONE: PROCCTL OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: UI OK"       "MILESTONE: DRAW OK" "MILESTONE: ARM64 DESKTOP FRAME OK" "MILESTONE: ARM64 SMP SCHED OK"

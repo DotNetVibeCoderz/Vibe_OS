@@ -268,10 +268,20 @@ pub fn sleep() {
         let black = alloc::vec![0u32; w * h];
         crate::framebuffer::present(&black);
     }
-    // Snapshot input state; wake when it changes.
+    // A second of grace: the release of the click that chose "sleep" must not
+    // wake it straight away. Then snapshot input state; wake when it changes.
+    let t0 = crate::interrupts::ticks();
+    while crate::interrupts::ticks() - t0 < 19 {
+        x86_64::instructions::hlt();
+        crate::virtio::input::poll();
+        crate::usb::poll();
+        while crate::keyboard::pop().is_some() {}
+    }
     let (_, _, _, mouse0) = crate::mouse::state();
     loop {
         x86_64::instructions::hlt();
+        crate::virtio::input::poll();
+        crate::usb::poll(); // USB keyboards / mice are polled, not interrupt-driven
         let woke_key = crate::keyboard::pop().is_some();
         let (_, _, _, mouse1) = crate::mouse::state();
         if woke_key || mouse1 != mouse0 {

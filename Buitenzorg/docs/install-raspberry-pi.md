@@ -23,14 +23,16 @@ all four cores.
 | CPU cores | All four, started through the spin tables |
 | SD card as `/disk`: wallpaper, icons, apps | Yes: read and write, through the EMMC2 slot |
 | Typing from a PC over the serial cable | Yes: into the desktop terminal or the focused app |
-| USB keyboard and mouse, Ethernet | No (R4) |
+| USB keyboard and mouse | Yes: full-speed and high-speed devices; plug them in before power-on |
+| Ethernet | Yes: an address from your router by DHCP |
+| Restart, shut down, sleep | Yes (shut down halts; the red LED stays on) |
 
-So today the Pi shows the desktop and you can type into it from a PC through
-the serial cable, but there's no USB keyboard or mouse yet, and without input
-the screensaver starts after about 12 seconds. The kernel reads the SD card it
-booted from as `/disk`, so the wallpaper, the app icons and the apps (C# programs
-and the managed apps) come from the card. The serial port (a **USB-to-serial
-3.3 V adapter**) shows the full boot log and takes your typing.
+The Pi shows the desktop and you use it with a USB keyboard and mouse (or by
+typing from a PC over the serial cable). The kernel reads the SD card it booted
+from as `/disk`, so the wallpaper, the app icons and the apps (C# programs and
+the managed apps) come from the card. With a network cable, it asks your router
+for an address. The serial port (a **USB-to-serial 3.3 V adapter**) shows the
+full boot log and takes your typing.
 
 ## Try it under QEMU
 
@@ -143,6 +145,17 @@ The card holds both, and `config.txt` picks one.
   passes `bcm2711-rpi-4-b.dtb` from the card instead.
 
 ## Limits
+
+- USB devices are found once, at power-on: a keyboard or mouse plugged in
+  later isn't seen until the next boot.
+- **Low-speed USB devices don't work yet.** Most keyboards and mice are
+  full-speed and work; some cheap keyboards are low-speed, and behind the Pi's
+  built-in USB hub those never send a key (the log shows `0 report(s)`). Use
+  another keyboard, or type over the serial cable.
+- Keyboard LEDs: Num Lock is switched on at start-up, and Caps Lock doesn't
+  light its LED.
+- Shut down stops the system and the firmware stays halted, but a Pi 4 can't
+  cut its own power: the red LED stays on. Unplug it to switch it off.
 
 - The SD card driver uses programmed I/O, one 512-byte block at a time, with
   no DMA or interrupts: reading the card works, but it isn't fast. Only the

@@ -60,6 +60,7 @@ mod task;
 mod terminal;
 mod theme;
 mod vfs;
+mod usb;
 mod virtio;
 mod vmm;
 mod wallpaper;

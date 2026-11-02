@@ -16,6 +16,18 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **USB keyboards and mice.** A new USB stack (xHCI host controllers, USB 2.0
+  hubs, keyboards and mice) works on PCs and, through the PCIe bus and the VL805
+  controller, on the Raspberry Pi 4. Plug the devices in before power-on.
+  Verified on a real Pi 4 with a full-speed keyboard and a mouse; low-speed
+  keyboards don't work yet on the Pi.
+- **Raspberry Pi 4: Ethernet.** The Pi's Gigabit Ethernet port works: the
+  kernel asks the router for an address (a new DHCP client, which also serves
+  virtual machines' network cards) and reaches it. Verified on a real Pi 4.
+- **Raspberry Pi 4: restart, shut down and sleep work.** Restart and shut down
+  go through the Pi's watchdog, since the Pi has no firmware power interface on
+  this boot route. After shut down the red LED stays on: the Pi can't cut its
+  own power.
 - **Raspberry Pi 4: the SD card is `/disk`.** A new SD card driver (SDHCI, the
   Pi 4's EMMC2 slot) mounts the card the Pi booted from, read-write. The
   wallpaper, the app icons, the C# programs and the managed apps now load from
@@ -309,6 +321,14 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **Managed apps no longer flicker.** A managed app redraws its whole window
+  when the pointer moves over it; on a computer with several cores the desktop
+  sometimes showed that window half drawn. App windows that redraw themselves
+  are now double-buffered, so only finished frames are shown. Drawing the
+  desktop to the screen is also faster.
+- **Sleep no longer wakes up at once.** Releasing the click that chose Sleep
+  woke the computer straight away; the first second after going to sleep is now
+  ignored. USB keyboards and mice wake it too.
 - **A full FAT32 root directory now grows.** Creating a file in a FAT32 root
   directory with no free entry failed with "root directory is full", although
   FAT32 roots can be extended. The kernel now adds a cluster to the root. Found

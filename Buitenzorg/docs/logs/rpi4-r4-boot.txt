@@ -1,0 +1,540 @@
+# Serial console of Buitenzorg OS on a Raspberry Pi 4 Model B (8 GB), roadmap
+# R4, 2026-11-02: PCIe + VL805 xHCI + USB hub + HID keyboard/mouse, GENET
+# Ethernet with DHCP + ping to the router, PM-watchdog restart / shutdown,
+# sleep. Several boots: the first with a low-speed keyboard (1a2c:97f4) that
+# never reports (split transaction error 36 when unplugged), later ones with a
+# full-speed keyboard (258a:1006) that works.
+
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 keyboard endpoint 3: running, 0 report(s)
+[usb] vl805: slot 3 endpoint 3 stopped (completion code 36)
+[power] restarting Read start4.elf bytes  2298048 hnd 0x00006efe 
+Read fixup4.dat bytes     5512 hnd 0x00008087 
+Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
+0x00d03114 0x00000000 0x00003fff
+MEM GPU: 76 ARM: 948 TOTAL: 1024
+Starting start4.elf @ 0xfec00200 partition 0
+PCI reset
++
+
+MESS:00:00:03.921613:0: arasan: arasan_emmc_open
+MESS:00:00:03.923271:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:04.043445:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:04.056315:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
+MESS:00:00:04.102088:0: boot-part: 0 fs-type: 0
+MESS:00:00:04.103501:0: boot-part: 0 fs-type: 3
+MESS:00:00:04.107879:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
+MESS:00:00:04.268290:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.271024:0: board: boardrev d03114 otp d03114
+MESS:00:00:04.275956:0: brfs: File read: 349 bytes
+MESS:00:00:04.363514:0: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.368022:0: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.375896:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.842097:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:04.847651:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:04.856673:0: *** Restart logging
+MESS:00:00:04.858460:0: brfs: File read: 349 bytes
+MESS:00:00:04.922011:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.927035:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.937654:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.942684:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.948282:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:00:00:04.957044:0: HDMI0: hdmi_pixel_freq_limit: 300000000
+MESS:00:00:04.962693:0: HDMI1: hdmi_pixel_freq_limit: 300000000
+MESS:00:00:04.978633:0: dtb_file 'bcm2711-rpi-4-b.dtb'
+MESS:00:00:04.988330:0: brfs: File read: /mfs/sd/bcm2711-rpi-4-b.dtb
+MESS:00:00:04.991579:0: Loaded 'bcm2711-rpi-4-b.dtb' to 0x100 size 0xd3f8
+MESS:00:00:05.032714:0: brfs: File read: 54264 bytes
+MESS:00:00:05.037009:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:05.039946:0: brfs: File read: 349 bytes
+MESS:00:00:05.046549:0: brfs: File read: /mfs/sd/overlays/miniuart-bt.dtbo
+MESS:00:00:05.072427:0: Loaded overlay 'miniuart-bt'
+MESS:00:00:05.129380:0: brfs: File read: 1566 bytes
+MESS:00:00:05.133537:0: Failed to open command line file 'cmdline.txt'
+MESS:00:00:05.513784:0: brfs: File read: /mfs/sd/kernel8.img
+MESS:00:00:05.516339:0: Loaded 'kernel8.img' to 0x200000 size 0xe4898
+MESS:00:00:05.523489:0: Kernel relocated to 0x80000
+MESS:00:00:05.527097:0: Device tree loaded to 0x2eff2700 (size 0xd8d0)
+MESS:00:00:05.534281:0: uart: Set PL011 baud rate to 103448.300000 Hz
+MESS:00:00:05.542425:0: uart: Baud rate change done...
+MESS:00:00:05.544445:0: uart: Baud rate change done...
+MESS:00:00:05.551731:0: gpioman: gpioman_get_pin_num: pin SDCARD_CONTROL_POWER not defined
+MESS:00:00:05.557437:0: Watchdog stopped
+MESS:00:00:05.560944:0: arm_loader: Starting ARM with 948MB
+BREM
+   ____        _ _                                       ____  _____
+  |  _ \      (_) |                                     / __ \/ ____|
+  | |_) |_   _ _| |_ ___ _ __  _______  _ __ __ _     | |  | | (___
+  |  _ <| | | | | __/ _ \ '_ \|_  / _ \| '__/ _` |    | |  | |\___ \
+  | |_) | |_| | | ||  __/ | | |/ / (_) | | | (_| |    | |__| |____) |
+  |____/ \__,_|_|\__\___|_| |_/___\___/|_|  \__, |     \____/|_____/
+                                             __/ |
+              .   .                         |___/
+               \_|_/
+              -- @ --      v0.1 "Benih" - zonder zorg, tanpa kekhawatiran
+               / | \
+                 |         kernel: Rust (ring 0)  |  userland: C# (.NET)
+             ~~~~~~~~~     Kebun Raya Bogor edition
+              dibuat oleh Gravicode Studios -- dipimpin oleh Kang Fadhil
+
+[kernel] Hello Kernel -- Buitenzorg OS (ARM64 / AArch64)
+[kernel] MILESTONE: HELLO KERNEL OK
+[arm64] running at EL1 on implementer 0x41 part 0xd08; counter 54 MHz; exception vectors installed
+[boot] loader=rpi-direct memory map: 5 regions (3952 MiB usable), framebuffer 1280x720 Bgr, firmware tables: Device Tree (0x2eff2700)
+[kernel] physical memory: 3952 MiB usable; 32 MiB kernel heap at 0xffffd00000000000 (TTBR1); user half root (TTBR0) at 0x372000
+[kernel] MILESTONE: ARM64 MEMORY OK (frame allocator + paging HAL on AArch64: heap via TTBR1, kernel page map/protect/unmap, user page in TTBR0 with EL0 rights checked, frames returned; 8 frames handed out, 8220 in use)
+[kernel] MILESTONE: MEMORY OK
+[arm64] address spaces: space 1000 reads 0xa11ce, space 1001 reads 0xb0b at the same address; kernel space sees nothing: true; 10 frames freed, 0 leaked
+[kernel] MILESTONE: ARM64 ASPACE OK (a TTBR0 root per process, shared TTBR1 kernel half; switch = TTBR0 + TLB invalidate; teardown frees every frame)
+[arm64] context switch: 2002 switches between two kernel threads, 0 FP mismatches, boot flow's d0 kept: true
+[kernel] MILESTONE: ARM64 CONTEXT OK (arch::context on AArch64: x19-x30 + SP + DAIF, q0-q31/FPCR/FPSR per task)
+[arm64] platform (live DTB): raspberrypi,4-model-b: 8052 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[dtb] aarch64 linux,dummy-virt: 512 MiB RAM at 0x40000000, 2 CPU(s), console arm,pl011 @ 0x9000000, irq arm,gic-v3 @ 0x8000000, timer arm,armv8-timer, 32 virtio-mmio slot(s), power arm,psci-1.0
+[dtb] riscv64 riscv-virtio: 512 MiB RAM at 0x80000000, 2 CPU(s), console ns16550a @ 0x10000000, irq sifive,plic-1.0.0 @ 0xc000000, timer sifive,clint0, 8 virtio-mmio slot(s), power syscon-poweroff
+[dtb] rpi4 raspberrypi,4-model-b: 0 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[dtb] boot raspberrypi,4-model-b: 8052 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[kernel] MILESTONE: DTB OK (Device Tree parser: QEMU virt aarch64 + riscv64 discovered -- RAM, CPUs, UART, GIC/PLIC, timer, virtio-mmio, PSCI; malformed blobs rejected; loader DTB: parsed)
+[arm64] PL031 clock: 1970-01-01 00:00:00 UTC (unix 0)
+[arm64] SD card (EMMC2) (SDHC/SDXC) at 0xfe340000: 30436 MiB, base clock 100 MHz, sector 0 has an MBR
+[kernel] MILESTONE: SD CARD OK (SD card (EMMC2) (SDHC/SDXC) at 0xfe340000: SDHCI v3, 4-bit, PIO; MBR read)
+[driver] block device registered: SD card (EMMC2) (SDHC/SDXC) (62333952 sectors)
+[vfs] mounted /disk (FAT32, rw) on SD card (EMMC2) (SDHC/SDXC)
+[arm64] /disk: 58 entries, BATANG.TXT read, ARM64.TXT = BZARM64 written 1970-01-01 00:00:00
+[kernel] MILESTONE: ARM64 DISK OK (SD card (EMMC2) (SDHC/SDXC), shared FAT + VFS: /disk listed, read, written + read back)
+[arm64] GICv2 at 0xff841000/0xff842000: 50 timer interrupts in 500 ms (50 IRQs taken)
+[kernel] MILESTONE: ARM64 TIMER OK (GICv2; EL1 virtual timer PPI 27 at 100 Hz)
+Hello from EL0 (ARM64 user mode)!
+[arm64] user fault: ESR_EL1=0x9200000f (EC=0x24) at 0x400008, address 0xffffd00000000000 -- program terminated
+[arm64] EL0 program 1: exit 0x113ba (want 0x113ba), 3 SVC calls, 4 timer IRQs taken in EL0, leaked Some(0) frames; program 2: exit 0xdead, fault address 0xffffd00000000000, leaked Some(0)
+[kernel] MILESTONE: ARM64 EL0 OK (user mode in its own TTBR0 space: SVC syscalls, timer IRQs from EL0, EXIT back to the kernel, a kernel-address read terminates only the program)
+[smp] 4 of 4 CPUs online via spin tables (MPIDRs [0, 1, 2, 3]); 4 took their own timer interrupts in 200 ms
+[kernel] MILESTONE: ARM64 SMP OK (4 CPUs: spin tables + MMU-off trampoline, per-CPU GIC + timer, shared scheduler)
+[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)
+[kernel] MILESTONE: RPI4 POWER OK (PM watchdog at 0xfe100000: restart = full reset, shutdown = firmware halt partition 63)
+[arm64] window system: 1280x720, 15 app icons, wallpaper 'nature' loaded: true
+[arm64] PCIe root complex at 0xfd500000 (from the DTB)
+[pcie] BCM2711 root complex rev 0x304: link up, gen 2 x1, spread spectrum on
+[pcie] VL805 firmware load requested from the VideoCore: acknowledged
+[pcie] 01:00.0 1106:3483 xHCI, BAR0 4 KiB at CPU 0x600000000, VL805 firmware 0x138a1
+[usb] vl805: xHCI running, 5 ports
+[usb] vl805 port 1: 2109:3431 high-speed hub
+[usb] vl805 port 1.3: 046d:c52f full-speed mouse (HID boot protocol)
+[usb] vl805: slot 2 endpoint 0x81 (8 bytes, bInterval 2) -> DCI 3, xHCI interval 4, via the TT of slot 1 port 3
+[kernel] MILESTONE: USB OK (vl805: xHCI, 2 device(s): 1 hub(s), 0 keyboard(s), 1 mouse/mice; HID boot protocol)
+[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)
+[arm64] Ethernet: GENET v5 at 0xfd580000, PHY at MDIO 1, rgmii-rxid, MAC dc:a6:32:f9:d7:e4
+[genet] PHY 600d:84a2 at MDIO 1: auto-negotiating
+[arm64] Ethernet link up: 100 Mb/s, full duplex
+[net] genet: DHCP lease 192.168.68.109 mask 255.255.255.0 router 192.168.68.1 dns 118.98.115.70 from 192.168.68.1 for 7200 s
+[kernel] MILESTONE: DHCP OK (genet: address 192.168.68.109 from the DHCP server 192.168.68.1)
+[arm64] Ethernet: router 192.168.68.1 ARP true, ping true
+[kernel] MILESTONE: RPI4 ETHERNET OK (GENET v5 + PHY, 100 Mb/s; DHCP address 192.168.68.109; ARP + ICMP echo with the router)
+[arm64] --- program 'hello' (85904 bytes, from /disk) ---
+Hello from C#!
+Buitenzorg OS: C# di ring 3, kernel Rust di ring 0.
+v0.4 'Tunas' -- benih telah bertunas.
+[app] process 1000 exited with code 0x0
+[arm64] --- 'hello' (pid 1000) exited with code 0x0 ---
+[kernel] MILESTONE: ARM64 CSHARP OK (C# compiled for linux-arm64 by bflat, loaded by the generic ELF loader, ran in EL0 as a process: Hello from C#!)
+[arm64] --- program 'matang' (86448 bytes, from /disk) ---
+Matang: menguji PAL memori (mmap/mprotect/munmap)...
+MILESTONE: MMAP OK
+Matang: mprotect+munmap ok
+MILESTONE: MATANG OK
+[app] process 1001 exited with code 0x0
+[arm64] --- 'matang' (pid 1001) exited with code 0x0 ---
+[arm64] --- program 'heap' (86736 bytes, from /disk) ---
+Heap: menguji new / array / generics...
+MILESTONE: HEAP OK
+[app] process 1002 exited with code 0x0
+[arm64] --- 'heap' (pid 1002) exited with code 0x0 ---
+[arm64] --- program 'gcmem' (86112 bytes, from /disk) ---
+GcMem: menguji reserve (lazy) + commit-on-demand...
+MILESTONE: GCMEM OK
+[app] process 1003 exited with code 0x0
+[arm64] --- 'gcmem' (pid 1003) exited with code 0x0 ---
+[arm64] --- program 'bcl' (116880 bytes, from /disk) ---
+Bcl: menguji List/LINQ/SB/BitConv/Base64 + Math/Random/Convert/Str/RefList/Hex...
+  list.Count=10 evens=5 sumOfSquares=120
+  base64(0x12345678)=eFY0Eg==
+  count(even)=5 max=9 min=0 stack/queue/map=111 set/strmap/sort/find/rev/long=111111 big=9876543210
+  math/rng/conv/str/ref/hex/linq3/sb=11111111
+MILESTONE: BCL OK
+[app] process 1004 exited with code 0x0
+[arm64] --- 'bcl' (pid 1004) exited with code 0x0 ---
+[arm64] --- program 'proctest' (87680 bytes, from /disk) ---
+ProcTest: induk men-spawn anak (path + nama app) lalu menunggu...
+[app] process 1006 exited with code 0x7
+[app] process 1007 exited with code 0x2a
+MILESTONE: PROCCTL OK
+[app] process 1005 exited with code 0x0
+[arm64] --- 'proctest' (pid 1005) exited with code 0x0 ---
+MPROC: proses selesai -- memori terisolasi, register SSE utuh
+[app] process 1009 exited with code 0x0
+MPROC: proses selesai -- memori terisolasi, register SSE utuh
+[app] process 1008 exited with code 0x0
+[arm64] mproc x2: exit codes [0, 0], 197 timer preemptions of EL0 code, 2.0 s
+[kernel] MILESTONE: ARM64 MULTIPROC OK (shared scheduler on AArch64: two processes preempted by the timer, each in its own TTBR0 space with its own FP state)
+MPROC: proses selesMaMPiRP OR-CO-:C M Pp:R OpmrreomCoso:er sis  petrseoerssliees  sssesoellaalise ise,a -rs-a emgiii  es-mt-oerr-  -i m SemmtoeSrEei mrsuooir lttaushie,
+r i irtseeorgi[app] process 1012 exited with code 0x0
+silosalstiear, s SirS,eEg  iustruthee
+rg iSsStEe [app] process 1011 exited with code 0x0
+ru tSuShE
+ utuh
+[app] process 1010 exited with code 0x0
+[app] process 1013 exited with code 0x0
+[smp] 4 mproc copies: exit codes [0, 0, 0, 0]; at most 4 CPUs ran user code at once; 195 syscalls served on secondary CPUs; 5 migrations
+[kernel] MILESTONE: ARM64 SMP SCHED OK (processes ran in parallel on 4 CPUs, syscalls served on the secondary CPUs, exact FP results)
+[arm64] --- program 'thread' ---
+Thread: menguji thread ring-3 kooperatif...
+MILESTONE: THREAD OK
+[app] process 1014 exited with code 0x0
+[arm64] --- 'thread' exited with code 0x0 ---
+[arm64] --- program 'sync' ---
+Sync: menguji mutex (futex), thread-self, clock...
+MILESTONE: SYNC OK
+[app] process 1015 exited with code 0x0
+[arm64] --- 'sync' exited with code 0x0 ---
+[arm64] --- program 'calc' ---
+Calc: Kalkulator (Buitenzorg.UI)...
+MILESTONE: CALC OK
+[app] process 1016 exited with code 0x0
+[arm64] --- 'calc' exited with code 0x0 ---
+[arm64] --- program 'g2048' ---
+2048: game (Buitenzorg.UI + Drawing)...
+MILESTONE: GAME OK
+[app] process 1017 exited with code 0x0
+[arm64] --- 'g2048' exited with code 0x0 ---
+[arm64] --- program 'ui' ---
+UI: menguji Buitenzorg.UI (kontrol + layout + event)...
+MILESTONE: UI OK
+[app] process 1018 exited with code 0x0
+[arm64] --- 'ui' exited with code 0x0 ---
+[arm64] --- program 'draw' ---
+Draw: menguji Buitenzorg.Drawing (renderer software)...
+MILESTONE: DRAW OK
+[app] process 1019 exited with code 0x0
+[arm64] --- 'draw' exited with code 0x0 ---
+[arm64] --- program 'xox' ---
+[xox] starting (C# desktop app, ring 3)
+[xox] game over: X wins
+[app] process 1020 exited with code 0x0
+[arm64] --- 'xox' exited with code 0x0 ---
+[arm64] programs done; frames leaked: 0
+[clr] RustCLR managed runtime: HelloGui loaded (298 types, 162 methods, 1972 native bindings)
+HelloGui: window 8 drawn (360x300 on a 1280x720 screen), time 00:00:00
+HelloGui: live clock ticked 1 times in 5 s on a background thread
+[clr] HelloGui exited with 1: 679248 IL instructions, 13678 calls, 59 managed allocations, 0 collections (0 objects freed), peak 53 KiB live; Rust heap 843 KiB in use of 8 MiB committed; 5326 ms
+[app] process 1021 exited with code 0x1
+[clr] hellogui failed (exit 0x1)
+[clr] RustCLR managed runtime: Managed loaded (533 types, 2498 methods, 1972 native bindings)
+Buitenzorg.UI: window 9
+Buitenzorg.UI: 4 checks, 0 failed
+MILESTONE: MANAGED UI OK
+Folder: 4 checks, 0 failed
+Berkas: 11 checks, 0 failed
+Pemantau: 8 checks, 0 failed
+Catatan: 11 checks, 0 failed
+MILESTONE: MANAGED APPS OK
+[clr] Managed exited with 0: 4012136 IL instructions, 518349 calls, 34044 managed allocations, 0 collections (0 objects freed), peak 3889 KiB live; Rust heap 13327 KiB in use of 40 MiB committed; 2379 ms
+[app] process 1022 exited with code 0x0
+[clr] managed app suite checked in 8.2 s
+[clr] RustCLR managed runtime: HelloClr loaded (288 types, 70 methods, 1972 native bindings)
+Hello from managed C# on Buitenzorg (RustCLR)!
+HelloClr: 9/9 checks passed (9 logged)
+[clr] HelloClr exited with 0: 560932 IL instructions, 40133 calls, 40079 managed allocations, 1 collections (39980 objects freed), peak 3597 KiB live; Rust heap 3523 KiB in use of 16 MiB committed; 508 ms
+[app] process 1023 exited with code 0x0
+[kernel] MILESTONE: CLR OK (managed C# on ARM64: a dotnet-built assembly run by RustCLR in ring 3 -- GC, generics, LINQ, exceptions)
+[clr] RustCLR managed runtime: Conformance loaded (434 types, 1550 methods, 1972 native bindings)
+checks=499 failures=0
+[clr] Conformance exited with 0: 1781813 IL instructions, 79098 calls, 101519 managed allocations, 3 collections (78734 objects freed), peak 4096 KiB live; Rust heap 36825 KiB in use of 40 MiB committed; 7273 ms
+[app] process 1024 exited with code 0x0
+[clr] /disk/CONFORM.DLL exited with 0
+[clr] RustCLR managed runtime: ModernSyntax loaded (288 types, 63 methods, 1972 native bindings)
+checks=35 failures=0
+[clr] ModernSyntax exited with 0: 1192 IL instructions, 143 calls, 120 managed allocations, 0 collections (0 objects freed), peak 6 KiB live; Rust heap 674 KiB in use of 8 MiB committed; 43 ms
+[app] process 1025 exited with code 0x0
+[clr] /disk/MODERN.DLL exited with 0
+[clr] managed-runtime demo took 36.6 s
+[arm64] desktop frame: 1280x720, 9 windows, 921500 lit pixels
+[kernel] MILESTONE: ARM64 DESKTOP FRAME OK (shared window manager on ARM64: C# GUI app windows composited over the wallpaper and presented)
+[kernel] MILESTONE: RPI4 BOOT OK (raspberrypi,4-model-b via rpi-direct -> EL1 kernel; arm,pl011 console, GICv2 + generic timer from the DTB)
+[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows
+[desktop] tidied 9 window(s) left by boot demos
+[usb] vl805: slot 2 mouse endpoint 3: running, 1 report(s)
+[power] shutting down (BCMRead start4.elf bytes  2298048 hnd 0x00006efe 
+Read fixup4.dat bytes     5512 hnd 0x00008087 
+Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
+0x00d03114 0x00000000 0x00003fff
+MEM GPU: 76 ARM: 948 TOTAL: 1024
+Starting start4.elf @ 0xfec00200 partition 0
+PCI reset
++
+
+MESS:00:00:04.089372:0: arasan: arasan_emmc_open
+MESS:00:00:04.091032:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:04.211208:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:04.224079:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
+MESS:00:00:04.269520:0: boot-part: 0 fs-type: 0
+MESS:00:00:04.270933:0: boot-part: 0 fs-type: 3
+MESS:00:00:04.275312:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
+MESS:00:00:04.435800:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.438528:0: board: boardrev d03114 otp d03114
+MESS:00:00:04.443466:0: brfs: File read: 349 bytes
+MESS:00:00:04.531027:0: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.535536:0: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.543407:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:05.042621:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:05.048180:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:05.057195:0: *** Restart logging
+MESS:00:00:05.058984:0: brfs: File read: 349 bytes
+MESS:00:00:05.122529:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:05.127553:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:05.138193:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:05.143273:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:05.148872:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:00:00:05.157627:0: HDMI0: hdmi_pixel_freq_limit: 300000000
+MESS:00:00:05.163271:0: HDMI1: hdmi_pixel_freq_limit: 300000000
+MESS:00:00:05.180113:0: dtb_file 'bcm2711-rpi-4-b.dtb'
+MESS:00:00:05.196865:0: brfs: File read: /mfs/sd/bcm2711-rpi-4-b.dtb
+MESS:00:00:05.200161:0: Loaded 'bcm2711-rpi-4-b.dtb' to 0x100 size 0xd3f8
+MESS:00:00:05.293574:0: brfs: File read: 54264 bytes
+MESS:00:00:05.298290:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:05.300963:0: brfs: File read: 349 bytes
+MESS:00:00:05.308824:0: brfs: File read: /mfs/sd/overlays/miniuart-bt.dtbo
+MESS:00:00:05.363407:0: Loaded overlay 'miniuart-bt'
+MESS:00:00:05.503515:0: brfs: File read: 1566 bytes
+MESS:00:00:05.508136:0: Failed to open command line file 'cmdline.txt'
+MESS:00:00:05.737590:0: brfs: File read: /mfs/sd/kernel8.img
+MESS:00:00:05.740146:0: Loaded 'kernel8.img' to 0x200000 size 0xe5898
+MESS:00:00:05.747296:0: Kernel relocated to 0x80000
+MESS:00:00:05.750903:0: Device tree loaded to 0x2eff2700 (size 0xd8d0)
+MESS:00:00:05.758076:0: uart: Set PL011 baud rate to 103448.300000 Hz
+MESS:00:00:05.766232:0: uart: Baud rate change done...
+MESS:00:00:05.768252:0: uart: Baud rate change done...
+MESS:00:00:05.775421:0: gpioman: gpioman_get_pin_num: pin SDCARD_CONTROL_POWER not defined
+MESS:00:00:05.781246:0: Watchdog stopped
+MESS:00:00:05.784751:0: arm_loader: Starting ARM with 948MB
+BREM
+   ____        _ _                                       ____  _____
+  |  _ \      (_) |                                     / __ \/ ____|
+  | |_) |_   _ _| |_ ___ _ __  _______  _ __ __ _     | |  | | (___
+  |  _ <| | | | | __/ _ \ '_ \|_  / _ \| '__/ _` |    | |  | |\___ \
+  | |_) | |_| | | ||  __/ | | |/ / (_) | | | (_| |    | |__| |____) |
+  |____/ \__,_|_|\__\___|_| |_/___\___/|_|  \__, |     \____/|_____/
+                                             __/ |
+              .   .                         |___/
+               \_|_/
+              -- @ --      v0.1 "Benih" - zonder zorg, tanpa kekhawatiran
+               / | \
+                 |         kernel: Rust (ring 0)  |  userland: C# (.NET)
+             ~~~~~~~~~     Kebun Raya Bogor edition
+              dibuat oleh Gravicode Studios -- dipimpin oleh Kang Fadhil
+
+[kernel] Hello Kernel -- Buitenzorg OS (ARM64 / AArch64)
+[kernel] MILESTONE: HELLO KERNEL OK
+[arm64] running at EL1 on implementer 0x41 part 0xd08; counter 54 MHz; exception vectors installed
+[boot] loader=rpi-direct memory map: 5 regions (3952 MiB usable), framebuffer 1280x720 Bgr, firmware tables: Device Tree (0x2eff2700)
+[kernel] physical memory: 3952 MiB usable; 32 MiB kernel heap at 0xffffd00000000000 (TTBR1); user half root (TTBR0) at 0x373000
+[kernel] MILESTONE: ARM64 MEMORY OK (frame allocator + paging HAL on AArch64: heap via TTBR1, kernel page map/protect/unmap, user page in TTBR0 with EL0 rights checked, frames returned; 8 frames handed out, 8220 in use)
+[kernel] MILESTONE: MEMORY OK
+[arm64] address spaces: space 1000 reads 0xa11ce, space 1001 reads 0xb0b at the same address; kernel space sees nothing: true; 10 frames freed, 0 leaked
+[kernel] MILESTONE: ARM64 ASPACE OK (a TTBR0 root per process, shared TTBR1 kernel half; switch = TTBR0 + TLB invalidate; teardown frees every frame)
+[arm64] context switch: 2002 switches between two kernel threads, 0 FP mismatches, boot flow's d0 kept: true
+[kernel] MILESTONE: ARM64 CONTEXT OK (arch::context on AArch64: x19-x30 + SP + DAIF, q0-q31/FPCR/FPSR per task)
+[arm64] platform (live DTB): raspberrypi,4-model-b: 8052 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[dtb] aarch64 linux,dummy-virt: 512 MiB RAM at 0x40000000, 2 CPU(s), console arm,pl011 @ 0x9000000, irq arm,gic-v3 @ 0x8000000, timer arm,armv8-timer, 32 virtio-mmio slot(s), power arm,psci-1.0
+[dtb] riscv64 riscv-virtio: 512 MiB RAM at 0x80000000, 2 CPU(s), console ns16550a @ 0x10000000, irq sifive,plic-1.0.0 @ 0xc000000, timer sifive,clint0, 8 virtio-mmio slot(s), power syscon-poweroff
+[dtb] rpi4 raspberrypi,4-model-b: 0 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[dtb] boot raspberrypi,4-model-b: 8052 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[kernel] MILESTONE: DTB OK (Device Tree parser: QEMU virt aarch64 + riscv64 discovered -- RAM, CPUs, UART, GIC/PLIC, timer, virtio-mmio, PSCI; malformed blobs rejected; loader DTB: parsed)
+[arm64] PL031 clock: 1970-01-01 00:00:00 UTC (unix 0)
+[arm64] SD card (EMMC2) (SDHC/SDXC) at 0xfe340000: 30436 MiB, base clock 100 MHz, sector 0 has an MBR
+[kernel] MILESTONE: SD CARD OK (SD card (EMMC2) (SDHC/SDXC) at 0xfe340000: SDHCI v3, 4-bit, PIO; MBR read)
+[driver] block device registered: SD card (EMMC2) (SDHC/SDXC) (62333952 sectors)
+[vfs] mounted /disk (FAT32, rw) on SD card (EMMC2) (SDHC/SDXC)
+[arm64] /disk: 58 entries, BATANG.TXT read, ARM64.TXT = BZARM64 written 1970-01-01 00:00:00
+[kernel] MILESTONE: ARM64 DISK OK (SD card (EMMC2) (SDHC/SDXC), shared FAT + VFS: /disk listed, read, written + read back)
+[arm64] GICv2 at 0xff841000/0xff842000: 50 timer interrupts in 500 ms (50 IRQs taken)
+[kernel] MILESTONE: ARM64 TIMER OK (GICv2; EL1 virtual timer PPI 27 at 100 Hz)
+Hello from EL0 (ARM64 user mode)!
+[arm64] user fault: ESR_EL1=0x9200000f (EC=0x24) at 0x400008, address 0xffffd00000000000 -- program terminated
+[arm64] EL0 program 1: exit 0x113ba (want 0x113ba), 3 SVC calls, 4 timer IRQs taken in EL0, leaked Some(0) frames; program 2: exit 0xdead, fault address 0xffffd00000000000, leaked Some(0)
+[kernel] MILESTONE: ARM64 EL0 OK (user mode in its own TTBR0 space: SVC syscalls, timer IRQs from EL0, EXIT back to the kernel, a kernel-address read terminates only the program)
+[smp] 4 of 4 CPUs online via spin tables (MPIDRs [0, 1, 2, 3]); 4 took their own timer interrupts in 200 ms
+[kernel] MILESTONE: ARM64 SMP OK (4 CPUs: spin tables + MMU-off trampoline, per-CPU GIC + timer, shared scheduler)
+[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)
+[kernel] MILESTONE: RPI4 POWER OK (PM watchdog at 0xfe100000: restart = full reset, shutdown = firmware halt partition 63)
+[arm64] window system: 1280x720, 15 app icons, wallpaper 'nature' loaded: true
+[arm64] PCIe root complex at 0xfd500000 (from the DTB)
+[pcie] BCM2711 root complex rev 0x304: link up, gen 2 x1, spread spectrum on
+[pcie] VL805 firmware load requested from the VideoCore: acknowledged
+[pcie] 01:00.0 1106:3483 xHCI, BAR0 4 KiB at CPU 0x600000000, VL805 firmware 0x138a1
+[usb] vl805: xHCI running, 5 ports
+[usb] vl805 port 1: 2109:3431 high-speed hub
+[usb] vl805: hub slot 1: 4 ports, single TT, TT think time 3, hub context via Evaluate Context
+[usb] vl805 port 1.1: 258a:1006 full-speed keyboard (HID boot protocol)
+[usb] vl805: keyboard interface 0: SET_IDLE ok, LED report ok (Num Lock on)
+[usb] vl805: slot 2 endpoint 0x81 (8 bytes, bInterval 10) -> DCI 3, xHCI interval 6, via the TT of slot 1 port 1
+[usb] vl805 port 1.3: 046d:c52f full-speed mouse (HID boot protocol)
+[usb] vl805: slot 3 endpoint 0x81 (8 bytes, bInterval 2) -> DCI 3, xHCI interval 4, via the TT of slot 1 port 3
+[kernel] MILESTONE: USB OK (vl805: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse/mice; HID boot protocol)
+[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)
+[arm64] Ethernet: GENET v5 at 0xfd580000, PHY at MDIO 1, rgmii-rxid, MAC dc:a6:32:f9:d7:e4
+[genet] PHY 600d:84a2 at MDIO 1: auto-negotiating
+[arm64] Ethernet link up: 100 Mb/s, full duplex
+[net] genet: DHCP lease 192.168.68.109 mask 255.255.255.0 router 192.168.68.1 dns 118.98.115.70 from 192.168.68.1 for 7200 s
+[kernel] MILESTONE: DHCP OK (genet: address 192.168.68.109 from the DHCP server 192.168.68.1)
+[arm64] Ethernet: router 192.168.68.1 ARP true, ping true
+[kernel] MILESTONE: RPI4 ETHERNET OK (GENET v5 + PHY, 100 Mb/s; DHCP address 192.168.68.109; ARP + ICMP echo with the router)
+[arm64] --- program 'hello' (85904 bytes, from /disk) ---
+Hello from C#!
+Buitenzorg OS: C# di ring 3, kernel Rust di ring 0.
+v0.4 'Tunas' -- benih telah bertunas.
+[app] process 1000 exited with code 0x0
+[arm64] --- 'hello' (pid 1000) exited with code 0x0 ---
+[kernel] MILESTONE: ARM64 CSHARP OK (C# compiled for linux-arm64 by bflat, loaded by the generic ELF loader, ran in EL0 as a process: Hello from C#!)
+[arm64] --- program 'matang' (86448 bytes, from /disk) ---
+Matang: menguji PAL memori (mmap/mprotect/munmap)...
+MILESTONE: MMAP OK
+Matang: mprotect+munmap ok
+MILESTONE: MATANG OK
+[app] process 1001 exited with code 0x0
+[arm64] --- 'matang' (pid 1001) exited with code 0x0 ---
+[arm64] --- program 'heap' (86736 bytes, from /disk) ---
+Heap: menguji new / array / generics...
+MILESTONE: HEAP OK
+[app] process 1002 exited with code 0x0
+[arm64] --- 'heap' (pid 1002) exited with code 0x0 ---
+[arm64] --- program 'gcmem' (86112 bytes, from /disk) ---
+GcMem: menguji reserve (lazy) + commit-on-demand...
+MILESTONE: GCMEM OK
+[app] process 1003 exited with code 0x0
+[arm64] --- 'gcmem' (pid 1003) exited with code 0x0 ---
+[arm64] --- program 'bcl' (116880 bytes, from /disk) ---
+Bcl: menguji List/LINQ/SB/BitConv/Base64 + Math/Random/Convert/Str/RefList/Hex...
+  list.Count=10 evens=5 sumOfSquares=120
+  base64(0x12345678)=eFY0Eg==
+  count(even)=5 max=9 min=0 stack/queue/map=111 set/strmap/sort/find/rev/long=111111 big=9876543210
+  math/rng/conv/str/ref/hex/linq3/sb=11111111
+MILESTONE: BCL OK
+[app] process 1004 exited with code 0x0
+[arm64] --- 'bcl' (pid 1004) exited with code 0x0 ---
+[arm64] --- program 'proctest' (87680 bytes, from /disk) ---
+ProcTest: induk men-spawn anak (path + nama app) lalu menunggu...
+[app] process 1006 exited with code 0x7
+[app] process 1007 exited with code 0x2a
+MILESTONE: PROCCTL OK
+[app] process 1005 exited with code 0x0
+[arm64] --- 'proctest' (pid 1005) exited with code 0x0 ---
+MPROC: proses selesai -- memori terisolasi, register SSE utuh
+[app] process 1009 exited with code 0x0
+MPROC: proses selesai -- memori terisolasi, register SSE utuh
+[app] process 1008 exited with code 0x0
+[arm64] mproc x2: exit codes [0, 0], 197 timer preemptions of EL0 code, 2.0 s
+[kernel] MILESTONE: ARM64 MULTIPROC OK (shared scheduler on AArch64: two processes preempted by the timer, each in its own TTBR0 space with its own FP state)
+MMPPRROOCC::  pprroosseess  sseelleeMMsPsPaaRRiOiO C-C-::    mp-perrmo-oos esmeresism   ostseeerlrlieiess soalita esai-i,-r   rm-ee-gmi iosrsmtoeeirm  loStarSesiEri  i,tus etorruleihags
+sisoitlear, [app] process 1010 exited with code 0x0
+ sSrSieE,g  uritesugthie
+sr tSeSrE  [app] process 1011 exited with code 0x0
+uStSuEh 
+utuh
+[app] process 1012 exited with code 0x0
+[app] process 1013 exited with code 0x0
+[smp] 4 mproc copies: exit codes [0, 0, 0, 0]; at most 4 CPUs ran user code at once; 195 syscalls served on secondary CPUs; 5 migrations
+[kernel] MILESTONE: ARM64 SMP SCHED OK (processes ran in parallel on 4 CPUs, syscalls served on the secondary CPUs, exact FP results)
+[arm64] --- program 'thread' ---
+Thread: menguji thread ring-3 kooperatif...
+MILESTONE: THREAD OK
+[app] process 1014 exited with code 0x0
+[arm64] --- 'thread' exited with code 0x0 ---
+[arm64] --- program 'sync' ---
+Sync: menguji mutex (futex), thread-self, clock...
+MILESTONE: SYNC OK
+[app] process 1015 exited with code 0x0
+[arm64] --- 'sync' exited with code 0x0 ---
+[arm64] --- program 'calc' ---
+Calc: Kalkulator (Buitenzorg.UI)...
+MILESTONE: CALC OK
+[app] process 1016 exited with code 0x0
+[arm64] --- 'calc' exited with code 0x0 ---
+[arm64] --- program 'g2048' ---
+2048: game (Buitenzorg.UI + Drawing)...
+MILESTONE: GAME OK
+[app] process 1017 exited with code 0x0
+[arm64] --- 'g2048' exited with code 0x0 ---
+[arm64] --- program 'ui' ---
+UI: menguji Buitenzorg.UI (kontrol + layout + event)...
+MILESTONE: UI OK
+[app] process 1018 exited with code 0x0
+[arm64] --- 'ui' exited with code 0x0 ---
+[arm64] --- program 'draw' ---
+Draw: menguji Buitenzorg.Drawing (renderer software)...
+MILESTONE: DRAW OK
+[app] process 1019 exited with code 0x0
+[arm64] --- 'draw' exited with code 0x0 ---
+[arm64] --- program 'xox' ---
+[xox] starting (C# desktop app, ring 3)
+[xox] game over: X wins
+[app] process 1020 exited with code 0x0
+[arm64] --- 'xox' exited with code 0x0 ---
+[arm64] programs done; frames leaked: 0
+[clr] RustCLR managed runtime: HelloGui loaded (298 types, 162 methods, 1972 native bindings)
+HelloGui: window 8 drawn (360x300 on a 1280x720 screen), time 00:00:00
+HelloGui: live clock ticked 1 times in 5 s on a background thread
+[clr] HelloGui exited with 1: 679248 IL instructions, 13678 calls, 59 managed allocations, 0 collections (0 objects freed), peak 53 KiB live; Rust heap 843 KiB in use of 8 MiB committed; 5308 ms
+[app] process 1021 exited with code 0x1
+[clr] hellogui failed (exit 0x1)
+[clr] RustCLR managed runtime: Managed loaded (533 types, 2498 methods, 1972 native bindings)
+Buitenzorg.UI: window 9
+Buitenzorg.UI: 4 checks, 0 failed
+MILESTONE: MANAGED UI OK
+Folder: 4 checks, 0 failed
+Berkas: 11 checks, 0 failed
+Pemantau: 8 checks, 0 failed
+Catatan: 11 checks, 0 failed
+MILESTONE: MANAGED APPS OK
+[clr] Managed exited with 0: 4012136 IL instructions, 518349 calls, 34044 managed allocations, 0 collections (0 objects freed), peak 3889 KiB live; Rust heap 13327 KiB in use of 40 MiB committed; 2375 ms
+[app] process 1022 exited with code 0x0
+[clr] managed app suite checked in 8.1 s
+[clr] RustCLR managed runtime: HelloClr loaded (288 types, 70 methods, 1972 native bindings)
+Hello from managed C# on Buitenzorg (RustCLR)!
+HelloClr: 9/9 checks passed (9 logged)
+[clr] HelloClr exited with 0: 560932 IL instructions, 40133 calls, 40079 managed allocations, 1 collections (39980 objects freed), peak 3597 KiB live; Rust heap 3523 KiB in use of 16 MiB committed; 509 ms
+[app] process 1023 exited with code 0x0
+[kernel] MILESTONE: CLR OK (managed C# on ARM64: a dotnet-built assembly run by RustCLR in ring 3 -- GC, generics, LINQ, exceptions)
+[clr] RustCLR managed runtime: Conformance loaded (434 types, 1550 methods, 1972 native bindings)
+checks=499 failures=0
+[clr] Conformance exited with 0: 1781770 IL instructions, 79076 calls, 101519 managed allocations, 3 collections (78734 objects freed), peak 4096 KiB live; Rust heap 36762 KiB in use of 40 MiB committed; 7134 ms
+[app] process 1024 exited with code 0x0
+[clr] /disk/CONFORM.DLL exited with 0
+[clr] RustCLR managed runtime: ModernSyntax loaded (288 types, 63 methods, 1972 native bindings)
+checks=35 failures=0
+[clr] ModernSyntax exited with 0: 1192 IL instructions, 143 calls, 120 managed allocations, 0 collections (0 objects freed), peak 6 KiB live; Rust heap 674 KiB in use of 8 MiB committed; 43 ms
+[app] process 1025 exited with code 0x0
+[clr] /disk/MODERN.DLL exited with 0
+[clr] managed-runtime demo took 36.6 s
+[arm64] desktop frame: 1280x720, 9 windows, 921500 lit pixels
+[kernel] MILESTONE: ARM64 DESKTOP FRAME OK (shared window manager on ARM64: C# GUI app windows composited over the wallpaper and presented)
+[kernel] MILESTONE: RPI4 BOOT OK (raspberrypi,4-model-b via rpi-direct -> EL1 kernel; arm,pl011 console, GICv2 + generic timer from the DTB)
+[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows
+[desktop] tidied 9 window(s) left by boot demos
+[usb] vl805: slot 2 keyboard endpoint 3: running, 1 report(s)
+[usb] vl805: slot 3 mouse endpoint 3: running, 1 report(s)
+[kernel] MILESTONE: USB INPUT OK (a key and a pointer movement arrived from USB HID devices)
+[desktop] launched 'managed' as pid 1026
+[clr] RustCLR managed runtime: Managed loaded (533 types, 2498 methods, 1972 native bindings)
+[clr] RustCLR managed runtime: MXox loaded (449 types, 1656 methods, 1972 native bindings)
+[app] process 1027 killed
+[clr] RustCLR managed runtime: MCalc loaded (448 types, 1690 methods, 1972 native bindings)
+[desktop] launch 'audiopanel' failed: app not found on /disk
+[power] sleeping (tekan tombol / gerakkan mouse untuk bangun)...
+[power] bangun
+[app] process 1028 killed

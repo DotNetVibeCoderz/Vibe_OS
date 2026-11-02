@@ -38,8 +38,11 @@ function Invoke-Boot {
         "ide"  { @('-smp', '2', '-drive', "format=raw,file=$image") }
         "ide1" { @('-drive', "format=raw,file=$image") }
         # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
+        # ...and an xHCI with a hub and a USB keyboard + mouse behind it (R4).
         "ahci" { @('-smp', '2', '-drive', "id=bzdisk,format=raw,file=$image,if=none",
-                   '-device', 'ahci,id=ahci0', '-device', 'ide-hd,drive=bzdisk,bus=ahci0.0') }
+                   '-device', 'ahci,id=ahci0', '-device', 'ide-hd,drive=bzdisk,bus=ahci0.0',
+                   '-device', 'qemu-xhci,id=xhci', '-device', 'usb-hub,bus=xhci.0,port=1',
+                   '-device', 'usb-kbd,bus=xhci.0,port=1.1', '-device', 'usb-mouse,bus=xhci.0,port=1.2') }
         "nvme" { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
                    '-device', 'nvme,drive=bzdisk,serial=bz0001') }
         "usb"  { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
@@ -194,8 +197,9 @@ foreach ($media in @("ahci", "nvme", "usb")) {
     Invoke-Boot -Media $media -Log $log
     Assert-Markers -Log $log -Markers $basic
     if ($media -eq "ahci") {
-        Assert-Markers -Log $log -Markers @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK")
-        Write-Host "smoke [ahci]: second CPU started (SMP)"
+        Assert-Markers -Log $log -Markers @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK",
+            "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse")
+        Write-Host "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
     }
     Write-Host "smoke [$media]: boots to READY"
 }
@@ -281,7 +285,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed",
         "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "MILESTONE: ARM64 EL0 OK", "Hello from EL0",
-        "MILESTONE: ARM64 RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: ARM64 DISK OK", "MILESTONE: VIRTIO GPU OK",
+        "MILESTONE: ARM64 RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: ARM64 DISK OK", "MILESTONE: VIRTIO GPU OK", "MILESTONE: DHCP OK",
         "MILESTONE: SECURITY OK", "MILESTONE: ARM64 PSCI OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK",
         "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=499 failures=", "checks=35 failures=0")
     if (Select-String -Path $log -Pattern "program 'hello'" -Quiet) {

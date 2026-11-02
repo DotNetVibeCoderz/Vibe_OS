@@ -232,6 +232,32 @@ impl Console {
         let (w, h) = (info.width, info.height);
         let format = info.format;
         let buffer = self.fb.buffer_mut();
+        // Fast paths for 32-bit pixels: whole rows (BGR = the compositor's own
+        // 0x00RRGGBB words) or one 32-bit store per pixel (RGB). Byte-wise
+        // writes cost 3-4 uncached stores per pixel -- on a Raspberry Pi 4 a
+        // 1280x720 present took long enough to show half-drawn frames.
+        if bpp == 4 && buffer.len() >= info.stride * h * 4 && back.len() >= w * h {
+            let dst = buffer.as_mut_ptr() as *mut u32;
+            match format {
+                PixelFormat::Bgr => {
+                    for y in 0..h {
+                        unsafe { core::ptr::copy_nonoverlapping(back.as_ptr().add(y * w), dst.add(y * info.stride), w) };
+                    }
+                    return;
+                }
+                PixelFormat::Rgb => {
+                    for y in 0..h {
+                        for x in 0..w {
+                            let s = back[y * w + x];
+                            let v = ((s & 0xFF) << 16) | (s & 0xFF00) | ((s >> 16) & 0xFF);
+                            unsafe { dst.add(y * info.stride + x).write_volatile(v) };
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         for y in 0..h {
             for x in 0..w {
                 let src = back[y * w + x];

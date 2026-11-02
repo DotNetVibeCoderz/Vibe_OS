@@ -106,6 +106,8 @@ pub fn run() -> ! {
         }
         // virtio keyboards / mice / tablets (multi-arch M2) are polled here.
         virtio::input::poll();
+        // USB HID keyboards / mice (roadmap R4).
+        crate::usb::poll();
         let now = interrupts::ticks();
         let mut input = false;
 

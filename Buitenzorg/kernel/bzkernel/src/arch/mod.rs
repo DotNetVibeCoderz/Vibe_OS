@@ -192,6 +192,18 @@ pub mod cpu {
         super::riscv64::cpu::sync_code();
     }
 
+    /// Make a DMA buffer coherent with a device that does not snoop the CPU
+    /// caches: clean + invalidate on ARM64 (the Raspberry Pi 4's PCIe needs it),
+    /// a full fence elsewhere (x86 and the RISC-V `virt` board are coherent).
+    #[inline]
+    #[cfg_attr(not(target_arch = "aarch64"), allow(unused_variables))]
+    pub fn dma_sync(va: u64, len: usize) {
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::dma_sync(va, len);
+        #[cfg(not(target_arch = "aarch64"))]
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Invalidate every non-global TLB entry on this CPU.
     #[inline]
     pub fn flush_tlb() {

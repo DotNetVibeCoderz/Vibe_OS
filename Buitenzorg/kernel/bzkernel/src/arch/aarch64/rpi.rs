@@ -314,6 +314,33 @@ fn videocore_clock_rate(id: u32) -> u32 {
     unsafe { m.add(6).read_volatile() }
 }
 
+/// The board's Ethernet MAC address from the firmware (mailbox tag 0x00010003).
+pub fn board_mac() -> Option<[u8; 6]> {
+    let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };
+    let words: [u32; 8] = [8 * 4, 0, 0x0001_0003, 8, 0, 0, 0, 0];
+    for (i, w) in words.iter().enumerate() {
+        unsafe { m.add(i).write_volatile(*w) };
+    }
+    if !mailbox_call(m, 8 * 4) {
+        return None;
+    }
+    let b = unsafe { core::slice::from_raw_parts(m.add(5) as *const u8, 6) };
+    let mac = [b[0], b[1], b[2], b[3], b[4], b[5]];
+    if mac == [0; 6] { None } else { Some(mac) }
+}
+
+/// Tell the VideoCore the VL805 USB controller at PCI address `dev_addr`
+/// (bus << 20 | device << 15 | function << 12) was reset, so it loads the
+/// VL805's firmware (mailbox tag 0x00030058, NOTIFY_XHCI_RESET).
+pub fn notify_xhci_reset(dev_addr: u32) -> bool {
+    let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };
+    let words: [u32; 7] = [7 * 4, 0, 0x0003_0058, 4, 4, dev_addr, 0];
+    for (i, w) in words.iter().enumerate() {
+        unsafe { m.add(i).write_volatile(*w) };
+    }
+    mailbox_call(m, 7 * 4)
+}
+
 #[repr(C, align(16))]
 struct Message([u32; 36]);
 static mut MAILBOX_MSG: Message = Message([0; 36]);
