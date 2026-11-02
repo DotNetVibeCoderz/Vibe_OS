@@ -79,7 +79,7 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     {
       exec 3<>/dev/tcp/127.0.0.1/4489
       for _ in 1 2 3; do printf 'info registers
-x/6i $pc
+x/64gx $rsp
 ' >&3; sleep 1; done
       printf 'info cpus
 ' >&3; sleep 1
