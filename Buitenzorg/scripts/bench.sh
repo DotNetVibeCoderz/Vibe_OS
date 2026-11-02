@@ -37,7 +37,7 @@ rm -f "$log"
 echo "bench: booting $img (headless, up to ${WAIT_S}s)"
 "$qemu" -drive "file=$img,format=raw,if=ide" -m 512M \
         -serial "file:$log" -display none \
-        -audiodev none,id=snd0 -device AC97,audiodev=snd0 &
+        -audiodev none,id=snd0 -device AC97,audiodev=snd0         -monitor tcp:127.0.0.1:4486,server,nowait &
 qemu_pid=$!
 
 # shellcheck disable=SC2317
@@ -48,12 +48,25 @@ for _ in $(seq 1 "$WAIT_S"); do
   sleep 1
   if [ -f "$log" ] && grep -q "BUITENZORG READY" "$log" 2>/dev/null; then break; fi
 done
-kill "$qemu_pid" 2>/dev/null || true
-
 if ! grep -q "BUITENZORG READY" "$log" 2>/dev/null; then
-  echo "bench: FAILED — never reached READY within ${WAIT_S}s" >&2
+  # A boot that never gets there: the CPU state, three times a second apart, so
+  # a hang can be told from slowness and located (the log is uploaded with the
+  # boot logs; RIPs are relative to the kernel base, see CLAUDE.md).
+  regs="$root/dist/bench-hang.log"
+  {
+    exec 3<>/dev/tcp/127.0.0.1/4486
+    for _ in 1 2 3; do printf 'info registers
+x/6i $pc
+' >&3; sleep 1; done
+    printf 'info cpus
+' >&3; sleep 1
+    timeout 2 cat <&3
+  } > "$regs" 2>&1 || true
+  kill "$qemu_pid" 2>/dev/null || true
+  echo "bench: FAILED — never reached READY within ${WAIT_S}s (CPU state: dist/bench-hang.log)" >&2
   exit 1
 fi
+kill "$qemu_pid" 2>/dev/null || true
 
 # "[kernel] boot to READY in ~42s (timer ticks)"
 boot_s="$(tr -d '\000' < "$log" | sed -n 's/.*boot to READY in ~\([0-9]\+\)s.*/\1/p' | head -1)"
