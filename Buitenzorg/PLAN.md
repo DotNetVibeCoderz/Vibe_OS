@@ -34,7 +34,8 @@
 | **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | 🔜 **Sedang berjalan** |
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
-| Multi-arch | v1.x | Rimba | ARM64 + RISC-V | ⏳ Rencana |
+| Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |
+| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | ⏳ Rencana (R1–R6) |
 
 Legend: ✅ selesai · 🟡 sebagian · 🔜 sedang/berikutnya · ⏳ direncanakan *(status dirapikan 2026-11-01)*
 
@@ -910,6 +911,60 @@ mirror C#, format disk (FAT), format aset (BMP/ICONS.BIN).
    test yang sama (marker MILESTONE) per arsitektur. *(✓ 2026-11-02: job
    build + matrix smoke per arsitektur, mode strict, log sebagai artifact.
    Roadmap multi-arsitektur M0–M5 selesai.)*
+
+## 🍓 v1.x — "Pucuk" · Raspberry Pi 4 & 5 (perangkat keras nyata, permintaan 2026-11-02)
+
+Port ARM64 (M3) sudah berjalan di QEMU `virt`. Raspberry Pi adalah langkah ke
+**perangkat keras nyata** pertama di luar PC, dan ternyata berbeda di banyak
+tempat yang penting:
+
+| | QEMU `virt` (sudah jalan) | Raspberry Pi 4 (BCM2711) | Raspberry Pi 5 (BCM2712) |
+|---|---|---|---|
+| CPU | Cortex-A72 (emulasi) | 4× Cortex-A72 1.5–1.8 GHz | 4× Cortex-A76 2.4 GHz |
+| Interrupt | GICv3 | **GIC-400 (GICv2)** | **GIC-400 (GICv2)** |
+| Firmware → kernel | edk2 → Limine | GPU firmware → **UEFI (pftf/RPi4 edk2)** → Limine | EEPROM bootloader → **UEFI (rpi5-uefi, edk2)** → Limine |
+| Konsol | PL011 dari DTB | PL011 / mini-UART (GPIO 14/15) | UART di **RP1** (lewat PCIe) + header debug UART |
+| Layar | ramfb / virtio-gpu | GOP dari UEFI → nanti mailbox VideoCore VI | GOP dari UEFI |
+| Penyimpanan | virtio-blk | **EMMC2 (SDHCI)** kartu SD, USB lewat **VL805 xHCI** (PCIe) | **SDHCI** kartu SD, NVMe lewat PCIe 2.0, USB di RP1 |
+| Jaringan | virtio-net | **GENET** (Broadcom) | Ethernet **Cadence GEM** di RP1 |
+| Input | virtio keyboard/tablet | **USB HID** (keyboard/mouse) | USB HID lewat RP1 |
+| Jam | PL031 | tidak ada RTC (NTP / tanpa jam) | **RTC bawaan** (baterai opsional) |
+
+Jalur yang dipilih: **boot lewat UEFI + Limine**, sama dengan QEMU — firmware
+komunitas edk2 untuk Pi 4 dan Pi 5 sudah menyerahkan Device Tree, framebuffer
+GOP dan peta memori, jadi `limine.rs`, `boot::BootInfo`, `dtb.rs` dan paging
+ARM64 dipakai apa adanya. Yang baru adalah **driver perangkat keras nyata**
+(tanpa virtio) dan pengujian di papan sungguhan (tidak bisa diemulasikan
+penuh di CI — QEMU `raspi4b` tidak memodelkan PCIe/USB/GENET; Pi 5 tidak ada
+modelnya sama sekali).
+
+1. **R1 — Boot Pi 4 ke konsol.** Image SD (`dist/buitenzorg-rpi4.img`: partisi
+   FAT berisi firmware Pi + `RPI_EFI.fd` + Limine + kernel ARM64), driver
+   **GICv2** (distributor + CPU interface; kernel saat ini hanya GICv3),
+   PL011/mini-UART dari DTB, timer generik ARM. Marker: `RPI4 BOOT OK` lewat
+   UART serial ke host. Uji awal di QEMU `-M raspi4b` (sebatas yang dimodelkan).
+2. **R2 — Desktop di layar Pi 4.** Framebuffer GOP dari UEFI → window manager +
+   desktop yang sama; SMP 4 core lewat PSCI (firmware UEFI menyediakannya).
+3. **R3 — Penyimpanan Pi 4.** Driver **SDHCI/EMMC2** (baca-tulis kartu SD) →
+   `/disk` FAT seperti di PC; boot program & app dari kartu SD.
+4. **R4 — Input + jaringan Pi 4.** **PCIe** (bridge BCM2711) + **xHCI** (VL805) +
+   **USB HID** keyboard/mouse; **GENET** Ethernet → stack jaringan yang ada.
+5. **R5 — Raspberry Pi 5.** Image `buitenzorg-rpi5.img` (EEPROM bootloader →
+   rpi5-uefi → Limine), CPU Cortex-A76, **RP1** lewat PCIe (UART, USB, Ethernet
+   GEM), SDHCI, RTC bawaan; NVMe lewat PCIe memakai driver NVMe yang dirancang
+   untuk PC.
+6. **R6 — Matang di perangkat nyata.** GPIO/I2C/SPI untuk proyek IoT (selaras
+   dengan HAL RustCLR `rustclr-hal`), audio (PWM/HDMI), power (reboot/shutdown
+   lewat firmware), validasi di papan fisik + dokumentasi instalasi
+   (`docs/install-raspberry-pi.md`), dan uji otomatis di papan nyata
+   (runner CI self-hosted dengan Pi yang dinyalakan lewat relay/PoE).
+
+**Batas jujur:** Pi tidak bisa diuji penuh di QEMU — R1 bisa dicoba sebagian di
+`raspi4b`, sisanya butuh papan fisik dan kabel serial USB-TTL. Firmware UEFI
+Pi adalah proyek komunitas (bukan Raspberry Pi Ltd.); bila suatu saat tidak
+memadai, jalur cadangannya adalah boot langsung dari firmware GPU
+(`kernel8.img` + `config.txt`, entri ARM64 tanpa UEFI) — butuh entry point
+sendiri tetapi tidak mengubah sisa kernel.
 
 ## 🔮 Pasca-1.x (jangka panjang)
 SMP/NUMA matang · driver GPU modern + NPU · WiFi/Bluetooth/USB luas ·
