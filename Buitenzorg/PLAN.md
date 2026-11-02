@@ -35,7 +35,7 @@
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |
-| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1 ✓ di Pi 4 fisik; R2–R6 berikutnya |
+| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1 + R2 ✓ di Pi 4 fisik; R3–R6 berikutnya |
 
 Legend: ✅ selesai · 🟡 sebagian · 🔜 sedang/berikutnya · ⏳ direncanakan *(status dirapikan 2026-11-01)*
 
@@ -956,6 +956,9 @@ modelnya sama sekali).
    dan SMP butuh spin-table. Panduan: `docs/install-raspberry-pi.md`.)*
 2. **R2 — Desktop di layar Pi 4.** Framebuffer GOP dari UEFI → window manager +
    desktop yang sama; SMP 4 core lewat PSCI (firmware UEFI menyediakannya).
+   *(Selesai 2026-11-02, di rute langsung alih-alih UEFI: framebuffer lewat
+   mailbox VideoCore, 4 core lewat spin table; desktop tampil di HDMI Pi 4
+   fisik.)*
 3. **R3 — Penyimpanan Pi 4.** Driver **SDHCI/EMMC2** (baca-tulis kartu SD) →
    `/disk` FAT seperti di PC; boot program & app dari kartu SD.
 4. **R4 — Input + jaringan Pi 4.** **PCIe** (bridge BCM2711) + **xHCI** (VL805) +

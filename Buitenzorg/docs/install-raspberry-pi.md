@@ -8,21 +8,26 @@
 
 ## What works today
 
-This is milestone R1: the kernel boots to a serial console.
+Milestones R1 and R2: the kernel boots, shows the desktop on HDMI and runs on
+all four cores.
+
+![The Buitenzorg desktop on a Raspberry Pi 4 (QEMU raspi4b; the real board shows the same)](img/rpi4-desktop.png)
 
 | | Status |
 |---|---|
 | Boot on the Pi firmware | Yes: a real Pi 4 and QEMU `raspi4b`, direct `kernel8.img` |
 | Serial console | PL011 on the GPIO header |
 | Interrupts and timer | GIC-400 + the ARM generic timer |
-| Memory, address spaces, built-in user-mode test programs | Yes, on one CPU |
-| Screen | No (R2): nothing appears on HDMI |
-| Other CPU cores | No (R2): one core |
+| Memory, address spaces, built-in user-mode test programs | Yes |
+| Screen | Yes: the desktop on HDMI, 1280x720 (the display scales it) |
+| CPU cores | All four, started through the spin tables |
 | SD card as `/disk`, apps | No (R3): the kernel can't read the card yet |
 | USB keyboard and mouse, Ethernet | No (R4) |
 
-So today the Pi boots and reports on the serial port, and that's all. You need a
-**USB-to-serial (3.3 V) adapter** to see anything.
+So today the Pi shows the desktop, but nothing can control it: there's no USB
+keyboard or mouse yet, and after about 12 seconds the screensaver starts. There
+is no wallpaper or app icons yet either: those come from the SD card. The serial
+port (a **USB-to-serial 3.3 V adapter**) shows the full boot log.
 
 ## Try it under QEMU
 
@@ -92,6 +97,19 @@ Cortex-A72 fetches instructions from memory, which still held stale bytes.
 The kernel now cleans written code to the point of unification and
 invalidates the instruction cache (`arch::cpu::sync_code`, called for every
 executable page `elf.rs` loads). The second boot passed.
+
+## How the screen and the cores start
+
+The firmware starts only one core, and the direct route has no UEFI to provide a
+framebuffer or PSCI, so the kernel does both itself:
+
+- **Screen:** before the kernel proper runs, it asks the VideoCore GPU for a
+  1280x720 32-bit framebuffer through its mailbox, maps it non-cacheable (so the
+  GPU sees every write) and hands it on exactly as a UEFI loader would.
+- **Cores:** the firmware parks cores 1-3 in a loop that watches an address
+  given in the Device Tree (`cpu-release-addr`). The kernel writes its entry
+  point there and wakes them; each drops to EL1, turns its MMU on and joins the
+  scheduler.
 
 ## Two boot routes
 

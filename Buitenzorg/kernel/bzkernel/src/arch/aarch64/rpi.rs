@@ -19,6 +19,13 @@
 //! has no debugger attached: `B` entered, `R` relocated, `E` at EL1, `M` MMU
 //! about to go on. `D` means no Device Tree, `3` entered at EL3.
 //!
+//! The screen (roadmap R2): before `kernel_main`, the VideoCore firmware is
+//! asked for a framebuffer through its mailbox (property channel 8). It is
+//! mapped Normal non-cacheable in its own window, so the GPU sees every write
+//! without cache maintenance, and handed over in `BootInfo` exactly as Limine
+//! hands over a UEFI framebuffer: console, window system and desktop need no
+//! Pi-specific code.
+//!
 //! Limits, for now: the kernel image is mapped RWX (blocks, one attribute
 //! set), and RAM above 0xFC00_0000 is ignored (the peripherals start there).
 //! RAM holes inside the first 4 GiB (a 1 GiB board) are mapped Normal, which
@@ -36,7 +43,12 @@ const PHYS_OFFSET: u64 = 0xffff_8000_0000_0000;
 /// Peripherals (and the top of what the tables map as RAM).
 const RAM_TOP: u64 = 0xFC00_0000;
 
-const TABLES: usize = 6;
+const TABLES: usize = 8;
+/// Where the framebuffer is mapped Normal non-cacheable (TTBR1 root entry 257).
+const FB_WINDOW: u64 = 0xffff_8080_0000_0000;
+/// The VideoCore mailbox (BCM2711), seen through the device mapping the head
+/// puts over the peripherals.
+const MAILBOX: u64 = PHYS_OFFSET + 0xfe00_b880;
 
 #[repr(C, align(4096))]
 pub struct Tables([[u64; 512]; TABLES]);
@@ -144,7 +156,8 @@ bz_rpi_head:
     //  0 root TTBR1   [256] -> 2 (all RAM at PHYS_OFFSET)   [511] -> 4 (the kernel)
     //  1 root TTBR0   [0]   -> 2 (identity, for the jump to the higher half)
     //  2 RAM L1       [0..2] 1 GiB blocks, [3] -> 3
-    //  3 RAM L2       2 MiB blocks from 3 GiB up to the peripherals
+    //  3 RAM L2       2 MiB blocks from 3 GiB up to the peripherals, then the
+    //                 peripherals themselves as Device-nGnRnE (the mailbox)
     //  4 kernel L1    [510] -> 5
     //  5 kernel L2    2 MiB blocks over the image
     ldr     x21, =(bz_rpi_tables - {virt})
@@ -179,6 +192,13 @@ bz_rpi_head:
     add     x0, x0, #0x200000
     subs    x3, x3, #1
     b.ne    8b
+    // 0xFC00_0000 .. 4 GiB: device blocks (attr 2), never executable.
+    ldr     x0, =(0xfc000000 | 0x409 | (3 << 53))
+    mov     x3, #32
+82: str     x0, [x4], #8
+    add     x0, x0, #0x200000
+    subs    x3, x3, #1
+    b.ne    82b
     ldr     x3, =(__bz_kernel_end - {virt} + 0x1fffff)
     lsr     x3, x3, #21
     orr     x0, x20, x2
@@ -273,5 +293,110 @@ extern "C" fn bz_rpi_main(dtb: u64) -> ! {
     }
     info.firmware.dtb = Some(dtb);
     info.kernel_base = Some((KERNEL_PHYS, KERNEL_VIRT));
+    info.framebuffer = videocore_framebuffer(1280, 720);
     crate::kernel_main(boot::install(info))
+}
+
+#[repr(C, align(16))]
+struct Message([u32; 36]);
+static mut MAILBOX_MSG: Message = Message([0; 36]);
+
+fn kernel_phys(va: u64) -> u64 {
+    va - KERNEL_VIRT + KERNEL_PHYS
+}
+
+/// Clean + invalidate `[va, va+len)` to the point of coherency (the VideoCore
+/// reads and writes the message in memory, not in our cache).
+fn flush(va: u64, len: u64) {
+    let mut a = va & !63;
+    while a < va + len {
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) a, options(nostack)) };
+        a += 64;
+    }
+    unsafe { core::arch::asm!("dsb sy", options(nostack)) };
+}
+
+/// One mailbox property call on channel 8; false if the firmware did not answer.
+fn mailbox_call(msg: *mut u32, len: u64) -> bool {
+    let reg = |off: u64| (MAILBOX + off) as *mut u32;
+    let addr = kernel_phys(msg as u64) as u32;
+    flush(msg as u64, len);
+    unsafe {
+        let mut n = 0u32;
+        while reg(0x18).read_volatile() & (1 << 31) != 0 {
+            n += 1;
+            if n > 10_000_000 {
+                return false;
+            }
+        }
+        reg(0x20).write_volatile(addr | 8);
+        loop {
+            let mut n = 0u32;
+            while reg(0x18).read_volatile() & (1 << 30) != 0 {
+                n += 1;
+                if n > 50_000_000 {
+                    return false;
+                }
+            }
+            if reg(0x00).read_volatile() == addr | 8 {
+                break;
+            }
+        }
+    }
+    flush(msg as u64, len);
+    unsafe { msg.add(1).read_volatile() == 0x8000_0000 }
+}
+
+/// Ask the VideoCore for a `width` x `height`, 32-bit framebuffer and map it.
+fn videocore_framebuffer(width: u32, height: u32) -> Option<boot::Framebuffer> {
+    let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };
+    let words: [u32; 35] = [
+        35 * 4, 0,
+        0x0004_8003, 8, 8, width, height,      // physical size
+        0x0004_8004, 8, 8, width, height,      // virtual size
+        0x0004_8009, 8, 8, 0, 0,               // virtual offset
+        0x0004_8005, 4, 4, 32,                 // depth
+        0x0004_8006, 4, 4, 0,                  // pixel order: BGR in memory (0x00RRGGBB words)
+        0x0004_0001, 8, 8, 4096, 0,            // allocate buffer -> base, size
+        0x0004_0008, 4, 4, 0,                  // pitch
+        0,
+    ];
+    for (i, w) in words.iter().enumerate() {
+        unsafe { m.add(i).write_volatile(*w) };
+    }
+    if !mailbox_call(m, 35 * 4) {
+        return None;
+    }
+    let at = |i: usize| unsafe { m.add(i).read_volatile() };
+    let (w, h, order, bus, size, pitch) = (at(5), at(6), at(24), at(28), at(29), at(33));
+    if bus == 0 || size == 0 || pitch < w * 4 || w == 0 || h == 0 {
+        return None;
+    }
+    let phys = (bus & 0x3FFF_FFFF) as u64;
+    let len = (pitch as u64) * h as u64;
+
+    // Map it in its own window: Normal non-cacheable (MAIR index 1), 2 MiB blocks.
+    let tables = unsafe { core::ptr::addr_of_mut!(bz_rpi_tables.0) };
+    let (l0, l1, l2) = unsafe { (&mut (*tables)[0], &mut (*tables)[6], &mut (*tables)[7]) };
+    let base = phys & !0x1F_FFFF;
+    let blocks = ((phys + len - base) + 0x1F_FFFF) >> 21;
+    if blocks > 512 {
+        return None;
+    }
+    for i in 0..blocks as usize {
+        l2[i] = (base + ((i as u64) << 21)) | 0x400 | 0x300 | (1 << 2) | 1 | (3 << 53);
+    }
+    l1[0] = kernel_phys(l2.as_ptr() as u64) | 3;
+    l0[((FB_WINDOW >> 39) & 511) as usize] = kernel_phys(l1.as_ptr() as u64) | 3;
+    unsafe { core::arch::asm!("dsb ishst", "tlbi vmalle1", "dsb ish", "isb", options(nostack)) };
+
+    Some(boot::Framebuffer {
+        addr: FB_WINDOW + (phys - base),
+        len: len as usize,
+        width: w as usize,
+        height: h as usize,
+        stride: (pitch / 4) as usize,
+        bytes_per_pixel: 4,
+        format: if order == 1 { boot::PixelFormat::Rgb } else { boot::PixelFormat::Bgr },
+    })
 }

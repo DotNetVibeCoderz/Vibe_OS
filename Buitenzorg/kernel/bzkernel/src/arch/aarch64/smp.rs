@@ -1,4 +1,8 @@
-//! Multi-core on ARM64: secondary CPUs are started with **PSCI CPU_ON**
+//! Multi-core on ARM64: secondary CPUs are started with **PSCI CPU_ON** (QEMU
+//! `virt`, UEFI boards) or, on a Raspberry Pi booted directly, through their
+//! **spin tables**: each parked core polls its `cpu-release-addr` (from the
+//! DTB) and jumps to the address written there, at EL2 with the MMU off; a
+//! stub first drops it to EL1 and fetches its boot block.
 //! (target MPIDR, physical entry point, context id). A CPU starts at EL1 with
 //! its MMU off, so it enters a small trampoline at the *physical* address of
 //! the kernel image, which loads the boot CPU's MAIR / TCR / TTBR1 / SCTLR plus
@@ -43,6 +47,34 @@ bz_ap_trampoline:
     mov sp, x6
     mov x0, x8
     br x7
+
+// Spin-table entry (Raspberry Pi firmware): EL2 or EL1, MMU off, no argument.
+// The boot block address waits in bz_ap_spin_block (one core starts at a time).
+.global bz_ap_spin_entry
+bz_ap_spin_entry:
+    mrs x9, currentel
+    lsr x9, x9, #2
+    cmp x9, #2
+    b.ne 1f
+    mov x9, #(1 << 31)          // HCR_EL2.RW
+    msr hcr_el2, x9
+    mov x9, #3                  // EL1 reaches the counter + timer
+    msr cnthctl_el2, x9
+    msr cntvoff_el2, xzr
+    mov x9, #0x33ff
+    msr cptr_el2, x9
+    msr hstr_el2, xzr
+    ldr x9, =0x30d00800
+    msr sctlr_el1, x9
+    mov x9, #0x3c5
+    msr spsr_el2, x9
+    adr x9, 1f
+    msr elr_el2, x9
+    eret
+1:  adrp x0, bz_ap_spin_block
+    ldr x0, [x0, :lo12:bz_ap_spin_block]
+    b bz_ap_trampoline
+    .ltorg
 .balign 4096
 .global bz_ap_trampoline_end
 bz_ap_trampoline_end:
@@ -51,7 +83,12 @@ bz_ap_trampoline_end:
 
 extern "C" {
     static bz_ap_trampoline: u8;
+    static bz_ap_spin_entry: u8;
 }
+
+/// Physical address of the boot block of the core being released from its spin table.
+#[no_mangle]
+static mut bz_ap_spin_block: u64 = 0;
 
 /// CPUs started (the boot CPU counts).
 static ONLINE: AtomicUsize = AtomicUsize::new(1);
@@ -90,9 +127,39 @@ fn clean_to_poc(va: u64, len: u64) {
 }
 
 /// Start every CPU in `mpidrs` (MPIDR affinities from the DTB) except the
-/// boot CPU. `kernel_base` = (physical, virtual) base of the kernel image.
-/// Returns how many CPUs are online afterwards.
+/// boot CPU, with PSCI CPU_ON. `kernel_base` = (physical, virtual) base of the
+/// kernel image. Returns how many CPUs are online afterwards.
 pub fn start_aps(mpidrs: &[u64], kernel_base: (u64, u64)) -> usize {
+    start_with(mpidrs, kernel_base, &|mpidr, tramp_pa, boot_pa| {
+        let r = super::psci::call(PSCI_CPU_ON, mpidr, tramp_pa, boot_pa);
+        if r != 0 {
+            crate::println!("[smp] PSCI CPU_ON {:#x} failed: {:#x}", mpidr, r as i64);
+        }
+        r == 0
+    })
+}
+
+/// Start CPUs parked in spin tables: `cpus` = (MPIDR, physical cpu-release-addr).
+pub fn start_aps_spin(cpus: &[(u64, u64)], kernel_base: (u64, u64)) -> usize {
+    let mpidrs: alloc::vec::Vec<u64> = cpus.iter().map(|c| c.0).collect();
+    let entry_va = unsafe { &bz_ap_spin_entry as *const u8 as u64 };
+    let entry_pa = entry_va - kernel_base.1 + kernel_base.0;
+    start_with(&mpidrs, kernel_base, &|mpidr, _tramp_pa, boot_pa| {
+        let Some(&(_, release)) = cpus.iter().find(|c| c.0 == mpidr) else { return false };
+        unsafe {
+            let slot = core::ptr::addr_of_mut!(bz_ap_spin_block);
+            slot.write_volatile(boot_pa);
+            clean_to_poc(slot as u64, 8);
+            let rel = crate::memory::phys_to_virt(release) as *mut u64;
+            rel.write_volatile(entry_pa);
+            clean_to_poc(rel as u64, 8);
+            asm!("sev", options(nostack));
+        }
+        true
+    })
+}
+
+fn start_with(mpidrs: &[u64], kernel_base: (u64, u64), kick: &dyn Fn(u64, u64, u64) -> bool) -> usize {
     let me = super::cpu::mpidr_affinity();
     let tramp_va = unsafe { &bz_ap_trampoline as *const u8 as u64 };
     let tramp_pa = tramp_va - kernel_base.1 + kernel_base.0;
@@ -124,9 +191,7 @@ pub fn start_aps(mpidrs: &[u64], kernel_base: (u64, u64)) -> usize {
             unsafe { block.add(i).write_volatile(*v) };
         }
         clean_to_poc(boot_va as u64, 64);
-        let r = super::psci::call(PSCI_CPU_ON, mpidr, tramp_pa, boot_pa);
-        if r != 0 {
-            crate::println!("[smp] PSCI CPU_ON {:#x} failed: {:#x}", mpidr, r as i64);
+        if !kick(mpidr, tramp_pa, boot_pa) {
             continue;
         }
         // Wait (up to ~1 s of counter time) for it to report in.
@@ -173,7 +238,7 @@ pub fn cpus_online() -> usize {
 pub fn report() -> alloc::vec::Vec<alloc::string::String> {
     let n = cpus_online();
     let mut out = alloc::vec![alloc::format!(
-        "{} CPU (AArch64, dinyalakan lewat PSCI CPU_ON), scheduler simetris + Big Kernel Lock; timer generik {} MHz",
+        "{} CPU (AArch64, dinyalakan lewat PSCI CPU_ON atau spin table), scheduler simetris + Big Kernel Lock; timer generik {} MHz",
         n,
         super::cpu::counter_hz() / 1_000_000
     )];

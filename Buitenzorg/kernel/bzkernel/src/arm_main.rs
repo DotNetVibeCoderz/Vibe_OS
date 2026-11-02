@@ -717,11 +717,28 @@ fn start_secondary_cpus(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         .filter_map(|i| f.reg(i).first().map(|r| r.0))
         .collect();
     let method = f.find_path("/psci").and_then(|i| f.nodes[i].strings("method").next()).unwrap_or("");
-    if mpidrs.len() < 2 || !power::init(method) {
+    // No PSCI (a Raspberry Pi booted directly): spin tables, if every CPU has one.
+    let spin: alloc::vec::Vec<(u64, u64)> = (0..f.nodes.len())
+        .filter(|&i| f.nodes[i].parent == Some(cpus) && f.nodes[i].strings("enable-method").any(|s| s == "spin-table"))
+        .filter_map(|i| {
+            let v = f.nodes[i].prop("cpu-release-addr")?;
+            let release = match v.len() {
+                8 => u64::from_be_bytes(v[..8].try_into().ok()?),
+                4 => u32::from_be_bytes(v[..4].try_into().ok()?) as u64,
+                _ => return None,
+            };
+            Some((f.reg(i).first()?.0, release))
+        })
+        .collect();
+    let psci = power::init(method);
+    let (online, how) = if mpidrs.len() >= 2 && psci {
+        (arch::aarch64::smp::start_aps(&mpidrs, base), "PSCI CPU_ON")
+    } else if mpidrs.len() >= 2 && spin.len() == mpidrs.len() {
+        (arch::aarch64::smp::start_aps_spin(&spin, base), "spin tables")
+    } else {
         println!("[smp] single CPU ({} in the DTB)", mpidrs.len());
         return;
-    }
-    let online = arch::aarch64::smp::start_aps(&mpidrs, base);
+    };
     let irq0: alloc::vec::Vec<u64> = (0..online).map(arch::aarch64::exceptions::irqs_on).collect();
     let t0 = arch::cpu::timestamp();
     while arch::cpu::timestamp() - t0 < arch::aarch64::cpu::counter_hz() / 5 {
@@ -729,14 +746,15 @@ fn start_secondary_cpus(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     }
     let ticked = (0..online).filter(|&c| arch::aarch64::exceptions::irqs_on(c) > irq0[c] + 5).count();
     println!(
-        "[smp] {} of {} CPUs online via PSCI CPU_ON (MPIDRs {:x?}); {} took their own timer interrupts in 200 ms",
+        "[smp] {} of {} CPUs online via {} (MPIDRs {:x?}); {} took their own timer interrupts in 200 ms",
         online,
         mpidrs.len(),
+        how,
         mpidrs,
         ticked
     );
     if online == mpidrs.len() && ticked == online {
-        println!("[kernel] MILESTONE: ARM64 SMP OK ({} CPUs: PSCI CPU_ON + MMU-off trampoline, per-CPU GIC redistributor + timer, shared scheduler)", online);
+        println!("[kernel] MILESTONE: ARM64 SMP OK ({} CPUs: {} + MMU-off trampoline, per-CPU GIC + timer, shared scheduler)", online, how);
     }
 }
 

@@ -16,10 +16,11 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
-- **Raspberry Pi 4: first boot.** The ARM64 kernel boots to a serial console
-  on a real Raspberry Pi 4 (tested on an 8 GB Model B) and on QEMU's Pi 4
-  machine. Flash `dist/buitenzorg-rpi4.img` to an SD card. There is no screen,
-  disk or keyboard support on the Pi yet. See
+- **Raspberry Pi 4: the desktop on HDMI, on all four cores.** The ARM64 kernel
+  boots on a real Raspberry Pi 4 (tested on an 8 GB Model B) and on QEMU's Pi 4
+  machine, shows the desktop on the HDMI screen and uses all four cores. Flash
+  `dist/buitenzorg-rpi4.img` to an SD card. There is no keyboard, mouse or SD
+  card access on the Pi yet. See
   [docs/install-raspberry-pi.md](docs/install-raspberry-pi.md).
 - **Managed Apps and a new UI toolkit.** The desktop has a **Managed Apps**
   icon that opens a folder of apps written in ordinary .NET C#: a calculator
