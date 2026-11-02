@@ -11,8 +11,11 @@
 //!
 //! The host supplies what RustCLR asks of an embedder (`Host`): console
 //! output (DEBUG_WRITE), the clocks (TICKS, CLOCK_RTC), the arguments
-//! (PROC_ARGS); plus the Rust heap (`heap.rs`, MMAP + MPROTECT) and a big
-//! stack (the interpreter recurses per managed call).
+//! (PROC_ARGS); plus the Rust heap (`heap.rs`, MMAP + MPROTECT), a big
+//! stack (the interpreter recurses per managed call), and real threads
+//! (`threads.rs`: RustCLR's `threads` feature over THREAD_CREATE, futexes
+//! with timeouts and CLOCK_NANOS -- `Thread`, `Task.Run`, `Parallel`,
+//! `Monitor.Wait`, a GC that stops every thread at safe points).
 
 #![no_std]
 #![no_main]
@@ -21,6 +24,7 @@ extern crate alloc;
 
 mod heap;
 mod sys;
+mod threads;
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -75,7 +79,10 @@ impl Host for BzHost {
         None
     }
     fn monotonic_millis(&mut self) -> u64 {
-        sys::uptime_millis() - self.t0
+        sys::syscall(threads::CLOCK_NANOS, 0, 0, 0) / 1_000_000 - self.t0
+    }
+    fn monotonic_nanos(&mut self) -> u64 {
+        sys::syscall(threads::CLOCK_NANOS, 0, 0, 0)
     }
     fn wall_clock_millis(&mut self) -> i64 {
         sys::unix_millis()
@@ -98,7 +105,8 @@ extern "C" fn clr_main() -> ! {
         sys::print(&format!("[clr] {}: file not found\n", path));
         sys::exit(3);
     };
-    let t0 = sys::uptime_millis();
+    threads::install();
+    let t0 = sys::syscall(threads::CLOCK_NANOS, 0, 0, 0) / 1_000_000;
     let image = match Image::from_bytes(bytes) {
         Ok(i) => i,
         Err(e) => {
@@ -109,6 +117,8 @@ extern "C" fn clr_main() -> ! {
     let name = image.assembly_name().to_string();
 
     let mut interp = Interpreter::with_host(Box::new(BzHost { args: prog_args, t0 }));
+    // Threads this program starts get the same console.
+    interp.host_factory = Some(alloc::sync::Arc::new(move || Box::new(BzHost { args: Vec::new(), t0 }) as Box<dyn Host>));
     rustclr_bcl::install(&mut interp);
     // RustBCL's `Assembly.Load` needs `std` (a filesystem to search); this
     // host has one -- the VFS -- so it supplies its own.
@@ -152,7 +162,7 @@ extern "C" fn clr_main() -> ! {
         gc.peak_live_bytes / 1024,
         used / 1024,
         committed >> 20,
-        sys::uptime_millis() - t0
+        sys::syscall(threads::CLOCK_NANOS, 0, 0, 0) / 1_000_000 - t0
     ));
     sys::exit(code)
 }

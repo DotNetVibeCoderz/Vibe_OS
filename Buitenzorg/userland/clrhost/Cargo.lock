@@ -11,6 +11,7 @@ dependencies = [
  "rustclr-core",
  "rustclr-gc",
  "rustclr-metadata",
+ "rustclr-thread",
 ]
 
 [[package]]
@@ -28,7 +29,7 @@ checksum = "2b23ac50abb8261cb38c6e2a7192d3302e0836dac1628f6a93b82b4fad185897"
 [[package]]
 name = "rustclr-bcl"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
 dependencies = [
  "libm",
  "rustclr-core",
@@ -37,28 +38,31 @@ dependencies = [
  "rustclr-gc",
  "rustclr-gfx",
  "rustclr-hal",
+ "rustclr-thread",
 ]
 
 [[package]]
 name = "rustclr-core"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
 dependencies = [
  "rustclr-gc",
  "rustclr-gfx",
  "rustclr-hal",
  "rustclr-metadata",
+ "rustclr-sched",
+ "rustclr-thread",
 ]
 
 [[package]]
 name = "rustclr-crypto"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
 
 [[package]]
 name = "rustclr-flashfs"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
 dependencies = [
  "rustclr-hal",
 ]
@@ -66,12 +70,15 @@ dependencies = [
 [[package]]
 name = "rustclr-gc"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
+dependencies = [
+ "rustclr-thread",
+]
 
 [[package]]
 name = "rustclr-gfx"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
 dependencies = [
  "rustclr-hal",
 ]
@@ -79,9 +86,22 @@ dependencies = [
 [[package]]
 name = "rustclr-hal"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
 
 [[package]]
 name = "rustclr-metadata"
 version = "0.1.1"
-source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=441601e013db5b33cffcb040fe6e963be1773d3a#441601e013db5b33cffcb040fe6e963be1773d3a"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
+
+[[package]]
+name = "rustclr-sched"
+version = "0.1.1"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"
+dependencies = [
+ "rustclr-thread",
+]
+
+[[package]]
+name = "rustclr-thread"
+version = "0.1.1"
+source = "git+https://github.com/DotNetVibeCoderz/Vibe_Runtime?rev=6e31a5a4a831a2994f47de64373f2f5ec5282b45#6e31a5a4a831a2994f47de64373f2f5ec5282b45"

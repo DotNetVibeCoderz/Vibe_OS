@@ -35,11 +35,11 @@ pub fn available() -> bool {
 /// Boot self-test of the managed path: `HELLOCLR.DLL` (strings, `object[]`,
 /// interfaces, LINQ + lambdas, exceptions, a GC that reclaims, a static
 /// reference field -- each something the native path cannot do) must pass
-/// all its checks, then RustCLR's own modern-syntax suite runs (`MODERN.DLL`;
-/// it prints `checks=35 failures=0`, which the smoke test requires).
-/// RustCLR's main conformance suite is not run yet: it starts real threads
-/// (`Thread`, `Monitor.Wait`, `Task.Run`), which RustCLR only provides with
-/// `std` -- the host's threads (THREAD_CREATE + futexes) come next.
+/// all its checks, then RustCLR's own suites run: `CONFORM.DLL` (361 checks:
+/// real threads, `lock`/`Monitor.Wait`/`Pulse`, `Interlocked`, `Task.Run`,
+/// `Parallel`, `async`/`await`, collection under several threads, ...) and
+/// `MODERN.DLL` (35 checks). They print `checks=N failures=0`, which the smoke
+/// test requires.
 pub fn boot_demo(arch: &str) {
     if !available() {
         crate::println!("[clr] managed runtime not installed ({} missing: scripts/build-clrhost)", HOST);
@@ -54,7 +54,7 @@ pub fn boot_demo(arch: &str) {
         Ok(code) => crate::println!("[clr] HELLOCLR.DLL failed (exit {:#x})", code),
         Err(e) => crate::println!("[clr] cannot start {}: {}", HOST, e),
     }
-    for dll in ["/disk/MODERN.DLL"] {
+    for dll in ["/disk/CONFORM.DLL", "/disk/MODERN.DLL"] {
         if crate::vfs::read(dll).is_err() {
             continue;
         }

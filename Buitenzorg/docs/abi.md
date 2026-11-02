@@ -63,6 +63,8 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 40 | `PROC_SPAWN` | ptr path (NUL-terminated app name or VFS path) | ptr args (NUL-terminated, 0 = none) | pid of the new process |
 | 41 | `PROC_WAIT` | pid | — | exit code (blocks until exit); `INVAL` if unknown |
 | 42 | `PROC_ARGS` | ptr buffer | max bytes | full length of the caller's argument string |
+| 43 | `FUTEX_WAIT_TIMEOUT` | ptr u32 word | expected value | 0 woken / word changed, 1 timed out (a2 = timeout in ns, 0 = none) |
+| 44 | `CLOCK_NANOS` | — | — | monotonic nanoseconds since boot |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.

@@ -322,8 +322,10 @@ yang "matang". Ini "make-or-break" Layer 4 dan **prasyarat** preloaded suite
   *managed* (RustCLR: re-implementasi CoreCLR di Rust — interpreter IL + GC +
   RustBCL — sebagai program ring-3 `CLRHOST.ELF`, DLL `dotnet build` jalan
   apa adanya, netral arsitektur). *(Increment 1 ✓ 2026-11-02: host di
-  x86-64/ARM64/RISC-V, `CLR OK` + suite ModernSyntax 35/35. Berikutnya: thread
-  di atas `THREAD_CREATE`/futex → suite Conformance RustCLR; interop
+  x86-64/ARM64/RISC-V, `CLR OK` + suite ModernSyntax 35/35. Increment 2 ✓:
+  thread sungguhan (RustCLR `threads` + `rustclr-thread`; syscall
+  `FUTEX_WAIT_TIMEOUT`/`CLOCK_NANOS`; futex per address space) → Conformance
+  488/488 di ARM64/RISC-V. Berikutnya: interop
   `Buitenzorg.Runtime` (jendela/grafik); `run app.dll` dari shell/desktop.)*
 
 **Milestone:** app C# ber-GC memakai LINQ/Regex/StringBuilder/Base64/

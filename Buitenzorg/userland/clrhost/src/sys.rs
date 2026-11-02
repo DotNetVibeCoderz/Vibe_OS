@@ -9,7 +9,6 @@ use core::arch::asm;
 
 pub const DEBUG_WRITE: u64 = 1;
 pub const EXIT: u64 = 2;
-pub const TICKS: u64 = 4;
 pub const MMAP: u64 = 13;
 pub const MPROTECT: u64 = 14;
 pub const FS_READ: u64 = 30;
@@ -94,11 +93,6 @@ pub fn print(s: &str) {
 pub fn exit(code: u64) -> ! {
     syscall(EXIT, code, 0, 0);
     loop {}
-}
-
-/// Ticks since boot in PIT units (18.2 per second) -> milliseconds.
-pub fn uptime_millis() -> u64 {
-    syscall(TICKS, 0, 0, 0) * 10_000 / 182
 }
 
 /// The real-time clock as Unix milliseconds (0 if unavailable).

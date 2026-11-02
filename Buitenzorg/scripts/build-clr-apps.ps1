@@ -1,9 +1,8 @@
 # The managed C# apps (RustCLR path): `dotnet build` every project under
 # userland/clr-apps and copy the assembly to userland/clr-apps/dist under its
 # 8.3 /disk name. The results are committed, so images build without the
-# .NET SDK; run this after changing an app. RustCLR's modern-syntax suite is
-# copied too when a RustNetRuntime checkout is found ($env:RUSTNET_ROOT); its
-# main Conformance suite needs threads, which the managed host does not have yet.
+# .NET SDK; run this after changing an app. RustCLR's own conformance suites
+# are copied too when a RustNetRuntime checkout is found ($env:RUSTNET_ROOT).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $apps = Join-Path $root "userland\clr-apps"
@@ -20,7 +19,7 @@ foreach ($proj in Get-ChildItem -Path $apps -Filter *.csproj -Recurse) {
 }
 $rustnet = if ($env:RUSTNET_ROOT) { $env:RUSTNET_ROOT } else { Join-Path $root "..\..\Vibe_Runtime\RustNetRuntime" }
 if (Test-Path (Join-Path $rustnet "tests\fixtures")) {
-    foreach ($pair in @(,@("ModernSyntax", "MODERN.DLL"))) {
+    foreach ($pair in @(@("Conformance", "CONFORM.DLL"), @("ModernSyntax", "MODERN.DLL"))) {
         $fx = $pair[0]; $out = $pair[1]
         Write-Host "==> RustCLR fixture $fx -> $out"
         dotnet build (Join-Path $rustnet "tests\fixtures\$fx\$fx.csproj") -c Release -nologo -v q

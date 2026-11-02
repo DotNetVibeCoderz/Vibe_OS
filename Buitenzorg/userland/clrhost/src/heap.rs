@@ -37,7 +37,15 @@ pub static HEAP: BzHeap = BzHeap {
 
 impl BzHeap {
     fn with<R>(&self, f: impl FnOnce(&mut Heap, &mut u64, &mut u64) -> R) -> R {
+        // Threads allocate concurrently (several CPUs); a holder preempted
+        // on this CPU would keep a spinner waiting a whole slice, so yield
+        // after a short spin.
+        let mut spins = 0u32;
         while self.lock.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            spins += 1;
+            if spins % 64 == 0 {
+                sys::syscall(3, 0, 0, 0); // YIELD
+            }
             core::hint::spin_loop();
         }
         let r = unsafe { f(&mut *self.heap.get(), &mut *self.base.get(), &mut *self.committed.get()) };

@@ -35,6 +35,12 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Managed C# (increment 2): real threads.** Managed programs can start
+  threads, use `lock`, `Monitor.Wait`/`Pulse`, `Task.Run`, `Parallel` and
+  `async`/`await`, and the garbage collector stops every thread safely. RustCLR's
+  conformance suite (488 checks) passes on ARM64 and RISC-V; on x86 under
+  emulation one timing-only check is too slow. Two new system calls: a futex
+  wait with a timeout and a nanosecond clock.
 - **Managed C# (increment 1): RustCLR as a second way to run C#.** Next to
   the native bflat apps, Buitenzorg now runs ordinary `dotnet build` programs
   unmodified on RustCLR, our Rust re-implementation of the .NET runtime, with
@@ -268,6 +274,11 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **A futex wake-up could reach the wrong program.** Futex keys were plain
+  user addresses, which are the same in every process, so waking one
+  program's waiting thread could wake another program's thread instead and
+  leave the first asleep for ever. Wake-ups now stay inside the caller's
+  process.
 - **The RISC-V user-mode self-test failed on fast machines.** It counted loop
   iterations instead of time, so a fast CI runner finished before enough timer
   interrupts arrived; it now waits a fixed 300 ms.

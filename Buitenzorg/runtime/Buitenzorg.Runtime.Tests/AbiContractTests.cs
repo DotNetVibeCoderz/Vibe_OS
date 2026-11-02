@@ -55,7 +55,9 @@ public class AbiContractTests
         Assert.Equal(40ul, SyscallNumbers.ProcSpawn);
         Assert.Equal(41ul, SyscallNumbers.ProcWait);
         Assert.Equal(42ul, SyscallNumbers.ProcArgs);
-        Assert.Equal(43ul, SyscallNumbers.Count);
+        Assert.Equal(43ul, SyscallNumbers.FutexWaitTimeout);
+        Assert.Equal(44ul, SyscallNumbers.ClockNanos);
+        Assert.Equal(45ul, SyscallNumbers.Count);
     }
 
     /// <summary>
@@ -68,7 +70,7 @@ public class AbiContractTests
     public void AbiV1IsFrozen()
     {
         Assert.Equal(1ul, Abi.Version);
-        Assert.Equal(43ul, SyscallNumbers.Count);
+        Assert.Equal(45ul, SyscallNumbers.Count);
 
         Assert.Equal(56, Marshal.SizeOf<FramebufferInfo>());
         Assert.Equal(48, Marshal.SizeOf<DrawCmd>());

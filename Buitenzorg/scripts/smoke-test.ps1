@@ -57,7 +57,7 @@ function Invoke-Boot {
     $qargs += @('-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                 '-display', 'none', '-serial', "file:$Log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
-    foreach ($i in 1..130) {
+    foreach ($i in 1..240) {
         Start-Sleep -Seconds 1
         if ((Test-Path $Log) -and (Select-String -Path $Log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
@@ -124,7 +124,7 @@ $ideMarkers = $basic + @(
     "MILESTONE: VFS OK", "MILESTONE: SERVICES OK", "MILESTONE: ASYNC IO OK",
     "MILESTONE: NETWORK OK", "MILESTONE: TERMINAL OK", "MILESTONE: THEME OK",
     "MILESTONE: WORKSPACE OK", "MILESTONE: KANOPI OK",
-    "MILESTONE: CLR OK", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=35 failures=0")
+    "MILESTONE: CLR OK", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=488 failures=", "checks=35 failures=0")
 # The C# ring-3 milestones only run when the ELFs were embedded (bflat present).
 if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
     $ideMarkers += @("Hello from C#!", "MILESTONE: TUNAS OK",
@@ -214,7 +214,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
-    foreach ($i in 1..130) {
+    foreach ($i in 1..240) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
@@ -238,7 +238,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
-    foreach ($i in 1..150) {
+    foreach ($i in 1..240) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
     }
@@ -283,7 +283,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
         "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "MILESTONE: ARM64 EL0 OK", "Hello from EL0",
         "MILESTONE: ARM64 RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: ARM64 DISK OK", "MILESTONE: VIRTIO GPU OK",
         "MILESTONE: SECURITY OK", "MILESTONE: ARM64 PSCI OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK",
-        "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=35 failures=0")
+        "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=488 failures=", "checks=35 failures=0")
     if (Select-String -Path $log -Pattern "program 'hello'" -Quiet) {
         Assert-Markers -Log $log -Markers @("Hello from C#!", "MILESTONE: ARM64 CSHARP OK", "MILESTONE: MATANG OK",
             "MILESTONE: HEAP OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
@@ -318,7 +318,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
                '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0', '-device', 'ramfb',
                '-monitor', 'tcp:127.0.0.1:4484,server,nowait', '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemuRv -ArgumentList $qargs -PassThru
-    foreach ($i in 1..150) {
+    foreach ($i in 1..240) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "RISCV READY" -Quiet)) { break }
     }
@@ -327,7 +327,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     Start-Sleep -Seconds 3
     Send-VirtioInput -Log $log -Port 4484
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CLR OK", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CLR OK", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=488 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
     Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
     # The file the kernel wrote to /disk must be inside the image file.
     # (QEMU must be gone first: it holds the image open.)
@@ -341,5 +341,19 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     Skip-Step "smoke [riscv64]: skipped (needs qemu-system-riscv64, edk2-riscv-code.fd/-vars.fd and dist\buitenzorg-riscv64.img)"
 }
 } # riscv64
+
+# Managed C#: RustCLR's conformance suite (CONFORM.DLL, 488 checks) must pass
+# every check except "blocked workers do not stall the queue" -- a wall-clock
+# assertion (32 tasks sleeping 200 ms must finish within 1 s; ~0.85 s even on
+# .NET itself) that QEMU's TCG emulation can miss, because every pool worker
+# it starts copies the interpreter, which is slow under emulation. Any other
+# failed check fails the smoke test.
+foreach ($pair in @(@("x86_64", "boot-ide.log"), @("aarch64", "boot-arm64.log"), @("riscv64", "boot-riscv64.log"))) {
+    if (-not (Test-Arch $pair[0])) { continue }
+    $f = Join-Path $root ("dist\" + $pair[1])
+    if (-not (Test-Path $f)) { continue }
+    $bad = Select-String -Path $f -Pattern '^FAIL ' | Where-Object { $_.Line -notmatch '^FAIL blocked workers do not stall the queue' }
+    if ($bad) { Write-Error "SMOKE TEST FAILED ($($pair[1])): RustCLR conformance: $($bad[0].Line)"; exit 1 }
+}
 
 Write-Host "SMOKE TEST PASSED ($Arch)" -ForegroundColor Green

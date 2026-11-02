@@ -136,8 +136,14 @@ public static class SyscallNumbers
     /// <summary>Copy the caller's argument string into a0 = buffer (max a1 bytes). Returns its full length.</summary>
     public const ulong ProcArgs = 42;
 
+    /// <summary>FUTEX_WAIT with a time limit: block while the u32 at a0 holds a1, at most a2 nanoseconds (0 = no limit). Returns 0 when woken / changed, 1 on timeout.</summary>
+    public const ulong FutexWaitTimeout = 43;
+
+    /// <summary>Monotonic nanoseconds since boot. No arguments.</summary>
+    public const ulong ClockNanos = 44;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 43;
+    public const ulong Count = 45;
 }
 
 /// <summary>Socket kinds for <see cref="SyscallNumbers.NetSocket"/>. Only UDP is implemented;

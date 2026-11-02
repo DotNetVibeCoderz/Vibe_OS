@@ -160,8 +160,16 @@ pub mod sysno {
     /// Copy the calling process's argument string into `a0 = buffer` (at most
     /// `a1 = max` bytes, NUL-terminated if it fits). Returns its full length.
     pub const PROC_ARGS: u64 = 42;
+    /// FUTEX_WAIT with a time limit (the managed runtime's `Monitor.Wait(ms)`,
+    /// `Thread.Sleep`, timed condition variables): block while the 32-bit word
+    /// at `a0` holds `a1`, for at most `a2` nanoseconds (0 = no limit).
+    /// Returns 0 when woken or the word changed, 1 when the time ran out.
+    pub const FUTEX_WAIT_TIMEOUT: u64 = 43;
+    /// Monotonic nanoseconds since boot (CLOCK_MONO is raw counter ticks of
+    /// an unspecified frequency). No arguments.
+    pub const CLOCK_NANOS: u64 = 44;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 43;
+    pub const COUNT: u64 = 45;
 }
 
 /// Socket kinds for the [`sysno::NET_SOCKET`] syscall.
@@ -483,7 +491,9 @@ mod tests {
         assert_eq!(sysno::PROC_SPAWN, 40);
         assert_eq!(sysno::PROC_WAIT, 41);
         assert_eq!(sysno::PROC_ARGS, 42);
-        assert_eq!(sysno::COUNT, 43);
+        assert_eq!(sysno::FUTEX_WAIT_TIMEOUT, 43);
+        assert_eq!(sysno::CLOCK_NANOS, 44);
+        assert_eq!(sysno::COUNT, 45);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -499,7 +509,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 43, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 45, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

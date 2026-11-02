@@ -111,6 +111,8 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::MPROTECT
             | sysno::MUNMAP
             | sysno::FUTEX_WAIT
+            | sysno::FUTEX_WAIT_TIMEOUT
+            | sysno::CLOCK_NANOS
             | sysno::FUTEX_WAKE
             | sysno::THREAD_SELF
             | sysno::IS_INTERACTIVE
@@ -285,7 +287,9 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::THREAD_JOIN => sys_thread_join(a0),
         sysno::THREAD_EXIT => crate::usermode::exit_user(a0),
         sysno::FUTEX_WAIT => sys_futex_wait(a0, a1),
-        sysno::FUTEX_WAKE => task::futex_wake(a0, a1),
+        sysno::FUTEX_WAIT_TIMEOUT => sys_futex_wait_timeout(a0, a1, a2),
+        sysno::CLOCK_NANOS => crate::arch::cpu::nanos(),
+        sysno::FUTEX_WAKE => task::futex_wake_user(a0, a1),
         sysno::THREAD_SELF => task::current_id(),
         sysno::CLOCK_MONO => crate::arch::cpu::timestamp(),
         sysno::AUDIO_STAT => sys_audio_stat(a0),
@@ -607,6 +611,25 @@ fn sys_audio_stat(out_ptr: u64) -> u64 {
     };
     unsafe { core::ptr::write(out_ptr as *mut bz_abi::AudioInfo, info) };
     0
+}
+
+/// FUTEX_WAIT_TIMEOUT: block while the word at `addr` holds `expected`, at
+/// most `timeout_ns` (0 = no limit). One wait, standard futex semantics: 0 on
+/// a wake-up or a changed word (the caller re-checks its condition), 1 when
+/// the time ran out.
+fn sys_futex_wait_timeout(addr: u64, expected: u64, timeout_ns: u64) -> u64 {
+    if addr % 4 != 0 || !user_read(addr, 4) {
+        return syserr::INVAL;
+    }
+    let deadline = if timeout_ns == 0 { 0 } else { crate::arch::cpu::nanos().saturating_add(timeout_ns).max(1) };
+    if !task::futex_wait_timeout_if(addr, expected as u32, deadline) {
+        return 0;
+    }
+    if deadline != 0 && crate::arch::cpu::nanos() >= deadline {
+        1
+    } else {
+        0
+    }
 }
 
 fn sys_futex_wait(addr: u64, expected: u64) -> u64 {

@@ -150,6 +150,23 @@ pub mod cpu {
         return super::riscv64::cpu::timestamp();
     }
 
+    /// Frequency of [`timestamp`] in Hz (the x86 TSC is calibrated against
+    /// the PIT during SMP bring-up; ARM64 and RISC-V know theirs).
+    pub fn counter_hz() -> u64 {
+        #[cfg(target_arch = "x86_64")]
+        let hz = super::x86::smp::tsc_hz();
+        #[cfg(target_arch = "aarch64")]
+        let hz = super::aarch64::cpu::counter_hz();
+        #[cfg(target_arch = "riscv64")]
+        let hz = super::riscv64::cpu::counter_hz();
+        if hz == 0 { 1_000_000_000 } else { hz }
+    }
+
+    /// Monotonic nanoseconds since boot (CLOCK_NANOS).
+    pub fn nanos() -> u64 {
+        (timestamp() as u128 * 1_000_000_000 / counter_hz() as u128) as u64
+    }
+
     /// Index of the CPU running this code (0 = the bootstrap CPU).
     #[inline]
     pub fn id() -> usize {

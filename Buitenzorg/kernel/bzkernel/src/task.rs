@@ -214,6 +214,12 @@ struct Task {
     user: Option<UserThread>,
     /// Futex address this task is blocked on (valid only in `Blocked` state).
     wait_key: u64,
+    /// `arch::cpu::nanos()` at which a timed wait gives up (0: no limit).
+    wake_ns: u64,
+    /// Address space of a FUTEX_WAIT (`wait_key` is then a *user* virtual
+    /// address, meaningful only inside that space), or [`KERNEL_KEY`] for the
+    /// kernel's own keys (`block_while`).
+    wait_space: u64,
     ctx: CpuCtx,
     /// Saved x87/SSE registers while switched out.
     fpu: Box<FpuState>,
@@ -247,6 +253,8 @@ impl Task {
             cpu_ticks: 0,
             user: None,
             wait_key: 0,
+            wake_ns: 0,
+            wait_space: KERNEL_KEY,
             ctx: CpuCtx::kernel(),
             fpu: FpuState::clean(),
             space: aspace::kernel(),
@@ -338,6 +346,23 @@ impl Scheduler {
         b
     }
 
+    /// Make runnable every task whose timed wait ran out (FUTEX_WAIT_TIMEOUT).
+    /// Runs before each pick, i.e. at every tick on every CPU.
+    fn wake_expired(&mut self) {
+        if TIMED_WAITERS.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let now = crate::arch::cpu::nanos();
+        for t in self.tasks.iter_mut() {
+            if t.state == State::Blocked && t.wake_ns != 0 && now >= t.wake_ns {
+                t.state = State::Runnable;
+                t.wait_key = 0;
+                t.wake_ns = 0;
+                TIMED_WAITERS.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// Next task for CPU `c`: round-robin over runnable tasks this CPU may run
     /// (not running elsewhere, pin respected, no sibling thread running on
     /// another CPU), the current task last; else this CPU's idle task.
@@ -371,6 +396,10 @@ impl Scheduler {
 }
 
 static SCHEDULER: Mutex<Option<Scheduler>> = Mutex::new(None);
+/// `Task::wait_space` of a kernel-internal wait key (not a user address).
+const KERNEL_KEY: u64 = u64::MAX;
+/// Tasks blocked with a deadline (lets `wake_expired` skip the scan).
+static TIMED_WAITERS: AtomicU64 = AtomicU64::new(0);
 static STARTED: AtomicBool = AtomicBool::new(false);
 /// Timer-driven preemption of *kernel* code. Only the v0.2 scheduler demo
 /// turns it on.
@@ -767,6 +796,32 @@ pub fn futex_wait_if(addr: u64, expected: u32) -> bool {
         }
         t.state = State::Blocked;
         t.wait_key = addr;
+        t.wait_space = t.space.id;
+        true
+    });
+    if blocked {
+        yield_now();
+    }
+    blocked
+}
+
+/// FUTEX_WAIT_TIMEOUT core: like [`futex_wait_if`], but the wait also ends
+/// at `deadline_ns` (`arch::cpu::nanos()`; 0 = no limit). Returns false if the
+/// value differed (no wait); otherwise blocks once and returns true -- the
+/// caller tells a timeout from a wake-up by the clock.
+pub fn futex_wait_timeout_if(addr: u64, expected: u32, deadline_ns: u64) -> bool {
+    let blocked = with_current(|t| {
+        let val = unsafe { core::ptr::read_volatile(addr as *const u32) };
+        if val != expected {
+            return false;
+        }
+        t.state = State::Blocked;
+        t.wait_key = addr;
+        t.wait_space = t.space.id;
+        if deadline_ns != 0 {
+            t.wake_ns = deadline_ns;
+            TIMED_WAITERS.fetch_add(1, Ordering::Relaxed);
+        }
         true
     });
     if blocked {
@@ -788,6 +843,7 @@ pub fn block_while(key: u64, still: impl FnOnce() -> bool) -> bool {
         }
         t.state = State::Blocked;
         t.wait_key = key;
+        t.wait_space = KERNEL_KEY;
         true
     });
     if blocked {
@@ -796,9 +852,25 @@ pub fn block_while(key: u64, still: impl FnOnce() -> bool) -> bool {
     blocked
 }
 
-/// Futex wake: make up to `count` threads blocked on `key` runnable. Returns
-/// the number woken.
+/// Kernel-key wake: make up to `count` tasks blocked on the kernel key `key`
+/// (`block_while`, e.g. a process wait) runnable. Returns the number woken.
 pub fn futex_wake(key: u64, count: u64) -> u64 {
+    wake_matching(key, KERNEL_KEY, count)
+}
+
+/// FUTEX_WAKE: wake up to `count` threads blocked on the user word at `addr`
+/// **in the caller's address space**. A user address means nothing outside
+/// its space: before the key carried the space, a wake for one process's
+/// word could wake another process's thread waiting at the same virtual
+/// address (every process's mmap arena starts at the same place) and leave
+/// the intended waiter asleep -- a lost wake-up the managed runtime's
+/// Monitor.Pulse hit on x86, where boot-demo processes were still waiting.
+pub fn futex_wake_user(addr: u64, count: u64) -> u64 {
+    let space = current_space().id;
+    wake_matching(addr, space, count)
+}
+
+fn wake_matching(key: u64, space: u64, count: u64) -> u64 {
     let n = interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         let Some(s) = guard.as_mut() else { return 0 };
@@ -807,9 +879,13 @@ pub fn futex_wake(key: u64, count: u64) -> u64 {
             if n >= count {
                 break;
             }
-            if t.state == State::Blocked && t.wait_key == key {
+            if t.state == State::Blocked && t.wait_key == key && t.wait_space == space {
                 t.state = State::Runnable;
                 t.wait_key = 0;
+                if t.wake_ns != 0 {
+                    t.wake_ns = 0;
+                    TIMED_WAITERS.fetch_sub(1, Ordering::Relaxed);
+                }
                 n += 1;
             }
         }
@@ -1074,6 +1150,7 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
             None => None,
             Some(sched) => {
                 before(sched);
+                sched.wake_expired();
                 let cur = sched.current[c];
                 let next = sched.pick_next(c);
                 if next == cur || next == NO_TASK {

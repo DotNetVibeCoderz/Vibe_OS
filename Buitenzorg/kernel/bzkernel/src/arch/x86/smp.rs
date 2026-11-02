@@ -102,6 +102,13 @@ static LAPIC_READY: AtomicBool = AtomicBool::new(false);
 static TIMER_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Local APIC timer input clock in Hz (bus clock / 16), from calibration.
 static TIMER_HZ: AtomicU64 = AtomicU64::new(0);
+/// TSC rate in Hz, measured against the PIT with the LAPIC timer.
+static TSC_HZ: AtomicU64 = AtomicU64::new(0);
+
+/// The TSC rate (0 until `smp::init` calibrated it).
+pub fn tsc_hz() -> u64 {
+    TSC_HZ.load(Ordering::Relaxed)
+}
 
 /// Index of the CPU running this code (0 = bootstrap CPU). Reads the Local
 /// APIC id — every CPU sees its own LAPIC at the same address.
@@ -230,9 +237,12 @@ fn calibrate_timer() {
     lapic_write(LAPIC_TIMER_DIV, 0x3); // divide by 16
     lapic_write(LAPIC_LVT_TIMER, (1 << 16) | TIMER_VECTOR as u32); // masked, one-shot
     wait_ticks(1); // start on a PIT tick edge
+    let tsc0 = unsafe { core::arch::x86_64::_rdtsc() };
     lapic_write(LAPIC_TIMER_INIT, u32::MAX);
     wait_ticks(CAL_TICKS);
     let elapsed = (u32::MAX - lapic_read(LAPIC_TIMER_CUR)) as u64;
+    let tsc = unsafe { core::arch::x86_64::_rdtsc() } - tsc0;
+    TSC_HZ.store(tsc * PIT_MILLIHZ / (CAL_TICKS * 1000), Ordering::Relaxed);
     lapic_write(LAPIC_TIMER_INIT, 0); // stop
     let hz = elapsed * PIT_MILLIHZ / (CAL_TICKS * 1000);
     TIMER_HZ.store(hz, Ordering::Relaxed);
