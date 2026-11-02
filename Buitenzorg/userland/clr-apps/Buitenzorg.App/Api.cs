@@ -27,6 +27,7 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern string FsList(string path);
     [DllImport("buitenzorg")] internal static extern string FsReadText(string path);
     [DllImport("buitenzorg")] internal static extern long FsSize(string path);
+    [DllImport("buitenzorg")] internal static extern int FsReadInto(string path, byte[] buffer);
     [DllImport("buitenzorg")] internal static extern int FsWriteText(string path, string text);
     [DllImport("buitenzorg")] internal static extern string ProcList();
     [DllImport("buitenzorg")] internal static extern int ProcKill(long pid);
@@ -210,6 +211,23 @@ public static class Files
     }
 
     /// <summary>The size in bytes, -1 when it cannot be read.</summary>
+    /// <summary>A file's bytes (null if it cannot be read; up to 16 MiB).</summary>
+    public static byte[]? ReadAllBytes(string path)
+    {
+        if (_sim != null) return _sim.TryGetValue(path, out var t) ? System.Text.Encoding.UTF8.GetBytes(t) : null;
+        long size = Size(path);
+        if (size <= 0) return null;
+        var buf = new byte[size];
+        try
+        {
+            int n = Native.FsReadInto(path, buf);
+            if (n < 0) return null;
+            if (n < buf.Length) Array.Resize(ref buf, n);
+            return buf;
+        }
+        catch (Exception e) when (Sim(e)) { return ReadAllBytes(path); }
+    }
+
     public static long Size(string path)
     {
         if (_sim != null) return _sim.TryGetValue(path, out var t) ? t.Length : -1;

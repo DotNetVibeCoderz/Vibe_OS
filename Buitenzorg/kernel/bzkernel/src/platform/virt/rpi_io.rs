@@ -35,7 +35,13 @@ struct Io {
     i2c_ready: [bool; 2],
     spi_ready: bool,
     uart_open: [bool; 4],
+    cm: u64,      // clock manager
+    pwm1: u64,    // PWM1: the headphone jack (GPIO 40 / 41); 0 = absent
+    audio_ready: bool,
 }
+
+/// Headphone-jack state (outside `IO` so AUDIO_STAT never waits on a tone).
+static VOLUME: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(70);
 
 static IO: Mutex<Option<Io>> = Mutex::new(None);
 
@@ -138,7 +144,29 @@ pub fn init(gpio_phys: u64) -> bool {
     }
     // The BSC / SPI dividers run off the VPU ("core") clock.
     let core_hz = fw(0x0003_0047, 4, 2).map(|v| v[1]).filter(|&h| h > 1_000_000).unwrap_or(500_000_000);
-    *IO.lock() = Some(Io { gpio, i2c: [i0, i1], spi0, uart, core_hz, i2c_ready: [false; 2], spi_ready: false, uart_open: [false; 4] });
+    let (Some(cm), Some(pwm)) = (map(0x10_1000), map(0x20_c000)) else { return false };
+    // The PWM block may be missing (QEMU raspi4b does not model it: any access
+    // is an external abort), so probe it once before using the jack.
+    let pwm1 = match crate::arch::aarch64::exceptions::probe_read32(pwm + 0x800 + PWM_STA) {
+        Some(_) => pwm + 0x800,
+        None => {
+            crate::println!("[rpi-io] no PWM block answers: headphone jack unavailable");
+            0
+        }
+    };
+    *IO.lock() = Some(Io {
+        gpio,
+        i2c: [i0, i1],
+        spi0,
+        uart,
+        core_hz,
+        i2c_ready: [false; 2],
+        spi_ready: false,
+        uart_open: [false; 4],
+        cm,
+        pwm1,
+        audio_ready: false,
+    });
     true
 }
 
@@ -487,6 +515,124 @@ pub fn uart_read(port: u32, out: &mut [u8]) -> u64 {
     n as u64
 }
 
+// ------------------------------------------------------------------ headphone jack (PWM)
+//
+// The Pi 4's 3.5 mm jack is PWM1 (GPIO 40 = left, 41 = right, ALT0) behind an
+// RC filter. Its clock comes from the clock manager: the 54 MHz oscillator
+// divided by 2 = 27 MHz; a range of 562 gives 27 MHz / 562 = 48.04 kHz
+// samples of ~9 bits. Both channels read one FIFO, alternately (left, right).
+
+pub const SAMPLE_RATE: u32 = 48_000;
+const CM_PASSWD: u32 = 0x5a00_0000;
+const CM_PWMCTL: u64 = 0xa0;
+const CM_PWMDIV: u64 = 0xa4;
+const PWM_CTL: u64 = 0x00;
+const PWM_STA: u64 = 0x04;
+const PWM_RNG1: u64 = 0x10;
+const PWM_FIF1: u64 = 0x18;
+const PWM_RNG2: u64 = 0x20;
+const PWM_RANGE: u32 = 562;
+
+fn audio_setup(io: &mut Io) {
+    if io.audio_ready {
+        return;
+    }
+    io.fsel(40, alt(0));
+    io.fsel(41, alt(0));
+    let cm = io.cm;
+    // stop the PWM clock, wait until it is idle, then oscillator / 2
+    w(cm + CM_PWMCTL, CM_PASSWD | (r(cm + CM_PWMCTL) & !0x10));
+    let t0 = cpu::timestamp();
+    while r(cm + CM_PWMCTL) & 0x80 != 0 && since_us(t0) < 10_000 {}
+    w(cm + CM_PWMDIV, CM_PASSWD | (2 << 12));
+    w(cm + CM_PWMCTL, CM_PASSWD | 1);
+    w(cm + CM_PWMCTL, CM_PASSWD | 0x10 | 1);
+    let t1 = cpu::timestamp();
+    while r(cm + CM_PWMCTL) & 0x80 == 0 && since_us(t1) < 10_000 {}
+    let p = io.pwm1;
+    w(p + PWM_CTL, 0);
+    delay_us(10);
+    w(p + PWM_RNG1, PWM_RANGE);
+    w(p + PWM_RNG2, PWM_RANGE);
+    w(p + PWM_CTL, 1 << 6); // clear the FIFO
+    delay_us(10);
+    w(p + PWM_STA, 0x1FE); // clear error flags
+    // both channels enabled, fed from the FIFO, PWM (not mark/space) algorithm
+    w(p + PWM_CTL, 1 | (1 << 5) | (1 << 8) | (1 << 13));
+    io.audio_ready = true;
+}
+
+/// Queue one stereo frame (0..PWM_RANGE per channel); false if the FIFO stalled.
+fn audio_frame(p: u64, l: u32, rr: u32) -> bool {
+    for v in [l, rr] {
+        let t0 = cpu::timestamp();
+        while r(p + PWM_STA) & 1 != 0 {
+            if since_us(t0) > 5_000 {
+                return false; // FIFO stuck full: no PWM clock
+            }
+        }
+        w(p + PWM_FIF1, v);
+    }
+    true
+}
+
+pub fn audio_present() -> bool {
+    IO.lock().as_ref().map_or(false, |io| io.pwm1 != 0)
+}
+pub fn audio_volume() -> u32 {
+    VOLUME.load(core::sync::atomic::Ordering::Relaxed)
+}
+pub fn audio_set_volume(pct: u32) -> bool {
+    VOLUME.store(pct.min(100), core::sync::atomic::Ordering::Relaxed);
+    audio_present()
+}
+
+/// A sine-ish tone (a 32-step table) for `ms` milliseconds.
+pub fn audio_tone(freq: u32, ms: u32) -> bool {
+    const SINE: [i32; 32] = [0, 98, 195, 290, 383, 471, 556, 634, 707, 773, 831, 882, 924, 957, 981, 995, 1000, 995, 981, 957, 924, 882, 831, 773, 707, 634, 556, 471, 383, 290, 195, 98];
+    let mut guard = IO.lock();
+    let Some(io) = guard.as_mut().filter(|io| io.pwm1 != 0) else { return false };
+    audio_setup(io);
+    let p = io.pwm1;
+    drop(guard);
+    let vol = audio_volume() as i32;
+    let mid = PWM_RANGE as i32 / 2;
+    let amp = mid * vol / 100;
+    let frames = SAMPLE_RATE as u64 * ms.min(5000) as u64 / 1000;
+    let step = (freq.clamp(20, 20_000) as u64) * 64 * 65536 / SAMPLE_RATE as u64; // 64 half-steps per period, 16.16
+    let mut phase = 0u64;
+    for _ in 0..frames {
+        let i = ((phase >> 16) % 64) as usize;
+        let s = if i < 32 { SINE[i] } else { -SINE[i - 32] };
+        let v = (mid + s * amp / 1000) as u32;
+        if !audio_frame(p, v, v) {
+            return false;
+        }
+        phase += step;
+    }
+    true
+}
+
+/// Interleaved 16-bit stereo PCM at 48 kHz (`len` bytes, already in kernel memory).
+pub fn audio_play(pcm: &[u8]) -> bool {
+    let mut guard = IO.lock();
+    let Some(io) = guard.as_mut().filter(|io| io.pwm1 != 0) else { return false };
+    audio_setup(io);
+    let p = io.pwm1;
+    drop(guard);
+    let vol = audio_volume() as i64;
+    let conv = |b: &[u8]| -> u32 {
+        let s = i16::from_le_bytes([b[0], b[1]]) as i64 * vol / 100;
+        ((s + 32768) * PWM_RANGE as i64 / 65536) as u32
+    };
+    for f in pcm.chunks_exact(4) {
+        if !audio_frame(p, conv(&f[0..2]), conv(&f[2..4])) {
+            return false;
+        }
+    }
+    true
+}
+
 // ------------------------------------------------------------------ self-test
 
 /// Boot check: sensors answer, the activity LED pin toggles and reads back,
@@ -527,6 +673,21 @@ pub fn self_test() -> bool {
     let read = uart_read(3, &mut back);
     uart_close(3);
     crate::println!("[rpi-io] UART3: open {}, wrote {}, read {} in {} us", opened, wrote, read, since_us(t_uart));
+    // headphone jack: 20 ms of silence must drain through the PWM FIFO
+    let jack = {
+        let mut g = IO.lock();
+        match g.as_mut().filter(|io| io.pwm1 != 0) {
+            Some(io) => {
+                audio_setup(io);
+                let p = io.pwm1;
+                drop(g);
+                let mid = PWM_RANGE / 2;
+                (0..SAMPLE_RATE / 50).all(|_| audio_frame(p, mid, mid))
+            }
+            None => false,
+        }
+    };
+    crate::println!("[rpi-io] headphone jack (PWM1, GPIO 40/41): {}", if jack { "PWM clock running, 48 kHz" } else { "not available" });
     let fmt = |v: u64| if v == bz_abi::syserr::INVAL { alloc::string::String::from("n/a") } else { alloc::format!("{}", v) };
     crate::println!(
         "[rpi-io] SoC {} mC, ARM {} Hz, core {} uV, throttled {:#x}; ACT LED toggles: {}; I2C1 {} {:?}",

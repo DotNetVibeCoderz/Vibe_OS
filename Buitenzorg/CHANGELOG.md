@@ -16,6 +16,15 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Raspberry Pi 4: sound on the headphone jack (not yet heard on a board).**
+  The 3.5 mm jack plays the test tone, Piano notes and PCM through PWM at
+  48 kHz; Settings' volume applies. Under QEMU, which has no PWM block, the
+  jack is reported as unavailable instead of crashing the boot.
+- **Picture viewer, Paint and Piano you can use.** *Gambar* shows the pictures on
+  `/disk` (the wallpapers, `PHOTO.BMP`) fitted to its window; *Paint* draws with
+  the mouse in eight colours and five brush sizes, with undo; *Piano* plays one
+  octave from the mouse or the keyboard (A-K, black keys W E T Y U). They are in
+  the Start menu under Multimedia and in *Managed Apps*, on every computer.
 - **Settings app.** *Pengaturan* changes the theme, wallpaper, screensaver (and
   how long the desktop waits before it starts), window animations, cursor size
   and the sound volume, and the desktop changes at once. Open it from the Start

@@ -160,6 +160,23 @@ pub fn el0_stats() -> (u64, u64) {
 
 const EC_SVC64: u64 = 0x15;
 
+/// Per-CPU "a device probe is in progress" flags: a data abort from EL1
+/// while set is not fatal -- the faulting load is skipped and recorded.
+static PROBING: [core::sync::atomic::AtomicBool; 16] = [const { core::sync::atomic::AtomicBool::new(false) }; 16];
+static PROBE_FAULT: [core::sync::atomic::AtomicBool; 16] = [const { core::sync::atomic::AtomicBool::new(false) }; 16];
+
+/// Read a 32-bit device register that may not exist (an emulator without
+/// the block raises a synchronous external abort): None if the read faulted.
+pub fn probe_read32(addr: u64) -> Option<u32> {
+    let c = super::cpu::id() % 16;
+    PROBE_FAULT[c].store(false, Ordering::SeqCst);
+    PROBING[c].store(true, Ordering::SeqCst);
+    let v: u64;
+    unsafe { asm!("mov {v}, xzr", "ldr {v:w}, [{a}]", v = out(reg) v, a = in(reg) addr, options(nostack)) };
+    PROBING[c].store(false, Ordering::SeqCst);
+    if PROBE_FAULT[c].load(Ordering::SeqCst) { None } else { Some(v as u32) }
+}
+
 const KINDS: [&str; 4] = ["synchronous", "IRQ", "FIQ", "SError"];
 const ORIGINS: [&str; 4] = ["EL1 (SP_EL0)", "EL1", "EL0 (AArch64)", "EL0 (AArch32)"];
 
@@ -207,6 +224,16 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
         // Any other synchronous exception from user code (bad access,
         // undefined instruction, ...) ends that program, not the kernel.
         crate::el0_fault(esr, far, elr);
+    }
+    // A data abort inside `probe_read32`: skip the load (ELR is saved at
+    // frame[31] and restored before eret) and report it.
+    if !from_el0 && kind == 0 && esr >> 26 == 0x25 {
+        let c = super::cpu::id() % 16;
+        if PROBING[c].load(Ordering::SeqCst) {
+            PROBE_FAULT[c].store(true, Ordering::SeqCst);
+            unsafe { frame.add(31).write(elr + 4) };
+            return;
+        }
     }
     panic!(
         "{} exception from {}: ESR_EL1={:#x} (EC={:#x}) ELR_EL1={:#x} FAR_EL1={:#x}",

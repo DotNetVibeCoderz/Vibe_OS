@@ -411,6 +411,31 @@ fn fs_read_text(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_string(i, &text)
 }
 
+/// `FsReadInto(string path, byte[] buffer)` -> bytes read into the buffer
+/// (at most its length, 16 MiB), -1 if unreadable.
+fn fs_read_into(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    let cap = match a.get(1) {
+        Some(Value::Obj(h)) if !h.is_null() => i.heap.with::<ClrArray, _>(*h, |arr| match &arr.storage {
+            ArrayStorage::U8(v) => v.len(),
+            _ => 0,
+        }).unwrap_or(0),
+        _ => 0,
+    }
+    .min(16 << 20);
+    if cap == 0 {
+        return ret_i32(-1);
+    }
+    let mut buf = alloc::vec![0u8; cap];
+    let n = sys::syscall(FS_READ, path.as_ptr() as u64, buf.as_mut_ptr() as u64, cap as u64);
+    if sys::is_err(n) {
+        return ret_i32(-1);
+    }
+    let n = (n as usize).min(cap);
+    store_bytes(i, a, 1, &buf[..n]);
+    ret_i32(n as i64)
+}
+
 /// `FsSize(string path)` -> the file's size in bytes (read up to 16 MiB),
 /// -1 if unreadable.
 fn fs_size(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
@@ -504,7 +529,7 @@ fn wait(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 34] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 35] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -539,6 +564,7 @@ pub fn install(interp: &mut Interpreter) {
         ("AudioStat", audio_stat),
         ("AudioSetVolume", audio_set_volume),
         ("AudioTone", audio_tone),
+        ("FsReadInto", fs_read_into),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);

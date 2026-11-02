@@ -31,6 +31,9 @@ public static class Folder
         new AppInfo("mtasks", "Pemantau", "Proses, memori, akhiri tugas", IconKind.Cpu, 0x8FA8E8),
         new AppInfo("mxox", "XOX", "Lawan komputer yang tak terkalahkan", IconKind.Close, 0x62AD7C),
         new AppInfo("mclock", "Jam", "Jam, stopwatch, timer, kalender", IconKind.Clock, 0xD3E07A),
+        new AppInfo("mimage", "Gambar", "Wallpaper dan foto di /disk", IconKind.Sun, 0xC792EA),
+        new AppInfo("mpaint", "Paint", "Menggambar dengan mouse", IconKind.Leaf, 0xE3A6C9),
+        new AppInfo("mpiano", "Piano", "Satu oktaf, mainkan dengan keyboard", IconKind.Play, 0xB99AE8),
         new AppInfo("mgallery", "Galeri Kontrol", "Semua kontrol Buitenzorg.UI", IconKind.Info, 0xC7A6E0),
         new AppInfo("msetting", "Pengaturan", "Tema, wallpaper, screensaver, suara", IconKind.Gear, 0xD9B38C),
         new AppInfo("mhwlab", "Lab Perangkat", "Sensor, LED, GPIO, I2C, SPI (Raspberry Pi)", IconKind.Cpu, 0x9BD08F),
@@ -165,6 +168,9 @@ public static class Folder
             Report(MXox.XoxApp.SelfTest());
             Report(MClock.ClockApp.SelfTest());
             Report(MGallery.GalleryApp.SelfTest());
+            Report(MImage.ImageApp.SelfTest());
+            Report(MPaint.PaintApp.SelfTest());
+            Report(MPiano.PianoApp.SelfTest());
         }
         if (failed == 0) Console.WriteLine("MILESTONE: MANAGED APPS OK");
         return failed;

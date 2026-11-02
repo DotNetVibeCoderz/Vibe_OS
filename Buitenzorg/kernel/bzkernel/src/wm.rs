@@ -58,7 +58,7 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Multimedia",
         leaf: gfx::rgb(0xC7, 0x92, 0xEA),
-        apps: &[("mgallery", "Galeri Kontrol")],
+        apps: &[("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol")],
     },
     Category {
         name: "Permainan",
@@ -147,7 +147,9 @@ fn icon_name(name: &str) -> &str {
         "mxox" => "xox",
         "mclock" | "hellogui" => "clock",
         "mtasks" => "taskmgr",
-        "mgallery" => "paint",
+        "mimage" => "imgview",
+        "mpiano" => "piano",
+        "mpaint" | "mgallery" => "paint",
         "msetting" => "audiopanel",
         n => n.trim_start_matches('@'),
     }
