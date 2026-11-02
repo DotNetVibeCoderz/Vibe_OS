@@ -78,11 +78,15 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     # three samples a second apart tell a hang from slowness and locate it
     {
       exec 3<>/dev/tcp/127.0.0.1/4489
-      for _ in 1 2 3; do printf 'info registers
-x/64gx $rsp
-' >&3; sleep 1; done
-      printf 'info cpus
-' >&3; sleep 1
+      # HMP has no $rsp: read RSP out of `info registers`, then dump the stack
+      for _ in 1 2 3; do
+        printf 'info registers\n' >&3; sleep 1
+        out="$(timeout 1 cat <&3)"
+        printf '%s\n' "$out"
+        rsp="$(printf '%s' "$out" | tr -d '\r' | grep -o 'RSP=[0-9a-f]*' | tail -1 | cut -d= -f2)"
+        if [ -n "$rsp" ]; then printf 'x/96gx 0x%s\n' "$rsp" >&3; sleep 1; timeout 1 cat <&3; fi
+      done
+      printf 'info cpus\n' >&3; sleep 1
       timeout 2 cat <&3
     } > "$root/dist/ide1-hang.log" 2>&1 || true
     echo "smoke [ide1]: no READY -- CPU state saved to dist/ide1-hang.log"
