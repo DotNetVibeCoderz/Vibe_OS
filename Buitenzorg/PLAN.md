@@ -974,7 +974,9 @@ modelnya sama sekali).
    rpi5-uefi → Limine), CPU Cortex-A76, **RP1** lewat PCIe (UART, USB, Ethernet
    GEM), SDHCI, RTC bawaan; NVMe lewat PCIe memakai driver NVMe yang dirancang
    untuk PC.
-6. **R6 — Matang di perangkat nyata.** GPIO/I2C/SPI untuk proyek IoT (selaras
+6. **R6 — Matang di perangkat nyata.** *(Sebagian, 2026-11-02: GPIO/I2C/SPI/UART2-5/LED/sensor
+   firmware untuk aplikasi lewat syscall `HW_*` + `Buitenzorg.Devices` (managed) /
+   `bzhw.cs` (native), sampel Lab Perangkat + hwdemo; jam lewat SNTP.)* GPIO/I2C/SPI untuk proyek IoT (selaras
    dengan HAL RustCLR `rustclr-hal`), audio (PWM/HDMI), power (reboot/shutdown
    lewat firmware), validasi di papan fisik + dokumentasi instalasi
    (`docs/install-raspberry-pi.md`), dan uji otomatis di papan nyata

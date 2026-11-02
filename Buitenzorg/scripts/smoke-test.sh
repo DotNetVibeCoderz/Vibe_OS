@@ -41,7 +41,9 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     # The full IDE run uses 2 CPUs (ring-3 processes on the AP, SMP SCHED);
     # "ide1" re-runs the process tests on a single CPU.
     ide)  drive=(-smp 2 -drive "format=raw,file=$img") ;;
-    ide1) drive=(-drive "format=raw,file=$img") ;;
+    # (with a monitor, to dump the CPU state if it never reaches READY: the
+    # intermittent single-CPU hang in RustCLR's Conformance -- see CLAUDE.md)
+    ide1) drive=(-drive "format=raw,file=$img" -monitor tcp:127.0.0.1:4489,server,nowait) ;;
     # AHCI also boots with 2 CPUs: SMP bring-up must start the second one.
     # It also carries an xHCI with a hub and a USB keyboard + mouse behind it (R4).
     ahci) drive=(-smp 2 -drive "id=bzdisk,format=raw,file=$img,if=none"
@@ -72,6 +74,19 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     grep -qF "BUITENZORG READY" "$log" 2>/dev/null && break
   done
   if [ "$media" = virtio ]; then virtio_input "$log" 4481; fi
+  if [ "$media" = ide1 ] && ! grep -qF "BUITENZORG READY" "$log" 2>/dev/null; then
+    # three samples a second apart tell a hang from slowness and locate it
+    {
+      exec 3<>/dev/tcp/127.0.0.1/4489
+      for _ in 1 2 3; do printf 'info registers
+x/6i $pc
+' >&3; sleep 1; done
+      printf 'info cpus
+' >&3; sleep 1
+      timeout 2 cat <&3
+    } > "$root/dist/ide1-hang.log" 2>&1 || true
+    echo "smoke [ide1]: no READY -- CPU state saved to dist/ide1-hang.log"
+  fi
   kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
 }
@@ -279,17 +294,23 @@ if [ -n "$qemu_arm" ] && [ -f "$kernel8" ] && "$qemu_arm" -M help | grep -q '^ra
     cp "$root/dist/buitenzorg-rpi4.img" "$root/dist/rpi4-sd-test.img"
     sdargs=(-drive "file=$root/dist/rpi4-sd-test.img,if=sd,format=raw")
   fi
-  timeout --foreground 300 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" \
+  timeout --foreground 500 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" \
     -dtb "$root/kernel/bzkernel/testdata/bcm2711-rpi-4-b.dtb" ${sdargs[@]+"${sdargs[@]}"} -display none -serial "file:$log" -serial null -no-reboot 2>/dev/null &
   qpid=$!
-  for _ in $(seq 280); do
+  for _ in $(seq 480); do
     sleep 1
     grep -q "ARM64 READY" "$log" 2>/dev/null && break
   done
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "BREM" "framebuffer 1280x720" "ARM64 SMP OK (4 CPUs: spin tables" "window system: 1280x720" "MILESTONE: HELLO KERNEL OK" "loader=rpi-direct" "MILESTONE: DTB OK" "MILESTONE: ARM64 MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "GICv2 at 0xff841000/0xff842000" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 EL0 OK" "MILESTONE: SECURITY OK" "MILESTONE: RPI4 BOOT OK" "BUITENZORG ARM64 READY"
   if [ ${#sdargs[@]} -gt 0 ]; then
-    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK"
+    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK" "Lab Perangkat: 10 checks, 0 failed"
+  fi
+  # Board I/O for applications (GPIO, I2C, SPI, UART, LEDs, sensors), and the
+  # native sample when the C# programs were built.
+  require "$log" "MILESTONE: RPI4 IO OK"
+  if grep -q "Hello from C#" "$log"; then
+    require "$log" "MILESTONE: HWDEMO OK"
   fi
   echo "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs, mailbox framebuffer + desktop, 4 cores via spin tables, /disk on the SD card"
 elif [ -n "$qemu_arm" ] && [ -f "$kernel8" ]; then

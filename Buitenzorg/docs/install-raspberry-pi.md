@@ -26,6 +26,8 @@ all four cores.
 | USB keyboard and mouse | Yes: full-speed and high-speed devices; plug them in before power-on |
 | Ethernet | Yes: an address from your router by DHCP |
 | Restart, shut down, sleep | Yes (shut down halts; the red LED stays on) |
+| Clock | Yes: set from the internet (SNTP) when the network cable is in; WIB |
+| GPIO, I2C, SPI, serial ports, LEDs, board sensors for apps | Yes: see [raspberry-pi-io.md](raspberry-pi-io.md) |
 
 The Pi shows the desktop and you use it with a USB keyboard and mouse (or by
 typing from a PC over the serial cable). The kernel reads the SD card it booted
@@ -160,7 +162,10 @@ The card holds both, and `config.txt` picks one.
 - The SD card driver uses programmed I/O, one 512-byte block at a time, with
   no DMA or interrupts: reading the card works, but it isn't fast. Only the
   card's first FAT partition is used, and only its root directory (8.3 names).
-- The Pi 4 has no real-time clock, so files are stamped 1970-01-01.
+- The Pi 4 has no battery-backed clock. Without a network the clock starts at
+  the time the kernel was built and runs from there; with a network cable it is
+  set from an internet time server at boot. The time zone is fixed at WIB
+  (UTC+7).
 - RAM above 0xFC00_0000 (just under 4 GiB) is ignored for now, so an 8 GiB board
   uses a little under 4 GiB.
 - With the direct route the kernel image is mapped read-write-execute; the

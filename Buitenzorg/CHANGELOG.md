@@ -16,6 +16,18 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Raspberry Pi 4: GPIO, I2C, SPI, serial ports, LEDs and board sensors for
+  apps.** A library with the same API for managed apps (`Buitenzorg.Devices` in
+  `BZAPP.DLL`, shaped after .NET IoT; a simulated board when run with `dotnet` on
+  a PC) and native apps (`bzhw.cs`). It reads the board's built-in sensors (SoC
+  temperature, clocks, voltages, under-voltage and throttling) and switches the
+  green and red LEDs. Two samples: **Lab Perangkat** in *Managed Apps* (live
+  temperature chart, LEDs, GPIO table, I2C scan, SPI and serial loopback tests)
+  and the console program **hwdemo**. Guide: `docs/raspberry-pi-io.md`.
+- **Raspberry Pi 4: the clock runs and is set from the internet.** The Pi has no
+  battery-backed clock, so the time stood still at 1970-01-01. The clock now
+  runs from the kernel's build time and is set from an internet time server at
+  boot when the network cable is in (WIB).
 - **USB keyboards and mice.** A new USB stack (xHCI host controllers, USB 2.0
   hubs, keyboards and mice) works on PCs and, through the PCIe bus and the VL805
   controller, on the Raspberry Pi 4. Plug the devices in before power-on.

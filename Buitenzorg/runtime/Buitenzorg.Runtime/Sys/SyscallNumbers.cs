@@ -148,8 +148,69 @@ public static class SyscallNumbers
     /// <summary>Metrics of a text style (a0 = 0 body, 1 strong, 2 heading): (glyph width &lt;&lt; 32) | line height.</summary>
     public const ulong TextMetrics = 46;
 
+    /// <summary>Board info + built-in sensors (Raspberry Pi 4): a0 = <see cref="HwQuery"/> code, a1 = argument. NOSYS without board I/O.</summary>
+    public const ulong HwBoard = 47;
+
+    /// <summary>GPIO: a0 = <see cref="HwGpio"/> operation, a1 = pin, a2 = value.</summary>
+    public const ulong HwGpio = 48;
+
+    /// <summary>I2C transfer: a0 = ptr to a <see cref="HwTransfer"/>. Returns a <see cref="HwStatus"/> code.</summary>
+    public const ulong HwI2c = 49;
+
+    /// <summary>SPI full-duplex transfer: a0 = ptr to a <see cref="HwTransfer"/>. Returns a <see cref="HwStatus"/> code.</summary>
+    public const ulong HwSpi = 50;
+
+    /// <summary>Serial port: a0 = <see cref="HwUart"/> operation, a1 = ptr to a <see cref="HwTransfer"/>. Returns bytes written / read.</summary>
+    public const ulong HwUart = 51;
+
+    /// <summary>Built-in LEDs: a0 = 0 activity / 1 power, a1 = 1 on / 0 off.</summary>
+    public const ulong HwLed = 52;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 47;
+    public const ulong Count = 53;
+}
+
+/// <summary>Queries of <see cref="SyscallNumbers.HwBoard"/>.</summary>
+public static class HwQuery
+{
+    public const ulong Board = 0;
+    public const ulong Temperature = 1;
+    public const ulong TemperatureMax = 2;
+    public const ulong Clock = 3;
+    public const ulong Voltage = 4;
+    public const ulong Throttled = 5;
+    public const ulong Revision = 6;
+    public const ulong Serial = 7;
+    public const ulong Memory = 8;
+    public const ulong GpioCount = 9;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.HwGpio"/>.</summary>
+public static class HwGpio
+{
+    public const ulong Mode = 0;
+    public const ulong Write = 1;
+    public const ulong Read = 2;
+    public const ulong Pull = 3;
+    public const ulong GetMode = 4;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.HwUart"/>.</summary>
+public static class HwUart
+{
+    public const ulong Open = 0;
+    public const ulong Write = 1;
+    public const ulong Read = 2;
+    public const ulong Close = 3;
+}
+
+/// <summary>Results of <see cref="SyscallNumbers.HwI2c"/> / <see cref="SyscallNumbers.HwSpi"/>.</summary>
+public static class HwStatus
+{
+    public const ulong Ok = 0;
+    public const ulong Nack = 1;
+    public const ulong ClockStretch = 2;
+    public const ulong Timeout = 3;
 }
 
 /// <summary>Socket kinds for <see cref="SyscallNumbers.NetSocket"/>. Only UDP is implemented;

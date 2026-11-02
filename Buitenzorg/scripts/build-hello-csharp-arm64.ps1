@@ -50,7 +50,8 @@ try {
         @{src=@("game2048.cs", "bzui.cs", "bzgfx.cs"); elf="g2048.elf"},
         @{src=@("ui.cs", "bzui.cs", "bzgfx.cs"); elf="ui.elf"},
         @{src=@("draw.cs", "bzgfx.cs"); elf="draw.elf"},
-        @{src=@("xox.cs");             elf="xox.elf"}
+        @{src=@("xox.cs");             elf="xox.elf"},
+        @{src=@("hwdemo.cs", "bzhw.cs", "bzbcl.cs"); elf="hwdemo.elf"}
     )
     foreach ($prog in $programs) {
         $obj = "arm64/" + [IO.Path]::ChangeExtension($prog.elf, ".o")

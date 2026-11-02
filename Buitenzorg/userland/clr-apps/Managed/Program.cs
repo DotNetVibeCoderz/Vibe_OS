@@ -32,6 +32,7 @@ public static class Folder
         new AppInfo("mxox", "XOX", "Lawan komputer yang tak terkalahkan", IconKind.Close, 0x62AD7C),
         new AppInfo("mclock", "Jam", "Jam, stopwatch, timer, kalender", IconKind.Clock, 0xD3E07A),
         new AppInfo("mgallery", "Galeri Kontrol", "Semua kontrol Buitenzorg.UI", IconKind.Info, 0xC7A6E0),
+        new AppInfo("mhwlab", "Lab Perangkat", "Sensor, LED, GPIO, I2C, SPI (Raspberry Pi)", IconKind.Cpu, 0x9BD08F),
         new AppInfo("hellogui", "Jam Analog", "Demo GUI pertama RustCLR", IconKind.Sun, 0xE3615A),
     };
 
@@ -154,6 +155,7 @@ public static class Folder
         Report(MFiles.FilesApp.SelfTest());
         Report(MTasks.TasksApp.SelfTest());
         Report(MNotes.NotesApp.SelfTest());
+        Report(MHwLab.LabApp.SelfTest()); // board I/O: a quick "no board" check off a Raspberry Pi
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());

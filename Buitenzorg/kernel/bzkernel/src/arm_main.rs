@@ -60,6 +60,8 @@ mod terminal;
 mod theme;
 mod vfs;
 mod dhcp;
+mod hwio;
+mod sntp;
 mod usb;
 mod virtio;
 mod vmm;
@@ -729,7 +731,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
     }
 
     // GUI apps (window syscalls into the shared window manager) and the rest.
-    for name in ["thread", "sync", "calc", "g2048", "ui", "draw", "xox"] {
+    for name in ["thread", "sync", "calc", "g2048", "ui", "draw", "xox", "hwdemo"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ---", name);
         match app::spawn_image(name, &image) {
@@ -931,6 +933,17 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         }
     }
 
+    // Raspberry Pi board I/O for applications: GPIO, I2C, SPI, UARTs, LEDs, sensors.
+    if let Some(f) = fdt {
+        if let Some(i) = f.compatible("brcm,bcm2711-gpio").next() {
+            if let Some(&(pa, _)) = f.reg(i).first() {
+                if platform::virt::rpi_io::init(pa) && platform::virt::rpi_io::self_test() {
+                    println!("[kernel] MILESTONE: RPI4 IO OK (GPIO + I2C + SPI + UART2-5 + LEDs + firmware sensors for applications: HW_* syscalls)");
+                }
+            }
+        }
+    }
+
     if let Some(fb) = info.framebuffer {
         wm::init(fb.width, fb.height);
         mouse::set_bounds(fb.width, fb.height);
@@ -957,6 +970,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         let (me, gw) = match dhcp::lease(&mut nic, 6) {
             Some(l) => {
                 print_lease("virtio-net", &l);
+                net::set_route(l.mask, l.router);
                 (l.ip, l.router)
             }
             None => ([10, 0, 2, 15], [10, 0, 2, 2]),
@@ -976,6 +990,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
             net::send_ping(gw, 0xA64, 2);
             if wait(&|| net::counters().0 > icmp0) {
                 println!("[kernel] MILESTONE: VIRTIO NET OK (virtio-net over virtio-mmio: ARP + ICMP echo with the gateway 10.0.2.2)");
+                sync_time("virtio-net");
             }
         }
     }
@@ -1028,6 +1043,7 @@ fn ethernet_init() {
     print_lease("genet", &lease);
     let gw = lease.router;
     net::attach(alloc::boxed::Box::new(nic), lease.ip);
+    net::set_route(lease.mask, gw);
     let icmp0 = net::counters().0;
     let wait = |done: &dyn Fn() -> bool| {
         let t0 = interrupts::ticks();
@@ -1050,6 +1066,28 @@ fn ethernet_init() {
             "[kernel] MILESTONE: RPI4 ETHERNET OK (GENET v5 + PHY, {} Mb/s; DHCP address {}.{}.{}.{}; ARP + ICMP echo with the router)",
             speed, lease.ip[0], lease.ip[1], lease.ip[2], lease.ip[3]
         );
+    }
+    if arp {
+        sync_time("genet");
+    }
+}
+
+/// Set the clock from an SNTP server through the router (boards without a
+/// real-time clock -- the Raspberry Pi 4 -- otherwise start at the build time).
+fn sync_time(dev: &str) {
+    if rtc::hardware() {
+        return; // a PL031 keeps its own time
+    }
+    match sntp::sync(2) {
+        Some((server, utc)) => {
+            rtc::set_time(utc + sntp::LOCAL_OFFSET_S);
+            let (y, mo, d, h, mi, s) = rtc::read();
+            println!(
+                "[kernel] MILESTONE: TIME SYNC OK ({}: SNTP from {}.{}.{}.{}, local time {:04}-{:02}-{:02} {:02}:{:02}:{:02} WIB)",
+                dev, server[0], server[1], server[2], server[3], y, mo, d, h, mi, s
+            );
+        }
+        None => println!("[arm64] {}: no answer from the time servers; the clock runs from the kernel build time", dev),
     }
 }
 

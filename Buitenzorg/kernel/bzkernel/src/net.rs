@@ -79,6 +79,10 @@ struct Stack {
     next_handle: u64,
     udp_tx: u64,
     udp_rx: u64,
+    /// Default route: traffic outside `ip & mask` goes to this router's MAC
+    /// (all zeros = no router: everything is sent on-link).
+    gateway: Ipv4Addr,
+    mask: Ipv4Addr,
 }
 
 static STACK: Mutex<Option<Stack>> = Mutex::new(None);
@@ -92,6 +96,15 @@ impl Stack {
         } else {
             self.device.transmit(frame);
         }
+    }
+
+    /// The MAC to send a packet for `dest` to: the router's for addresses
+    /// outside our subnet (when a router is set), else `dest`'s own;
+    /// broadcast while it is unknown.
+    fn next_hop_mac(&self, dest: Ipv4Addr) -> MacAddr {
+        let off_link = self.gateway != [0; 4] && (0..4).any(|i| dest[i] & self.mask[i] != self.ip[i] & self.mask[i]);
+        let hop = if off_link { self.gateway } else { dest };
+        self.arp.iter().find(|(ip, _)| *ip == hop).map(|(_, m)| *m).unwrap_or([0xFF; ETH_ALEN])
     }
 
     /// Learn (or refresh) an IPv4 -> MAC mapping.
@@ -113,6 +126,16 @@ pub fn attach(device: alloc::boxed::Box<dyn NetDevice>, ip: Ipv4Addr) {
     stack.device = device;
     stack.ip = ip;
     stack.arp = vec![(ip, mac)];
+}
+
+/// Set the default route (from DHCP): `gateway` for everything outside
+/// `ip & mask`.
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+pub fn set_route(mask: Ipv4Addr, gateway: Ipv4Addr) {
+    if let Some(stack) = STACK.lock().as_mut() {
+        stack.mask = mask;
+        stack.gateway = gateway;
+    }
 }
 
 /// Broadcast an ARP request for `target`.
@@ -152,6 +175,8 @@ pub fn init(ip: Ipv4Addr) {
         next_handle: 1,
         udp_tx: 0,
         udp_rx: 0,
+        gateway: [0; 4],
+        mask: [255, 255, 255, 0],
     });
 }
 
@@ -227,12 +252,7 @@ pub fn udp_send(handle: u64, dest: Ipv4Addr, dest_port: u16, payload: &[u8]) -> 
     let src_port = sock.port;
     let src_ip = stack.ip;
     let src_mac = stack.device.mac();
-    let dst_mac = stack
-        .arp
-        .iter()
-        .find(|(ip, _)| *ip == dest)
-        .map(|(_, m)| *m)
-        .unwrap_or([0xFF; ETH_ALEN]);
+    let dst_mac = stack.next_hop_mac(dest);
 
     let udp = build_udp(src_ip, dest, src_port, dest_port, payload);
     let frame = build_ipv4_frame(src_mac, dst_mac, src_ip, dest, IPPROTO_UDP, &udp);
@@ -344,12 +364,7 @@ pub fn send_ping(dest: Ipv4Addr, ident: u16, seq: u16) {
     let mut guard = STACK.lock();
     let Some(stack) = guard.as_mut() else { return };
     let src_mac = stack.device.mac();
-    let dst_mac = stack
-        .arp
-        .iter()
-        .find(|(ip, _)| *ip == dest)
-        .map(|(_, m)| *m)
-        .unwrap_or([0xFF; ETH_ALEN]);
+    let dst_mac = stack.next_hop_mac(dest);
 
     // ICMP echo request.
     let mut icmp = vec![8u8, 0, 0, 0, (ident >> 8) as u8, ident as u8, (seq >> 8) as u8, seq as u8];

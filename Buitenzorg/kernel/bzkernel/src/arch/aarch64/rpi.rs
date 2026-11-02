@@ -314,6 +314,42 @@ fn videocore_clock_rate(id: u32) -> u32 {
     unsafe { m.add(6).read_volatile() }
 }
 
+/// Serializes runtime mailbox calls (the HW_* syscalls run on any CPU; the
+/// boot-time helpers above run before anything else can).
+static MBOX_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+/// One VideoCore firmware property: `tag` with request words `values` (at
+/// most 8); the answer's words replace them. False if the firmware did not
+/// answer or rejected the tag.
+pub fn firmware_property(tag: u32, values: &mut [u32]) -> bool {
+    let n = values.len().min(8);
+    let _guard = MBOX_LOCK.lock();
+    let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };
+    let total = 6 + n; // size, code, tag, buffer bytes, request code, values..., end
+    unsafe {
+        m.write_volatile((total * 4) as u32);
+        m.add(1).write_volatile(0);
+        m.add(2).write_volatile(tag);
+        m.add(3).write_volatile((n * 4) as u32);
+        m.add(4).write_volatile(0);
+        for (i, v) in values.iter().take(n).enumerate() {
+            m.add(5 + i).write_volatile(*v);
+        }
+        m.add(5 + n).write_volatile(0);
+    }
+    if !mailbox_call(m, (total * 4) as u64) {
+        return false;
+    }
+    // bit 31 of the tag's response code = "answered"
+    if unsafe { m.add(4).read_volatile() } & 0x8000_0000 == 0 {
+        return false;
+    }
+    for (i, v) in values.iter_mut().take(n).enumerate() {
+        *v = unsafe { m.add(5 + i).read_volatile() };
+    }
+    true
+}
+
 /// The board's Ethernet MAC address from the firmware (mailbox tag 0x00010003).
 pub fn board_mac() -> Option<[u8; 6]> {
     let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };

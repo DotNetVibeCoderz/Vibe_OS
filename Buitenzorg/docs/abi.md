@@ -67,6 +67,12 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 44 | `CLOCK_NANOS` | — | — | monotonic nanoseconds since boot |
 | 45 | `WIN_EVENT` | window id | — | next pointer event, 0 = none (packed: x bits 0-15, y 16-31, buttons 32-39, kind 56-63: 1 move, 2 down, 3 up, 4 leave) |
 | 46 | `TEXT_METRICS` | style (0 body, 1 strong, 2 heading) | — | `(glyph width << 32) \| line height` |
+| 47 | `HW_BOARD` | `hw_query` code | argument (clock / voltage id) | the value; `NOSYS` without board I/O (Raspberry Pi 4 only) |
+| 48 | `HW_GPIO` | `hw_gpio` operation | pin | 0, the level (READ) or the mode (GET_MODE); a2 = value |
+| 49 | `HW_I2C` | ptr `HwTransfer` | — | `hw_status` (0 ok, 1 no acknowledge, 2 clock stretch, 3 timeout) |
+| 50 | `HW_SPI` | ptr `HwTransfer` | — | `hw_status` |
+| 51 | `HW_UART` | `hw_uart` operation (0 open, 1 write, 2 read, 3 close) | ptr `HwTransfer` | bytes written / read (read does not block), 0 for open / close |
+| 52 | `HW_LED` | 0 activity (green) / 1 power (red) | 1 on / 0 off | 0 |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
@@ -229,6 +235,24 @@ State: `0=runnable, 1=running, 2=finished`. Kind: `0=kernel task, 1=user app`.
 `NetDatagram` (pre-v1.0) — `#[repr(C)]`, **16 bytes**: `addr:[u8;4], port:u32, length:u64`; the payload follows immediately.
 
 `NetInfo` (pre-v1.0) — `#[repr(C)]`, **48 bytes**: `addr:[u8;8], up, tx_datagrams, rx_datagrams, icmp_replies, arp_replies`.
+
+`HwTransfer` (v1.x, board I/O) — `#[repr(C)]`, **48 bytes**: `bus:u32, addr:u32,
+speed_hz:u32, mode:u32, tx_ptr:u64, tx_len:u64, rx_ptr:u64, rx_len:u64`. `bus` =
+I2C/SPI bus or serial port; `addr` = I2C 7-bit address or SPI chip select;
+`speed_hz` 0 = the bus default (I2C 100 kHz, SPI 1 MHz) or the baud rate for
+UART OPEN; `mode` = SPI mode 0-3. I2C writes `tx` then reads `rx`; SPI clocks
+`max(tx_len, rx_len)` bytes full-duplex.
+
+**Board I/O codes.** `hw_query`: `0 BOARD` (1 = Raspberry Pi 4), `1 TEMPERATURE`
+(m°C), `2 TEMPERATURE_MAX` (m°C), `3 CLOCK` (Hz; a1 = firmware clock id: 3 ARM,
+4 core), `4 VOLTAGE` (µV; a1 = 1 core, 2-4 SDRAM), `5 THROTTLED` (bit 0
+under-voltage, 1 frequency capped, 2 throttled, 3 soft temperature limit; +16 =
+"has occurred"), `6 REVISION`, `7 SERIAL`, `8 MEMORY` (bytes), `9 GPIO_COUNT`.
+`hw_gpio`: `0 MODE` (0 input, 1 output, 2+n ALTn), `1 WRITE`, `2 READ`, `3 PULL`
+(0 none, 1 up, 2 down), `4 GET_MODE`. Applications may use the header pins
+GPIO 0-27 except 14/15 (the serial console) and GPIO 42 (the activity LED); others
+are refused with `INVAL`. Serial ports 2-5 are the Pi 4's extra PL011 UARTs (TX/RX
+on GPIO 0/1, 4/5, 8/9, 12/13).
 
 ## Implementation status
 

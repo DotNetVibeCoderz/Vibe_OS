@@ -58,6 +58,7 @@ mod task;
 mod terminal;
 mod theme;
 mod vfs;
+mod hwio;
 mod usb;
 mod virtio;
 mod vmm;

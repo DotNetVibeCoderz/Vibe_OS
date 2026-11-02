@@ -301,6 +301,12 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
             };
             ((crate::gfx::text_width("M", style) as u64) << 32) | crate::gfx::line_height(style) as u64
         }
+        sysno::HW_BOARD => crate::hwio::board(a0, a1),
+        sysno::HW_GPIO => crate::hwio::gpio(a0, a1, a2),
+        sysno::HW_LED => crate::hwio::led(a0, a1 != 0),
+        sysno::HW_I2C => sys_hw_transfer(sysno::HW_I2C, 0, a0),
+        sysno::HW_SPI => sys_hw_transfer(sysno::HW_SPI, 0, a0),
+        sysno::HW_UART => sys_hw_transfer(sysno::HW_UART, a0, a1),
         sysno::FUTEX_WAKE => task::futex_wake_user(a0, a1),
         sysno::THREAD_SELF => task::current_id(),
         sysno::CLOCK_MONO => crate::arch::cpu::timestamp(),
@@ -509,6 +515,66 @@ fn sys_net_send(handle: u64, buf_ptr: u64, len: u64) -> u64 {
 
 /// NET_RECV: fills the `abi::NetDatagram` header and the payload after it.
 /// Returns the payload length, or 0 when nothing is queued (non-blocking).
+/// HW_I2C / HW_SPI / HW_UART: read the `HwTransfer`, copy `tx` in, run the
+/// bus operation on kernel buffers, copy `rx` out (validated, volatile).
+fn sys_hw_transfer(nr: u64, op: u64, t_ptr: u64) -> u64 {
+    use bz_abi::{hw_uart, HwTransfer};
+    const MAX: u64 = 4096;
+    let size = core::mem::size_of::<HwTransfer>() as u64;
+    if !user_read(t_ptr, size) {
+        return syserr::INVAL;
+    }
+    let raw = copy_user_bytes(t_ptr, size as usize);
+    if raw.len() != size as usize {
+        return syserr::INVAL;
+    }
+    let u32_at = |o: usize| u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
+    let u64_at = |o: usize| u64::from_le_bytes(raw[o..o + 8].try_into().unwrap());
+    let t = HwTransfer {
+        bus: u32_at(0),
+        addr: u32_at(4),
+        speed_hz: u32_at(8),
+        mode: u32_at(12),
+        tx_ptr: u64_at(16),
+        tx_len: u64_at(24),
+        rx_ptr: u64_at(32),
+        rx_len: u64_at(40),
+    };
+    if t.tx_len > MAX || t.rx_len > MAX {
+        return syserr::INVAL;
+    }
+    let tx = if t.tx_len > 0 {
+        if !user_read(t.tx_ptr, t.tx_len) {
+            return syserr::INVAL;
+        }
+        copy_user_bytes(t.tx_ptr, t.tx_len as usize)
+    } else {
+        alloc::vec::Vec::new()
+    };
+    if t.rx_len > 0 && !user_write(t.rx_ptr, t.rx_len) {
+        return syserr::INVAL;
+    }
+    let mut rx = alloc::vec![0u8; t.rx_len as usize];
+    let r = match nr {
+        sysno::HW_I2C => crate::hwio::i2c(t.bus, t.addr, t.speed_hz, &tx, &mut rx),
+        sysno::HW_SPI => crate::hwio::spi(t.bus, t.addr, t.speed_hz, t.mode, &tx, &mut rx),
+        _ => match op {
+            hw_uart::OPEN => crate::hwio::uart_open(t.bus, t.speed_hz),
+            hw_uart::CLOSE => crate::hwio::uart_close(t.bus),
+            hw_uart::WRITE => crate::hwio::uart_write(t.bus, &tx),
+            hw_uart::READ => crate::hwio::uart_read(t.bus, &mut rx),
+            _ => syserr::INVAL,
+        },
+    };
+    // Copy out what was read (all of rx for I2C/SPI, the count for UART READ).
+    let n = if nr == sysno::HW_UART { if op == hw_uart::READ && r <= t.rx_len { r as usize } else { 0 } } else { rx.len() };
+    let out = t.rx_ptr as *mut u8;
+    for (i, b) in rx.iter().take(n).enumerate() {
+        unsafe { out.add(i).write_volatile(*b) };
+    }
+    r
+}
+
 fn sys_net_recv(handle: u64, buf_ptr: u64, max: u64) -> u64 {
     if handle == 0 || max as usize > crate::net::UDP_MAX_PAYLOAD {
         return syserr::INVAL;

@@ -59,7 +59,13 @@ public class AbiContractTests
         Assert.Equal(44ul, SyscallNumbers.ClockNanos);
         Assert.Equal(45ul, SyscallNumbers.WinEvent);
         Assert.Equal(46ul, SyscallNumbers.TextMetrics);
-        Assert.Equal(47ul, SyscallNumbers.Count);
+        Assert.Equal(47ul, SyscallNumbers.HwBoard);
+        Assert.Equal(48ul, SyscallNumbers.HwGpio);
+        Assert.Equal(49ul, SyscallNumbers.HwI2c);
+        Assert.Equal(50ul, SyscallNumbers.HwSpi);
+        Assert.Equal(51ul, SyscallNumbers.HwUart);
+        Assert.Equal(52ul, SyscallNumbers.HwLed);
+        Assert.Equal(53ul, SyscallNumbers.Count);
     }
 
     /// <summary>
@@ -72,7 +78,7 @@ public class AbiContractTests
     public void AbiV1IsFrozen()
     {
         Assert.Equal(1ul, Abi.Version);
-        Assert.Equal(47ul, SyscallNumbers.Count);
+        Assert.Equal(53ul, SyscallNumbers.Count);
 
         Assert.Equal(56, Marshal.SizeOf<FramebufferInfo>());
         Assert.Equal(48, Marshal.SizeOf<DrawCmd>());
@@ -84,6 +90,13 @@ public class AbiContractTests
         Assert.Equal(48, Marshal.SizeOf<RtcTime>());
         Assert.Equal(16, Marshal.SizeOf<NetDatagram>());
         Assert.Equal(48, Marshal.SizeOf<NetInfo>());
+        Assert.Equal(48, Marshal.SizeOf<HwTransfer>());
+        Assert.Equal(16, (int)Marshal.OffsetOf<HwTransfer>(nameof(HwTransfer.TxPtr)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<HwTransfer>(nameof(HwTransfer.RxPtr)));
+        Assert.Equal(9ul, HwQuery.GpioCount);
+        Assert.Equal(4ul, HwGpio.GetMode);
+        Assert.Equal(3ul, HwUart.Close);
+        Assert.Equal(3ul, HwStatus.Timeout);
 
         Assert.Equal(ulong.MaxValue, SyscallErrors.NoSys);
         Assert.Equal(ulong.MaxValue - 1, SyscallErrors.Invalid);

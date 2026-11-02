@@ -10,5 +10,11 @@ fn main() {
         println!("cargo:rustc-link-arg=-zmax-page-size=4096");
         println!("cargo:rerun-if-changed={}", script.display());
     }
+    // When the kernel was built (Unix seconds): the starting point of the
+    // software clock on boards without a real-time clock (Raspberry Pi 4),
+    // until SNTP gives the real time. Rebuilt whenever a source file changes.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    println!("cargo:rustc-env=BZ_BUILD_UNIX={}", now);
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=build.rs");
 }

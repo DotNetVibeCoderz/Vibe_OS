@@ -177,8 +177,98 @@ pub mod sysno {
     /// returns `(glyph width << 32) | line height`, in pixels (the font is
     /// monospaced).
     pub const TEXT_METRICS: u64 = 46;
+    /// Board information and built-in sensors (Raspberry Pi 4): `a0` = a
+    /// [`crate::hw_query`] code, `a1` = its argument (a clock or voltage id).
+    /// Returns the value; `syserr::NOSYS` on a machine without board I/O,
+    /// `syserr::INVAL` for an unknown query or when the firmware did not answer.
+    pub const HW_BOARD: u64 = 47;
+    /// GPIO: `a0` = a [`crate::hw_gpio`] operation, `a1` = pin, `a2` = value.
+    /// Returns 0 (MODE / WRITE / PULL), the level (READ) or the mode (GET_MODE);
+    /// `syserr::INVAL` for a pin applications may not use.
+    pub const HW_GPIO: u64 = 48;
+    /// I2C transfer: `a0` = ptr to a [`crate::HwTransfer`] (`bus`, `addr` =
+    /// 7-bit address, `speed_hz` 0 = 100 kHz; write `tx`, then read `rx`).
+    /// Returns a [`crate::hw_status`] code.
+    pub const HW_I2C: u64 = 49;
+    /// SPI full-duplex transfer: `a0` = ptr to a [`crate::HwTransfer`] (`bus`,
+    /// `addr` = chip select, `speed_hz`, `mode` 0-3; `max(tx_len, rx_len)`
+    /// bytes are clocked, zeros sent past `tx`). Returns a [`crate::hw_status`].
+    pub const HW_SPI: u64 = 50;
+    /// Serial port: `a0` = a [`crate::hw_uart`] operation, `a1` = ptr to a
+    /// [`crate::HwTransfer`] (`bus` = port, `speed_hz` = baud for OPEN, `tx`
+    /// for WRITE, `rx` for READ). Returns bytes written / read (READ does not
+    /// block), 0 for OPEN / CLOSE.
+    pub const HW_UART: u64 = 51;
+    /// Built-in LEDs: `a0` = 0 activity (green) / 1 power (red), `a1` = 1 on,
+    /// 0 off. Returns 0.
+    pub const HW_LED: u64 = 52;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 47;
+    pub const COUNT: u64 = 53;
+}
+
+/// Queries of the [`sysno::HW_BOARD`] syscall.
+pub mod hw_query {
+    /// Which board: 1 = Raspberry Pi 4 (BCM2711).
+    pub const BOARD: u64 = 0;
+    /// SoC temperature, milli-degrees Celsius.
+    pub const TEMPERATURE: u64 = 1;
+    /// Temperature at which the firmware throttles, milli-degrees Celsius.
+    pub const TEMPERATURE_MAX: u64 = 2;
+    /// Measured clock rate in Hz; `a1` = firmware clock id (3 ARM, 4 core, ...).
+    pub const CLOCK: u64 = 3;
+    /// Voltage in microvolts; `a1` = 1 core, 2 SDRAM controller, 3 SDRAM PHY, 4 SDRAM I/O.
+    pub const VOLTAGE: u64 = 4;
+    /// Firmware throttle flags: bit 0 under-voltage now, 1 ARM frequency
+    /// capped now, 2 throttled now, 3 soft temperature limit now; bits 16-19
+    /// the same "has occurred since boot".
+    pub const THROTTLED: u64 = 5;
+    /// Board revision code.
+    pub const REVISION: u64 = 6;
+    /// Board serial number.
+    pub const SERIAL: u64 = 7;
+    /// Memory the firmware gave the ARM cores, bytes.
+    pub const MEMORY: u64 = 8;
+    /// Number of GPIO pins of the SoC.
+    pub const GPIO_COUNT: u64 = 9;
+}
+
+/// Operations of the [`sysno::HW_GPIO`] syscall.
+pub mod hw_gpio {
+    /// Set a pin's function: value 0 input, 1 output, 2 + n alternate function n (0-5).
+    pub const MODE: u64 = 0;
+    /// Drive an output pin: value 0 low, 1 high.
+    pub const WRITE: u64 = 1;
+    /// Read a pin's level (0 / 1).
+    pub const READ: u64 = 2;
+    /// Pull resistor: value 0 none, 1 up, 2 down.
+    pub const PULL: u64 = 3;
+    /// A pin's current function, encoded as for MODE.
+    pub const GET_MODE: u64 = 4;
+}
+
+/// Operations of the [`sysno::HW_UART`] syscall.
+pub mod hw_uart {
+    /// Configure the port's pins and baud rate (`speed_hz`).
+    pub const OPEN: u64 = 0;
+    /// Send `tx`; returns the bytes written.
+    pub const WRITE: u64 = 1;
+    /// Take up to `rx_len` received bytes without blocking; returns how many.
+    pub const READ: u64 = 2;
+    /// Stop using the port.
+    pub const CLOSE: u64 = 3;
+}
+
+/// Results of [`sysno::HW_I2C`] / [`sysno::HW_SPI`] (small values, never
+/// confused with the `syserr` range).
+pub mod hw_status {
+    /// The transfer completed.
+    pub const OK: u64 = 0;
+    /// No device acknowledged the address (I2C).
+    pub const NACK: u64 = 1;
+    /// The device held the clock too long (I2C).
+    pub const CLOCK_STRETCH: u64 = 2;
+    /// The transfer did not finish in time.
+    pub const TIMEOUT: u64 = 3;
 }
 
 /// Socket kinds for the [`sysno::NET_SOCKET`] syscall.
@@ -455,6 +545,31 @@ pub struct NetDatagram {
     pub length: u64,
 }
 
+/// One bus transfer for [`sysno::HW_I2C`], [`sysno::HW_SPI`] and
+/// [`sysno::HW_UART`]: which bus/device, and a write and a read buffer.
+///
+/// C# mirror: `Buitenzorg.Runtime.Sys.HwTransfer` (Sequential, Pack = 8).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HwTransfer {
+    /// I2C / SPI bus number, or serial port number.
+    pub bus: u32,
+    /// I2C 7-bit address, or SPI chip select.
+    pub addr: u32,
+    /// Bus clock in Hz (0 = the bus default), or the baud rate for UART OPEN.
+    pub speed_hz: u32,
+    /// SPI mode 0-3 (CPOL << 1 | CPHA); unused otherwise.
+    pub mode: u32,
+    /// Bytes to write (user pointer).
+    pub tx_ptr: u64,
+    /// Number of bytes at `tx_ptr`.
+    pub tx_len: u64,
+    /// Buffer for the bytes read (user pointer).
+    pub rx_ptr: u64,
+    /// Size of the buffer at `rx_ptr`.
+    pub rx_len: u64,
+}
+
 /// Interface information and counters for the NET_INFO syscall.
 ///
 /// C# mirror: `Buitenzorg.Runtime.Sys.NetInfo` (Sequential, Pack = 8).
@@ -541,7 +656,13 @@ mod tests {
         assert_eq!(sysno::CLOCK_NANOS, 44);
         assert_eq!(sysno::WIN_EVENT, 45);
         assert_eq!(sysno::TEXT_METRICS, 46);
-        assert_eq!(sysno::COUNT, 47);
+        assert_eq!(sysno::HW_BOARD, 47);
+        assert_eq!(sysno::HW_GPIO, 48);
+        assert_eq!(sysno::HW_I2C, 49);
+        assert_eq!(sysno::HW_SPI, 50);
+        assert_eq!(sysno::HW_UART, 51);
+        assert_eq!(sysno::HW_LED, 52);
+        assert_eq!(sysno::COUNT, 53);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -557,7 +678,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 47, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 53, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);
@@ -570,6 +691,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<RtcTime>(), 48);
         assert_eq!(core::mem::size_of::<NetDatagram>(), 16);
         assert_eq!(core::mem::size_of::<NetInfo>(), 48);
+        assert_eq!(core::mem::size_of::<HwTransfer>(), 48);
 
         // Every struct crossing the boundary must be 8-byte aligned so the C#
         // `Pack = 8` mirrors line up field for field.
@@ -583,6 +705,15 @@ mod tests {
         assert_eq!(core::mem::align_of::<RtcTime>(), 8);
         assert_eq!(core::mem::align_of::<NetDatagram>(), 8);
         assert_eq!(core::mem::align_of::<NetInfo>(), 8);
+        assert_eq!(core::mem::align_of::<HwTransfer>(), 8);
+        assert_eq!(core::mem::offset_of!(HwTransfer, tx_ptr), 16);
+        assert_eq!(core::mem::offset_of!(HwTransfer, rx_ptr), 32);
+
+        // Board I/O codes are part of the contract too.
+        assert_eq!(hw_query::GPIO_COUNT, 9);
+        assert_eq!(hw_gpio::GET_MODE, 4);
+        assert_eq!(hw_uart::CLOSE, 3);
+        assert_eq!(hw_status::TIMEOUT, 3);
 
         // Error codes are part of the contract too.
         assert_eq!(syserr::NOSYS, u64::MAX);

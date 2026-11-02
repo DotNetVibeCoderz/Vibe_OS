@@ -52,6 +52,7 @@ build_prog thread thread.cs
 build_prog sync sync.cs
 build_prog bcl bcl.cs bzbcl.cs
 build_prog proctest proctest.cs bzbcl.cs bzbcl2.cs
+build_prog hwdemo hwdemo.cs bzhw.cs bzbcl.cs
 build_prog calc calc.cs bzui.cs bzgfx.cs
 build_prog g2048 game2048.cs bzui.cs bzgfx.cs
 build_prog ui ui.cs bzui.cs bzgfx.cs

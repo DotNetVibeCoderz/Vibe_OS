@@ -14,6 +14,14 @@ use core::panic::PanicInfo;
 
 // Buitenzorg syscall numbers (mirror of bz_abi::sysno).
 const SYS_DEBUG_WRITE: u64 = 1;
+// Board I/O (Raspberry Pi 4; NOSYS elsewhere): see bz-abi `HW_*`.
+const SYS_CLOCK_NANOS: u64 = 44;
+const SYS_HW_BOARD: u64 = 47;
+const SYS_HW_GPIO: u64 = 48;
+const SYS_HW_I2C: u64 = 49;
+const SYS_HW_SPI: u64 = 50;
+const SYS_HW_UART: u64 = 51;
+const SYS_HW_LED: u64 = 52;
 const SYS_EXIT: u64 = 2;
 const SYS_TICKS: u64 = 4;
 const SYS_WIN_CREATE: u64 = 6;
@@ -591,6 +599,48 @@ pub unsafe extern "C" fn bz_audio_tone(freq: u64, ms: u64) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn bz_audio_play(ptr: *const u8, len: u64) -> u64 {
     syscall2(SYS_AUDIO_PLAY, ptr as u64, len)
+}
+
+/// Monotonic nanoseconds since boot.
+#[no_mangle]
+pub unsafe extern "C" fn bz_clock_nanos() -> u64 {
+    syscall2(SYS_CLOCK_NANOS, 0, 0)
+}
+
+/// Board info / built-in sensors: `query` (bz-abi `hw_query`), `arg`.
+#[no_mangle]
+pub unsafe extern "C" fn bz_hw_board(query: u64, arg: u64) -> u64 {
+    syscall2(SYS_HW_BOARD, query, arg)
+}
+
+/// GPIO: `op` (bz-abi `hw_gpio`), `pin`, `value`.
+#[no_mangle]
+pub unsafe extern "C" fn bz_hw_gpio(op: u64, pin: u64, value: u64) -> u64 {
+    syscall3(SYS_HW_GPIO, op, pin, value)
+}
+
+/// Built-in LED `led` (0 activity, 1 power) on / off.
+#[no_mangle]
+pub unsafe extern "C" fn bz_hw_led(led: u64, on: u64) -> u64 {
+    syscall2(SYS_HW_LED, led, on)
+}
+
+/// I2C transfer described by the HwTransfer (48 bytes) at `t`.
+#[no_mangle]
+pub unsafe extern "C" fn bz_hw_i2c(t: *mut u8) -> u64 {
+    syscall2(SYS_HW_I2C, t as u64, 0)
+}
+
+/// SPI transfer described by the HwTransfer at `t`.
+#[no_mangle]
+pub unsafe extern "C" fn bz_hw_spi(t: *mut u8) -> u64 {
+    syscall2(SYS_HW_SPI, t as u64, 0)
+}
+
+/// Serial port operation `op` (bz-abi `hw_uart`) with the HwTransfer at `t`.
+#[no_mangle]
+pub unsafe extern "C" fn bz_hw_uart(op: u64, t: *mut u8) -> u64 {
+    syscall2(SYS_HW_UART, op, t as u64)
 }
 
 /// Fill an array of PkgInfo (48 bytes each) at `buf`; returns the count.

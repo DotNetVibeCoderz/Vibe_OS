@@ -150,6 +150,27 @@ public unsafe struct NetDatagram
 }
 
 /// <summary>
+/// Mirror of the Rust <c>bz_abi::HwTransfer</c> (<c>#[repr(C)]</c>, 48 bytes):
+/// one I2C / SPI / serial transfer for HW_I2C, HW_SPI and HW_UART.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+public struct HwTransfer
+{
+    /// <summary>I2C / SPI bus number, or serial port number.</summary>
+    public uint Bus;
+    /// <summary>I2C 7-bit address, or SPI chip select.</summary>
+    public uint Addr;
+    /// <summary>Bus clock in Hz (0 = default), or the baud rate for UART OPEN.</summary>
+    public uint SpeedHz;
+    /// <summary>SPI mode 0-3.</summary>
+    public uint Mode;
+    public ulong TxPtr;
+    public ulong TxLen;
+    public ulong RxPtr;
+    public ulong RxLen;
+}
+
+/// <summary>
 /// Mirror of the Rust <c>bz_abi::NetInfo</c> (<c>#[repr(C)]</c>, 48 bytes):
 /// interface address, link state and counters for the NET_INFO syscall.
 /// </summary>

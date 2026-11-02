@@ -31,6 +31,25 @@ const PROC_SPAWN: u64 = 40;
 const PROC_WAIT: u64 = 41;
 const WIN_EVENT: u64 = 45;
 const TEXT_METRICS: u64 = 46;
+const HW_BOARD: u64 = 47;
+const HW_GPIO: u64 = 48;
+const HW_I2C: u64 = 49;
+const HW_SPI: u64 = 50;
+const HW_UART: u64 = 51;
+const HW_LED: u64 = 52;
+
+/// `bz_abi::HwTransfer`.
+#[repr(C)]
+struct HwTransfer {
+    bus: u32,
+    addr: u32,
+    speed_hz: u32,
+    mode: u32,
+    tx_ptr: u64,
+    tx_len: u64,
+    rx_ptr: u64,
+    rx_len: u64,
+}
 /// `bz_abi::win_flags::CLIENT_SIZE`.
 const CLIENT_SIZE: u64 = 1 << 63;
 
@@ -77,6 +96,124 @@ fn pixels(interp: &Interpreter, a: &[Value], i: usize) -> Vec<u32> {
             _ => Vec::new(),
         })
         .unwrap_or_default()
+}
+
+/// A `byte[]` argument's contents (empty for null or another element type).
+fn bytes(interp: &Interpreter, a: &[Value], i: usize) -> Vec<u8> {
+    let Some(Value::Obj(h)) = a.get(i) else { return Vec::new() };
+    if h.is_null() {
+        return Vec::new();
+    }
+    interp
+        .heap
+        .with::<ClrArray, _>(*h, |arr| match &arr.storage {
+            ArrayStorage::U8(v) => v.clone(),
+            ArrayStorage::I8(v) => v.iter().map(|&b| b as u8).collect(),
+            _ => Vec::new(),
+        })
+        .unwrap_or_default()
+}
+
+/// Copy `data` into the `byte[]` argument `i` (as far as it is long).
+fn store_bytes(interp: &mut Interpreter, a: &[Value], i: usize, data: &[u8]) {
+    let Some(Value::Obj(h)) = a.get(i) else { return };
+    if h.is_null() {
+        return;
+    }
+    let _ = interp.heap.with_mut::<ClrArray, _>(*h, |arr| match &mut arr.storage {
+        ArrayStorage::U8(v) => {
+            let n = v.len().min(data.len());
+            v[..n].copy_from_slice(&data[..n]);
+        }
+        ArrayStorage::I8(v) => {
+            for (d, s) in v.iter_mut().zip(data) {
+                *d = *s as i8;
+            }
+        }
+        _ => {}
+    });
+}
+
+/// Run a bus syscall with a `HwTransfer` over host buffers.
+fn hw_transfer(nr: u64, op: u64, bus: i64, addr: i64, speed: i64, mode: i64, tx: &[u8], rx: &mut [u8]) -> u64 {
+    let t = HwTransfer {
+        bus: bus as u32,
+        addr: addr as u32,
+        speed_hz: speed as u32,
+        mode: mode as u32,
+        tx_ptr: if tx.is_empty() { 0 } else { tx.as_ptr() as u64 },
+        tx_len: tx.len() as u64,
+        rx_ptr: if rx.is_empty() { 0 } else { rx.as_mut_ptr() as u64 },
+        rx_len: rx.len() as u64,
+    };
+    let p = &t as *const HwTransfer as u64;
+    if nr == HW_UART { sys::syscall(nr, op, p, 0) } else { sys::syscall(nr, p, 0, 0) }
+}
+
+/// `HwBoard(int query, int arg)` -> value, -1 when unavailable.
+fn hw_board(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(HW_BOARD, int(a, 0) as u64, int(a, 1) as u64, 0);
+    Ok(Some(Value::I64(if sys::is_err(r) { -1 } else { r as i64 })))
+}
+
+/// `HwGpio(int op, int pin, int value)` -> result, -1 when refused.
+fn hw_gpio(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(HW_GPIO, int(a, 0) as u64, int(a, 1) as u64, int(a, 2) as u64);
+    Ok(Some(Value::I64(if sys::is_err(r) { -1 } else { r as i64 })))
+}
+
+/// `HwLed(int led, int on)` -> 0 / -1.
+fn hw_led(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(HW_LED, int(a, 0) as u64, int(a, 1) as u64, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `HwI2c(int bus, int address, int speedHz, byte[] tx, int txLen, byte[] rx, int rxLen)` -> status.
+fn hw_i2c(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let mut tx = bytes(i, a, 3);
+    tx.truncate(int(a, 4).max(0) as usize);
+    let mut rx = alloc::vec![0u8; int(a, 6).clamp(0, 4096) as usize];
+    let r = hw_transfer(HW_I2C, 0, int(a, 0), int(a, 1), int(a, 2), 0, &tx, &mut rx);
+    if !sys::is_err(r) && !rx.is_empty() {
+        store_bytes(i, a, 5, &rx);
+    }
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `HwSpi(int bus, int cs, int speedHz, int mode, byte[] tx, byte[] rx, int len)` -> status.
+fn hw_spi(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let len = int(a, 6).clamp(0, 4096) as usize;
+    let mut tx = bytes(i, a, 4);
+    tx.resize(len, 0);
+    let mut rx = alloc::vec![0u8; len];
+    let r = hw_transfer(HW_SPI, 0, int(a, 0), int(a, 1), int(a, 2), int(a, 3), &tx, &mut rx);
+    if !sys::is_err(r) {
+        store_bytes(i, a, 5, &rx);
+    }
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `HwUart(int op, int port, int baud, byte[] buffer, int len)` -> bytes / 0 / -1.
+fn hw_uart(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let op = int(a, 0) as u64;
+    let len = int(a, 4).clamp(0, 4096) as usize;
+    let (r, rx) = match op {
+        1 => {
+            let mut tx = bytes(i, a, 3);
+            tx.truncate(len);
+            (hw_transfer(HW_UART, op, int(a, 1), 0, int(a, 2), 0, &tx, &mut []), Vec::new())
+        }
+        2 => {
+            let mut rx = alloc::vec![0u8; len];
+            let r = hw_transfer(HW_UART, op, int(a, 1), 0, int(a, 2), 0, &[], &mut rx);
+            (r, rx)
+        }
+        _ => (hw_transfer(HW_UART, op, int(a, 1), 0, int(a, 2), 0, &[], &mut []), Vec::new()),
+    };
+    if op == 2 && !sys::is_err(r) {
+        store_bytes(i, a, 3, &rx[..(r as usize).min(rx.len())]);
+    }
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
 }
 
 /// A NUL-terminated copy of `s` (PROC_SPAWN takes C strings).
@@ -312,7 +449,7 @@ fn wait(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 21] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 27] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -334,6 +471,12 @@ pub fn install(interp: &mut Interpreter) {
         ("ProcList", proc_list),
         ("ProcKill", proc_kill),
         ("SysStat", sys_stat),
+        ("HwBoard", hw_board),
+        ("HwGpio", hw_gpio),
+        ("HwLed", hw_led),
+        ("HwI2c", hw_i2c),
+        ("HwSpi", hw_spi),
+        ("HwUart", hw_uart),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);
