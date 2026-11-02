@@ -1,0 +1,12 @@
+# A static ET_EXEC at 0x400000 (link.ld), like every Buitenzorg user program:
+# no PIE. x86-64 keeps the target's "kernel" code model: its precompiled core
+# and alloc use it (LTO refuses a mix), and sign-extended 32-bit addresses
+# cover 0x400000 as well.
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=static"]
+
+[target.aarch64-unknown-none]
+rustflags = ["-C", "relocation-model=static"]
+
+[target.riscv64imac-unknown-none-elf]
+rustflags = ["-C", "relocation-model=static", "-C", "link-arg=--no-relax"]

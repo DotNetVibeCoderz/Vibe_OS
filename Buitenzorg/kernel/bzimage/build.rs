@@ -390,6 +390,17 @@ fn main() {
         }
     }
 
+    // The managed C# path (RustCLR): CLRHOST.ELF for this image's
+    // architecture (scripts/build-clrhost.*) and the managed apps -- .NET
+    // assemblies, identical on every architecture (userland/clr-apps/dist).
+    if let Some(bytes) = clrhost_elf("x86_64-unknown-none") {
+        add_file(&mut builder, &mut files, "clrhost.elf".into(), bytes);
+    }
+    let clr_apps = clr_assemblies();
+    for (name, bytes) in &clr_apps {
+        add_file(&mut builder, &mut files, name.to_lowercase(), bytes.clone());
+    }
+
     builder.create_uefi_image(&uefi_path).unwrap();
     builder.create_bios_image(&bios_path).unwrap();
 
@@ -418,6 +429,9 @@ fn main() {
     // as a module (the ARM64 kernel has no disk driver yet).
     let arm_progs = manifest_dir().join("..").join("..").join("userland").join("hello-csharp").join("arm64");
     let mut arm_files: Vec<(String, Vec<u8>)> = files.iter().filter(|(n, _)| !n.to_lowercase().ends_with(".elf")).cloned().collect();
+    if let Some(bytes) = clrhost_elf("aarch64-unknown-none") {
+        arm_files.push(("CLRHOST.ELF".into(), bytes));
+    }
     let mut modules = String::new();
     if let Ok(dir) = std::fs::read_dir(&arm_progs) {
         let mut elfs: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().map_or(false, |x| x == "elf")).collect();
@@ -446,6 +460,9 @@ fn main() {
     println!("cargo:rerun-if-changed={}", rv_kernel.display());
     let rv_path = out_dir.join("buitenzorg-riscv64.img");
     let mut rv_files: Vec<(String, Vec<u8>)> = files.iter().filter(|(n, _)| !n.to_lowercase().ends_with(".elf")).cloned().collect();
+    if let Some(bytes) = clrhost_elf("riscv64imac-unknown-none-elf") {
+        rv_files.push(("CLRHOST.ELF".into(), bytes));
+    }
     let mut rv_modules = String::new();
     for (stem, bytes) in build_riscv_programs(&out_dir) {
         let file = format!("{}.ELF", stem.to_uppercase());
@@ -495,6 +512,34 @@ fn build_riscv_programs(out_dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
         match status.ok().filter(|s| s.success()).and_then(|_| std::fs::read(&elf).ok()) {
             Some(bytes) => out.push((stem, bytes)),
             None => println!("cargo:warning=RISC-V user program {stem} failed to build"),
+        }
+    }
+    out
+}
+
+/// The managed-runtime host built for `target` (scripts/build-clrhost.*),
+/// if it has been built.
+fn clrhost_elf(target: &str) -> Option<Vec<u8>> {
+    let path = manifest_dir().join("..").join("..").join("userland").join("clrhost").join("target").join(target).join("release").join("clrhost");
+    println!("cargo:rerun-if-changed={}", path.display());
+    std::fs::read(&path).ok()
+}
+
+/// The managed C# apps: .NET assemblies built by `dotnet build`
+/// (scripts/build-clr-apps.*) and committed in userland/clr-apps/dist as 8.3
+/// names (HELLOCLR.DLL, CONFORM.DLL, ...). Architecture-neutral.
+fn clr_assemblies() -> Vec<(String, Vec<u8>)> {
+    let dir = manifest_dir().join("..").join("..").join("userland").join("clr-apps").join("dist");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        let mut paths: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().map_or(false, |x| x.eq_ignore_ascii_case("dll"))).collect();
+        paths.sort();
+        for p in paths {
+            println!("cargo:rerun-if-changed={}", p.display());
+            if let Ok(bytes) = std::fs::read(&p) {
+                out.push((p.file_name().unwrap().to_string_lossy().to_uppercase(), bytes));
+            }
         }
     }
     out

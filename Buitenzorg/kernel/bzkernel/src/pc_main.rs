@@ -5,6 +5,7 @@ mod ai;
 mod aio;
 mod allocator;
 mod app;
+mod clr;
 mod arch;
 mod boot;
 mod dtb;
@@ -174,6 +175,8 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     panen_audio_demo();
     panen_suite_demo();
     multiproc_demo();
+    // The managed C# path (RustCLR) next to the native one (bflat).
+    clr::boot_demo("x86-64");
 
     // v1.0 hardening: syscalls must refuse user pointers the caller does not
     // own (kernel addresses, unmapped pages, ranges that overflow the user

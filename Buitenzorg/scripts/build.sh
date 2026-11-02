@@ -24,6 +24,9 @@ echo "==> kernel (Rust)"
 # Multi-arch M4: the RISC-V kernel (-> dist/buitenzorg-riscv64.img). Non-fatal.
 (cd "$root/kernel" && cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf) \
   || echo "==> RISC-V kernel build failed; no RISC-V image"
+# The managed C# runtime (RustCLR host, /disk/CLRHOST.ELF) for every
+# architecture. Non-fatal: the images build without it.
+"$root/scripts/build-clrhost.sh" || echo "==> managed runtime host build failed; no CLRHOST.ELF"
 (cd "$root/kernel" && cargo build --release && cargo run --release -p bzimage -- --out "$root/dist")
 
 echo "==> runtime + sdk (.NET)"

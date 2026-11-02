@@ -286,6 +286,7 @@ GC/heap/BCL.)
 - [x] **Streams / System.IO**: `BzMemoryStream` + `BzFile` read/write + `BzDir`/`BzPath` di atas VFS (`FS_READ/FS_WRITE/FS_LIST`); *FileStream ber-seek di atas file belum*
 - [~] Sample C# terverifikasi di QEMU — `bcl.cs` + `bcl2.cs` (LINQ/Regex/StringBuilder/Base64/Collections/Tasks/Streams) → `BCL OK`/`BCL2 OK`; *tanpa GC reklamasi & async/await*
 - [ ] **(Menyusul) CoreCLR/JIT + reflection penuh + Reflection.Emit** (skenario dinamis di luar batas NativeAOT/trimming)
+- [~] **Jalur managed: RustCLR (RustNetRuntime)** — dua jalur C#: **native** (bflat/NativeAOT) + **managed** (RustCLR, interpreter IL + GC mark-sweep + RustBCL). **Increment 1 ✓ (2026-11-02):** host ring-3 `CLRHOST.ELF` (`userland/clrhost`, `no_std`, crate RustCLR sebagai git dependency ter-pin) untuk x86-64/ARM64/RISC-V; DLL hasil `dotnet build` jalan tanpa diubah; `HELLOCLR.DLL` 9/9 (static ref, `object[]`, string, LINQ+lambda, exception, GC mereklamasi ~40 ribu objek) + `MODERN.DLL` `checks=35 failures=0` → `CLR OK` di ketiga arsitektur (C# pertama di RISC-V). *Belum:* thread (suite Conformance butuh `Thread`/`Monitor`/`Task`) → increment 2; interop GUI + `run app.dll` menyusul.
 
 ### 🌾 v0.16 "Panen" — Preloaded Suite & Optimasi
 **Prasyarat: framework grafis/UI + audio (lihat PLAN.md §v0.16 untuk rincian).**

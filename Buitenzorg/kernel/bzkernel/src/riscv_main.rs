@@ -27,6 +27,7 @@ mod ai;
 mod aio;
 mod allocator;
 mod app;
+mod clr;
 mod arch;
 mod boot;
 mod compute;
@@ -215,6 +216,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     shared_kernel_setup(info);
     polyglot_test();
     run_boot_programs(info);
+    // The managed C# path (RustCLR): C# on RISC-V, where bflat has no target.
+    clr::boot_demo("RISC-V");
     gpu_self_test(info);
     show_desktop();
     if timer_ok && uart.is_some() && info.loader == "limine" {

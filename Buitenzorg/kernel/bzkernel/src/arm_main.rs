@@ -26,6 +26,7 @@ mod ai;
 mod aio;
 mod allocator;
 mod app;
+mod clr;
 mod arch;
 mod boot;
 mod compute;
@@ -206,6 +207,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     start_secondary_cpus(info, fdt.as_ref());
     shared_kernel_setup(info, fdt.as_ref());
     run_boot_programs(info);
+    // The managed C# path (RustCLR) next to the native one (bflat).
+    clr::boot_demo("ARM64");
     show_desktop();
 
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();

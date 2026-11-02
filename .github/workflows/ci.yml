@@ -54,6 +54,11 @@ jobs:
         working-directory: Buitenzorg/kernel
         run: cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf
 
+      # The managed C# runtime: RustCLR as a ring-3 host (/disk/CLRHOST.ELF)
+      # for every architecture; fetches RustCLR at the pinned commit.
+      - name: Build managed runtime host (RustCLR)
+        run: bash scripts/build-clrhost.sh
+
       # The x86-64 kernel + every image (bzimage also compiles the RISC-V
       # user programs in userland/riscv) -> dist/.
       - name: Build x86-64 kernel + boot images

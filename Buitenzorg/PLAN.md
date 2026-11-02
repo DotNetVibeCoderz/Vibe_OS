@@ -317,6 +317,14 @@ yang "matang". Ini "make-or-break" Layer 4 dan **prasyarat** preloaded suite
   async + Streams, **diverifikasi jalan di ring 3 (QEMU)**.
 - **(Menyusul) CoreCLR/JIT + reflection penuh + Reflection.Emit** — untuk
   skenario dinamis yang tak bisa NativeAOT (dibatasi trimming).
+- **Jalur managed lewat RustCLR (RustNetRuntime)** — keputusan 2026-11-02: C#
+  punya **dua jalur**: *native* (bflat/NativeAOT, cepat, tanpa GC) dan
+  *managed* (RustCLR: re-implementasi CoreCLR di Rust — interpreter IL + GC +
+  RustBCL — sebagai program ring-3 `CLRHOST.ELF`, DLL `dotnet build` jalan
+  apa adanya, netral arsitektur). *(Increment 1 ✓ 2026-11-02: host di
+  x86-64/ARM64/RISC-V, `CLR OK` + suite ModernSyntax 35/35. Berikutnya: thread
+  di atas `THREAD_CREATE`/futex → suite Conformance RustCLR; interop
+  `Buitenzorg.Runtime` (jendela/grafik); `run app.dll` dari shell/desktop.)*
 
 **Milestone:** app C# ber-GC memakai LINQ/Regex/StringBuilder/Base64/
 Collections/Tasks-async/Streams berjalan & terverifikasi di QEMU.

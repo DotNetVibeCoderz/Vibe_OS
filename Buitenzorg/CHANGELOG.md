@@ -35,6 +35,12 @@ Hardening toward a stable x86-64 release.
 - **Multi-arch M0 (increment 2): context-switch HAL.** `arch::context`
   (`FpuState`, `prepare_stack`, `switch`) holds the x86 FXSAVE + stack-switch
   assembly; the scheduler (`task.rs`) is now architecture-neutral.
+- **Managed C# (increment 1): RustCLR as a second way to run C#.** Next to
+  the native bflat apps, Buitenzorg now runs ordinary `dotnet build` programs
+  unmodified on RustCLR, our Rust re-implementation of the .NET runtime, with
+  a real garbage collector: generics, LINQ, lambdas, exceptions, strings and
+  collections all work. The same program runs on x86-64, ARM64 and RISC-V --
+  the first C# on RISC-V.
 - **Multi-arch M5: CI matrix.** Every push now builds the kernels for
   x86-64, ARM64 and RISC-V once and boots each architecture in its own CI job
   with the same milestone checks; a job fails if it would have skipped one of

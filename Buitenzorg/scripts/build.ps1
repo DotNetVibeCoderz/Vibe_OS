@@ -30,6 +30,9 @@ try {
     # Multi-arch M4: the RISC-V kernel (-> dist/buitenzorg-riscv64.img). Non-fatal.
     cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf
     if ($LASTEXITCODE -ne 0) { Write-Host "==> RISC-V kernel build failed; no RISC-V image" -ForegroundColor Yellow }
+    # The managed C# runtime (RustCLR host, /disk/CLRHOST.ELF) for every
+    # architecture. Non-fatal: the images build without it.
+    try { & (Join-Path $PSScriptRoot "build-clrhost.ps1") } catch { Write-Host "==> managed runtime host build failed; no CLRHOST.ELF" -ForegroundColor Yellow }
     cargo build --release
     if ($LASTEXITCODE -ne 0) { throw "kernel build failed" }
     cargo run --release -p bzimage -- --out (Join-Path $root "dist")

@@ -1,5 +1,6 @@
 # Rust
 kernel/target/
+userland/clrhost/target/
 **/*.rs.bk
 
 # .NET
@@ -7,8 +8,9 @@ kernel/target/
 **/obj/
 *.user
 
-# Build output
-dist/
+# Build output (the images; userland/clr-apps/dist holds the committed
+# managed-app assemblies -- see scripts/build-clr-apps.*)
+/dist/
 *.img
 *.qcow2
 *.vhdx
