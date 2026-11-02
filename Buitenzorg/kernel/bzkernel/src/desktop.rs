@@ -113,6 +113,11 @@ pub fn run() -> ! {
         // queued for the focused program's KEY_READ, and used to leave the
         // idle timer running (the screensaver came on while someone typed into
         // an app). A key that wakes the screensaver is swallowed, not passed on.
+        // Keys typed on the serial console (a board with no keyboard driver yet).
+        for _ in 0..64 {
+            let Some(b) = crate::serial::read_byte() else { break };
+            keyboard::feed_serial(b);
+        }
         let keys = keyboard::pushed();
         if keys != last_keys {
             last_keys = keys;

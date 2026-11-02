@@ -74,6 +74,74 @@ fn nav_char(code: pc_keyboard::KeyCode) -> Option<char> {
     char::from_u32(NAV_FIRST as u32 + n)
 }
 
+/// Where `feed_serial` is inside an escape sequence: 0 none, 1 after ESC,
+/// 2 after "ESC [", 3.. after "ESC [ <digit>" (digit + 3).
+static SERIAL_STATE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// A byte typed on the serial console, as a terminal program sends it:
+/// Enter is CR, Backspace is DEL, arrows and Home/End/Delete/PageUp/PageDown
+/// are VT100 escape sequences. Lets a board without a keyboard driver (the
+/// Raspberry Pi before USB) be used from a PC.
+pub fn feed_serial(byte: u8) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let nav = |n: u32| char::from_u32(NAV_FIRST as u32 + n);
+    match SERIAL_STATE.load(Relaxed) {
+        1 => {
+            SERIAL_STATE.store(if byte == b'[' { 2 } else { 0 }, Relaxed);
+            if byte != b'[' {
+                push('\u{1b}');
+            }
+            return;
+        }
+        2 => {
+            SERIAL_STATE.store(0, Relaxed);
+            let key = match byte {
+                b'A' => nav(0),
+                b'B' => nav(1),
+                b'D' => nav(2),
+                b'C' => nav(3),
+                b'H' => nav(4),
+                b'F' => nav(5),
+                b'0'..=b'9' => {
+                    SERIAL_STATE.store(byte - b'0' + 3, Relaxed);
+                    None
+                }
+                _ => None,
+            };
+            if let Some(c) = key {
+                push(c);
+            }
+            return;
+        }
+        s @ 3.. => {
+            SERIAL_STATE.store(0, Relaxed);
+            if byte == b'~' {
+                let key = match s - 3 {
+                    1 => nav(4),
+                    3 => nav(6),
+                    4 => nav(5),
+                    5 => nav(7),
+                    6 => nav(8),
+                    _ => None,
+                };
+                if let Some(c) = key {
+                    push(c);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+    match byte {
+        0x1b => SERIAL_STATE.store(1, Relaxed),
+        b'\r' => push('\n'),
+        b'\n' => {} // CR LF from some terminals: the CR already was Enter
+        0x7f | 0x08 => push('\u{8}'),
+        0x01..=0x7e => push(byte as char),
+        _ => {}
+    }
+}
+
 /// Called from the keyboard IRQ handler with a decoded character.
 pub fn push(c: char) {
     let mut q = QUEUE.lock();

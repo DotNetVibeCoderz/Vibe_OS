@@ -17,6 +17,22 @@ const CR_RXE: u32 = 1 << 9;
 static BASE: AtomicU64 = AtomicU64::new(0);
 static LOCK: Mutex<()> = Mutex::new(());
 
+const FR_RXFE: u32 = 1 << 4;
+
+/// One received byte, if any (never blocks): typing on the serial console.
+pub fn read_byte() -> Option<u8> {
+    let base = BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    unsafe {
+        if ((base + UARTFR) as *const u32).read_volatile() & FR_RXFE != 0 {
+            return None;
+        }
+        Some(((base + UARTDR) as *const u32).read_volatile() as u8)
+    }
+}
+
 /// Nothing to do before the device is known (kept for the boot glue).
 pub fn init() {}
 

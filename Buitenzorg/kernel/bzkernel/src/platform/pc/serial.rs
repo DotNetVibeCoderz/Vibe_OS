@@ -69,6 +69,19 @@ pub fn init() {
     SERIAL1.lock().init();
 }
 
+/// One received byte, if any (never blocks): typing on the serial console.
+pub fn read_byte() -> Option<u8> {
+    crate::arch::cpu::without_interrupts(|| {
+        let mut s = SERIAL1.lock();
+        unsafe {
+            if s.line_status.read() & 1 == 0 {
+                return None;
+            }
+            Some(s.data.read())
+        }
+    })
+}
+
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;

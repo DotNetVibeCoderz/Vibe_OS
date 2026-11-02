@@ -16,6 +16,10 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Typing over the serial cable.** Characters typed into a terminal program
+  connected to the serial port go to the desktop terminal or the focused app,
+  including arrow keys. On a Raspberry Pi 4, which has no USB keyboard support
+  yet, this is how you use the desktop.
 - **Raspberry Pi 4: the desktop on HDMI, on all four cores.** The ARM64 kernel
   boots on a real Raspberry Pi 4 (tested on an 8 GB Model B) and on QEMU's Pi 4
   machine, shows the desktop on the HDMI screen and uses all four cores. Flash

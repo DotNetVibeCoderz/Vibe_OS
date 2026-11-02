@@ -17,6 +17,20 @@ const IER_THRE: u8 = 1 << 1;
 static BASE: AtomicU64 = AtomicU64::new(0);
 static LOCK: Mutex<()> = Mutex::new(());
 
+/// One received byte, if any (never blocks): typing on the serial console.
+pub fn read_byte() -> Option<u8> {
+    let base = BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    unsafe {
+        if ((base + LSR) as *const u8).read_volatile() & 1 == 0 {
+            return None;
+        }
+        Some(((base + THR) as *const u8).read_volatile())
+    }
+}
+
 /// Nothing to do before the device is known (kept for the boot glue).
 pub fn init() {}
 

@@ -22,12 +22,14 @@ all four cores.
 | Screen | Yes: the desktop on HDMI, 1280x720 (the display scales it) |
 | CPU cores | All four, started through the spin tables |
 | SD card as `/disk`, apps | No (R3): the kernel can't read the card yet |
+| Typing from a PC over the serial cable | Yes: into the desktop terminal or the focused app |
 | USB keyboard and mouse, Ethernet | No (R4) |
 
-So today the Pi shows the desktop, but nothing can control it: there's no USB
-keyboard or mouse yet, and after about 12 seconds the screensaver starts. There
-is no wallpaper or app icons yet either: those come from the SD card. The serial
-port (a **USB-to-serial 3.3 V adapter**) shows the full boot log.
+So today the Pi shows the desktop and you can type into it from a PC through
+the serial cable, but there's no USB keyboard or mouse yet, and without input
+the screensaver starts after about 12 seconds. There is no wallpaper or app
+icons yet either: those come from the SD card. The serial port (a
+**USB-to-serial 3.3 V adapter**) shows the full boot log and takes your typing.
 
 ## Try it under QEMU
 
@@ -66,6 +68,17 @@ sudo ./scripts/flash-usb.sh /dev/sdX --image dist/buitenzorg-rpi4.img
 
 Use 3.3 V logic: **a 5 V adapter can damage the Pi.** Don't connect the adapter's
 power pin. Open the port at **115200 8N1**, then power the Pi on.
+
+## Typing from the PC
+
+Open the adapter's port in a terminal program (PuTTY, Tera Term, `screen`) at
+**115200 8N1** and type: the characters go to the desktop's Terminal window, or
+to the app whose window has focus. Enter, Backspace, the arrow keys, Home, End,
+Delete and Page Up / Down work. The first key while the screensaver is showing
+only wakes it.
+
+Only one program can hold the port: close the terminal program before
+capturing the boot log with another one.
 
 ## Reading the serial output
 
