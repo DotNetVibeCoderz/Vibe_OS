@@ -167,6 +167,11 @@ pub fn init(gpio_phys: u64) -> bool {
         pwm1,
         audio_ready: false,
     });
+    // HDMI audio on HDMI0 (CTS from the pixel clock the firmware set up)
+    let pixel = fw(0x0003_0047, 9, 2).map(|v| v[1]).filter(|&h| h > 1_000_000)
+        .or_else(|| fw(0x0003_0002, 9, 2).map(|v| v[1]).filter(|&h| h > 1_000_000))
+        .unwrap_or(148_500_000) as u64;
+    super::hdmi_audio::init(pixel);
     true
 }
 
@@ -295,13 +300,16 @@ fn bsc_phase(b: u64, addr: u32, tx: &[u8], rx: &mut [u8]) -> Result<(), u64> {
                 i += 1;
             }
         }
-        if s & S_ERR != 0 {
+        if s & (S_ERR | S_CLKT) != 0 {
+            // The failed transfer is not over yet: wait for the controller to
+            // finish it (DONE, TA clear) before clearing, else the *next*
+            // transfer sees this one's DONE and reports success (a scan on a
+            // real board then "found" every second address).
+            let t1 = cpu::timestamp();
+            while r(b + BSC_S) & (S_DONE | 1) != S_DONE && since_us(t1) < 10_000 {}
+            w(b + BSC_C, C_I2CEN | C_CLEAR);
             w(b + BSC_S, S_DONE | S_ERR | S_CLKT);
-            return Err(hw_status::NACK);
-        }
-        if s & S_CLKT != 0 {
-            w(b + BSC_S, S_DONE | S_ERR | S_CLKT);
-            return Err(hw_status::CLOCK_STRETCH);
+            return Err(if s & S_ERR != 0 { hw_status::NACK } else { hw_status::CLOCK_STRETCH });
         }
         if s & S_DONE != 0 {
             // a read may leave the last bytes in the FIFO
@@ -577,7 +585,52 @@ fn audio_frame(p: u64, l: u32, rr: u32) -> bool {
 }
 
 pub fn audio_present() -> bool {
-    IO.lock().as_ref().map_or(false, |io| io.pwm1 != 0)
+    super::hdmi_audio::present() || IO.lock().as_ref().map_or(false, |io| io.pwm1 != 0)
+}
+
+/// The jack's PWM FIFO, set up on first use (0 = no jack).
+fn jack() -> u64 {
+    let mut guard = IO.lock();
+    match guard.as_mut().filter(|io| io.pwm1 != 0) {
+        Some(io) => {
+            audio_setup(io);
+            io.pwm1
+        }
+        None => 0,
+    }
+}
+
+/// Play `frames` stereo samples from `next` on every output there is (the
+/// headphone jack and HDMI); an output whose FIFO stalls is dropped for the
+/// rest of this sound. False if nothing played.
+fn play_frames(frames: usize, mut next: impl FnMut(usize) -> (i16, i16)) -> bool {
+    let mut pwm = jack();
+    let mut hdmi = super::hdmi_audio::present();
+    if pwm == 0 && !hdmi {
+        return false;
+    }
+    let conv = |s: i16| ((s as i32 + 32768) as u32 * PWM_RANGE / 65536).min(PWM_RANGE);
+    let mut hdmi_sent = 0usize;
+    let mut ok = true;
+    for i in 0..frames {
+        let (l, r) = next(i);
+        if pwm != 0 && !audio_frame(pwm, conv(l), conv(r)) {
+            pwm = 0;
+        }
+        if hdmi {
+            if super::hdmi_audio::frame(l, r) {
+                hdmi_sent += 1;
+            } else {
+                hdmi = false;
+            }
+        }
+        if pwm == 0 && !hdmi {
+            ok = false;
+            break;
+        }
+    }
+    super::hdmi_audio::report(frames, hdmi_sent);
+    ok
 }
 pub fn audio_volume() -> u32 {
     VOLUME.load(core::sync::atomic::Ordering::Relaxed)
@@ -590,47 +643,21 @@ pub fn audio_set_volume(pct: u32) -> bool {
 /// A sine-ish tone (a 32-step table) for `ms` milliseconds.
 pub fn audio_tone(freq: u32, ms: u32) -> bool {
     const SINE: [i32; 32] = [0, 98, 195, 290, 383, 471, 556, 634, 707, 773, 831, 882, 924, 957, 981, 995, 1000, 995, 981, 957, 924, 882, 831, 773, 707, 634, 556, 471, 383, 290, 195, 98];
-    let mut guard = IO.lock();
-    let Some(io) = guard.as_mut().filter(|io| io.pwm1 != 0) else { return false };
-    audio_setup(io);
-    let p = io.pwm1;
-    drop(guard);
-    let vol = audio_volume() as i32;
-    let mid = PWM_RANGE as i32 / 2;
-    let amp = mid * vol / 100;
-    let frames = SAMPLE_RATE as u64 * ms.min(5000) as u64 / 1000;
+    let amp = 32_000 * audio_volume() as i32 / 100;
+    let frames = SAMPLE_RATE as usize * ms.min(5000) as usize / 1000;
     let step = (freq.clamp(20, 20_000) as u64) * 64 * 65536 / SAMPLE_RATE as u64; // 64 half-steps per period, 16.16
-    let mut phase = 0u64;
-    for _ in 0..frames {
-        let i = ((phase >> 16) % 64) as usize;
-        let s = if i < 32 { SINE[i] } else { -SINE[i - 32] };
-        let v = (mid + s * amp / 1000) as u32;
-        if !audio_frame(p, v, v) {
-            return false;
-        }
-        phase += step;
-    }
-    true
+    play_frames(frames, |n| {
+        let i = (((n as u64 * step) >> 16) % 64) as usize;
+        let s = (if i < 32 { SINE[i] } else { -SINE[i - 32] } * amp / 1000) as i16;
+        (s, s)
+    })
 }
 
 /// Interleaved 16-bit stereo PCM at 48 kHz (`len` bytes, already in kernel memory).
 pub fn audio_play(pcm: &[u8]) -> bool {
-    let mut guard = IO.lock();
-    let Some(io) = guard.as_mut().filter(|io| io.pwm1 != 0) else { return false };
-    audio_setup(io);
-    let p = io.pwm1;
-    drop(guard);
-    let vol = audio_volume() as i64;
-    let conv = |b: &[u8]| -> u32 {
-        let s = i16::from_le_bytes([b[0], b[1]]) as i64 * vol / 100;
-        ((s + 32768) * PWM_RANGE as i64 / 65536) as u32
-    };
-    for f in pcm.chunks_exact(4) {
-        if !audio_frame(p, conv(&f[0..2]), conv(&f[2..4])) {
-            return false;
-        }
-    }
-    true
+    let vol = audio_volume() as i32;
+    let s = |b: &[u8]| (i16::from_le_bytes([b[0], b[1]]) as i32 * vol / 100) as i16;
+    play_frames(pcm.len() / 4, |n| (s(&pcm[n * 4..n * 4 + 2]), s(&pcm[n * 4 + 2..n * 4 + 4])))
 }
 
 // ------------------------------------------------------------------ self-test

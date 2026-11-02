@@ -322,7 +322,7 @@ static MBOX_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 /// most 8); the answer's words replace them. False if the firmware did not
 /// answer or rejected the tag.
 pub fn firmware_property(tag: u32, values: &mut [u32]) -> bool {
-    let n = values.len().min(8);
+    let n = values.len().min(40);
     let _guard = MBOX_LOCK.lock();
     let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };
     let total = 6 + n; // size, code, tag, buffer bytes, request code, values..., end
@@ -378,8 +378,8 @@ pub fn notify_xhci_reset(dev_addr: u32) -> bool {
 }
 
 #[repr(C, align(16))]
-struct Message([u32; 36]);
-static mut MAILBOX_MSG: Message = Message([0; 36]);
+struct Message([u32; 48]);
+static mut MAILBOX_MSG: Message = Message([0; 48]);
 
 fn kernel_phys(va: u64) -> u64 {
     va - KERNEL_VIRT + KERNEL_PHYS

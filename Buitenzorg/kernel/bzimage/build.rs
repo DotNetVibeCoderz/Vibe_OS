@@ -338,6 +338,8 @@ enable_gic=1
 enable_uart=1
 uart_2ndstage=1
 dtoverlay=miniuart-bt
+# HDMI mode (not DVI) even if the display does not ask for it: HDMI audio needs it.
+hdmi_drive=2
 
 # UEFI + Limine instead: uncomment these four lines.
 #armstub=RPI_EFI.fd

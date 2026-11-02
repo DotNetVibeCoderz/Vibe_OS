@@ -74,6 +74,13 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
         "cursor" => cursor_cmd(args.first().copied()),
         "anim" => anim_cmd(args.first().copied()),
+        "tone" | "nada" => {
+            // tone <Hz> <ms>: a sine tone on every audio output (sound card / jack / HDMI)
+            let hz = args.first().and_then(|a| a.parse::<u32>().ok()).unwrap_or(440);
+            let ms = args.get(1).and_then(|a| a.parse::<u32>().ok()).unwrap_or(1000).min(10_000);
+            let ok = crate::audio::play_tone(hz, ms);
+            (vec![if ok { format!("nada {} Hz, {} ms", hz, ms) } else { String::from("tidak ada perangkat suara") }], Effect::None)
+        }
         "settings" | "personalize" => (settings_show(), Effect::None),
         "ask" | "ai" => (ai_ask(&args), Effect::Redraw),
         "vm" => vm_cmd(&args),

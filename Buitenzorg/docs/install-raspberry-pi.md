@@ -26,6 +26,7 @@ all four cores.
 | USB keyboard and mouse | Yes: full-speed and high-speed devices; plug them in before power-on |
 | Ethernet | Yes: an address from your router by DHCP |
 | Restart, shut down, sleep | Yes (shut down halts; the red LED stays on) |
+| Sound | Yes: the 3.5 mm jack and HDMI0 (a display that takes audio) |
 | Clock | Yes: set from the internet (SNTP) when the network cable is in; WIB |
 | GPIO, I2C, SPI, serial ports, LEDs, board sensors for apps | Yes: see [raspberry-pi-io.md](raspberry-pi-io.md) |
 
@@ -156,6 +157,10 @@ The card holds both, and `config.txt` picks one.
   another keyboard, or type over the serial cable.
 - Keyboard LEDs: Num Lock is switched on at start-up, and Caps Lock doesn't
   light its LED.
+- Sound on HDMI works on HDMI0 only (the port next to the power socket). Very
+  short sounds may only click there: the display needs a moment to lock onto
+  each new sound. Use `tone 440 3000` in the terminal to check it. A monitor
+  without speakers sends HDMI sound to its own audio-out jack.
 - Shut down stops the system and the firmware stays halted, but a Pi 4 can't
   cut its own power: the red LED stays on. Unplug it to switch it off.
 

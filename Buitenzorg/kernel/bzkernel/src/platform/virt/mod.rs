@@ -19,5 +19,7 @@ pub mod brcm_pcie;
 pub mod genet;
 #[cfg(target_arch = "aarch64")]
 pub mod rpi_io;
+#[cfg(target_arch = "aarch64")]
+pub mod hdmi_audio;
 #[cfg(target_arch = "riscv64")]
 pub mod uart16550;

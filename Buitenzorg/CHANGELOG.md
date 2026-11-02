@@ -16,10 +16,13 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
-- **Raspberry Pi 4: sound on the headphone jack (not yet heard on a board).**
-  The 3.5 mm jack plays the test tone, Piano notes and PCM through PWM at
-  48 kHz; Settings' volume applies. Under QEMU, which has no PWM block, the
-  jack is reported as unavailable instead of crashing the boot.
+- **Raspberry Pi 4: sound on the headphone jack and over HDMI.** The 3.5 mm
+  jack plays the test tone, Piano notes and other sounds; so does a display on
+  HDMI0 that takes audio (a monitor without speakers sends it to its own audio
+  jack). Both play at once. Settings' volume applies. Verified on a real Pi 4.
+  Very short sounds may only click on HDMI: a display needs a moment to lock
+  onto a new audio stream.
+- **`tone <Hz> <ms>`** in the terminal plays a tone (for example `tone 440 3000`).
 - **Picture viewer, Paint and Piano you can use.** *Gambar* shows the pictures on
   `/disk` (the wallpapers, `PHOTO.BMP`) fitted to its window; *Paint* draws with
   the mouse in eight colours and five brush sizes, with undo; *Piano* plays one
@@ -352,6 +355,8 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **Raspberry Pi 4: an I2C scan no longer finds devices that are not there.**
+  After an address that did not answer, the next one was reported as present.
 - **Managed apps no longer flicker.** A managed app redraws its whole window
   when the pointer moves over it; on a computer with several cores the desktop
   sometimes showed that window half drawn. App windows that redraw themselves
