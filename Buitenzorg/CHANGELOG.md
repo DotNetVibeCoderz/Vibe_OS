@@ -16,6 +16,11 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Raspberry Pi 4: the SD card is `/disk`.** A new SD card driver (SDHCI, the
+  Pi 4's EMMC2 slot) mounts the card the Pi booted from, read-write. The
+  wallpaper, the app icons, the C# programs and the managed apps now load from
+  the card. The card image carries all the `/disk` files and is 128 MiB.
+  Verified on a real Pi 4 with a 32 GB card.
 - **Typing over the serial cable.** Characters typed into a terminal program
   connected to the serial port go to the desktop terminal or the focused app,
   including arrow keys. On a Raspberry Pi 4, which has no USB keyboard support
@@ -304,6 +309,11 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **A full FAT32 root directory now grows.** Creating a file in a FAT32 root
+  directory with no free entry failed with "root directory is full", although
+  FAT32 roots can be extended. The kernel now adds a cluster to the root. Found
+  on the Raspberry Pi card image, whose root holds 54 files: the Notes app
+  could not save.
 - **ARM64 programs could run stale code on real hardware.** After loading a
   program the kernel didn't make the new code visible to the processor's
   instruction fetch. QEMU hides this; a real Raspberry Pi 4 showed it.

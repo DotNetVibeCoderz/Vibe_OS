@@ -234,12 +234,14 @@ fn limine_image_for(efi_name: &str, limine: &std::path::Path, kernel: &std::path
 /// The general form: `extra_conf` is appended to the boot entry (e.g.
 /// `module_path:` lines).
 fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], extra_conf: &str, raw: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
+    // An SD card image (the Raspberry Pi's, raw files present) is 128 MiB in all,
+    // a power of two as QEMU's SD card model requires; the others 1 + 64 MiB.
+    let part_mib: u64 = if raw.is_empty() { 64 } else { 127 };
     use std::io::{Read, Seek, SeekFrom, Write};
     let Ok(efi) = std::fs::read(limine.join(efi_name)) else { return Ok(false) };
     let kernel_elf = std::fs::read(kernel)?;
     const START_LBA: u64 = 2048;
-    const PART_MIB: u64 = 64;
-    let part_bytes = PART_MIB * 1024 * 1024;
+    let part_bytes = part_mib * 1024 * 1024;
     let part_path = out.with_extension("part");
     {
         let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&part_path)?;
@@ -545,7 +547,9 @@ fn main() {
     let rpi_ok = match (&kernel8, rpi4_files(&manifest_dir().join("..").join("target").join("rpi4-uefi"))) {
         (Some(k), Some(mut raw)) => {
             raw.push(("kernel8.img".into(), k.clone()));
-            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &[], RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
+            // The /disk files too (wallpapers, icons, programs, managed apps): the
+            // kernel mounts the card's FAT partition as /disk (R3).
+            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
         }
         _ => false,
     };

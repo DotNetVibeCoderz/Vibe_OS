@@ -1,0 +1,109 @@
+# Serial console of Buitenzorg OS on a Raspberry Pi 4 Model B (8 GB), roadmap
+# R2: framebuffer from the VideoCore mailbox (the desktop appeared on HDMI)
+# and four cores started through the spin tables, 2026-11-02.
+
+Read start4.elf bytes  2298048 hnd 0x00000aff 
+Read fixup4.dat bytes     5512 hnd 0x00001c88 
+Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
+0x00d03114 0x00000000 0x00003fff
+MEM GPU: 76 ARM: 948 TOTAL: 1024
+Starting start4.elf @ 0xfec00200 partition 0
+PCI reset
++
+
+MESS:00:00:04.047481:0: arasan: arasan_emmc_open
+MESS:00:00:04.049140:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:04.169315:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:04.182186:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
+MESS:00:00:04.228026:0: boot-part: 0 fs-type: 0
+MESS:00:00:04.229440:0: boot-part: 0 fs-type: 3
+MESS:00:00:04.233819:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
+MESS:00:00:04.252973:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.255706:0: board: boardrev d03114 otp d03114
+MESS:00:00:04.260639:0: brfs: File read: 349 bytes
+MESS:00:00:04.347839:0: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.352347:0: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.359589:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.826460:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:04.832015:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:04.841036:0: *** Restart logging
+MESS:00:00:04.842824:0: brfs: File read: 349 bytes
+MESS:00:00:04.906036:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.911061:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.921701:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.926781:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.932379:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:00:00:04.941135:0: HDMI0: hdmi_pixel_freq_limit: 300000000
+MESS:00:00:04.946792:0: HDMI1: hdmi_pixel_freq_limit: 300000000
+MESS:00:00:04.963033:0: dtb_file 'bcm2711-rpi-4-b.dtb'
+MESS:00:00:04.978311:0: brfs: File read: /mfs/sd/bcm2711-rpi-4-b.dtb
+MESS:00:00:04.981607:0: Loaded 'bcm2711-rpi-4-b.dtb' to 0x100 size 0xd3f8
+MESS:00:00:05.074996:0: brfs: File read: 54264 bytes
+MESS:00:00:05.079165:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:05.082351:0: brfs: File read: 349 bytes
+MESS:00:00:05.088947:0: brfs: File read: /mfs/sd/overlays/miniuart-bt.dtbo
+MESS:00:00:05.143976:0: Loaded overlay 'miniuart-bt'
+MESS:00:00:05.283992:0: brfs: File read: 1566 bytes
+MESS:00:00:05.286026:0: Failed to open command line file 'cmdline.txt'
+MESS:00:00:05.511317:0: brfs: File read: /mfs/sd/kernel8.img
+MESS:00:00:05.513872:0: Loaded 'kernel8.img' to 0x200000 size 0xd3878
+MESS:00:00:05.520946:0: Kernel relocated to 0x80000
+MESS:00:00:05.524630:0: Device tree loaded to 0x2eff2700 (size 0xd8d0)
+MESS:00:00:05.531793:0: uart: Set PL011 baud rate to 103448.300000 Hz
+MESS:00:00:05.539959:0: uart: Baud rate change done...
+MESS:00:00:05.541979:0: uart: Baud rate change done...
+MESS:00:00:05.547220:0: gpioman: gpioman_get_pin_num: pin SDCARD_CONTROL_POWER not defined
+MESS:00:00:05.554972:0: Watchdog stopped
+MESS:00:00:05.558478:0: arm_loader: Starting ARM with 948MB
+BREM
+   ____        _ _                                       ____  _____
+  |  _ \      (_) |                                     / __ \/ ____|
+  | |_) |_   _ _| |_ ___ _ __  _______  _ __ __ _     | |  | | (___
+  |  _ <| | | | | __/ _ \ '_ \|_  / _ \| '__/ _` |    | |  | |\___ \
+  | |_) | |_| | | ||  __/ | | |/ / (_) | | | (_| |    | |__| |____) |
+  |____/ \__,_|_|\__\___|_| |_/___\___/|_|  \__, |     \____/|_____/
+                                             __/ |
+              .   .                         |___/
+               \_|_/
+              -- @ --      v0.1 "Benih" - zonder zorg, tanpa kekhawatiran
+               / | \
+                 |         kernel: Rust (ring 0)  |  userland: C# (.NET)
+             ~~~~~~~~~     Kebun Raya Bogor edition
+              dibuat oleh Gravicode Studios -- dipimpin oleh Kang Fadhil
+
+[kernel] Hello Kernel -- Buitenzorg OS (ARM64 / AArch64)
+[kernel] MILESTONE: HELLO KERNEL OK
+[arm64] running at EL1 on implementer 0x41 part 0xd08; counter 54 MHz; exception vectors installed
+[boot] loader=rpi-direct memory map: 5 regions (3952 MiB usable), framebuffer 1280x720 Bgr, firmware tables: Device Tree (0x2eff2700)
+[kernel] physical memory: 3952 MiB usable; 32 MiB kernel heap at 0xffffd00000000000 (TTBR1); user half root (TTBR0) at 0x362000
+[kernel] MILESTONE: ARM64 MEMORY OK (frame allocator + paging HAL on AArch64: heap via TTBR1, kernel page map/protect/unmap, user page in TTBR0 with EL0 rights checked, frames returned; 8 frames handed out, 8220 in use)
+[kernel] MILESTONE: MEMORY OK
+[arm64] address spaces: space 1000 reads 0xa11ce, space 1001 reads 0xb0b at the same address; kernel space sees nothing: true; 10 frames freed, 0 leaked
+[kernel] MILESTONE: ARM64 ASPACE OK (a TTBR0 root per process, shared TTBR1 kernel half; switch = TTBR0 + TLB invalidate; teardown frees every frame)
+[arm64] context switch: 2002 switches between two kernel threads, 0 FP mismatches, boot flow's d0 kept: true
+[kernel] MILESTONE: ARM64 CONTEXT OK (arch::context on AArch64: x19-x30 + SP + DAIF, q0-q31/FPCR/FPSR per task)
+[arm64] platform (live DTB): raspberrypi,4-model-b: 8052 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[dtb] aarch64 linux,dummy-virt: 512 MiB RAM at 0x40000000, 2 CPU(s), console arm,pl011 @ 0x9000000, irq arm,gic-v3 @ 0x8000000, timer arm,armv8-timer, 32 virtio-mmio slot(s), power arm,psci-1.0
+[dtb] riscv64 riscv-virtio: 512 MiB RAM at 0x80000000, 2 CPU(s), console ns16550a @ 0x10000000, irq sifive,plic-1.0.0 @ 0xc000000, timer sifive,clint0, 8 virtio-mmio slot(s), power syscon-poweroff
+[dtb] rpi4 raspberrypi,4-model-b: 0 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[dtb] boot raspberrypi,4-model-b: 8052 MiB RAM at 0x0, 4 CPU(s), console arm,pl011 @ 0xfe201000, irq arm,gic-400 @ 0xff841000, timer arm,armv8-timer, 0 virtio-mmio slot(s), power -
+[kernel] MILESTONE: DTB OK (Device Tree parser: QEMU virt aarch64 + riscv64 discovered -- RAM, CPUs, UART, GIC/PLIC, timer, virtio-mmio, PSCI; malformed blobs rejected; loader DTB: parsed)
+[arm64] PL031 clock: 1970-01-01 00:00:00 UTC (unix 0)
+[arm64] storage: no virtio-blk device (QEMU: -device virtio-blk-device + -global virtio-mmio.force-legacy=false)
+[arm64] GICv2 at 0xff841000/0xff842000: 50 timer interrupts in 500 ms (50 IRQs taken)
+[kernel] MILESTONE: ARM64 TIMER OK (GICv2; EL1 virtual timer PPI 27 at 100 Hz)
+Hello from EL0 (ARM64 user mode)!
+[arm64] user fault: ESR_EL1=0x9200000f (EC=0x24) at 0x400008, address 0xffffd00000000000 -- program terminated
+[arm64] EL0 program 1: exit 0x113ba (want 0x113ba), 3 SVC calls, 4 timer IRQs taken in EL0, leaked Some(0) frames; program 2: exit 0xdead, fault address 0xffffd00000000000, leaked Some(0)
+[kernel] MILESTONE: ARM64 EL0 OK (user mode in its own TTBR0 space: SVC syscalls, timer IRQs from EL0, EXIT back to the kernel, a kernel-address read terminates only the program)
+[smp] 4 of 4 CPUs online via spin tables (MPIDRs [0, 1, 2, 3]); 4 took their own timer interrupts in 200 ms
+[kernel] MILESTONE: ARM64 SMP OK (4 CPUs: spin tables + MMU-off trampoline, per-CPU GIC + timer, shared scheduler)
+[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)
+[arm64] window system: 1280x720, 0 app icons, wallpaper 'nature' loaded: false
+[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)
+[arm64] programs done; frames leaked: 0
+[clr] managed runtime not installed (/disk/CLRHOST.ELF missing: scripts/build-clrhost)
+[arm64] desktop frame: 1280x720, 0 windows, 921600 lit pixels
+[kernel] MILESTONE: RPI4 BOOT OK (raspberrypi,4-model-b via rpi-direct -> EL1 kernel; arm,pl011 console, GICv2 + generic timer from the DTB)
+[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows
+[desktop] tidied 0 window(s) left by boot demos

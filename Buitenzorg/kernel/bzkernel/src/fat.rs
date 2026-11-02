@@ -577,6 +577,35 @@ impl FatVolume {
         dev.write_sector(self.fsinfo_sector, &s)
     }
 
+    /// A full FAT32 root directory (a cluster chain, unlike the fixed FAT12/16
+    /// root) gets one more cluster: zeroed first (so it reads as "end of
+    /// directory"), marked end-of-chain, then linked after the last root
+    /// cluster. Returns its first slot.
+    fn grow_root(&self, dev: &mut dyn BlockDevice) -> Result<(u64, usize), &'static str> {
+        if self.kind != FatKind::Fat32 {
+            return Err("root directory is full");
+        }
+        self.invalidate_fsinfo(dev)?;
+        let new = *self.alloc_clusters(dev, 1)?.first().ok_or("not enough free clusters")?;
+        let first = self.cluster_to_sector(new);
+        let zero = [0u8; SECTOR_SIZE];
+        for s in 0..self.sectors_per_cluster {
+            dev.write_sector(first + s, &zero)?;
+        }
+        self.fat_set(dev, new, self.eoc())?;
+        let mut last = self.root_cluster;
+        let mut steps = 0u64;
+        while let Some(next) = self.next_cluster(dev, last)? {
+            last = next;
+            steps += 1;
+            if steps > self.cluster_count {
+                return Err("root directory chain loops");
+            }
+        }
+        self.fat_set(dev, last, new)?;
+        Ok((first, 0))
+    }
+
     /// Create or overwrite a root-directory file with `data`.
     pub fn write_file(
         &self,
@@ -589,7 +618,7 @@ impl FatVolume {
         let (lba, off) = match (existing, free) {
             (Some((lba, off, _)), _) => (lba, off),
             (None, Some(slot)) => slot,
-            (None, None) => return Err("root directory is full"),
+            (None, None) => self.grow_root(dev)?,
         };
         self.invalidate_fsinfo(dev)?;
 

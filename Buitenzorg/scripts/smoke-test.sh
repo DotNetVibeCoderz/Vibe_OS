@@ -270,16 +270,25 @@ kernel8="$root/dist/kernel8.img"
 if [ -n "$qemu_arm" ] && [ -f "$kernel8" ] && "$qemu_arm" -M help | grep -q '^raspi4b'; then
   log="$root/dist/boot-rpi4.log"
   rm -f "$log"
-  timeout --foreground 100 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" \
-    -dtb "$root/kernel/bzkernel/testdata/bcm2711-rpi-4-b.dtb" -display none -serial "file:$log" -serial null -no-reboot 2>/dev/null &
+  # The SD card image as the card (R3), a copy: the kernel writes to /disk.
+  sdargs=()
+  if [ -f "$root/dist/buitenzorg-rpi4.img" ]; then
+    cp "$root/dist/buitenzorg-rpi4.img" "$root/dist/rpi4-sd-test.img"
+    sdargs=(-drive "file=$root/dist/rpi4-sd-test.img,if=sd,format=raw")
+  fi
+  timeout --foreground 300 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" \
+    -dtb "$root/kernel/bzkernel/testdata/bcm2711-rpi-4-b.dtb" ${sdargs[@]+"${sdargs[@]}"} -display none -serial "file:$log" -serial null -no-reboot 2>/dev/null &
   qpid=$!
-  for _ in $(seq 90); do
+  for _ in $(seq 280); do
     sleep 1
     grep -q "ARM64 READY" "$log" 2>/dev/null && break
   done
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "BREM" "framebuffer 1280x720" "ARM64 SMP OK (4 CPUs: spin tables" "window system: 1280x720" "MILESTONE: HELLO KERNEL OK" "loader=rpi-direct" "MILESTONE: DTB OK" "MILESTONE: ARM64 MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "GICv2 at 0xff841000/0xff842000" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 EL0 OK" "MILESTONE: SECURITY OK" "MILESTONE: RPI4 BOOT OK" "BUITENZORG ARM64 READY"
-  echo "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs, mailbox framebuffer + desktop, 4 cores via spin tables"
+  if [ ${#sdargs[@]} -gt 0 ]; then
+    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK"
+  fi
+  echo "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs, mailbox framebuffer + desktop, 4 cores via spin tables, /disk on the SD card"
 elif [ -n "$qemu_arm" ] && [ -f "$kernel8" ]; then
   echo "smoke [rpi4]: not run: this QEMU has no raspi4b board (added in QEMU 9.0)"
 else

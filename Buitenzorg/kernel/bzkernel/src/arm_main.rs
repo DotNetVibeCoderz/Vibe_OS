@@ -250,6 +250,53 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     desktop::run()
 }
 
+/// An SD card on an SDHCI controller from the DTB (roadmap R3): the Raspberry
+/// Pi 4's slot (EMMC2) first; the older Broadcom SDHCI only if EMMC2 found no
+/// card (on a real Pi 4 that one carries the Wi-Fi chip, under QEMU the card).
+/// Registers it as a block device; returns how many were found (0 or 1).
+fn sd_card_init() -> usize {
+    let Some(phys) = boot::info().firmware.dtb else { return 0 };
+    let Ok(f) = (unsafe { dtb::Fdt::from_phys(phys) }) else { return 0 };
+    let okay = |i: usize| f.nodes[i].strings("status").next().map_or(true, |s| s == "okay");
+    let mut candidates = alloc::vec::Vec::new();
+    for (compat, label, clock) in [
+        ("brcm,bcm2711-emmc2", "SD card (EMMC2)", arch::aarch64::rpi::EMMC2_CLOCK_HZ.load(core::sync::atomic::Ordering::SeqCst)),
+        ("brcm,bcm2835-sdhci", "SD card (SDHCI)", 0),
+    ] {
+        for i in f.compatible(compat).filter(|&i| okay(i)) {
+            if let Some(&(pa, _)) = f.reg(i).first() {
+                candidates.push((pa, label, clock));
+            }
+        }
+    }
+    for (pa, label, clock) in candidates {
+        let Some(va) = memory::map_mmio(pa, 0x1000) else { continue };
+        match platform::virt::sdhci::SdCard::init(va, clock, label) {
+            Ok(card) => {
+                use driver::BlockDevice;
+                let mut card = card;
+                let mut s0 = [0u8; 512];
+                let mbr = card.read_sector(0, &mut s0).is_ok() && s0[510] == 0x55 && s0[511] == 0xAA;
+                println!(
+                    "[arm64] {} at {:#x}: {} MiB, base clock {} MHz, sector 0 {}",
+                    card.name(),
+                    pa,
+                    card.sector_count() / 2048,
+                    card.base_hz / 1_000_000,
+                    if mbr { "has an MBR" } else { "unreadable" }
+                );
+                if mbr {
+                    println!("[kernel] MILESTONE: SD CARD OK ({} at {:#x}: SDHCI v3, 4-bit, PIO; MBR read)", card.name(), pa);
+                    driver::register_block_device(alloc::boxed::Box::new(card));
+                    return 1;
+                }
+            }
+            Err(e) => println!("[arm64] {} at {:#x}: {}", label, pa, e),
+        }
+    }
+    0
+}
+
 /// The generic memory subsystem on AArch64 page tables:
 /// - the heap (mapped page by page through `arch::paging`) holds a 1 MiB
 ///   vector intact;
@@ -655,12 +702,13 @@ fn rtc_self_test() {
 /// virtio-mmio transport, mounted by the shared FAT + VFS code. Lists the
 /// root, reads BATANG.TXT, writes a file and reads it back.
 fn storage_self_test() {
-    let n = virtio::init_block();
+    let n = virtio::init_block() + sd_card_init();
     if n == 0 {
-        println!("[arm64] storage: no virtio-blk device (QEMU: -device virtio-blk-device + -global virtio-mmio.force-legacy=false)");
+        println!("[arm64] storage: no virtio-blk device and no SD card (QEMU: -device virtio-blk-device + -global virtio-mmio.force-legacy=false)");
         return;
     }
     let Some(dev) = driver::take_boot_block_device() else { return };
+    let dev_name = dev.name();
     if let Err(e) = vfs::mount("disk", dev, false) {
         println!("[arm64] storage: mount /disk failed: {}", e);
         return;
@@ -678,7 +726,7 @@ fn storage_self_test() {
         stamp.trim_end()
     );
     if names.len() > 5 && batang.as_deref().map_or(false, |t| t.contains("batang")) && wrote && back.as_deref() == Some(stamp.as_bytes()) {
-        println!("[kernel] MILESTONE: ARM64 DISK OK (virtio-blk over virtio-mmio, shared FAT + VFS: /disk listed, read, written + read back)");
+        println!("[kernel] MILESTONE: ARM64 DISK OK ({}, shared FAT + VFS: /disk listed, read, written + read back)", dev_name);
     }
 }
 

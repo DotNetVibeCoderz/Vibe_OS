@@ -21,15 +21,16 @@ all four cores.
 | Memory, address spaces, built-in user-mode test programs | Yes |
 | Screen | Yes: the desktop on HDMI, 1280x720 (the display scales it) |
 | CPU cores | All four, started through the spin tables |
-| SD card as `/disk`, apps | No (R3): the kernel can't read the card yet |
+| SD card as `/disk`: wallpaper, icons, apps | Yes: read and write, through the EMMC2 slot |
 | Typing from a PC over the serial cable | Yes: into the desktop terminal or the focused app |
 | USB keyboard and mouse, Ethernet | No (R4) |
 
 So today the Pi shows the desktop and you can type into it from a PC through
 the serial cable, but there's no USB keyboard or mouse yet, and without input
-the screensaver starts after about 12 seconds. There is no wallpaper or app
-icons yet either: those come from the SD card. The serial port (a
-**USB-to-serial 3.3 V adapter**) shows the full boot log and takes your typing.
+the screensaver starts after about 12 seconds. The kernel reads the SD card it
+booted from as `/disk`, so the wallpaper, the app icons and the apps (C# programs
+and the managed apps) come from the card. The serial port (a **USB-to-serial
+3.3 V adapter**) shows the full boot log and takes your typing.
 
 ## Try it under QEMU
 
@@ -38,10 +39,14 @@ No board needed. This needs QEMU 9.0 or newer:
 ```powershell
 .\scripts\build.ps1
 qemu-system-aarch64 -M raspi4b -m 2G -kernel dist\kernel8.img `
-    -dtb kernel\bzkernel\testdata\bcm2711-rpi-4-b.dtb -display none -serial stdio -serial null
+    -dtb kernel\bzkernel\testdata\bcm2711-rpi-4-b.dtb -display none -serial stdio -serial null `
+    -drive file=dist\buitenzorg-rpi4.img,if=sd,format=raw
 ```
 
-`scripts/smoke-test.ps1` runs the same boot and checks it.
+The `-drive` line gives QEMU the card image as the SD card (`/disk`). The kernel
+writes to it, so use a copy if you want to keep the image pristine. QEMU only
+accepts card images whose size is a power of two, which is why the image is
+128 MiB. `scripts/smoke-test.ps1` runs the same boot (on a copy) and checks it.
 
 ## Put it on an SD card
 
@@ -139,6 +144,10 @@ The card holds both, and `config.txt` picks one.
 
 ## Limits
 
+- The SD card driver uses programmed I/O, one 512-byte block at a time, with
+  no DMA or interrupts: reading the card works, but it isn't fast. Only the
+  card's first FAT partition is used, and only its root directory (8.3 names).
+- The Pi 4 has no real-time clock, so files are stamped 1970-01-01.
 - RAM above 0xFC00_0000 (just under 4 GiB) is ignored for now, so an 8 GiB board
   uses a little under 4 GiB.
 - With the direct route the kernel image is mapped read-write-execute; the

@@ -294,7 +294,24 @@ extern "C" fn bz_rpi_main(dtb: u64) -> ! {
     info.firmware.dtb = Some(dtb);
     info.kernel_base = Some((KERNEL_PHYS, KERNEL_VIRT));
     info.framebuffer = videocore_framebuffer(1280, 720);
+    EMMC2_CLOCK_HZ.store(videocore_clock_rate(12) as u64, core::sync::atomic::Ordering::SeqCst);
     crate::kernel_main(boot::install(info))
+}
+
+/// The EMMC2 (SD card) base clock the firmware set up, in Hz (0 = unknown).
+pub static EMMC2_CLOCK_HZ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// A firmware clock's rate (mailbox tag 0x00030002); 0 if it would not say.
+fn videocore_clock_rate(id: u32) -> u32 {
+    let m = unsafe { core::ptr::addr_of_mut!(MAILBOX_MSG.0) as *mut u32 };
+    let words: [u32; 8] = [8 * 4, 0, 0x0003_0002, 8, 8, id, 0, 0];
+    for (i, w) in words.iter().enumerate() {
+        unsafe { m.add(i).write_volatile(*w) };
+    }
+    if !mailbox_call(m, 8 * 4) {
+        return 0;
+    }
+    unsafe { m.add(6).read_volatile() }
 }
 
 #[repr(C, align(16))]

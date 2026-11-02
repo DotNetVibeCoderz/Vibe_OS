@@ -304,14 +304,23 @@ if ((Test-Path $qemuArm) -and (Test-Path $kernel8)) {
     $piDtb = Join-Path $root "kernel\bzkernel\testdata\bcm2711-rpi-4-b.dtb"
     $qargs = @('-M', 'raspi4b', '-m', '2G', '-kernel', "`"$kernel8`"", '-dtb', "`"$piDtb`"",
                '-display', 'none', '-serial', "`"file:$log`"", '-serial', 'null', '-no-reboot')
+    # The SD card image as the card (R3), a copy: the kernel writes to /disk.
+    $sdImg = Join-Path $root "dist\buitenzorg-rpi4.img"
+    $haveSd = Test-Path $sdImg
+    if ($haveSd) {
+        $sdCopy = Join-Path $root "dist\rpi4-sd-test.img"
+        Copy-Item $sdImg $sdCopy -Force
+        $qargs += @('-drive', "`"file=$sdCopy,if=sd,format=raw`"")
+    }
     $p = Start-Process -FilePath $qemuArm -ArgumentList $qargs -PassThru -RedirectStandardError (Join-Path $root "dist\boot-rpi4.err")
-    foreach ($i in 1..90) {
+    foreach ($i in 1..280) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "ARM64 READY" -Quiet)) { break }
     }
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
     Assert-Markers -Log $log -Markers @("BREM", "framebuffer 1280x720", "ARM64 SMP OK (4 CPUs: spin tables", "window system: 1280x720", "MILESTONE: HELLO KERNEL OK", "loader=rpi-direct", "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "GICv2 at 0xff841000/0xff842000", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 EL0 OK", "MILESTONE: SECURITY OK", "MILESTONE: RPI4 BOOT OK", "BUITENZORG ARM64 READY")
-    Write-Host "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs, mailbox framebuffer + desktop, 4 cores via spin tables"
+    if ($haveSd) { Assert-Markers -Log $log -Markers @("MILESTONE: SD CARD OK", "MILESTONE: ARM64 DISK OK (SD card", "wallpaper 'nature' loaded: true", "MILESTONE: MANAGED APPS OK") }
+    Write-Host "smoke [rpi4]: kernel8.img on QEMU raspi4b: direct entry, GICv2, PL011, Device Tree ranges, EL0 programs, mailbox framebuffer + desktop, 4 cores via spin tables, /disk on the SD card"
 } else {
     Skip-Step "smoke [rpi4]: skipped (needs qemu-system-aarch64 and dist\kernel8.img)"
 }
