@@ -512,6 +512,7 @@ fn run_el0(id: u64, code: &[u8]) -> Option<(u64, i64)> {
             core::ptr::write_bytes(dst, 0, 4096);
             core::ptr::copy_nonoverlapping(code.as_ptr(), dst, code.len().min(4096));
         }
+        arch::cpu::sync_code(dst as u64, 4096);
         paging::map(&mut ctx.mapper, &mut ctx.frames, ENTRY, pa, Flags { write: false, user: true, exec: true }).ok()?;
         let st = ctx.frames.alloc()?;
         unsafe { core::ptr::write_bytes(memory::phys_to_virt(st) as *mut u8, 0, 4096) };

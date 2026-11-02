@@ -119,3 +119,8 @@ pub fn satp() -> u64 {
     unsafe { asm!("csrr {}, satp", out(reg) v, options(nomem, nostack)) };
     v
 }
+
+/// Make freshly written code visible to this hart's instruction fetch.
+pub fn sync_code() {
+    unsafe { core::arch::asm!("fence.i", options(nostack)) };
+}

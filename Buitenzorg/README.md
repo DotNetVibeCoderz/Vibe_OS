@@ -203,7 +203,7 @@ Highlights:
 | [Your First App](docs/first-app.md) | Build an app + the built-in library catalog |
 | [Run in a VM](docs/run-in-vm.md) | VMware, VirtualBox, Hyper-V |
 | [Install on Hardware](docs/install-hardware.md) | Flash to USB and boot a physical machine |
-| [Raspberry Pi 4](docs/install-raspberry-pi.md) | Boot on a Pi 4 (QEMU verified, physical board untested) |
+| [Raspberry Pi 4](docs/install-raspberry-pi.md) | Boot on a Pi 4 to a serial console (verified on a real board) |
 | [Debugging & Profiling](docs/debugging.md) | GDB attach + the TSC zone profiler |
 | [Managed Apps + Buitenzorg.UI](docs/managed-apps.md) | The managed app folder and the Avalonia-style UI toolkit |
 | [Syscall ABI](docs/abi.md) | The v1 ABI table and evolution rules |

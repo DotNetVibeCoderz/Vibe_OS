@@ -119,6 +119,9 @@ fn map_segment(
                 );
             }
         }
+        if page_flags.exec {
+            crate::arch::cpu::sync_code(dst as u64, 4096);
+        }
 
         paging::map(&mut ctx.mapper, &mut ctx.frames, page_addr, phys, page_flags)?;
         pages.push(page_addr);

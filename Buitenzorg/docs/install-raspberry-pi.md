@@ -1,8 +1,9 @@
 # Raspberry Pi 4
 
-> **Not yet tested on a physical board.** Everything below `dist/kernel8.img`
-> is verified on QEMU's `raspi4b` machine, using the Device Tree the real
-> firmware ships. A real Pi may behave differently. If you try it, the
+> **Verified on one physical board:** a Raspberry Pi 4 Model B (8 GB) booted
+> `dist/buitenzorg-rpi4.img` to `RPI4 BOOT OK` on 2026-11-02 (the
+> [serial log](logs/rpi4-first-boot.txt)). Other revisions and RAM sizes are
+> untested. If yours stops early, the
 > [stage letters](#reading-the-serial-output) tell you how far it got.
 
 ## What works today
@@ -11,7 +12,7 @@ This is milestone R1: the kernel boots to a serial console.
 
 | | Status |
 |---|---|
-| Boot on the Pi firmware | Yes (QEMU), direct `kernel8.img` |
+| Boot on the Pi firmware | Yes: a real Pi 4 and QEMU `raspi4b`, direct `kernel8.img` |
 | Serial console | PL011 on the GPIO header |
 | Interrupts and timer | GIC-400 + the ARM generic timer |
 | Memory, address spaces, built-in user-mode test programs | Yes, on one CPU |
@@ -81,6 +82,16 @@ A good boot ends with:
 [kernel] MILESTONE: RPI4 BOOT OK (raspberrypi,4-model-b via rpi-direct -> EL1 kernel; ...)
 [kernel] BUITENZORG ARM64 READY ...
 ```
+
+## What the first hardware boot found
+
+The first boot on a real board stopped both user-mode test programs with an
+"undefined instruction". QEMU had passed them, because it models no caches:
+the kernel wrote the programs' code through the data cache, and a real
+Cortex-A72 fetches instructions from memory, which still held stale bytes.
+The kernel now cleans written code to the point of unification and
+invalidates the instruction cache (`arch::cpu::sync_code`, called for every
+executable page `elf.rs` loads). The second boot passed.
 
 ## Two boot routes
 

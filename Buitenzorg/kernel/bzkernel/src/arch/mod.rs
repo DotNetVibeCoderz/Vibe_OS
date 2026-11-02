@@ -178,6 +178,20 @@ pub mod cpu {
         return super::riscv64::cpu::id();
     }
 
+    /// Make code just written through the data side (at kernel address `va`,
+    /// `len` bytes) visible to instruction fetch, on every CPU. ARM64 caches
+    /// are not coherent between the two: without this a real Cortex-A72 runs
+    /// the stale bytes of a freshly loaded program (QEMU models no caches, so
+    /// only the first Raspberry Pi boot showed it). x86 needs nothing.
+    #[inline]
+    #[cfg_attr(not(target_arch = "aarch64"), allow(unused_variables))]
+    pub fn sync_code(va: u64, len: usize) {
+        #[cfg(target_arch = "aarch64")]
+        super::aarch64::cpu::sync_code(va, len);
+        #[cfg(target_arch = "riscv64")]
+        super::riscv64::cpu::sync_code();
+    }
+
     /// Invalidate every non-global TLB entry on this CPU.
     #[inline]
     pub fn flush_tlb() {

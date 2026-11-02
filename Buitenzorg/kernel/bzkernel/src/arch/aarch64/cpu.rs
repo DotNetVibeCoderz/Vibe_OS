@@ -98,3 +98,18 @@ pub fn midr() -> u64 {
     unsafe { asm!("mrs {}, midr_el1", out(reg) v, options(nomem, nostack, preserves_flags)) };
     v
 }
+
+/// Clean `[va, va + len)` from the data cache to the point of unification and
+/// invalidate the instruction cache (all CPUs: `ic ialluis` broadcasts), so
+/// instruction fetch sees what was just written.
+pub fn sync_code(va: u64, len: usize) {
+    let ctr: u64;
+    unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack)) };
+    let line = 4u64 << ((ctr >> 16) & 0xF); // DminLine: log2 of words per line
+    let mut a = va & !(line - 1);
+    while a < va + len as u64 {
+        unsafe { core::arch::asm!("dc cvau, {}", in(reg) a, options(nostack)) };
+        a += line;
+    }
+    unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
+}

@@ -16,10 +16,10 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
-- **Raspberry Pi 4: first boot.** The ARM64 kernel now boots to a serial console
-  on QEMU's Raspberry Pi 4 machine, using the real Pi Device Tree. There is an SD
-  card image too, but **it has not been tested on a physical board yet**, and
-  there's no screen, disk or keyboard support on the Pi yet. See
+- **Raspberry Pi 4: first boot.** The ARM64 kernel boots to a serial console
+  on a real Raspberry Pi 4 (tested on an 8 GB Model B) and on QEMU's Pi 4
+  machine. Flash `dist/buitenzorg-rpi4.img` to an SD card. There is no screen,
+  disk or keyboard support on the Pi yet. See
   [docs/install-raspberry-pi.md](docs/install-raspberry-pi.md).
 - **Managed Apps and a new UI toolkit.** The desktop has a **Managed Apps**
   icon that opens a folder of apps written in ordinary .NET C#: a calculator
@@ -299,6 +299,9 @@ Hardening toward a stable x86-64 release.
   written bytes inside the host image → `MILESTONE: DISK WRITE OK`.
 
 ### Fixed
+- **ARM64 programs could run stale code on real hardware.** After loading a
+  program the kernel didn't make the new code visible to the processor's
+  instruction fetch. QEMU hides this; a real Raspberry Pi 4 showed it.
 - **A quick click could be lost while an app was busy redrawing.** The desktop
   only looked at the current button state; a press and release between two
   looks went unnoticed. Clicks are now counted, so none are missed.

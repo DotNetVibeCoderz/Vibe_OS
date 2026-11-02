@@ -35,7 +35,7 @@
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |
-| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1 di QEMU `raspi4b`; papan fisik belum (R1–R6) |
+| Raspberry Pi | v1.x | Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | 🟡 R1 ✓ di Pi 4 fisik; R2–R6 berikutnya |
 
 Legend: ✅ selesai · 🟡 sebagian · 🔜 sedang/berikutnya · ⏳ direncanakan *(status dirapikan 2026-11-01)*
 
@@ -945,8 +945,9 @@ modelnya sama sekali).
    **GICv2** (distributor + CPU interface; kernel saat ini hanya GICv3),
    PL011/mini-UART dari DTB, timer generik ARM. Marker: `RPI4 BOOT OK` lewat
    UART serial ke host. Uji awal di QEMU `-M raspi4b` (sebatas yang dimodelkan).
-   *(Status 2026-11-02: `RPI4 BOOT OK` tercapai di QEMU `raspi4b`; **belum diuji
-   di papan fisik**. Perubahan dari rencana: rute UEFI tidak bisa diuji di QEMU
+   *(Status 2026-11-02: `RPI4 BOOT OK` tercapai di QEMU `raspi4b` **dan di
+   Raspberry Pi 4 Model B fisik (8 GB)** lewat UART; papan fisik menemukan bug
+   sinkronisasi cache instruksi yang tidak terlihat di QEMU, sudah diperbaiki. Perubahan dari rencana: rute UEFI tidak bisa diuji di QEMU
    -- firmware berhenti di register RNG yang tidak dimodelkan, dan `raspi4b`
    tidak punya SD/PCIe -- jadi jalur "cadangan" `kernel8.img` dibangun dan
    menjadi bawaan image SD. Rute UEFI + Limine tetap ada di image, tinggal

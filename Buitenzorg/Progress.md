@@ -32,7 +32,7 @@
 | v0.16 Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | `DRAW/UI/AUDIO/AUDIO PANEL/SUITE/CALC/GAME/CLOCK/PIANO/STORE/FILES/EDITOR/IMGVIEW/JPEG OK` | [x] |
 | v1.0 Buitenzorg | Stable release x86-64 | `SECURITY/PROFILER/DESKTOP SHELL OK` | [~] Berjalan |
 | v1.x Rimba | Multi-arch ARM64 + RISC-V di QEMU `virt` + CI matrix | `ARM64/RISCV BOOT OK`, `RISCV SMP SCHED OK` | [x] |
-| v1.x Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | `RPI4 BOOT OK` (QEMU `raspi4b`; papan fisik belum) | [~] |
+| v1.x Pucuk | Raspberry Pi 4 & 5 (perangkat keras nyata) | `RPI4 BOOT OK` (Pi 4 fisik 8 GB + QEMU `raspi4b`) | [~] R1 ✓ |
 
 ---
 
@@ -485,7 +485,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 
 ### 🍓 Raspberry Pi 4 & 5 (v1.x "Pucuk") — rencana lengkap: [PLAN.md](PLAN.md)
 Boot lewat UEFI komunitas (edk2) + Limine seperti di QEMU; perbedaan utama dari port ARM64 `virt`: GICv2 (GIC-400), driver perangkat keras nyata (bukan virtio), uji di papan fisik.
-- [~] **R1 — Boot Pi 4 ke konsol** — **terverifikasi di QEMU `raspi4b` (2026-11-02); belum diuji di papan fisik.** `kernel8.img` (entri langsung `arch/aarch64/rpi.rs`: relokasi ke 2 MiB, EL2→EL1, tabel halaman + MMU sendiri, peta memori dari DTB tanpa heap), driver **GICv2** (`gic.rs` v2 + v3), PL011 dari DTB, translasi `ranges` di `dtb.rs` (`0x7e201000` → `0xfe201000`), image SD `buitenzorg-rpi4.img` (`config.txt` memilih rute; bawaan: langsung; UEFI + Limine belum pernah berjalan), smoke `[rpi4]` → `RPI4 BOOT OK`. Panduan: [docs/install-raspberry-pi.md](docs/install-raspberry-pi.md)
+- [x] **R1 — Boot Pi 4 ke konsol** — **terverifikasi di Raspberry Pi 4 Model B fisik (8 GB) lewat UART dan di QEMU `raspi4b` (2026-11-02).** Boot pertama di papan menemukan bug yang tidak terlihat di QEMU: program user mode mati dengan "undefined instruction" karena cache instruksi tidak disinkronkan setelah kode ditulis -- kini `arch::cpu::sync_code` (`dc cvau` + `ic ialluis`) untuk setiap halaman executable di `elf.rs`; boot kedua lolos. Log: [docs/logs/rpi4-first-boot.txt](docs/logs/rpi4-first-boot.txt). `kernel8.img` (entri langsung `arch/aarch64/rpi.rs`: relokasi ke 2 MiB, EL2→EL1, tabel halaman + MMU sendiri, peta memori dari DTB tanpa heap), driver **GICv2** (`gic.rs` v2 + v3), PL011 dari DTB, translasi `ranges` di `dtb.rs` (`0x7e201000` → `0xfe201000`), image SD `buitenzorg-rpi4.img` (`config.txt` memilih rute; bawaan: langsung; UEFI + Limine belum pernah berjalan), smoke `[rpi4]` → `RPI4 BOOT OK`. Panduan: [docs/install-raspberry-pi.md](docs/install-raspberry-pi.md)
 - [ ] **R2 — Desktop di layar Pi 4**: framebuffer GOP UEFI → WM + desktop, SMP 4 core lewat PSCI
 - [ ] **R3 — Penyimpanan Pi 4**: driver SDHCI/EMMC2 (baca-tulis kartu SD) → `/disk` FAT, app dari kartu SD
 - [ ] **R4 — Input + jaringan Pi 4**: PCIe BCM2711 + xHCI (VL805) + USB HID keyboard/mouse; Ethernet GENET
