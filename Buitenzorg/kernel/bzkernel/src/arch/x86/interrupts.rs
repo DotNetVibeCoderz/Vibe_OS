@@ -184,6 +184,7 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     crate::task::account_tick();
     crate::process::account_tick();
     end_of_interrupt(InterruptIndex::Timer.as_u8());
+    crate::task::watchdog(frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64(), from_user(&frame));
     // EOI is done, interrupts are still disabled: safe point to preempt. Ring-3
     // code is always preemptible (it holds no kernel lock); kernel code is not.
     crate::task::preempt(from_user(&frame));

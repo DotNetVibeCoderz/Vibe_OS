@@ -1229,3 +1229,123 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
         }
     }
 }
+
+// --- Boot watchdog -------------------------------------------------------------
+//
+// A boot that stops printing (the intermittent single-CPU hang CI sees during
+// RustCLR's Conformance) is reported from the timer interrupt: where the CPU
+// was interrupted, a few words of that kernel stack, and the task table. Only
+// before the desktop is interactive, and only if interrupts still arrive --
+// no report at all means the CPU spins with interrupts off.
+
+/// Tick (PIT units) of the last line printed.
+static LAST_OUTPUT: AtomicU64 = AtomicU64::new(0);
+static NEXT_REPORT: AtomicU64 = AtomicU64::new(0);
+static REPORTS: AtomicU32 = AtomicU32::new(0);
+/// Timer interrupts that landed in kernel / user code since the last output.
+static QUIET_KERNEL: AtomicU64 = AtomicU64::new(0);
+static QUIET_USER: AtomicU64 = AtomicU64::new(0);
+
+/// A line was printed (called by the console's `_print`).
+pub fn note_output() {
+    LAST_OUTPUT.store(crate::interrupts::ticks(), Ordering::Relaxed);
+    QUIET_KERNEL.store(0, Ordering::Relaxed);
+    QUIET_USER.store(0, Ordering::Relaxed);
+}
+
+/// From the timer interrupt on CPU 0, before `preempt`: report a boot that has
+/// printed nothing for two minutes (then every minute, at most five times).
+/// `rsp` is the interrupted stack (kernel code only).
+pub fn watchdog(rip: u64, rsp: u64, from_user: bool) {
+    if crate::interactive::is_active() || !STARTED.load(Ordering::Relaxed) {
+        return;
+    }
+    if from_user { &QUIET_USER } else { &QUIET_KERNEL }.fetch_add(1, Ordering::Relaxed);
+    let now = crate::interrupts::ticks();
+    const MINUTE: u64 = 1092; // PIT units (18.2 Hz)
+    let last = LAST_OUTPUT.load(Ordering::Relaxed);
+    if now < last + 2 * MINUTE || now < NEXT_REPORT.load(Ordering::Relaxed) || REPORTS.load(Ordering::Relaxed) >= 5 {
+        return;
+    }
+    NEXT_REPORT.store(now + MINUTE, Ordering::Relaxed);
+    REPORTS.fetch_add(1, Ordering::Relaxed);
+    let say = |args: core::fmt::Arguments| crate::serial::_print(args);
+    say(format_args!(
+        "[watchdog] no output for {} s: interrupted {} rip={:#x} rsp={:#x}; ticks since output: kernel {} user {}; timed waiters {}, now {} ns\n",
+        (now - last) * 10 / 182,
+        if from_user { "ring 3" } else { "kernel" },
+        rip,
+        rsp,
+        QUIET_KERNEL.load(Ordering::Relaxed),
+        QUIET_USER.load(Ordering::Relaxed),
+        TIMED_WAITERS.load(Ordering::Relaxed),
+        crate::arch::cpu::nanos(),
+    ));
+    if !from_user && rsp >= 0x8000_0000 {
+        let p = rsp as *const u64;
+        for row in 0..6 {
+            let w: [u64; 4] = core::array::from_fn(|i| unsafe { core::ptr::read_volatile(p.add(row * 4 + i)) });
+            say(format_args!("[watchdog]   stack+{:03x}: {:016x} {:016x} {:016x} {:016x}\n", row * 32, w[0], w[1], w[2], w[3]));
+        }
+    }
+    let Some(guard) = SCHEDULER.try_lock() else {
+        say(format_args!("[watchdog] scheduler lock held -- no task table\n"));
+        return;
+    };
+    let Some(s) = guard.as_ref() else { return };
+    for (i, t) in s.tasks.iter().enumerate() {
+        if t.state == State::Finished {
+            continue;
+        }
+        let cur = s.current.iter().position(|&c| c == i);
+        say(format_args!(
+            "[watchdog]   #{:<3} id={:<4} {:<12} {:?}{}{}{} key={:#x} kspace={:#x} wake_ns={} space={} ticks={} rsp={:#x}\n",
+            i,
+            t.id,
+            t.name,
+            t.state,
+            if t.running { " running" } else { "" },
+            if t.user.is_some() { " user" } else { "" },
+            match cur { Some(_) => " CURRENT", None => "" },
+            t.wait_key,
+            t.wait_space,
+            t.wake_ns,
+            t.space.id,
+            t.cpu_ticks,
+            t.rsp,
+        ));
+        // Where a blocked ring-3 thread made its syscall: the entry stub
+        // pushed the user rsp, then the user rip (rcx), at the top of the
+        // task's own kernel stack.
+        let top = t.ctx.sys_kstack_top;
+        if t.user.is_some() && t.state == State::Blocked && top >= 0x8000_0000 + 16 {
+            let (ursp, urip) = unsafe {
+                (core::ptr::read_volatile((top - 8) as *const u64), core::ptr::read_volatile((top - 16) as *const u64))
+            };
+            say(format_args!("[watchdog]        syscall from user rip={:#x} rsp={:#x}
+", urip, ursp));
+            // Code addresses on the user stack (a poor man's backtrace): look
+            // through the thread's own address space for a moment.
+            let back = s.tasks[s.current[cpu()]].space;
+            aspace::install(t.space);
+            let mut found = [0u64; 24];
+            let mut n = 0;
+            for i in 0..512u64 {
+                let a = ursp + i * 8;
+                if a % 4096 == 0 || i == 0 {
+                    if crate::arch::paging::user_access(a).is_none() {
+                        break;
+                    }
+                }
+                let v = unsafe { core::ptr::read_volatile(a as *const u64) };
+                if (0x40_0000..0x100_0000).contains(&v) && n < found.len() {
+                    found[n] = v;
+                    n += 1;
+                }
+            }
+            aspace::install(back);
+            say(format_args!("[watchdog]        user stack code addrs: {:x?}
+", &found[..n]));
+        }
+    }
+}

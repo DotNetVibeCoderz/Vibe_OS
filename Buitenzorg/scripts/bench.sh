@@ -55,11 +55,15 @@ if ! grep -q "BUITENZORG READY" "$log" 2>/dev/null; then
   regs="$root/dist/bench-hang.log"
   {
     exec 3<>/dev/tcp/127.0.0.1/4486
-    for _ in 1 2 3; do printf 'info registers
-x/6i $pc
-' >&3; sleep 1; done
-    printf 'info cpus
-' >&3; sleep 1
+    # HMP has no $rsp: read RSP out of `info registers`, then dump the stack
+    for _ in 1 2 3; do
+      printf 'info registers\n' >&3; sleep 1
+      out="$(timeout 1 cat <&3)"
+      printf '%s\n' "$out"
+      rsp="$(printf '%s' "$out" | tr -d '\r' | grep -o 'RSP=[0-9a-f]*' | tail -1 | cut -d= -f2)"
+      if [ -n "$rsp" ]; then printf 'x/96gx 0x%s\n' "$rsp" >&3; sleep 1; timeout 1 cat <&3; fi
+    done
+    printf 'info cpus\n' >&3; sleep 1
     timeout 2 cat <&3
   } > "$regs" 2>&1 || true
   kill "$qemu_pid" 2>/dev/null || true

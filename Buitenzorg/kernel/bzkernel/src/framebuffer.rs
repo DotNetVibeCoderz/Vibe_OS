@@ -414,6 +414,7 @@ pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
     // the remote log of the deploy service keeps the last 16 KiB of output
     crate::logring::push_fmt(args);
+    crate::task::note_output();
     // Once the interactive desktop owns the framebuffer, kernel log lines go
     // to serial only: drawing them here scrolled the whole desktop up (the
     // console scrolls the framebuffer) and left log text under the taskbar.

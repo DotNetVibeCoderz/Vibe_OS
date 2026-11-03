@@ -27,6 +27,13 @@ Hardening toward a stable x86-64 release.
   tile and only tiles that changed are written; covered parts of windows,
   shadows and app canvases are no longer drawn. A desktop frame costs ~3.5x
   less (x86 under QEMU: 786M -> 223M cycles). `prof` shows the tile counts.
+- **Boot watchdog.** If the boot prints nothing for two minutes, the kernel
+  writes where the CPU is, the task table and, for each blocked thread of an
+  app, where in the app it waits (serial log).
+- **Fixed: the intermittent single-CPU boot hang in CI.** A `Monitor.Pulse`
+  could be lost in the managed runtime (RustCLR, now `b97c88d`): a thread in
+  `Monitor.Wait` missed a pulse sent right after it released the lock, so
+  the Conformance test's `Thread.Join` never returned.
 - **SSH server.** `ssh on` in the terminal starts an SSH-2 server on port 22
   (curve25519-sha256, ssh-ed25519 host key, chacha20-poly1305@openssh.com):
   `ssh administrator@<ip>` gives the Buitenzorg shell, `ssh ... <command>`
