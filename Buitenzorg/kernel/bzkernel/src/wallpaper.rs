@@ -152,8 +152,12 @@ pub fn paint(canvas: &mut Canvas, th: &Theme, workspace: u8) {
                 *scaled = Some((cw, ch, resample(pixels, *w, *h, cw, ch)));
             }
             let (_, _, img) = scaled.as_ref().unwrap();
-            if canvas.pixels.len() == img.len() {
-                canvas.pixels.copy_from_slice(img);
+            // Only the rows this canvas holds (a band, when composing in
+            // parallel).
+            let w = canvas.width;
+            let (a, b) = (canvas.y0 * w, canvas.y1 * w);
+            if b <= img.len() && canvas.pixels.len() == b - a {
+                canvas.pixels.copy_from_slice(&img[a..b]);
             }
         }
     }

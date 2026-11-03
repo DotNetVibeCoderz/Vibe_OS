@@ -747,7 +747,21 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   baris itu saja: **~2,9M siklus vs ~150M** frame penuh (x86 TCG). **Cache lapisan** ikon
   desktop dan taskbar (dipakai ulang bila piksel di bawahnya + input sama): ikon 21M → 4M,
   taskbar 31M → 3M per frame. Hash ubin FNV per kata 64-bit: present 135M → ~75M.
-  Sisa: badan & isi jendela (~40M), permukaan shared-memory, komposisi paralel.
+  **Langkah 3 (✓):** cache glyph ASCII per gaya (hanya piksel berisi, tanpa cek batas bila
+  glyph di dalam kanvas), blend dua kanal tanpa pembagian, fill lewat salinan blok
+  bergandakan — jendela 41M → 32,5M, compose 55M → 45,5M per frame (juga mempercepat teks
+  taskbar/menu dan op teks app terkelola).
+- **Langkah 4 — G1 selesai (2026-11-03 ✓):** **damage tracking** — tiap frame dideskripsikan
+  per elemen (tema/wallpaper/menu, ikon, taskbar, tiap jendela: urutan + rect + isi termasuk
+  generasi kanvas app, kursor); present hanya menulis baris yang berubah (frame tanpa
+  perubahan: present ~80M → ~0,13M siklus), frame penuh tiap 64 frame sebagai jaring
+  pengaman. **Teks jendela** kini lewat cache glyph (sebelumnya `draw_text` masih per piksel):
+  compose 45M → 34M. **BLIT** app native: salinan baris tervalidasi, bukan `read_volatile`
+  per piksel. **Komposisi paralel**: dua pita baris, pita bawah digambar task pembantu tanpa
+  BKL di CPU lain (34M → 29,5M di QEMU TCG 2 vCPU; `prof seq|par`). Permukaan *zero-copy*
+  sungguhan (memori app dipetakan ke compositor) sengaja tidak dibuat: compose berjalan di
+  ruang alamat kernel, dan kepemilikan frame bersama (munmap/exit) butuh dukungan paging
+  di tiga arsitektur — BLIT cepat memberi sebagian besar manfaatnya.
 - **Referensi G3:** SDK 3D terkelola tingkat tinggi mengikuti **ThreeNet**
   (`C:\experiment\VibeCoding\Vibe_Graphics\ThreeNet`, gaya three.js untuk .NET) —
   scene graph, kamera, mesh/material, loader — di atas `Buitenzorg.Graphics3D`.

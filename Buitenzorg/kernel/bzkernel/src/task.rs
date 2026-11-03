@@ -526,6 +526,19 @@ pub fn spawn_named(name: &'static str, entry: fn()) {
     spawn_task(name, entry, true, false, None);
 }
 
+/// Spawn a kernel task that runs **without the BKL** (like the idle tasks).
+/// Only for code that touches nothing but state behind its own locks -- the
+/// compositor's band helper: under the BKL it could never run while the
+/// desktop task (which holds it) waits for its half of a compose.
+pub fn spawn_unlocked(name: &'static str, entry: fn()) {
+    spawn_task(name, entry, false, false, None);
+}
+
+/// Whether the scheduler runs (before that nothing can block or be woken).
+pub fn is_started() -> bool {
+    STARTED.load(Ordering::SeqCst)
+}
+
 /// Create a task; returns its index.
 fn spawn_task(name: &'static str, entry: fn(), bkl: bool, idle: bool, pinned: Option<usize>) -> usize {
     let stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();

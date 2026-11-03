@@ -71,6 +71,7 @@ pub fn active() -> bool {
 /// Show the splash. `expected` = how many milestones this boot prints from
 /// here on (the bar's 100 %; it stops at 96 % until [`finish`]).
 pub fn start(expected: usize) {
+    crate::gfx::warm_glyphs();
     if active() {
         return;
     }

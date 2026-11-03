@@ -3,6 +3,7 @@
 //! and text drawn from the Noto Sans Mono bitmap font. The compositor and
 //! window manager render into a full-screen back buffer of these pixels.
 
+use alloc::vec::Vec;
 use noto_sans_mono_bitmap::{get_raster, get_raster_width, FontWeight, RasterHeight};
 
 pub const FONT_HEIGHT: RasterHeight = RasterHeight::Size16;
@@ -15,69 +16,101 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
 }
 
 /// A mutable view over a rectangular pixel buffer.
+///
+/// It may hold only a band of the frame's rows (`y0..y1`, parallel compose):
+/// coordinates stay those of the whole `width` x `height` frame, drawing
+/// outside the band is clipped, and row `y` lives at `(y - y0) * width`.
+/// Code indexing `pixels` directly must go through [`Canvas::at`] /
+/// [`Canvas::band`].
 pub struct Canvas<'a> {
     pub pixels: &'a mut [Color],
     pub width: usize,
     pub height: usize,
+    /// First row held in `pixels`.
+    pub y0: usize,
+    /// One past the last row held.
+    pub y1: usize,
 }
 
 impl<'a> Canvas<'a> {
     pub fn new(pixels: &'a mut [Color], width: usize, height: usize) -> Self {
-        Self { pixels, width, height }
+        Self { pixels, width, height, y0: 0, y1: height }
+    }
+
+    /// Rows `y0..y1` of a `width` x `height` frame; `pixels` holds exactly them.
+    pub fn band(pixels: &'a mut [Color], width: usize, height: usize, y0: usize, y1: usize) -> Self {
+        Self { pixels, width, height, y0, y1 }
+    }
+
+    /// Index of (x, y) in `pixels` (y must be within the band).
+    #[inline]
+    pub fn at(&self, x: usize, y: usize) -> usize {
+        (y - self.y0) * self.width + x
+    }
+
+    /// Whether rows `y..y + h` touch this canvas's band (whole elements
+    /// outside it are skipped in a parallel compose).
+    #[inline]
+    pub fn rows_visible(&self, y: i32, h: i32) -> bool {
+        y + h > self.y0 as i32 && y < self.y1 as i32
     }
 
     #[inline]
     pub fn put(&mut self, x: usize, y: usize, color: Color) {
-        if x < self.width && y < self.height {
-            self.pixels[y * self.width + x] = color;
+        if x < self.width && y >= self.y0 && y < self.y1 {
+            let i = self.at(x, y);
+            self.pixels[i] = color;
         }
     }
 
     /// Alpha-blend `color` over the existing pixel (`alpha` 0..=255).
     #[inline]
     pub fn blend(&mut self, x: usize, y: usize, color: Color, alpha: u8) {
-        if x >= self.width || y >= self.height {
+        if x >= self.width || y < self.y0 || y >= self.y1 {
             return;
         }
-        let idx = y * self.width + x;
-        let dst = self.pixels[idx];
-        let mix = |s: u32, d: u32| -> u32 {
-            (s * alpha as u32 + d * (255 - alpha as u32)) / 255
-        };
-        let r = mix((color >> 16) & 0xFF, (dst >> 16) & 0xFF);
-        let g = mix((color >> 8) & 0xFF, (dst >> 8) & 0xFF);
-        let b = mix(color & 0xFF, dst & 0xFF);
-        self.pixels[idx] = (r << 16) | (g << 8) | b;
+        let idx = self.at(x, y);
+        self.pixels[idx] = blend_px(self.pixels[idx], color, alpha);
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
         let x0 = x.max(0) as usize;
-        let y0 = y.max(0) as usize;
+        let y0 = (y.max(0) as usize).max(self.y0);
         let x1 = ((x + w).max(0) as usize).min(self.width);
-        let y1 = ((y + h).max(0) as usize).min(self.height);
+        let y1 = ((y + h).max(0) as usize).min(self.y1);
         if x1 <= x0 {
             return;
         }
-        for py in y0..y1 {
-            let row = py * self.width;
-            self.pixels[row + x0..row + x1].fill(color);
+        if y1 <= y0 {
+            return;
+        }
+        // First row by doubling, every further row a copy of it: block copies
+        // (`memcpy`, `rep movsb` on x86) cost a fraction of a store per pixel,
+        // above all under an emulator (G1: a window body fill took longer
+        // than copying the whole wallpaper).
+        let n = x1 - x0;
+        let first = self.at(x0, y0);
+        fill_span(&mut self.pixels[first..first + n], color);
+        for py in y0 + 1..y1 {
+            let dst = self.at(x0, py);
+            let (head, tail) = self.pixels.split_at_mut(dst);
+            tail[..n].copy_from_slice(&head[first..first + n]);
         }
     }
 
     /// A vertical gradient fill from `top` to `bottom`.
     pub fn fill_gradient(&mut self, top: Color, bottom: Color) {
         let h = self.height.max(1);
-        for y in 0..self.height {
+        for y in self.y0..self.y1 {
             let t = y as u32 * 255 / h as u32;
             let lerp = |a: u32, b: u32| (a * (255 - t) + b * t) / 255;
             let r = lerp((top >> 16) & 0xFF, (bottom >> 16) & 0xFF);
             let g = lerp((top >> 8) & 0xFF, (bottom >> 8) & 0xFF);
             let b = lerp(top & 0xFF, bottom & 0xFF);
             let color = (r << 16) | (g << 8) | b;
-            let row = y * self.width;
-            for x in 0..self.width {
-                self.pixels[row + x] = color;
-            }
+            let row = self.at(0, y);
+            let w = self.width;
+            fill_span(&mut self.pixels[row..row + w], color);
         }
     }
 
@@ -167,6 +200,12 @@ impl<'a> Canvas<'a> {
 
     /// Draw a string; long text is clipped at `max_x`.
     pub fn draw_text(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32) {
+        // The console font is TextStyle::Body: same rasters, and its path
+        // has the glyph cache (window text used to go pixel by pixel here).
+        if matches!(FONT_WEIGHT, FontWeight::Regular) && FONT_HEIGHT.val() == 16 {
+            self.draw_text_styled(x, y, text, color, max_x, TextStyle::Body);
+            return;
+        }
         let mut cx = x;
         for c in text.chars() {
             if cx + glyph_width() as i32 > max_x {
@@ -228,20 +267,60 @@ impl<'a> Canvas<'a> {
     pub fn draw_text_styled(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32, style: TextStyle) -> i32 {
         let (weight, height) = style.font();
         let gw = get_raster_width(weight, height) as i32;
+        if !self.rows_visible(y, height.val() as i32) {
+            // Outside this band: only the advance matters to the caller.
+            let n = text.chars().count() as i32;
+            let room = if gw > 0 { ((max_x - x) / gw).max(0) } else { 0 };
+            return x + n.min(room) * gw;
+        }
         let mut cx = x;
         for c in text.chars() {
             if cx + gw > max_x {
                 break;
             }
+            if c == ' ' {
+                cx += gw;
+                continue;
+            }
+            // ASCII from the glyph cache: only the covered pixels, and no
+            // bounds checks when the glyph lies inside the canvas.
+            if let Some(g) = GLYPHS[glyph_slot(style)].get().and_then(|t| t.get((c as usize).wrapping_sub(32))) {
+                let inside = cx >= 0 && y >= self.y0 as i32 && (cx + gw) as usize <= self.width && (y + g.height as i32) as usize <= self.y1;
+                if inside {
+                    let origin = self.at(cx as usize, y as usize);
+                    for &(dx, dy, a) in g.pixels.iter() {
+                        let i = origin + dy as usize * self.width + dx as usize;
+                        self.pixels[i] = if a == 255 { color } else { blend_px(self.pixels[i], color, a) };
+                    }
+                    cx += gw;
+                    continue;
+                }
+            }
             let raster = get_raster(c, weight, height)
                 .or_else(|| get_raster('?', weight, height))
                 .unwrap();
+            // Bounds once per row, not per pixel; full-coverage pixels are a
+            // plain store (G1: text was most of a text window's compose).
+            let (w, top, h) = (self.width as i32, self.y0 as i32, self.y1 as i32);
             for (dy, row) in raster.raster().iter().enumerate() {
+                let py = y + dy as i32;
+                if py < top {
+                    continue;
+                }
+                if py >= h {
+                    break;
+                }
+                let base = self.at(0, py as usize);
                 for (dx, &intensity) in row.iter().enumerate() {
-                    let (px, py) = (cx + dx as i32, y + dy as i32);
-                    if intensity > 0 && px >= 0 && py >= 0 {
-                        self.blend(px as usize, py as usize, color, intensity);
+                    let px = cx + dx as i32;
+                    if intensity == 0 || px < 0 {
+                        continue;
                     }
+                    if px >= w {
+                        break;
+                    }
+                    let i = base + px as usize;
+                    self.pixels[i] = if intensity == 255 { color } else { blend_px(self.pixels[i], color, intensity) };
                 }
             }
             cx += gw;
@@ -306,6 +385,86 @@ pub fn glyph_width() -> usize {
 
 pub fn glyph_height() -> usize {
     FONT_HEIGHT.val()
+}
+
+/// One cached glyph: its covered pixels as (dx, dy, coverage).
+pub struct Glyph {
+    pixels: Vec<(u8, u8, u8)>,
+    height: u8,
+}
+
+static GLYPHS: [spin::Once<Vec<Glyph>>; 3] = [spin::Once::new(), spin::Once::new(), spin::Once::new()];
+
+fn glyph_slot(style: TextStyle) -> usize {
+    match style {
+        TextStyle::Body => 0,
+        TextStyle::Strong => 1,
+        TextStyle::Heading => 2,
+    }
+}
+
+/// Build the glyph cache (printable ASCII of every style). Call at a point
+/// where allocating is safe: drawing only *reads* it (text is also drawn from
+/// inside `_print` by the boot splash, which must never allocate), and falls
+/// back to the font's rasters until it exists.
+pub fn warm_glyphs() {
+    for style in [TextStyle::Body, TextStyle::Strong, TextStyle::Heading] {
+        glyphs(style);
+    }
+}
+
+/// Printable ASCII (32..=126) of `style`.
+fn glyphs(style: TextStyle) -> &'static Vec<Glyph> {
+    GLYPHS[glyph_slot(style)].call_once(|| {
+        let (weight, height) = style.font();
+        (32u8..=126)
+            .map(|c| {
+                let mut pixels = Vec::new();
+                let mut h = 0u8;
+                if let Some(r) = get_raster(c as char, weight, height) {
+                    h = r.raster().len() as u8;
+                    for (dy, row) in r.raster().iter().enumerate() {
+                        for (dx, &a) in row.iter().enumerate() {
+                            if a > 0 {
+                                pixels.push((dx as u8, dy as u8, a));
+                            }
+                        }
+                    }
+                }
+                Glyph { pixels, height: h }
+            })
+            .collect()
+    })
+}
+
+/// `color` over `dst` at coverage `alpha` (0 = dst, 255 = color): red+blue
+/// and green each in one multiply, scaled to 0..=256 instead of divided by
+/// 255 three times.
+#[inline]
+pub fn blend_px(dst: Color, color: Color, alpha: u8) -> Color {
+    let a = alpha as u32 + (alpha as u32 >> 7);
+    let na = 256 - a;
+    let rb = ((color & 0xFF_00FF) * a + (dst & 0xFF_00FF) * na) >> 8;
+    let g = ((color & 0x00_FF00) * a + (dst & 0x00_FF00) * na) >> 8;
+    (rb & 0xFF_00FF) | (g & 0x00_FF00)
+}
+
+/// Fill `span` with `color`: a few stores, then doubling block copies.
+pub fn fill_span(span: &mut [u32], color: Color) {
+    const SEED: usize = 16;
+    let n = span.len();
+    if n <= SEED {
+        span.fill(color);
+        return;
+    }
+    span[..SEED].fill(color);
+    let mut done = SEED;
+    while done < n {
+        let k = done.min(n - done);
+        let (a, b) = span.split_at_mut(done);
+        b[..k].copy_from_slice(&a[..k]);
+        done += k;
+    }
 }
 
 // --- Hashing for frame caches ----------------------------------------------------

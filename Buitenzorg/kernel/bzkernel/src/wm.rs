@@ -265,6 +265,9 @@ pub struct AppCanvas {
     /// `pixels` here. Without it a compose on another CPU could catch the
     /// frame half drawn -- the window flickered on a 4-core Raspberry Pi.
     pub front: Option<Vec<u32>>,
+    /// Bumped by every change to what the window shows (draws, blits,
+    /// presents): the compositor's damage tracking compares it.
+    pub gen: u64,
 }
 
 /// A window's canvas, shared between the window list and in-flight composes.
@@ -417,6 +420,7 @@ struct Wm {
 static WM: Mutex<Option<Wm>> = Mutex::new(None);
 
 pub fn init(width: usize, height: usize) {
+    gfx::warm_glyphs();
     *WM.lock() = Some(Wm {
         windows: Vec::new(),
         next_id: 1,
@@ -821,6 +825,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             lines: Vec::new(),
             workspace,
             canvas: Some(shared(AppCanvas {
+                gen: 0,
                 w: cw,
                 h: ch,
                 pixels: vec![body; (cw * ch) as usize],
@@ -851,6 +856,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         lines: Vec::new(),
         workspace,
         canvas: Some(shared(AppCanvas {
+                gen: 0,
             w: cw,
             h: ch,
             pixels: vec![body; (cw * ch) as usize],
@@ -874,6 +880,7 @@ pub fn flip_owned(owner: u64) {
     for c in canvases {
         let mut c = c.lock();
         let c = &mut *c;
+        c.gen += 1;
         if let Some(front) = c.front.as_mut() {
             if front.len() == c.pixels.len() {
                 front.copy_from_slice(&c.pixels);
@@ -895,6 +902,7 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
     note_draw();
     let mut canvas = shared.lock();
     let canvas = &mut *canvas;
+    canvas.gen += 1;
     if cmd.op == bz_abi::draw_op::CLEAR && canvas.front.is_none() && owner != 0 {
         // a full redraw starts: from now on show only presented frames
         canvas.front = Some(canvas.pixels.clone());
@@ -941,10 +949,10 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
 /// clipping (v0.16 "Panen" BLIT op — client-side software rendering). The
 /// canvas stores 0x00RRGGBB, so alpha is dropped (the client composites first).
 ///
-/// `src_ptr` is a user-space pointer to `bw*bh` ARGB `u32` pixels; it is read
-/// per-pixel with `read_volatile` (not turned into a `&[u32]` slice — a slice
-/// over user memory would let the optimizer assume the whole region is
-/// dereferenceable/immutable, which corrupted the boot).
+/// `src_ptr` is a user-space pointer to `bw*bh` ARGB `u32` pixels; it is
+/// copied row by row through a raw pointer (never turned into a `&[u32]`
+/// slice — a slice over user memory would let the optimizer assume the whole
+/// region is dereferenceable/immutable, which corrupted the boot).
 pub fn blit_on_window(
     id: u32,
     x: i32,
@@ -960,20 +968,34 @@ pub fn blit_on_window(
     drop(guard); // blit with only this window's canvas locked
     note_draw();
     let mut canvas = shared.lock();
+    canvas.gen += 1;
     let (cw, ch) = (canvas.w as i32, canvas.h as i32);
     let base = src_ptr as *const u32;
+    // Clip once, then one block copy per row (G1: this was a volatile read
+    // per pixel). The source is user memory the syscall layer validated; it
+    // is copied through a raw pointer -- never a slice over user memory (see
+    // CLAUDE.md) -- and the alpha byte is cleared afterwards, two pixels per
+    // step.
+    let x0 = x.max(0);
+    let x1 = (x + bw).min(cw);
+    if x1 <= x0 {
+        return Ok(());
+    }
+    let n = (x1 - x0) as usize;
     for row in 0..bh {
         let dy = y + row;
         if dy < 0 || dy >= ch {
             continue;
         }
-        for col in 0..bw {
-            let dx = x + col;
-            if dx < 0 || dx >= cw {
-                continue;
-            }
-            let s = unsafe { core::ptr::read_volatile(base.add((row * bw + col) as usize)) };
-            canvas.pixels[(dy * cw + dx) as usize] = s & 0x00FF_FFFF;
+        let d = (dy * cw + x0) as usize;
+        let dst = &mut canvas.pixels[d..d + n];
+        unsafe { core::ptr::copy_nonoverlapping(base.add((row * bw + (x0 - x)) as usize), dst.as_mut_ptr(), n) };
+        let (head, words, tail) = unsafe { dst.align_to_mut::<u64>() };
+        for p in head.iter_mut().chain(tail.iter_mut()) {
+            *p &= 0x00FF_FFFF;
+        }
+        for w in words.iter_mut() {
+            *w &= 0x00FF_FFFF_00FF_FFFF;
         }
     }
     Ok(())
@@ -1004,15 +1026,10 @@ pub fn present_now() {
         }
         for _ in 0..4 {
             PRESENT_AGAIN.store(false, Ordering::Release);
-            {
-                // Profiler zone: the compositor is the deepest thing a
-                // WIN_PRESENT syscall runs, so it is the natural thing to
-                // measure. Inert unless profiling is enabled.
-                let _z = crate::profile::Guard::new("wm::compose");
-                compose_into(&mut back, w, h);
-            }
-            let _z = crate::profile::Guard::new("fb::present");
-            crate::framebuffer::present(&back);
+            // Profiler zones (wm::compose, fb::present): the compositor is
+            // the deepest thing a WIN_PRESENT syscall runs. Inert unless
+            // profiling is enabled.
+            compose_and_present(&mut back, w, h);
             if !PRESENT_AGAIN.load(Ordering::Acquire) {
                 break;
             }
@@ -1489,6 +1506,11 @@ impl Wm {
         };
 
         for win in &visible {
+            // In a parallel compose, a window (with its shadow) entirely in
+            // the other band is that band's work.
+            if !canvas.rows_visible(win.y - 10, win.h + 20) {
+                continue;
+            }
             let active = Some(win.id) == top_id;
 
             // Drop shadow per theme style.
@@ -1573,17 +1595,17 @@ impl Wm {
                 let vis_h = app.h.min(win.h - TITLE_H - 2 * BORDER).max(0);
                 // Row copies, clipped to the screen once (G1: this was a
                 // bounds-checked put() per pixel, most of a compose).
-                let (cw, ch) = (canvas.width as i32, canvas.height as i32);
+                let cw = canvas.width as i32;
                 let x0 = ox.max(0);
                 let x1 = (ox + vis_w).min(cw);
-                let y0 = oy.max(0);
-                let y1 = (oy + vis_h).min(ch);
+                let y0 = oy.max(canvas.y0 as i32);
+                let y1 = (oy + vis_h).min(canvas.y1 as i32);
                 if x1 > x0 {
                     let n = (x1 - x0) as usize;
                     let src_col = (x0 - ox) as usize;
                     for py in y0..y1 {
                         let src = ((py - oy) as usize) * app.w as usize + src_col;
-                        let dst = py as usize * canvas.width + x0 as usize;
+                        let dst = canvas.at(x0 as usize, py as usize);
                         canvas.pixels[dst..dst + n].copy_from_slice(&shown[src..src + n]);
                     }
                 }
@@ -1613,6 +1635,63 @@ impl Wm {
         self.draw_start_menu(canvas, &th);
         self.draw_ctx_menu(canvas, &th);
         self.draw_ripple(canvas, &th);
+    }
+
+    /// What this frame shows, element by element, for damage tracking.
+    fn scene_desc(&self) -> SceneDesc {
+        let th = theme::current();
+        let mut global = gfx::mix(theme_key(&th), self.workspace as u64);
+        global = gfx::mix_bytes(global, crate::wallpaper::label().as_bytes());
+        global = gfx::mix(global, (self.width as u64) << 32 | self.height as u64);
+        global = gfx::mix(global, (self.rounded as u64) << 2 | (self.animations as u64) << 1 | crate::icons::loaded() as u64);
+        global = gfx::mix(global, self.cursor_scale as u64);
+        // Menus and the click ripple follow the pointer over large areas:
+        // while one is up (or was, see `damage`) every frame is a full one.
+        let overlay = self.start_open || self.ctx_menu.is_some() || self.ripple.is_some();
+        if overlay {
+            global = gfx::mix(global, (self.cursor.0 as u32 as u64) << 32 | self.cursor.1 as u32 as u64);
+            global = gfx::mix(global, self.start_cat as u64);
+            global = gfx::mix(global, self.frame);
+        }
+        let (mx, my) = self.cursor;
+        let hot = (0..DESKTOP.len()).position(|i| {
+            let (ix, iy) = icon_rect(i);
+            mx >= ix && mx < ix + ICON_W && my >= iy && my < iy + ICON_H
+        });
+        let top_id = self
+            .windows
+            .iter()
+            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
+            .next_back()
+            .map(|w| w.id);
+        let windows = self
+            .windows
+            .iter()
+            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
+            .map(|w| {
+                let mut k = gfx::mix_bytes(gfx::mix(0, (Some(w.id) == top_id) as u64), w.title.as_bytes());
+                for line in &w.lines {
+                    k = gfx::mix_bytes(k, line.as_bytes());
+                }
+                if let Some((id, b)) = self.hover {
+                    if id == w.id {
+                        k = gfx::mix(k, 1 + b as u64);
+                    }
+                }
+                if let Some(c) = &w.canvas {
+                    k = gfx::mix(k, c.lock().gen);
+                }
+                (w.id, (w.x, w.y, w.w, w.h), k)
+            })
+            .collect();
+        SceneDesc {
+            global,
+            overlay,
+            icons: hot.map_or(u64::MAX, |i| i as u64),
+            taskbar: self.taskbar_key(&th),
+            windows,
+            cursor: cursor_rect(self.cursor, self.cursor_scale),
+        }
     }
 
     /// Everything a cursor-only frame must not change: when this key is the
@@ -1982,6 +2061,123 @@ impl Wm {
     }
 }
 
+/// What a presented frame showed, element by element (damage tracking).
+#[derive(Clone, PartialEq)]
+struct SceneDesc {
+    /// Theme, wallpaper, desktop, options, open menus: any change = full frame.
+    global: u64,
+    /// A menu or the ripple was up (then the next frame is a full one too).
+    overlay: bool,
+    icons: u64,
+    taskbar: u64,
+    /// Visible windows back to front: id, rect, content key.
+    windows: Vec<(u32, (i32, i32, i32, i32), u64)>,
+    cursor: (i32, i32, i32, i32),
+}
+
+/// What is on the screen now (None = unknown: present everything next time).
+static ON_SCREEN: Mutex<Option<SceneDesc>> = Mutex::new(None);
+/// Damage frames since the last full present (a full one every so often is
+/// the safety net for any change the description misses).
+static SINCE_FULL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static DAMAGE_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DAMAGE_ROWS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// (frames presented by damage, rows they presented).
+pub fn damage_stats() -> (u64, u64) {
+    use core::sync::atomic::Ordering::Relaxed;
+    (DAMAGE_FRAMES.load(Relaxed), DAMAGE_ROWS.load(Relaxed))
+}
+
+/// Something other than the compositor drew on the screen (screensaver,
+/// splash, a direct full present): the next frame presents everything.
+pub fn screen_overwritten() {
+    if let Some(mut g) = ON_SCREEN.try_lock() {
+        *g = None;
+    } else {
+        SINCE_FULL.store(u32::MAX / 2, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Rows that differ between two scenes, merged; None = present everything.
+fn damage(old: &SceneDesc, new: &SceneDesc, width: i32, height: i32) -> Option<Vec<(usize, usize)>> {
+    if old.global != new.global || old.overlay || new.overlay {
+        return None;
+    }
+    let mut rows: Vec<(i32, i32)> = Vec::new();
+    let mut add = |r: (i32, i32, i32, i32), margin: i32| rows.push((r.1 - margin, r.1 + r.3 + margin));
+    if old.icons != new.icons {
+        let (_, last_y) = icon_rect(DESKTOP.len() - 1);
+        add((0, 0, ICON_W + 40, last_y + ICON_H + 8), 0);
+    }
+    if old.taskbar != new.taskbar {
+        add((0, height - TASKBAR_H, width, TASKBAR_H), 0);
+    }
+    if old.cursor != new.cursor {
+        add(old.cursor, 0);
+        add(new.cursor, 0);
+    }
+    // A window counts as changed when its place in the stack, its rect or
+    // its content changed; its old and new rects (with the shadow) are damage.
+    const SHADOW: i32 = 10;
+    for (i, w) in new.windows.iter().enumerate() {
+        match old.windows.iter().position(|o| o.0 == w.0) {
+            Some(j) if j == i && old.windows[j] == *w => {}
+            Some(j) => {
+                add(old.windows[j].1, SHADOW);
+                add(w.1, SHADOW);
+            }
+            None => add(w.1, SHADOW),
+        }
+    }
+    for (j, o) in old.windows.iter().enumerate() {
+        match new.windows.iter().position(|w| w.0 == o.0) {
+            Some(i) if i == j => {}
+            Some(_) => add(o.1, SHADOW),
+            None => add(o.1, SHADOW),
+        }
+    }
+    rows.sort_unstable();
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (a, b) in rows {
+        let (a, b) = (a.clamp(0, height) as usize, b.clamp(0, height) as usize);
+        if b <= a {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    Some(out)
+}
+
+/// Present a composed full frame `back` showing `scene`: only the rows that
+/// changed since the frame on the screen, or everything when unknown.
+fn present_scene(back: &[u32], width: usize, height: usize, scene: SceneDesc) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let mut on_screen = ON_SCREEN.lock();
+    let bands = match on_screen.as_ref() {
+        Some(old) if SINCE_FULL.load(Relaxed) < 64 => damage(old, &scene, width as i32, height as i32),
+        _ => None,
+    };
+    match bands {
+        Some(bands) => {
+            SINCE_FULL.fetch_add(1, Relaxed);
+            DAMAGE_FRAMES.fetch_add(1, Relaxed);
+            for &(y0, y1) in &bands {
+                DAMAGE_ROWS.fetch_add((y1 - y0) as u64, Relaxed);
+            }
+            crate::framebuffer::present_bands(back, &bands);
+        }
+        None => {
+            SINCE_FULL.store(0, Relaxed);
+            crate::framebuffer::present_full(back);
+        }
+    }
+    *on_screen = Some(scene);
+}
+
 /// The pointer's bounding box: (x, y, w, h).
 fn cursor_rect(cursor: (i32, i32), scale: i32) -> (i32, i32, i32, i32) {
     (cursor.0, cursor.1, 12 * scale, 12 * scale)
@@ -2200,13 +2396,17 @@ pub fn layer_stats() -> (u64, u64) {
 /// rectangle: on a hit only the rectangle is restored.
 fn cached_layer(cache: &Mutex<Option<LayerCache>>, canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, inputs: u64, draw: impl FnOnce(&mut Canvas)) {
     use core::sync::atomic::Ordering::Relaxed;
+    // Clipped to the rows this canvas holds (a band in a parallel compose:
+    // each band then caches its own part -- the rect is part of the key).
     let x0 = x.max(0) as usize;
-    let y0 = y.max(0) as usize;
+    let y0 = (y.max(0) as usize).max(canvas.y0);
     let x1 = ((x + w).max(0) as usize).min(canvas.width);
-    let y1 = ((y + h).max(0) as usize).min(canvas.height);
-    let cw = canvas.width;
+    let y1 = ((y + h).max(0) as usize).min(canvas.y1);
+    if x1 <= x0 || y1 <= y0 {
+        return; // nothing of it in this band (`draw` stays inside the rect)
+    }
     // Another CPU composing at the same time: just draw.
-    let guard = if x1 > x0 && y1 > y0 && canvas.pixels.len() >= cw * y1 { cache.try_lock() } else { None };
+    let guard = cache.try_lock();
     let Some(mut guard) = guard else {
         draw(canvas);
         return;
@@ -2214,12 +2414,14 @@ fn cached_layer(cache: &Mutex<Option<LayerCache>>, canvas: &mut Canvas, x: i32, 
     let rw = x1 - x0;
     let mut key = gfx::mix(inputs, (x0 | y0 << 16 | x1 << 32 | y1 << 48) as u64);
     for row in y0..y1 {
-        key = gfx::hash_px(key, &canvas.pixels[row * cw + x0..row * cw + x1]);
+        let r = canvas.at(x0, row);
+        key = gfx::hash_px(key, &canvas.pixels[r..r + rw]);
     }
     if let Some(c) = guard.as_ref() {
         if c.key == key && c.rect == (x0, y0, x1, y1) {
             for (i, row) in (y0..y1).enumerate() {
-                canvas.pixels[row * cw + x0..row * cw + x1].copy_from_slice(&c.px[i * rw..(i + 1) * rw]);
+                let r = canvas.at(x0, row);
+                canvas.pixels[r..r + rw].copy_from_slice(&c.px[i * rw..(i + 1) * rw]);
             }
             LAYER_HITS.fetch_add(1, Relaxed);
             return;
@@ -2231,7 +2433,8 @@ fn cached_layer(cache: &Mutex<Option<LayerCache>>, canvas: &mut Canvas, x: i32, 
     px.clear();
     px.reserve(rw * (y1 - y0));
     for row in y0..y1 {
-        px.extend_from_slice(&canvas.pixels[row * cw + x0..row * cw + x1]);
+        let r = canvas.at(x0, row);
+        px.extend_from_slice(&canvas.pixels[r..r + rw]);
     }
     *guard = Some(LayerCache { key, rect: (x0, y0, x1, y1), px });
 }
@@ -2269,11 +2472,127 @@ fn outline_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: 
     canvas.fill_rect(x + radius, y + h - thickness, w - 2 * radius, thickness, color);
 }
 
-pub fn compose_into(back: &mut [u32], width: usize, height: usize) {
-    compose_scene(back, width, height, |wm, canvas| {
-        wm.draw_cursor(canvas, &theme::current());
-        None::<()>
+// --- Parallel compose -------------------------------------------------------------
+//
+// A full compose is split in two row bands: the caller draws the top one and
+// a helper kernel task -- running without the BKL, on another CPU when one is
+// free -- the bottom one, into the two disjoint halves of the same buffer.
+// Every drawing primitive clips to its canvas's band (`Canvas::band`).
+
+/// The bottom band of a compose, for the helper. The pointers stay valid
+/// because the caller waits for `BAND_DONE` before it returns.
+struct BandJob {
+    wm: *const Wm,
+    ptr: *mut u32,
+    len: usize,
+    width: usize,
+    height: usize,
+    y0: usize,
+}
+
+// SAFETY: handed to exactly one other task, and the caller outlives its use.
+unsafe impl Send for BandJob {}
+
+static BAND_JOB: Mutex<Option<BandJob>> = Mutex::new(None);
+static BAND_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static BAND_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+/// One compose at a time uses the helper; others compose alone.
+static HELPER_BUSY: Mutex<()> = Mutex::new(());
+static HELPER_STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static PARALLEL_COMPOSE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+static PARALLEL_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Kernel futex keys (above every user address, apart from process waits).
+const HELPER_KEY: u64 = 0xC0 << 48 | 1;
+const DONE_KEY: u64 = 0xC0 << 48 | 2;
+
+/// Frames composed in two bands so far.
+pub fn parallel_frames() -> u64 {
+    PARALLEL_FRAMES.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Switch parallel compose on or off (shell `prof`-style experiments).
+pub fn set_parallel_compose(on: bool) {
+    PARALLEL_COMPOSE.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Body of the band helper task: wait for a job, compose it, report.
+fn band_helper() {
+    use core::sync::atomic::Ordering;
+    loop {
+        crate::task::block_while(HELPER_KEY, || !BAND_PENDING.load(Ordering::Acquire));
+        if !BAND_PENDING.swap(false, Ordering::AcqRel) {
+            continue;
+        }
+        let job = BAND_JOB.lock().take();
+        if let Some(j) = job {
+            let _z = crate::profile::Guard::new("wm::compose-band");
+            // SAFETY: kernel memory of the caller's frame buffer (its bottom
+            // rows, which the caller does not touch until BAND_DONE), and its
+            // Wm snapshot; both outlive the job (see BandJob).
+            let pixels = unsafe { core::slice::from_raw_parts_mut(j.ptr, j.len) };
+            let mut canvas = Canvas::band(pixels, j.width, j.height, j.y0, j.height);
+            unsafe { (*j.wm).compose(&mut canvas) };
+        }
+        BAND_DONE.store(true, Ordering::Release);
+        crate::task::futex_wake(DONE_KEY, 1);
+    }
+}
+
+/// Compose `wm` into `back`, in two bands when a second CPU can help.
+fn compose_parallel(wm: &Wm, back: &mut [u32], width: usize, height: usize) {
+    use core::sync::atomic::Ordering;
+    let able = PARALLEL_COMPOSE.load(Ordering::Relaxed)
+        && crate::task::is_started()
+        // waiting for the helper blocks: only where blocking is allowed
+        && crate::arch::cpu::interrupts_enabled()
+        && crate::smp::cpus_online() >= 2
+        && height >= 64
+        && back.len() >= width * height;
+    let busy = if able { HELPER_BUSY.try_lock() } else { None };
+    let Some(_busy) = busy else {
+        wm.compose(&mut Canvas::new(back, width, height));
+        return;
+    };
+    if !HELPER_STARTED.swap(true, Ordering::AcqRel) {
+        crate::task::spawn_unlocked("compose-band", band_helper);
+    }
+    let split = height / 2;
+    let (top, bottom) = back[..width * height].split_at_mut(split * width);
+    *BAND_JOB.lock() = Some(BandJob {
+        wm: wm as *const Wm,
+        ptr: bottom.as_mut_ptr(),
+        len: bottom.len(),
+        width,
+        height,
+        y0: split,
     });
+    BAND_DONE.store(false, Ordering::Release);
+    BAND_PENDING.store(true, Ordering::Release);
+    crate::task::futex_wake(HELPER_KEY, 1);
+    wm.compose(&mut Canvas::band(top, width, height, 0, split));
+    {
+        let _z = crate::profile::Guard::new("wm::compose-wait");
+        while !BAND_DONE.load(Ordering::Acquire) {
+            crate::task::block_while(DONE_KEY, || !BAND_DONE.load(Ordering::Acquire));
+        }
+    }
+    PARALLEL_FRAMES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Compose into `back` and present it, by damage.
+fn compose_and_present(back: &mut [u32], width: usize, height: usize) {
+    let scene = {
+        let _z = crate::profile::Guard::new("wm::compose");
+        compose_scene(back, width, height, |wm, canvas| {
+            wm.draw_cursor(canvas, &theme::current());
+            None::<()>
+        })
+    };
+    let _z = crate::profile::Guard::new("fb::present");
+    match scene {
+        Some((_, scene)) => present_scene(back, width, height, scene),
+        None => crate::framebuffer::present_full(back),
+    }
 }
 
 /// Full frames composed so far (any buffer): a cursor-only frame is valid
@@ -2300,17 +2619,21 @@ static CURSOR_FRAME: Mutex<Option<CursorFrame>> = Mutex::new(None);
 /// Snapshot the structure (cheap: canvases are shared) and compose without
 /// holding `WM`, so other CPUs can create, move and draw into windows
 /// meanwhile; `finish` draws the cursor.
-fn compose_scene<R>(back: &mut [u32], width: usize, height: usize, finish: impl FnOnce(&Wm, &mut Canvas) -> Option<R>) -> Option<R> {
+fn compose_scene<R>(back: &mut [u32], width: usize, height: usize, finish: impl FnOnce(&Wm, &mut Canvas) -> Option<R>) -> Option<(Option<R>, SceneDesc)> {
     use core::sync::atomic::Ordering;
     let snapshot = WM.lock().clone();
     let wm = snapshot?;
     COMPOSE_SEQ.fetch_add(1, Ordering::AcqRel);
     COMPOSING.fetch_add(1, Ordering::Relaxed);
+    // Described before drawing: a canvas changed during the compose then
+    // carries a newer generation than the one recorded, so the next frame
+    // presents it again.
+    let scene = wm.scene_desc();
+    compose_parallel(&wm, back, width, height);
     let mut canvas = Canvas::new(back, width, height);
-    wm.compose(&mut canvas);
     let r = finish(&wm, &mut canvas);
     COMPOSING.fetch_sub(1, Ordering::Relaxed);
-    r
+    Some((r, scene))
 }
 
 fn clip_rect(r: (i32, i32, i32, i32), width: usize, height: usize) -> (usize, usize, usize, usize) {
@@ -2365,25 +2688,40 @@ pub fn render_frame_hint(back: &mut Vec<u32>, width: usize, height: usize, point
                 let th = theme::current();
                 draw_cursor_at(&mut Canvas::new(back, width, height), &th, cursor, scale);
                 let (y0, y1) = (old.1.min(new.1), old.3.max(new.3));
-                crate::framebuffer::present_rows_of(back, y0, y1);
+                // The screen now shows the cursor here: tell damage tracking.
+                {
+                    let mut on_screen = ON_SCREEN.lock();
+                    if let Some(sc) = on_screen.as_mut() {
+                        sc.cursor = cursor_rect(cursor, scale);
+                    }
+                    crate::framebuffer::present_rows_of(back, y0, y1);
+                }
                 CURSOR_ONLY_FRAMES.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
     }
-    {
+    let composed = {
         let _z = crate::profile::Guard::new("wm::compose");
-        let recorded = compose_scene(back, width, height, |wm, canvas| {
+        compose_scene(back, width, height, |wm, canvas| {
             let r = clip_rect(cursor_rect(wm.cursor, wm.cursor_scale), width, height);
             let mut under = Vec::new();
             save_under(canvas.pixels, width, r, &mut under);
             wm.draw_cursor(canvas, &theme::current());
             Some(wm.cursor_key().map(|key| CursorFrame { seq: COMPOSE_SEQ.load(Ordering::Acquire), key, rect: r, under }))
-        });
-        *CURSOR_FRAME.lock() = recorded.flatten();
-    }
+        })
+    };
     let _z = crate::profile::Guard::new("fb::present");
-    crate::framebuffer::present(back);
+    match composed {
+        Some((recorded, scene)) => {
+            *CURSOR_FRAME.lock() = recorded.flatten();
+            present_scene(back, width, height, scene);
+        }
+        None => {
+            *CURSOR_FRAME.lock() = None;
+            crate::framebuffer::present_full(back);
+        }
+    }
 }
 
 /// WIN_EVENT: the next pointer event of window `id`, if `owner` owns it.

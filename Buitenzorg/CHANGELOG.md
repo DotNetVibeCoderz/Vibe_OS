@@ -31,6 +31,13 @@ Hardening toward a stable x86-64 release.
   redraws only the cursor (about 50x less work per move than a full frame),
   and the desktop icons and taskbar are reused from the last frame when
   nothing about them changed.
+- **Faster text and fills (G1, step 3).** Letters are drawn from a glyph
+  cache and solid areas are filled with block copies: a desktop frame with
+  three text windows composes ~20% faster, and every app's text benefits.
+- **Only what changed reaches the screen (G1 done).** The compositor tracks
+  which windows, icons, taskbar and cursor changed and sends only those rows
+  to the display; window text uses the glyph cache, native apps' image
+  blits are block copies, and a full redraw is split over two CPUs.
 - **Boot watchdog.** If the boot prints nothing for two minutes, the kernel
   writes where the CPU is, the task table and, for each blocked thread of an
   app, where in the app it waits (serial log).

@@ -368,10 +368,40 @@ pub fn dimensions() -> Option<(usize, usize)> {
 /// back while the boot splash owns the screen (the boot demos' windows must
 /// not flash up mid-boot); the splash itself uses [`present_splash`].
 pub fn present(back: &[u32]) {
+    // Not the compositor's own damage-tracked path: its record of what is on
+    // the screen no longer holds.
+    crate::wm::screen_overwritten();
+    present_full(back);
+}
+
+/// Present a whole frame (every tile hashed, changed ones written).
+pub fn present_full(back: &[u32]) {
     if crate::splash::active() {
         return;
     }
     present_splash(back);
+}
+
+/// Present only the row bands `(y0, y1)` of a full frame `back` (the
+/// compositor's damage). A virtio GPU takes whole frames.
+pub fn present_bands(back: &[u32], bands: &[(usize, usize)]) {
+    if crate::splash::active() || bands.is_empty() {
+        return;
+    }
+    if let Some(console) = CONSOLE.get() {
+        crate::arch::cpu::without_interrupts(|| {
+            let mut c = console.lock();
+            let w = c.fb.info().width.max(1);
+            let rows = back.len() / w;
+            for &(y0, y1) in bands {
+                let y1 = y1.min(rows);
+                if y1 > y0 {
+                    c.present_rows(&back[y0 * w..y1 * w], y0, y1);
+                }
+            }
+        });
+    }
+    crate::virtio::gpu::present(back);
 }
 
 /// Present screen rows `y0..y1` from `rows` (just those rows, `width` pixels

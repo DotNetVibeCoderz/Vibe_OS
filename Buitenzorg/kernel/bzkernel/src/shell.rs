@@ -805,6 +805,11 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             crate::profile::disable();
             (vec![String::from("profiler: off")], Effect::None)
         }
+        Some("seq") | Some("par") => {
+            let par = arg == Some("par");
+            crate::wm::set_parallel_compose(par);
+            (vec![format!("compose: {}", if par { "two bands in parallel" } else { "one CPU" })], Effect::None)
+        }
         Some("reset") => {
             crate::profile::reset();
             (vec![String::from("profiler: cleared")], Effect::None)
@@ -838,6 +843,9 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             let (hits, misses) = crate::wm::layer_stats();
             crate::println!("[profile] shell layers (icons, taskbar) since boot: {} reused, {} redrawn", hits, misses);
             crate::println!("[profile] cursor-only frames since boot: {}", crate::wm::cursor_only_frames());
+            crate::println!("[profile] frames composed in two bands (parallel): {}", crate::wm::parallel_frames());
+            let (df, dr) = crate::wm::damage_stats();
+            crate::println!("[profile] damage-presented frames since boot: {} ({} rows in all)", df, dr);
             (
                 vec![
                     format!("profiler: sampled {} zone(s)", crate::profile::zone_count()),
