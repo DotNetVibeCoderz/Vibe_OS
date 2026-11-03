@@ -42,6 +42,25 @@ pub struct Console {
     x: usize,
     y: usize,
     glyph_w: usize,
+    /// Hash of every TILE-wide piece of every row as last presented (G1:
+    /// only pieces whose hash changed are written to the framebuffer, which
+    /// is slow to write -- uncached on a Raspberry Pi, byte-wise on a 24-bit
+    /// VBE mode). Empty = not valid (the console drew over the screen).
+    tiles: alloc::vec::Vec<u64>,
+    /// Tile pieces written / skipped (diagnostics: `fb_stats`).
+    written: u64,
+    skipped: u64,
+}
+
+/// Width in pixels of a present tile (one row high).
+const TILE: usize = 64;
+
+fn tile_hash(px: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &p in px {
+        h = (h ^ p as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 impl Console {
@@ -58,6 +77,9 @@ impl Console {
             x: BORDER,
             y: BORDER,
             glyph_w: get_raster_width(FONT_WEIGHT, FONT_HEIGHT),
+            tiles: alloc::vec::Vec::new(),
+            written: 0,
+            skipped: 0,
         }
     }
 
@@ -95,6 +117,7 @@ impl Console {
     }
 
     fn write_char(&mut self, c: char) {
+        self.tiles.clear(); // the console draws straight to the screen
         match c {
             '\n' => self.newline(),
             '\r' => self.x = BORDER,
@@ -172,6 +195,7 @@ impl Console {
     /// v0.3 "Batang" milestone "gambar piksel": paint direct-pixel color
     /// swatches (a growth gradient, soil → canopy) in the top-right corner.
     fn draw_pixel_demo(&mut self) {
+        self.tiles.clear();
         const SWATCHES: [(u8, u8, u8); 8] = [
             (0x3E, 0x2A, 0x1D), // soil
             (0x6B, 0x4A, 0x2B), // roots
@@ -240,12 +264,34 @@ impl Console {
         let (w, h) = (info.width, info.height);
         let y1 = y1.min(h);
         let format = info.format;
+        let tiles_x = w.div_ceil(TILE);
+        let fresh = self.tiles.len() != tiles_x * h;
+        if fresh {
+            self.tiles.clear();
+            self.tiles.resize(tiles_x * h, 0);
+        }
+        let mut tiles = core::mem::take(&mut self.tiles);
+        let (mut written, mut skipped) = (0u64, 0u64);
+        // `dirty(y, tx)`: hash the piece, compare, remember; true = write it
+        let mut dirty = |y: usize, tx: usize, row: &[u32]| -> bool {
+            let x0 = tx * TILE;
+            let hsh = tile_hash(&row[x0..(x0 + TILE).min(w)]);
+            let slot = &mut tiles[y * tiles_x + tx];
+            if !fresh && *slot == hsh {
+                skipped += 1;
+                return false;
+            }
+            *slot = hsh;
+            written += 1;
+            true
+        };
         let buffer = self.fb.buffer_mut();
         // Fast paths for 32-bit pixels: whole rows (BGR = the compositor's own
         // 0x00RRGGBB words) or one 32-bit store per pixel (RGB). Byte-wise
         // writes cost 3-4 uncached stores per pixel -- on a Raspberry Pi 4 a
         // 1280x720 present took long enough to show half-drawn frames.
         if y1 <= y0 || back.len() < (y1 - y0) * w {
+            self.tiles = tiles;
             return;
         }
         if bpp == 4 && buffer.len() >= info.stride * h * 4 {
@@ -253,35 +299,58 @@ impl Console {
             match format {
                 PixelFormat::Bgr => {
                     for y in y0..y1 {
-                        unsafe { core::ptr::copy_nonoverlapping(back.as_ptr().add((y - y0) * w), dst.add(y * info.stride), w) };
+                        let row = &back[(y - y0) * w..(y - y0 + 1) * w];
+                        for tx in 0..tiles_x {
+                            if dirty(y, tx, row) {
+                                let x0 = tx * TILE;
+                                let n = TILE.min(w - x0);
+                                unsafe { core::ptr::copy_nonoverlapping(row.as_ptr().add(x0), dst.add(y * info.stride + x0), n) };
+                            }
+                        }
                     }
+                    self.tiles = tiles;
+                    self.written += written;
+                    self.skipped += skipped;
                     return;
                 }
                 PixelFormat::Rgb => {
                     for y in y0..y1 {
-                        for x in 0..w {
-                            let s = back[(y - y0) * w + x];
-                            let v = ((s & 0xFF) << 16) | (s & 0xFF00) | ((s >> 16) & 0xFF);
-                            unsafe { dst.add(y * info.stride + x).write_volatile(v) };
+                        let row = &back[(y - y0) * w..(y - y0 + 1) * w];
+                        for tx in 0..tiles_x {
+                            if dirty(y, tx, row) {
+                                for x in tx * TILE..((tx + 1) * TILE).min(w) {
+                                    let s = row[x];
+                                    let v = ((s & 0xFF) << 16) | (s & 0xFF00) | ((s >> 16) & 0xFF);
+                                    unsafe { dst.add(y * info.stride + x).write_volatile(v) };
+                                }
+                            }
                         }
                     }
+                    self.tiles = tiles;
+                    self.written += written;
+                    self.skipped += skipped;
                     return;
                 }
                 _ => {}
             }
         }
         for y in y0..y1 {
-            for x in 0..w {
-                let src = back[(y - y0) * w + x];
-                let color = (
-                    (src >> 16) as u8,
-                    (src >> 8) as u8,
-                    src as u8,
-                );
-                let off = (y * info.stride + x) * bpp;
-                write_pixel_bytes(&mut buffer[off..off + bpp], format, color);
+            let row = &back[(y - y0) * w..(y - y0 + 1) * w];
+            for tx in 0..tiles_x {
+                if !dirty(y, tx, row) {
+                    continue;
+                }
+                for x in tx * TILE..((tx + 1) * TILE).min(w) {
+                    let src = row[x];
+                    let color = ((src >> 16) as u8, (src >> 8) as u8, src as u8);
+                    let off = (y * info.stride + x) * bpp;
+                    write_pixel_bytes(&mut buffer[off..off + bpp], format, color);
+                }
             }
         }
+        self.tiles = tiles;
+        self.written += written;
+        self.skipped += skipped;
     }
 }
 
@@ -318,6 +387,14 @@ pub fn present_splash_rows(rows: &[u32], y0: usize, y1: usize) {
             console.lock().present_rows(rows, y0, y1);
         });
     }
+}
+
+/// (tile pieces written, skipped as unchanged) by presents so far.
+pub fn present_stats() -> (u64, u64) {
+    CONSOLE.get().map_or((0, 0), |c| {
+        let c = c.lock();
+        (c.written, c.skipped)
+    })
 }
 
 /// Present unconditionally (the boot splash's own frames).

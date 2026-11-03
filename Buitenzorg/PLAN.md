@@ -733,6 +733,16 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   semua arsitektur), lalu **virgl** (QEMU `virtio-gpu-gl`) dan **V3D** Pi 4
   (VideoCore VI, mengikuti driver Mesa `v3d`). Demo: kubus/teapot berputar, game 3D kecil.
 - Prasyarat: FPU/SIMD untuk kode grafis (ring-3), timer resolusi tinggi untuk frame pacing.
+- **Status G1 (2026-11-03, langkah 1 ✓):** present per **ubin 64 px** dengan hash FNV
+  (hanya ubin yang berubah ditulis ke framebuffer), `fill_rect` pakai slice fill,
+  kanvas app di-blit per baris dengan clipping, bayangan & badan jendela hanya
+  digambar di area yang terlihat. Terukur di x86 TCG per frame: compose 352M → 107M
+  siklus, present 446M → 116M, total **786M → 223M (×3,5)** (`prof` mencetak statistik
+  ubin). Sisa: biaya hashing present (~116M), cache taskbar/ikon, frame hanya-kursor,
+  permukaan shared-memory, komposisi paralel.
+- **Referensi G3:** SDK 3D terkelola tingkat tinggi mengikuti **ThreeNet**
+  (`C:\experiment\VibeCoding\Vibe_Graphics\ThreeNet`, gaya three.js untuk .NET) —
+  scene graph, kamera, mesh/material, loader — di atas `Buitenzorg.Graphics3D`.
 
 ## 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)
 Tujuan: Buitenzorg layak dipakai untuk **memutar musik/video, menjelajah

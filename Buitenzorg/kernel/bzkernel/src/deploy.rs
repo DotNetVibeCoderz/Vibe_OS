@@ -81,8 +81,11 @@ pub fn disable() {
 }
 
 /// (enabled, pairing code, requests served).
+static SERVED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 pub fn status() -> (bool, u16, u64) {
-    let served = STATE.lock().as_ref().map_or(0, |s| s.requests);
+    // try_lock: RUN executes a shell line while `STATE` is held.
+    let served = STATE.try_lock().map_or(SERVED.load(Ordering::Relaxed), |g| g.as_ref().map_or(0, |s| s.requests));
     (ENABLED.load(Ordering::Relaxed), CODE.load(Ordering::Relaxed) as u16, served)
 }
 
@@ -145,6 +148,7 @@ fn handle(st: &mut State, pkt: &[u8]) -> Option<Vec<u8>> {
         }
     }
     st.requests += 1;
+    SERVED.store(st.requests, Ordering::Relaxed);
     let r = match op {
         1 => {
             let text = alloc::format!(

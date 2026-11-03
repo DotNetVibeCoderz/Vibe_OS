@@ -55,11 +55,12 @@ impl<'a> Canvas<'a> {
         let y0 = y.max(0) as usize;
         let x1 = ((x + w).max(0) as usize).min(self.width);
         let y1 = ((y + h).max(0) as usize).min(self.height);
+        if x1 <= x0 {
+            return;
+        }
         for py in y0..y1 {
             let row = py * self.width;
-            for px in x0..x1 {
-                self.pixels[row + px] = color;
-            }
+            self.pixels[row + x0..row + x1].fill(color);
         }
     }
 

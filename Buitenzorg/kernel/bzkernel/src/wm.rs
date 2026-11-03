@@ -1457,8 +1457,15 @@ impl Wm {
 
     fn compose(&self, canvas: &mut Canvas) {
         let th = theme::current();
-        crate::wallpaper::paint(canvas, &th, self.workspace);
-        self.draw_desktop_icons(canvas, &th);
+        {
+            let _z = crate::profile::Guard::new("compose:wallpaper");
+            crate::wallpaper::paint(canvas, &th, self.workspace);
+        }
+        {
+            let _z = crate::profile::Guard::new("compose:icons");
+            self.draw_desktop_icons(canvas, &th);
+        }
+        let zw = crate::profile::Guard::new("compose:windows");
 
         let visible: Vec<&Window> = self
             .windows
@@ -1480,15 +1487,34 @@ impl Wm {
             match th.shadow_style {
                 theme::ShadowStyle::None => {}
                 theme::ShadowStyle::Soft => {
-                    fill_rounded(canvas, win.x + 4, win.y + 5, win.w, win.h, radius, th.shadow);
+                    // Only where the window does not cover it (G1: the body
+                    // used to be painted over a full-size shadow).
+                    shadow_rounded(canvas, win.x, win.y, win.w, win.h, 4, 5, radius, th.shadow);
                 }
                 theme::ShadowStyle::HardOffset => {
-                    canvas.fill_rect(win.x + 8, win.y + 8, win.w, win.h, th.shadow);
+                    canvas.fill_rect(win.x + win.w, win.y + 8, 8, win.h, th.shadow);
+                    canvas.fill_rect(win.x + 8, win.y + win.h, win.w - 8, 8, th.shadow);
                 }
             }
 
-            // Body + border (rounded).
-            fill_rounded(canvas, win.x, win.y, win.w, win.h, radius, th.win_body);
+            // Body + border (rounded). An app window's client area is about
+            // to be covered by its canvas: paint only around it.
+            match &win.canvas {
+                Some(app) => {
+                    let (aw, ah) = {
+                        let a = app.lock();
+                        (a.w, a.h)
+                    };
+                    let top = BORDER + TITLE_H;
+                    let vis_w = aw.min(win.w - 2 * BORDER).max(0);
+                    let vis_h = ah.min(win.h - TITLE_H - 2 * BORDER).max(0);
+                    fill_rounded_rows(canvas, win.x, win.y, win.w, win.h, radius, th.win_body, 0, top);
+                    fill_rounded_rows(canvas, win.x, win.y, win.w, win.h, radius, th.win_body, top + vis_h, win.h);
+                    canvas.fill_rect(win.x, win.y + top, BORDER, vis_h, th.win_body);
+                    canvas.fill_rect(win.x + BORDER + vis_w, win.y + top, win.w - BORDER - vis_w, vis_h, th.win_body);
+                }
+                None => fill_rounded(canvas, win.x, win.y, win.w, win.h, radius, th.win_body),
+            }
             outline_rounded(canvas, win.x, win.y, win.w, win.h, radius, bt, th.win_border);
 
             let title_bg = if active { th.win_title_active } else { th.win_title_inactive };
@@ -1535,19 +1561,22 @@ impl Wm {
                 // the current window size and the screen.
                 let ox = win.x + BORDER;
                 let oy = win.y + BORDER + TITLE_H;
-                let vis_w = app.w.min(win.w - 2 * BORDER).max(0) as usize;
-                let vis_h = app.h.min(win.h - TITLE_H - 2 * BORDER).max(0) as usize;
-                for row in 0..vis_h {
-                    for col in 0..vis_w {
-                        let px = ox + col as i32;
-                        let py = oy + row as i32;
-                        if px >= 0 && py >= 0 {
-                            canvas.put(
-                                px as usize,
-                                py as usize,
-                                shown[row * app.w as usize + col],
-                            );
-                        }
+                let vis_w = app.w.min(win.w - 2 * BORDER).max(0);
+                let vis_h = app.h.min(win.h - TITLE_H - 2 * BORDER).max(0);
+                // Row copies, clipped to the screen once (G1: this was a
+                // bounds-checked put() per pixel, most of a compose).
+                let (cw, ch) = (canvas.width as i32, canvas.height as i32);
+                let x0 = ox.max(0);
+                let x1 = (ox + vis_w).min(cw);
+                let y0 = oy.max(0);
+                let y1 = (oy + vis_h).min(ch);
+                if x1 > x0 {
+                    let n = (x1 - x0) as usize;
+                    let src_col = (x0 - ox) as usize;
+                    for py in y0..y1 {
+                        let src = ((py - oy) as usize) * app.w as usize + src_col;
+                        let dst = py as usize * canvas.width + x0 as usize;
+                        canvas.pixels[dst..dst + n].copy_from_slice(&shown[src..src + n]);
                     }
                 }
             } else {
@@ -1568,7 +1597,10 @@ impl Wm {
             }
         }
 
+        drop(zw);
+        let zt = crate::profile::Guard::new("compose:taskbar");
         self.draw_taskbar(canvas, &th);
+        drop(zt);
         self.draw_start_menu(canvas, &th);
         self.draw_ctx_menu(canvas, &th);
         self.draw_ripple(canvas, &th);
@@ -1946,6 +1978,46 @@ fn fill_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32
     }
 }
 
+/// Rows `from..to` (relative to `y`) of a rounded rectangle.
+fn fill_rounded_rows(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color, from: i32, to: i32) {
+    for row in from.max(0)..to.min(h) {
+        let inset = if radius > 0 && row < radius {
+            corner_inset(row, radius)
+        } else if radius > 0 && row >= h - radius {
+            corner_inset(h - 1 - row, radius)
+        } else {
+            0
+        };
+        canvas.fill_rect(x + inset, y + row, w - 2 * inset, 1, color);
+    }
+}
+
+/// The part of a rounded drop shadow (the window's shape moved by dx, dy)
+/// that the window itself does not cover: everything right of / below the
+/// window, plus the bands where the window's own corners are cut away.
+fn shadow_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, dx: i32, dy: i32, radius: i32, color: Color) {
+    let (sx, sy) = (x + dx, y + dy);
+    for row in 0..h {
+        let inset = if radius > 0 && row < radius {
+            corner_inset(row, radius)
+        } else if radius > 0 && row >= h - radius {
+            corner_inset(h - 1 - row, radius)
+        } else {
+            0
+        };
+        let py = sy + row;
+        let (l, r) = (sx + inset, sx + w - inset);
+        // rows of the window itself (outside its corner bands) hide the
+        // shadow up to the window's right edge
+        let wrow = py - y;
+        let covered_to = if wrow >= radius && wrow < h - radius { x + w } else { l };
+        let from = l.max(covered_to);
+        if r > from {
+            canvas.fill_rect(from, py, r - from, 1, color);
+        }
+    }
+}
+
 /// Blend a rounded rectangle of `color` at `alpha` over what is underneath —
 /// the glass panels of themes with `glass > 0`.
 fn blend_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color, alpha: u8) {
@@ -2064,7 +2136,11 @@ pub fn render_frame(back: &mut Vec<u32>, width: usize, height: usize) {
     if back.len() != width * height {
         *back = vec![0u32; width * height];
     }
-    compose_into(back, width, height);
+    {
+        let _z = crate::profile::Guard::new("wm::compose");
+        compose_into(back, width, height);
+    }
+    let _z = crate::profile::Guard::new("fb::present");
     crate::framebuffer::present(back);
 }
 

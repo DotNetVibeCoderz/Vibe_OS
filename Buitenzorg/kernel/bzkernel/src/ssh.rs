@@ -18,6 +18,7 @@ use alloc::vec::Vec;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use poly1305::universal_hash::KeyInit;
 use sha2::{Digest, Sha256};
+use core::sync::atomic::Ordering;
 use spin::Mutex;
 
 pub const PORT: u16 = 22;
@@ -740,9 +741,19 @@ pub fn autostart() {
 }
 
 /// (running, open sessions, successful logins).
+///
+/// Never blocks: a command typed over SSH runs inside `poll`, which holds
+/// `SERVER`, so waiting for it here deadlocked (`ipconfig`, `ssh status`).
+/// The counters are mirrored in atomics at the end of every `poll`.
 pub fn status() -> (bool, usize, u64) {
-    SERVER.lock().as_ref().map_or((false, 0, 0), |s| (true, s.sessions.len(), s.logins))
+    match SERVER.try_lock() {
+        Some(g) => g.as_ref().map_or((false, 0, 0), |s| (true, s.sessions.len(), s.logins)),
+        None => (true, SESSIONS.load(Ordering::Relaxed), LOGINS.load(Ordering::Relaxed)),
+    }
 }
+
+static SESSIONS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static LOGINS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Serve the sessions (desktop loop).
 pub fn poll() {
@@ -782,4 +793,6 @@ pub fn poll() {
             true
         }
     });
+    SESSIONS.store(srv.sessions.len(), Ordering::Relaxed);
+    LOGINS.store(srv.logins, Ordering::Relaxed);
 }

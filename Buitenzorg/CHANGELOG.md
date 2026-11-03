@@ -16,6 +16,17 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Network commands in the terminal:** `ipconfig` (also `ifconfig` / `ip`:
+  address, mask, gateway, MAC, device, frame counters), `ping <ip> [n]` (real
+  ICMP echo with round-trip time), `arp`, `route`, `netstat` (TCP connections
+  and listeners, UDP sockets), `hostname`, `nslookup` (says plainly there is
+  no DNS client yet). They work over SSH too (`ssh status` and `ipconfig`
+  typed over SSH used to hang the desktop: they waited for a lock the SSH
+  session itself held).
+- **Faster desktop drawing (G1, step 1).** The screen is updated per 64-pixel
+  tile and only tiles that changed are written; covered parts of windows,
+  shadows and app canvases are no longer drawn. A desktop frame costs ~3.5x
+  less (x86 under QEMU: 786M -> 223M cycles). `prof` shows the tile counts.
 - **SSH server.** `ssh on` in the terminal starts an SSH-2 server on port 22
   (curve25519-sha256, ssh-ed25519 host key, chacha20-poly1305@openssh.com):
   `ssh administrator@<ip>` gives the Buitenzorg shell, `ssh ... <command>`

@@ -515,6 +515,13 @@ pub fn close(id: u64) {
     }
 }
 
+/// (local port, remote ip, remote port, state) of every connection, and the
+/// listening ports (`netstat`).
+pub fn snapshot() -> (Vec<(u16, Ipv4Addr, u16, State)>, Vec<u16>) {
+    let t = TCP.lock();
+    (t.conns.iter().map(|c| (c.local_port, c.remote_ip, c.remote_port, c.state)).collect(), t.listeners.clone())
+}
+
 /// Number of open connections (diagnostics).
 #[allow(dead_code)]
 pub fn connections() -> usize {

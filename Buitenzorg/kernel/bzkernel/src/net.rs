@@ -83,6 +83,10 @@ struct Stack {
     /// (all zeros = no router: everything is sent on-link).
     gateway: Ipv4Addr,
     mask: Ipv4Addr,
+    /// A real NIC is attached (else the loopback device).
+    attached: bool,
+    frames_tx: u64,
+    frames_rx: u64,
 }
 
 static STACK: Mutex<Option<Stack>> = Mutex::new(None);
@@ -91,6 +95,7 @@ impl Stack {
     /// Send a frame: to ourselves through the local queue, otherwise out of
     /// the device.
     fn tx(&mut self, frame: &[u8]) {
+        self.frames_tx += 1;
         if frame.len() >= 6 && frame[..6] == self.device.mac() {
             self.local.push_back(frame.to_vec());
         } else {
@@ -126,6 +131,7 @@ pub fn attach(device: alloc::boxed::Box<dyn NetDevice>, ip: Ipv4Addr) {
     stack.device = device;
     stack.ip = ip;
     stack.arp = vec![(ip, mac)];
+    stack.attached = true;
 }
 
 /// Set the default route (from DHCP): `gateway` for everything outside
@@ -177,7 +183,94 @@ pub fn init(ip: Ipv4Addr) {
         udp_rx: 0,
         gateway: [0; 4],
         mask: [255, 255, 255, 0],
+        attached: false,
+        frames_tx: 0,
+        frames_rx: 0,
     });
+}
+
+/// What `ipconfig` shows.
+pub struct NetInfo {
+    pub mac: MacAddr,
+    pub ip: Ipv4Addr,
+    pub mask: Ipv4Addr,
+    pub gateway: Ipv4Addr,
+    pub attached: bool,
+    pub frames_tx: u64,
+    pub frames_rx: u64,
+    pub udp_tx: u64,
+    pub udp_rx: u64,
+    pub icmp_replies: u64,
+    pub arp: Vec<(Ipv4Addr, MacAddr)>,
+    pub udp_ports: Vec<u16>,
+}
+
+pub fn info() -> Option<NetInfo> {
+    let guard = STACK.lock();
+    let s = guard.as_ref()?;
+    Some(NetInfo {
+        mac: s.device.mac(),
+        ip: s.ip,
+        mask: s.mask,
+        gateway: s.gateway,
+        attached: s.attached,
+        frames_tx: s.frames_tx,
+        frames_rx: s.frames_rx,
+        udp_tx: s.udp_tx,
+        udp_rx: s.udp_rx,
+        icmp_replies: s.icmp_replies,
+        arp: s.arp.clone(),
+        udp_ports: s.sockets.iter().filter(|u| u.bound).map(|u| u.port).collect(),
+    })
+}
+
+/// "52:54:00:12:34:56".
+pub fn fmt_mac(m: MacAddr) -> alloc::string::String {
+    alloc::format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
+}
+
+/// "10.0.2.15" -> address.
+pub fn parse_ip(s: &str) -> Option<Ipv4Addr> {
+    let mut ip = [0u8; 4];
+    let mut parts = s.trim().split('.');
+    for b in ip.iter_mut() {
+        *b = parts.next()?.parse().ok()?;
+    }
+    parts.next().is_none().then_some(ip)
+}
+
+/// One ICMP echo to `dest`; the round trip in microseconds, or None after
+/// `timeout_ms` (ARPs for the next hop first when its MAC is unknown).
+pub fn ping_once(dest: Ipv4Addr, seq: u16, timeout_ms: u64) -> Option<u64> {
+    let hop_known = {
+        let guard = STACK.lock();
+        let s = guard.as_ref()?;
+        dest == s.ip || s.next_hop_mac(dest) != [0xFF; ETH_ALEN]
+    };
+    if !hop_known {
+        let (mask, gw, ip) = {
+            let guard = STACK.lock();
+            let s = guard.as_ref()?;
+            (s.mask, s.gateway, s.ip)
+        };
+        let off_link = gw != [0; 4] && (0..4).any(|i| dest[i] & mask[i] != ip[i] & mask[i]);
+        arp_request(if off_link { gw } else { dest });
+        let t = crate::arch::cpu::nanos();
+        while crate::arch::cpu::nanos() - t < 300_000_000 {
+            poll();
+        }
+    }
+    let before = counters().0;
+    let t0 = crate::arch::cpu::nanos();
+    send_ping(dest, 0xB2B2, seq);
+    while crate::arch::cpu::nanos() - t0 < timeout_ms * 1_000_000 {
+        poll();
+        if counters().0 > before {
+            return Some((crate::arch::cpu::nanos() - t0) / 1000);
+        }
+        core::hint::spin_loop();
+    }
+    None
 }
 
 /// The interface address, or `None` if the stack is down.
@@ -435,6 +528,9 @@ pub fn poll() -> usize {
             }
         };
         let Some(frame) = frame else { break };
+        if let Some(s) = STACK.lock().as_mut() {
+            s.frames_rx += 1;
+        }
         handle_frame(&frame);
         handled += 1;
     }

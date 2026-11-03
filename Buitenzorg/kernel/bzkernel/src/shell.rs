@@ -24,6 +24,101 @@ pub enum Effect {
     Redraw, // theme/workspace changed; recompose the desktop
 }
 
+// ---- network commands -------------------------------------------------------
+
+fn ipconfig() -> Vec<String> {
+    use crate::net::{fmt_ip, fmt_mac};
+    let Some(i) = crate::net::info() else { return vec![String::from("jaringan: tidak aktif")] };
+    let prefix: u32 = i.mask.iter().map(|b| b.count_ones()).sum();
+    let mut out = vec![
+        format!("{}  {}", if i.attached { "eth0" } else { "lo  " }, if i.attached { "(kartu jaringan)" } else { "(loopback -- tidak ada kartu jaringan)" }),
+        format!("      MAC          {}", fmt_mac(i.mac)),
+        format!("      IPv4         {}/{}", fmt_ip(i.ip), prefix),
+        format!("      netmask      {}", fmt_ip(i.mask)),
+        format!("      gateway      {}", if i.gateway == [0; 4] { String::from("-") } else { fmt_ip(i.gateway) }),
+        String::from("      DNS          - (belum ada resolver)"),
+        format!("      frame        {} terkirim, {} diterima", i.frames_tx, i.frames_rx),
+        format!("      UDP          {} terkirim, {} diterima; ICMP balasan {}", i.udp_tx, i.udp_rx, i.icmp_replies),
+    ];
+    let (ssh_on, _, _) = crate::ssh::status();
+    let (dep_on, code, _) = crate::deploy::status();
+    out.push(format!(
+        "      layanan      ssh {}, deploy {}",
+        if ssh_on { "aktif (tcp/22)" } else { "mati" },
+        if dep_on { format!("aktif (udp/{}, kode {:04})", crate::deploy::PORT, code) } else { String::from("mati") }
+    ));
+    out
+}
+
+fn ping(args: &[&str]) -> Vec<String> {
+    let Some(dest) = args.first().and_then(|a| crate::net::parse_ip(a)) else {
+        return vec![String::from("pakai: ping <alamat-ip> [jumlah]   (mis. ping 10.0.2.2)")];
+    };
+    let n = args.get(1).and_then(|c| c.parse::<u16>().ok()).unwrap_or(4).clamp(1, 20);
+    let ip = crate::net::fmt_ip(dest);
+    let mut out = vec![format!("PING {} ({} kali)", ip, n)];
+    let (mut ok, mut sum, mut min, mut max) = (0u32, 0u64, u64::MAX, 0u64);
+    for seq in 1..=n {
+        match crate::net::ping_once(dest, seq, 1000) {
+            Some(us) => {
+                ok += 1;
+                sum += us;
+                min = min.min(us);
+                max = max.max(us);
+                out.push(format!("balasan dari {}: seq={} waktu={}.{:03} ms", ip, seq, us / 1000, us % 1000));
+            }
+            None => out.push(format!("seq={}: tidak ada balasan (1 detik)", seq)),
+        }
+    }
+    let loss = (n as u32 - ok) * 100 / n as u32;
+    out.push(format!("--- {}: {} terkirim, {} diterima, {}% hilang", ip, n, ok, loss));
+    if ok > 0 {
+        out.push(format!("waktu min/rata/maks = {}.{:03} / {}.{:03} / {}.{:03} ms",
+            min / 1000, min % 1000, sum / ok as u64 / 1000, sum / ok as u64 % 1000, max / 1000, max % 1000));
+    }
+    out
+}
+
+fn arp() -> Vec<String> {
+    let Some(i) = crate::net::info() else { return vec![String::from("jaringan: tidak aktif")] };
+    let mut out = vec![String::from("alamat IP          alamat MAC")];
+    for (ip, mac) in i.arp {
+        out.push(format!("{:<18} {}{}", crate::net::fmt_ip(ip), crate::net::fmt_mac(mac), if ip == i.ip { "  (perangkat ini)" } else { "" }));
+    }
+    out
+}
+
+fn route() -> Vec<String> {
+    let Some(i) = crate::net::info() else { return vec![String::from("jaringan: tidak aktif")] };
+    let net: [u8; 4] = core::array::from_fn(|k| i.ip[k] & i.mask[k]);
+    let mut out = vec![
+        String::from("tujuan             netmask            gateway            antarmuka"),
+        format!("{:<18} {:<18} {:<18} {}", crate::net::fmt_ip(net), crate::net::fmt_ip(i.mask), "langsung", if i.attached { "eth0" } else { "lo" }),
+    ];
+    if i.gateway != [0; 4] {
+        out.push(format!("{:<18} {:<18} {:<18} {}", "0.0.0.0", "0.0.0.0", crate::net::fmt_ip(i.gateway), if i.attached { "eth0" } else { "lo" }));
+    }
+    out
+}
+
+fn netstat() -> Vec<String> {
+    let (conns, listeners) = crate::tcp::snapshot();
+    let mut out = vec![String::from("proto  lokal            jarak jauh           status")];
+    for p in listeners {
+        out.push(format!("tcp    *:{:<14} *:*                  LISTEN", p));
+    }
+    for (lp, rip, rp, st) in conns {
+        let remote = format!("{}:{}", crate::net::fmt_ip(rip), rp);
+        out.push(format!("tcp    *:{:<14} {:<20} {:?}", lp, remote, st));
+    }
+    if let Some(i) = crate::net::info() {
+        for p in i.udp_ports {
+            out.push(format!("udp    *:{:<14} *:*", p));
+        }
+    }
+    out
+}
+
 /// `ssh [on | off]`: the SSH server (port 22, accounts from Pengaturan > Pengguna).
 fn ssh_cmd(arg: Option<&str>) -> Vec<String> {
     match arg {
@@ -123,6 +218,16 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
         "deploy" => (deploy_cmd(&args), Effect::None),
         "ssh" | "sshd" => (ssh_cmd(args.first().copied()), Effect::None),
+        "ipconfig" | "ifconfig" | "ip" => (ipconfig(), Effect::None),
+        "ping" => (ping(&args), Effect::None),
+        "arp" => (arp(), Effect::None),
+        "route" => (route(), Effect::None),
+        "netstat" => (netstat(), Effect::None),
+        "hostname" => (vec![String::from("buitenzorg")], Effect::None),
+        "nslookup" | "dig" | "host" => (
+            vec![String::from("nslookup: belum ada DNS resolver -- pakai alamat IP (mis. ping 10.0.2.2)")],
+            Effect::None,
+        ),
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
         "cursor" => cursor_cmd(args.first().copied()),
@@ -194,6 +299,9 @@ fn help() -> Vec<String> {
      "  kill <pid>        hentikan proses app",
      "  deploy on|off     terima app dari Magic App Generator (UDP 7070)",
      "  ssh on|off        server SSH (port 22) untuk akses jarak jauh",
+     "  ipconfig          alamat IP, MAC, gateway, statistik jaringan",
+     "  ping <ip> [n]     uji koneksi (ICMP echo)",
+     "  arp, route, netstat, hostname   tabel ARP, rute, koneksi",
      "  ask <prompt>      AI: lengkapi teks (LLM lokal)",
      "  vm <sub>          virtualisasi (list/create/start/snapshot/restore)",
      "  script <lang> [f] polyglot: js|ts|py (jalankan demo/file)",
@@ -725,6 +833,8 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
                 crate::profile::disable();
             }
             crate::profile::report();
+            let (wr, sk) = crate::framebuffer::present_stats();
+            crate::println!("[profile] present tiles since boot: {} written, {} unchanged and skipped", wr, sk);
             (
                 vec![
                     format!("profiler: sampled {} zone(s)", crate::profile::zone_count()),

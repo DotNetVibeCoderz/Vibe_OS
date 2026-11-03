@@ -84,7 +84,7 @@
 - [x] FAT12/16/32 read + **write** (FAT12/16/32 sejak 2026-11-01; teruji lintas reboot)
 - [x] Service/init manager (parallel, dependency-aware)
 - [~] Async I/O io_uring-style (SQ/CQ + benchmark) — *zero-copy & syscall submit belum*
-- [~] Networking (Ethernet/ARP/IPv4/ICMP loopback) — *TCP/UDP & driver NIC belum*
+- [~] Networking: Ethernet/ARP/IPv4/ICMP/UDP/TCP, virtio-net + GENET (Pi 4), DHCP, SNTP, SSH; perintah terminal `ipconfig`/`ping`/`arp`/`route`/`netstat`/`hostname` (2026-11-03) — *DNS, WiFi, e1000 belum*
 - [ ] Filesystem kustom journaled · [ ] permission broker · [x] package manager (`pkg.rs`, v0.10)
 
 ### 🖼️ Graphics & Window System
@@ -453,6 +453,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 - **Game 3D**
   - [ ] Rasterizer software `Buitenzorg.Graphics3D`: math vektor/matriks, perspektif, clipping, z-buffer, culling, texture mapping, shading, loader OBJ/glTF
   - [ ] Demo: raycaster gaya Wolfenstein · kubus bertekstur berputar
+  - [x] **G1 langkah 1 — compositor cepat:** present per ubin 64 px berbasis hash (hanya ubin berubah ditulis), blit kanvas per baris + clipping, bayangan/badan jendela hanya area terlihat → frame desktop ×3,5 lebih murah (x86 TCG 786M → 223M siklus) · [ ] sisa G1: cache taskbar/ikon, frame hanya-kursor, permukaan shared-memory, komposisi paralel · referensi SDK 3D terkelola: ThreeNet (G3)
   - [ ] GPU: virtio-gpu 2D → virgl 3D → API gaya Vulkan/WebGPU `Buitenzorg.GPU` (+ `compute.rs` `Backend::Gpu`) · [ ] driver GPU nyata (Intel dulu)
   - [ ] Engine: scene graph · animasi skeletal · fisika rigid body · audio 3D posisional
   - [ ] Lapisan libc (musl/newlib) + subset SDL2 → **port DOOM**
