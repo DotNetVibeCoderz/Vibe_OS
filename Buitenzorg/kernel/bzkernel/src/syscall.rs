@@ -132,6 +132,7 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FS_WRITE
             | sysno::FS_OP
             | sysno::USER_OP
+            | sysno::GFX3D
             | sysno::PROC_SPAWN
             | sysno::PROC_WAIT
             | sysno::NET_SOCKET
@@ -345,6 +346,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
         sysno::FS_OP => sys_fs_op(a0, a1, a2),
         sysno::USER_OP => sys_user_op(a0, a1, a2),
+        sysno::GFX3D => sys_gfx3d(a0),
         sysno::CLOCK_RTC => sys_clock_rtc(a0),
         sysno::NET_SOCKET => sys_net_socket(a0),
         sysno::NET_BIND => sys_net_bind(a0, a1),
@@ -398,6 +400,116 @@ fn sys_fs_list(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
         n += 1;
     }
     n as u64
+}
+
+/// GFX3D: the 3D API (`bz_abi::gfx3d_op`, `gfx3d.rs`). Every data block is
+/// validated and copied into the kernel (never a slice over user memory);
+/// the f32s are converted to fixed point by `gfx3d` without floating point.
+fn sys_gfx3d(cmd_ptr: u64) -> u64 {
+    use bz_abi::{gfx3d_op as op, Gfx3dCmd};
+    let size = core::mem::size_of::<Gfx3dCmd>() as u64;
+    if !user_read(cmd_ptr, size) {
+        return syserr::INVAL;
+    }
+    let raw = copy_user_bytes(cmd_ptr, size as usize);
+    if raw.len() != size as usize {
+        return syserr::INVAL;
+    }
+    let u32_at = |o: usize| u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
+    let u64_at = |o: usize| u64::from_le_bytes(raw[o..o + 8].try_into().unwrap());
+    let c = Gfx3dCmd {
+        op: u32_at(0),
+        target: u32_at(4),
+        a: u32_at(8),
+        b: u32_at(12),
+        c: u32_at(16),
+        d: u32_at(20),
+        ptr: u64_at(24),
+        len: u64_at(32),
+        ptr2: u64_at(40),
+        len2: u64_at(48),
+    };
+    let owner = task::current_space().id;
+    // a block of `n` 32-bit words at `ptr`, validated and copied
+    let words = |ptr: u64, n: usize| -> Option<alloc::vec::Vec<u32>> {
+        let bytes = (n as u64).checked_mul(4)?;
+        if n == 0 || !user_read(ptr, bytes) {
+            return None;
+        }
+        let b = copy_user_bytes(ptr, bytes as usize);
+        (b.len() == bytes as usize).then(|| b.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])).collect())
+    };
+    let r: Result<u64, &'static str> = match c.op {
+        op::CREATE => crate::gfx3d::create(owner, c.a, c.b).map(|id| id as u64),
+        op::FREE => {
+            if crate::gfx3d::free(owner, c.target) { Ok(0) } else { Err("no such resource") }
+        }
+        op::CLEAR => crate::gfx3d::clear(owner, c.target, c.a, c.b).map(|_| 0),
+        op::MESH => {
+            let (nv, ni) = (c.a as usize, c.b as usize);
+            if nv > crate::gfx3d::MAX_VERTICES || ni > crate::gfx3d::MAX_INDICES {
+                return syserr::INVAL;
+            }
+            let vb = nv as u64 * core::mem::size_of::<bz_abi::Vertex3D>() as u64;
+            if nv == 0 || !user_read(c.ptr, vb) {
+                return syserr::INVAL;
+            }
+            let raw = copy_user_bytes(c.ptr, vb as usize);
+            if raw.len() != vb as usize {
+                return syserr::INVAL;
+            }
+            let v = raw.chunks_exact(40).map(crate::gfx3d::Vtx::from_bytes).collect();
+            let idx = if ni == 0 { alloc::vec::Vec::new() } else { match words(c.ptr2, ni) { Some(w) => w, None => return syserr::INVAL } };
+            crate::gfx3d::mesh(owner, v, idx).map(|id| id as u64)
+        }
+        op::TEXTURE => {
+            if c.a == 0 || c.b == 0 || c.a > crate::gfx3d::MAX_DIM || c.b > crate::gfx3d::MAX_DIM {
+                return syserr::INVAL;
+            }
+            match words(c.ptr, (c.a * c.b) as usize) {
+                Some(px) => crate::gfx3d::texture(owner, c.a, c.b, px).map(|id| id as u64),
+                None => return syserr::INVAL,
+            }
+        }
+        op::LIGHTS => {
+            let n = (c.len / 4).min((bz_abi::gfx3d_light::LIGHTS + bz_abi::gfx3d_light::STRIDE * bz_abi::gfx3d_light::MAX_LIGHTS) as u64) as usize;
+            match words(c.ptr, n) {
+                Some(b) => crate::gfx3d::set_lighting(owner, c.target, crate::gfx3d::Lighting::from_f32(&b)).map(|_| 0),
+                None => return syserr::INVAL,
+            }
+        }
+        op::DRAW => {
+            let Some(m) = words(c.ptr, 32) else { return syserr::INVAL };
+            let mut model = [0i64; 16];
+            let mut vp = [0i64; 16];
+            for i in 0..16 {
+                model[i] = crate::gfx3d::fx(m[i]);
+                vp[i] = crate::gfx3d::fx(m[16 + i]);
+            }
+            crate::gfx3d::draw(owner, c.target, c.a, c.b, c.c, c.d, model, vp).map(|(t, p)| (p as u64) << 32 | t as u64)
+        }
+        op::PRESENT => crate::gfx3d::present(owner, c.target, c.a, c.b as i32, c.c as i32).map(|_| 0),
+        op::READ_PIXEL => crate::gfx3d::read_pixel(owner, c.target, c.a, c.b).map(|p| p as u64),
+        op::READ => {
+            let r = crate::gfx3d::with_color(owner, c.target, |w, h, px| {
+                let need = w as u64 * h as u64 * 4;
+                if c.len < need || !user_write(c.ptr, need) {
+                    return false;
+                }
+                let out = c.ptr as *mut u32;
+                for (i, p) in px.iter().enumerate() {
+                    unsafe { out.add(i).write_volatile(*p) };
+                }
+                true
+            });
+            match r {
+                Ok(true) => Ok(0),
+                _ => Err("read refused"),
+            }
+        }
+        _ => Err("unknown op"),
+    };
+    r.unwrap_or(syserr::INVAL)
 }
 
 /// USER_OP: accounts (see `bz_abi::user_op`, `users.rs`).

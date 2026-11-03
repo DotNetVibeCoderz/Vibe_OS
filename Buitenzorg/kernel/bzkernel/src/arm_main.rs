@@ -76,6 +76,7 @@ mod tcp;
 mod rng;
 mod ssh;
 mod wm;
+mod gfx3d;
 
 pub(crate) use arch::aarch64::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::virt::pl011 as serial;
@@ -924,6 +925,8 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     } else {
         println!("[kernel] security self-test FAILED");
     }
+    // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
+    gfx3d::self_test();
 
     let method = fdt
         .and_then(|f| f.find_path("/psci").map(|i| f.nodes[i].strings("method").next().unwrap_or("").into()))

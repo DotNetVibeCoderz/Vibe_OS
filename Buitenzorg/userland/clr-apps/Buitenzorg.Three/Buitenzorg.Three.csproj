@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Buitenzorg.Three: a ThreeNet / three.js-style scene graph (scene, nodes,
+       geometry, materials, lights, cameras, renderer) over Buitenzorg.Graphics3D,
+       the kernel's 3D rasterizer (/disk/BZTHREE.DLL). -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Buitenzorg.Three</AssemblyName>
+    <RootNamespace>Buitenzorg.Three</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.App\Buitenzorg.App.csproj" />
+  </ItemGroup>
+</Project>

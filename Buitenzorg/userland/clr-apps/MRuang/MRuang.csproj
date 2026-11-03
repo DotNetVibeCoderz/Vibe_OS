@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Ruang 3D (G3 demo): /disk/MRUANG.DLL, `run mruang`. Buitenzorg.UI +
+       Buitenzorg.Three over the kernel's 3D rasterizer. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MRuang</AssemblyName>
+    <RootNamespace>MRuang</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+    <ProjectReference Include="..\Buitenzorg.Three\Buitenzorg.Three.csproj" />
+  </ItemGroup>
+</Project>

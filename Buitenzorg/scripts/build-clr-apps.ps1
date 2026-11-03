@@ -8,7 +8,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $apps = Join-Path $root "userland\clr-apps"
 $dist = Join-Path $apps "dist"
 New-Item -ItemType Directory -Force $dist | Out-Null
-$names = @{ "HelloClr" = "HELLOCLR.DLL"; "Buitenzorg.App" = "BZAPP.DLL"; "Buitenzorg.UI" = "BZUI.DLL"; "HelloGui" = "HELLOGUI.DLL" }
+$names = @{ "HelloClr" = "HELLOCLR.DLL"; "Buitenzorg.App" = "BZAPP.DLL"; "Buitenzorg.UI" = "BZUI.DLL"; "HelloGui" = "HELLOGUI.DLL"; "Buitenzorg.Three" = "BZTHREE.DLL" }
 foreach ($proj in Get-ChildItem -Path $apps -Filter *.csproj -Recurse) {
     $name = $proj.BaseName
     $out = if ($names.ContainsKey($name)) { $names[$name] } else { ($name.Substring(0, [Math]::Min(8, $name.Length))).ToUpper() + ".DLL" }

@@ -76,6 +76,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 53 | `SETTING` | `setting_op` (0 get, 1 set, 2 count, 3 name, 4 description) | `setting_key` (\| index << 16 for name / description) | value / count / text length; 0 after set (a2 = value or 64-byte buffer) |
 | 54 | `FS_OP` | `fs_op` (0 mkdir, 1 remove, 2 rename/move, 3 stat) | path (NUL-terminated, absolute, folders allowed) | 0 or `INVAL`; a2 = second path (rename) or, for stat, a pointer to 4 u64: size, is-folder, FAT date << 16 \| time, 0 |
 | 55 | `USER_OP` | `user_op` (0 list, 1 verify, 2 add, 3 remove, 4 passwd, 5 reset, 6 avatar) | request: NUL-terminated `\n`-separated fields (see `user_op`) | 0 or `INVAL`; list writes `name\tadmin\tavatar\n` lines into a2 (2048 bytes) and returns their length. Changing accounts needs an administrator's password (own password: the current one); passwords are PBKDF2-HMAC-SHA256 with salt in `/disk/USERS.CFG` |
+| 56 | `GFX3D` | pointer to a `Gfx3dCmd` | — | new resource id (CREATE / MESH / TEXTURE), `pixels << 32 \| triangles` (DRAW), a pixel (READ_PIXEL), 0, or `INVAL`. The 3D API (G3): see **3D (GFX3D)** below |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
@@ -266,6 +267,46 @@ under-voltage, 1 frequency capped, 2 throttled, 3 soft temperature limit; +16 =
 GPIO 0-27 except 14/15 (the serial console) and GPIO 42 (the activity LED); others
 are refused with `INVAL`. Serial ports 2-5 are the Pi 4's extra PL011 UARTs (TX/RX
 on GPIO 0/1, 4/5, 8/9, 12/13).
+
+**3D (GFX3D, G3).** One syscall, `a0` = a `Gfx3dCmd` — `#[repr(C)]`, **56
+bytes**: `op:u32, target:u32, a:u32, b:u32, c:u32, d:u32, ptr:u64, len:u64,
+ptr2:u64, len2:u64`. `gfx3d_op`:
+
+| op | name | parameters | result |
+|---|---|---|---|
+| 0 | `CREATE` | `a` width, `b` height (1..=1024) | context id (color + 24-bit depth buffer) |
+| 1 | `FREE` | `target` = context, mesh or texture | 0 |
+| 2 | `CLEAR` | `target`, `a` = 0xRRGGBB, `b` = `gfx3d_clear` (1 color, 2 depth) | 0 |
+| 3 | `MESH` | `a` vertex count, `ptr` = `Vertex3D[a]`, `b` index count (multiple of 3), `ptr2` = `u32[b]` | mesh id |
+| 4 | `TEXTURE` | `a` width, `b` height (1..=1024), `ptr` = 0xAARRGGBB `u32[a*b]`, top row first | texture id |
+| 5 | `LIGHTS` | `target`, `ptr` = `f32` block (`gfx3d_light`), `len` bytes | 0 |
+| 6 | `DRAW` | `target`, `a` mesh, `b` texture (0 none), `c` = `gfx3d_flags`, `d` = material 0xAARRGGBB, `ptr` = 32 `f32`: model then view-projection, row-major, column vectors | `pixels << 32 \| triangles` |
+| 7 | `PRESENT` | `target`, `a` window, `b`/`c` = client x/y (`i32`) | 0 (WIN_PRESENT then shows it) |
+| 8 | `READ_PIXEL` | `target`, `a` x, `b` y | 0x00RRGGBB |
+| 9 | `READ` | `target`, `ptr` = `u32[w*h]` out, `len` bytes | 0 |
+
+`Vertex3D` — `#[repr(C)]`, **40 bytes**, 4-byte aligned (an array element):
+`x, y, z, nx, ny, nz, u, v: f32, color: u32` (0xAARRGGBB, multiplied with the
+material color), `_reserved: u32`. Texture coordinates repeat outside 0..1; `v = 0` is
+the top row. Clip space is OpenGL's (z in -w..w); counter-clockwise triangles
+face the viewer and back faces are culled unless `DOUBLE_SIDED`.
+
+`gfx3d_flags`: shading `0 UNLIT`, `1 LAMBERT`, `2 PHONG` (mask 3; per-vertex
+lighting, Gouraud), `4 DOUBLE_SIDED`, `8 WIREFRAME`, `16 NO_DEPTH_TEST`,
+`32 NO_DEPTH_WRITE`, `64 BLEND` (material alpha), bits 8-15 specular exponent
+(0 = 32), bits 16-23 specular strength (0 = 128).
+
+`gfx3d_light` block (`f32` indices): `0..3` ambient rgb (0..1), `3..6` eye
+position, `6..9` fog color, `9` fog start, `10` fog end (off unless end > start;
+distances from the eye), `11` light count (<= 8), then from `12` one block of 8
+per light: kind (0 directional, 1 point), x, y, z (directional: the direction
+the light travels; point: its position), r, g, b (color x intensity), range
+(point: fade-out distance, 0 = never).
+
+Every resource belongs to the calling process and is freed when it exits; all of
+them together are capped at 8 MiB (`gfx3d::BUDGET`). The kernel converts the
+`f32`s to 16.16 fixed point without floating point (the kernels are soft-float)
+and rasterizes in integers.
 
 ## Implementation status
 

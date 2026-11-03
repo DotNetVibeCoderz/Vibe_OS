@@ -218,8 +218,109 @@ pub mod sysno {
     /// `a2` = the output buffer (LIST, 2048 bytes: one `name\tadmin\tavatar\n`
     /// line per account). Returns 0 (LIST: bytes written) or `syserr::INVAL`.
     pub const USER_OP: u64 = 55;
+    /// 3D rendering (G3, `Buitenzorg.Graphics3D`): `a0` = a pointer to a
+    /// [`crate::Gfx3dCmd`] whose `op` is a [`crate::gfx3d_op`]. Returns a new
+    /// resource id (CREATE / MESH / TEXTURE), DRAW statistics
+    /// (pixels << 32 | triangles), a pixel (READ_PIXEL), 0, or `syserr::INVAL`.
+    pub const GFX3D: u64 = 56;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 56;
+    pub const COUNT: u64 = 57;
+}
+
+/// Operations of the [`sysno::GFX3D`] syscall ([`Gfx3dCmd::op`]). Every
+/// resource belongs to the process that made it and is freed when it exits.
+pub mod gfx3d_op {
+    /// A render context (color + depth buffer): `a` = width, `b` = height
+    /// (1..=1024 each). Returns its id.
+    pub const CREATE: u32 = 0;
+    /// Free the context, mesh or texture `target`.
+    pub const FREE: u32 = 1;
+    /// Clear context `target`: `a` = 0xRRGGBB color, `b` = [`super::gfx3d_clear`] bits.
+    pub const CLEAR: u32 = 2;
+    /// A mesh (vertex + index buffer): `a` = vertex count, `ptr` = that many
+    /// [`super::Vertex3D`], `b` = index count (a multiple of 3, triangles),
+    /// `ptr2` = that many `u32` indices. Returns its id.
+    pub const MESH: u32 = 3;
+    /// A texture: `a` = width, `b` = height (1..=1024), `ptr` = w*h 0xAARRGGBB
+    /// pixels, top row first. Returns its id.
+    pub const TEXTURE: u32 = 4;
+    /// Lighting, fog and eye position of context `target`: `ptr` = `f32`s laid
+    /// out as in [`super::gfx3d_light`], `len` = their size in bytes.
+    pub const LIGHTS: u32 = 5;
+    /// Draw mesh `a` into context `target` with texture `b` (0 = none),
+    /// `c` = [`super::gfx3d_flags`], `d` = material color 0xAARRGGBB (alpha =
+    /// opacity with BLEND), `ptr` = 32 `f32`s: the model matrix then the
+    /// view-projection matrix, each row-major (translation in elements 3, 7,
+    /// 11), applied to column vectors; clip space is OpenGL's (z in -w..w,
+    /// counter-clockwise front faces). Returns pixels << 32 | triangles drawn.
+    pub const DRAW: u32 = 6;
+    /// Copy context `target`'s color buffer into window `a` at client
+    /// position (`b`, `c`) (as `i32`); WIN_PRESENT then shows it.
+    pub const PRESENT: u32 = 7;
+    /// The 0x00RRGGBB pixel at (`a`, `b`) of context `target`.
+    pub const READ_PIXEL: u32 = 8;
+    /// Copy context `target`'s color buffer (w*h `u32`, top row first) to
+    /// `ptr` (`len` bytes, at least w*h*4).
+    pub const READ: u32 = 9;
+}
+
+/// [`gfx3d_op::CLEAR`] bits.
+pub mod gfx3d_clear {
+    /// Fill the color buffer.
+    pub const COLOR: u32 = 1;
+    /// Reset the depth buffer to the far plane.
+    pub const DEPTH: u32 = 2;
+}
+
+/// [`gfx3d_op::DRAW`] flags.
+pub mod gfx3d_flags {
+    /// Shading model (mask): color as given, no lights (three.js Basic).
+    pub const UNLIT: u32 = 0;
+    /// Diffuse per-vertex lighting (Lambert, Gouraud-interpolated).
+    pub const LAMBERT: u32 = 1;
+    /// Diffuse + Blinn-Phong specular per vertex.
+    pub const PHONG: u32 = 2;
+    /// Mask of the shading model.
+    pub const SHADING_MASK: u32 = 3;
+    /// Draw back faces too (no culling).
+    pub const DOUBLE_SIDED: u32 = 4;
+    /// Draw the triangle edges only.
+    pub const WIREFRAME: u32 = 8;
+    /// Ignore the depth buffer.
+    pub const NO_DEPTH_TEST: u32 = 16;
+    /// Do not update the depth buffer.
+    pub const NO_DEPTH_WRITE: u32 = 32;
+    /// Blend over the color buffer with the material alpha.
+    pub const BLEND: u32 = 64;
+    /// Bits 8-15: specular exponent (PHONG; 0 = 32).
+    pub const SHININESS_SHIFT: u32 = 8;
+    /// Bits 16-23: specular strength 0-255 (PHONG; 0 = 128).
+    pub const SPECULAR_SHIFT: u32 = 16;
+}
+
+/// Layout of the [`gfx3d_op::LIGHTS`] block (indices of `f32`s).
+pub mod gfx3d_light {
+    /// Ambient light r, g, b (0..1 = none..full).
+    pub const AMBIENT: usize = 0;
+    /// Eye (camera) position x, y, z, for specular highlights.
+    pub const EYE: usize = 3;
+    /// Fog color r, g, b (0..1).
+    pub const FOG_COLOR: usize = 6;
+    /// Distance where fog starts.
+    pub const FOG_START: usize = 9;
+    /// Distance where fog is complete (fog is off when not beyond FOG_START).
+    pub const FOG_END: usize = 10;
+    /// Number of lights that follow (at most [`MAX_LIGHTS`]).
+    pub const COUNT: usize = 11;
+    /// First light; each takes [`STRIDE`] floats: kind (0 directional,
+    /// 1 point), x, y, z (directional: the direction the light travels;
+    /// point: its position), r, g, b (color times intensity), range (point:
+    /// distance where it fades out, 0 = never).
+    pub const LIGHTS: usize = 12;
+    /// Floats per light.
+    pub const STRIDE: usize = 8;
+    /// Lights a context can hold.
+    pub const MAX_LIGHTS: usize = 8;
 }
 
 /// Operations of the [`sysno::USER_OP`] syscall (request fields in order).
@@ -659,6 +760,62 @@ pub struct HwTransfer {
     pub rx_len: u64,
 }
 
+/// One [`sysno::GFX3D`] request.
+///
+/// C# mirror: `Buitenzorg.Runtime.Sys.Gfx3dCmd` (Sequential, Pack = 8).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Gfx3dCmd {
+    /// A [`gfx3d_op`].
+    pub op: u32,
+    /// The context / resource the operation acts on.
+    pub target: u32,
+    /// First operation parameter (see [`gfx3d_op`]).
+    pub a: u32,
+    /// Second operation parameter.
+    pub b: u32,
+    /// Third operation parameter.
+    pub c: u32,
+    /// Fourth operation parameter.
+    pub d: u32,
+    /// First data block (user pointer).
+    pub ptr: u64,
+    /// Size of the first data block in bytes.
+    pub len: u64,
+    /// Second data block (user pointer).
+    pub ptr2: u64,
+    /// Size of the second data block in bytes.
+    pub len2: u64,
+}
+
+/// One vertex of a [`gfx3d_op::MESH`] (an array element, 40 bytes).
+///
+/// C# mirror: `Buitenzorg.Runtime.Sys.Vertex3D` (Sequential).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Vertex3D {
+    /// Position x.
+    pub x: f32,
+    /// Position y.
+    pub y: f32,
+    /// Position z.
+    pub z: f32,
+    /// Normal x (the normal need not be unit length).
+    pub nx: f32,
+    /// Normal y.
+    pub ny: f32,
+    /// Normal z.
+    pub nz: f32,
+    /// Texture coordinate u (0..1 across the texture; repeats outside).
+    pub u: f32,
+    /// Texture coordinate v (0 = top row).
+    pub v: f32,
+    /// Vertex color 0xAARRGGBB, multiplied with the material color.
+    pub color: u32,
+    /// Zero.
+    pub _reserved: u32,
+}
+
 /// Interface information and counters for the NET_INFO syscall.
 ///
 /// C# mirror: `Buitenzorg.Runtime.Sys.NetInfo` (Sequential, Pack = 8).
@@ -756,7 +913,10 @@ mod tests {
         assert_eq!(fs_op::STAT, 3);
         assert_eq!(sysno::USER_OP, 55);
         assert_eq!(user_op::AVATAR, 6);
-        assert_eq!(sysno::COUNT, 56);
+        assert_eq!(sysno::GFX3D, 56);
+        assert_eq!(gfx3d_op::READ, 9);
+        assert_eq!(gfx3d_light::LIGHTS, 12);
+        assert_eq!(sysno::COUNT, 57);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -772,7 +932,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 56, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 57, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);
@@ -786,6 +946,11 @@ mod tests {
         assert_eq!(core::mem::size_of::<NetDatagram>(), 16);
         assert_eq!(core::mem::size_of::<NetInfo>(), 48);
         assert_eq!(core::mem::size_of::<HwTransfer>(), 48);
+        assert_eq!(core::mem::size_of::<Gfx3dCmd>(), 56);
+        assert_eq!(core::mem::size_of::<Vertex3D>(), 40);
+        assert_eq!(core::mem::align_of::<Gfx3dCmd>(), 8);
+        // Vertex3D is an array element of f32s / u32s: 4-byte aligned.
+        assert_eq!(core::mem::align_of::<Vertex3D>(), 4);
 
         // Every struct crossing the boundary must be 8-byte aligned so the C#
         // `Pack = 8` mirrors line up field for field.

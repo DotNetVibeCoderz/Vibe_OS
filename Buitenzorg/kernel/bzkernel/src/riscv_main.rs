@@ -75,6 +75,7 @@ mod tcp;
 mod rng;
 mod ssh;
 mod wm;
+mod gfx3d;
 
 pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::virt::goldfish_rtc as rtc;
@@ -897,6 +898,8 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
     } else {
         println!("[kernel] security self-test FAILED");
     }
+    // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
+    gfx3d::self_test();
 
     if power::init("") {
         println!(

@@ -70,7 +70,10 @@ public class AbiContractTests
         Assert.Equal(3ul, FsOp.Stat);
         Assert.Equal(55ul, SyscallNumbers.UserOp);
         Assert.Equal(6ul, UserOp.Avatar);
-        Assert.Equal(56ul, SyscallNumbers.Count);
+        Assert.Equal(56ul, SyscallNumbers.Gfx3d);
+        Assert.Equal(9u, Gfx3dOp.Read);
+        Assert.Equal(12, Gfx3dLight.Lights);
+        Assert.Equal(57ul, SyscallNumbers.Count);
     }
 
     /// <summary>
@@ -83,9 +86,14 @@ public class AbiContractTests
     public void AbiV1IsFrozen()
     {
         Assert.Equal(1ul, Abi.Version);
-        Assert.Equal(56ul, SyscallNumbers.Count);
+        Assert.Equal(57ul, SyscallNumbers.Count);
 
         Assert.Equal(56, Marshal.SizeOf<FramebufferInfo>());
+        Assert.Equal(56, Marshal.SizeOf<Gfx3dCmd>());
+        Assert.Equal(24, (int)Marshal.OffsetOf<Gfx3dCmd>(nameof(Gfx3dCmd.Ptr)));
+        Assert.Equal(40, (int)Marshal.OffsetOf<Gfx3dCmd>(nameof(Gfx3dCmd.Ptr2)));
+        Assert.Equal(40, Marshal.SizeOf<Vertex3D>());
+        Assert.Equal(32, (int)Marshal.OffsetOf<Vertex3D>(nameof(Vertex3D.Color)));
         Assert.Equal(48, Marshal.SizeOf<DrawCmd>());
         Assert.Equal(64, Marshal.SizeOf<ProcInfo>());
         Assert.Equal(48, Marshal.SizeOf<SysStat>());

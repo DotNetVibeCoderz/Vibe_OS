@@ -33,6 +33,7 @@ public static class Folder
         new AppInfo("mclock", "Jam", "Jam, stopwatch, timer, kalender", IconKind.Clock, 0xD3E07A),
         new AppInfo("mimage", "Gambar", "Wallpaper dan foto di /disk", IconKind.Sun, 0xC792EA),
         new AppInfo("mpaint", "Paint", "Menggambar dengan mouse", IconKind.Leaf, 0xE3A6C9),
+        new AppInfo("mruang", "Ruang 3D", "Taman 3D: orbit kamera, lampu, kabut", IconKind.Grid, 0x7CC4A4),
         new AppInfo("mpiano", "Piano", "Satu oktaf, mainkan dengan keyboard", IconKind.Play, 0xB99AE8),
         new AppInfo("mgallery", "Galeri Kontrol", "Semua kontrol Buitenzorg.UI", IconKind.Info, 0xC7A6E0),
         new AppInfo("msetting", "Pengaturan", "Tema, wallpaper, screensaver, suara", IconKind.Gear, 0xD9B38C),
@@ -163,6 +164,7 @@ public static class Folder
         Report(MHwLab.LabApp.SelfTest()); // board I/O: a quick "no board" check off a Raspberry Pi
         Report(MSettings.SettingsApp.SelfTest()); // the SETTING syscall, end to end (restores every value)
         Report(MWaktu.WaktuApp.SelfTest()); // time zone / language / 12-24 h / setting the clock (restores them)
+        Report(MRuang.RuangApp.SelfTest()); // G3: the scene graph through the kernel's 3D rasterizer (GFX3D)
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());

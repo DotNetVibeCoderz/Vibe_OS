@@ -171,6 +171,41 @@ public struct HwTransfer
 }
 
 /// <summary>
+/// Mirror of the Rust <c>bz_abi::Gfx3dCmd</c> (<c>#[repr(C)]</c>, 56 bytes):
+/// one request of the GFX3D syscall.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+public struct Gfx3dCmd
+{
+    /// <summary>A <see cref="Gfx3dOp"/>.</summary>
+    public uint Op;
+    /// <summary>The context / resource the operation acts on.</summary>
+    public uint Target;
+    public uint A;
+    public uint B;
+    public uint C;
+    public uint D;
+    public ulong Ptr;
+    public ulong Len;
+    public ulong Ptr2;
+    public ulong Len2;
+}
+
+/// <summary>
+/// Mirror of the Rust <c>bz_abi::Vertex3D</c> (40 bytes): one mesh vertex.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Vertex3D
+{
+    public float X, Y, Z;
+    public float Nx, Ny, Nz;
+    public float U, V;
+    /// <summary>0xAARRGGBB, multiplied with the material color.</summary>
+    public uint Color;
+    public uint Reserved;
+}
+
+/// <summary>
 /// Mirror of the Rust <c>bz_abi::NetInfo</c> (<c>#[repr(C)]</c>, 48 bytes):
 /// interface address, link state and counters for the NET_INFO syscall.
 /// </summary>

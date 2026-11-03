@@ -244,6 +244,18 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "vm" => vm_cmd(&args),
         "script" | "js" | "ts" | "py" => script_cmd(cmd, &args),
         "prof" | "profile" => prof_cmd(args.first().copied()),
+        "gfx3d" | "3d" => {
+            // gfx3d [test]: the 3D API's resources, or its self-test
+            let mut out = Vec::new();
+            if args.first() == Some(&"test") {
+                let ok = crate::gfx3d::self_test();
+                out.push(String::from(if ok { "self-test 3D: OK (lihat log serial)" } else { "self-test 3D GAGAL (lihat log serial)" }));
+            }
+            let (c, m, t, used, draws, tris, px) = crate::gfx3d::summary();
+            out.push(format!("3D: {} konteks, {} mesh, {} tekstur, {} KiB dari {} KiB", c, m, t, used / 1024, crate::gfx3d::BUDGET / 1024));
+            out.push(format!("   {} draw, {} segitiga, {} piksel sejak boot", draws, tris, px));
+            (out, Effect::None)
+        }
         "shutdown" | "poweroff" => power::shutdown(),
         "restart" | "reboot" => power::restart(),
         "sleep" | "suspend" => {

@@ -34,6 +34,23 @@ Hardening toward a stable x86-64 release.
 - **Faster text and fills (G1, step 3).** Letters are drawn from a glyph
   cache and solid areas are filled with block copies: a desktop frame with
   three text windows composes ~20% faster, and every app's text benefits.
+- **3D graphics (G3, first step).** Apps can draw 3D scenes. The kernel has
+  a 3D renderer that works on every architecture: meshes, textures, depth,
+  lighting (ambient, directional and point lights, highlights), fog,
+  transparency and wireframe, behind one new syscall (`GFX3D`, 56). Managed C#
+  apps use it through `Buitenzorg.Graphics3D` (meshes, textures, matrices) and
+  `Buitenzorg.Three`, a scene graph in the style of ThreeNet / three.js
+  (scene, nodes, box / sphere / cylinder / cone / torus / plane, OBJ models,
+  Basic / Lambert / Phong materials, lights, cameras). The new **Ruang 3D**
+  app (Start menu > Permainan, `run mruang`) shows a small garden you can
+  orbit with the mouse or arrow keys; shell `gfx3d` shows what 3D resources are
+  in use. GPU backends (virgl, Raspberry Pi V3D) come later.
+- **Fixed in the managed runtime (RustCLR `187e842`), found by the 3D work:**
+  a struct's `ToString` that used its own fields crashed when called on a
+  boxed value or through string concatenation; `MathF` and the `float`
+  versions of `Math.Min/Max/Abs/Sign/Clamp` were missing; `List<float>.ToArray()`
+  did not give a real `float[]`; and `GetType()` of an array said `Array`
+  instead of e.g. `Single[]`.
 - **Hardware cursor (G2).** With a virtio GPU the pointer is drawn by the
   GPU itself and only changed rows are transferred to it; on a Raspberry Pi
   the firmware's cursor plane is used when it answers (otherwise the desktop

@@ -744,6 +744,20 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   tekstur, shading sederhana; backend **software rasterizer** dulu (jalan di
   semua arsitektur), lalu **virgl** (QEMU `virtio-gpu-gl`) dan **V3D** Pi 4
   (VideoCore VI, mengikuti driver Mesa `v3d`). Demo: kubus/teapot berputar, game 3D kecil.
+- **Status G3 (2026-11-04, langkah 1 ✓ — rasterizer software):** `gfx3d.rs` di kernel
+  (semua arsitektur): konteks render (warna + depth 24-bit), mesh (vertex/index buffer),
+  tekstur, transformasi model + view-projection, pencahayaan per-vertex (ambient +
+  hingga 8 lampu directional/point, Lambert + Blinn-Phong, Gouraud), kabut linier,
+  clipping homogen (near/far + guard band), rasterizer edge-function 28.4 fixed point
+  dengan aturan top-left, tekstur perspektif-benar, blending, wireframe — semuanya
+  integer (kernel soft-float), satu syscall `GFX3D` (56). Terkelola: `Buitenzorg.Graphics3D`
+  (BZAPP.DLL: `Device3D`, `Mesh3D`, `Texture3D`, `Matrix4`, `Vector3`, `Lighting`) dan
+  **`Buitenzorg.Three`** (BZTHREE.DLL, gaya ThreeNet: `Scene`, `Node`, `Geometry`
+  box/plane/sphere/cylinder/cone/torus/OBJ, `Material` Basic/Lambert/Phong + map +
+  transparan + wireframe, `Light`, `Camera`, `Renderer`). Demo **Ruang 3D** (`mruang`):
+  taman 3D dengan orbit kamera. `MILESTONE: GFX3D OK` di ketiga arsitektur; self-test
+  Ruang 3D (12 cek) ikut `MANAGED APPS OK`. Berikutnya: backend **virgl** (`virtio-gpu-gl`),
+  **V3D** Pi 4, game 3D kecil, picking/raycast, animasi.
 - Prasyarat: FPU/SIMD untuk kode grafis (ring-3), timer resolusi tinggi untuk frame pacing.
 - **Status G1 (2026-11-03, langkah 1 ✓):** present per **ubin 64 px** dengan hash FNV
   (hanya ubin yang berubah ditulis ke framebuffer), `fill_rect` pakai slice fill,

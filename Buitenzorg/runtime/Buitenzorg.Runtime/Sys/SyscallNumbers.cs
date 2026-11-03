@@ -175,8 +175,56 @@ public static class SyscallNumbers
     /// <summary>User accounts: a0 = <see cref="UserOp"/>, a1 = NUL-terminated request of '\n'-separated fields, a2 = output buffer (list).</summary>
     public const ulong UserOp = 55;
 
+    /// <summary>3D rendering (G3): a0 = pointer to a <see cref="Gfx3dCmd"/> whose Op is a <see cref="Gfx3dOp"/>.</summary>
+    public const ulong Gfx3d = 56;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 56;
+    public const ulong Count = 57;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.Gfx3d"/> (bz-abi <c>gfx3d_op</c>).</summary>
+public static class Gfx3dOp
+{
+    public const uint Create = 0;
+    public const uint Free = 1;
+    public const uint Clear = 2;
+    public const uint Mesh = 3;
+    public const uint Texture = 4;
+    public const uint Lights = 5;
+    public const uint Draw = 6;
+    public const uint Present = 7;
+    public const uint ReadPixel = 8;
+    public const uint Read = 9;
+}
+
+/// <summary>Draw flags of <see cref="Gfx3dOp.Draw"/> (bz-abi <c>gfx3d_flags</c>).</summary>
+public static class Gfx3dFlags
+{
+    public const uint Unlit = 0;
+    public const uint Lambert = 1;
+    public const uint Phong = 2;
+    public const uint ShadingMask = 3;
+    public const uint DoubleSided = 4;
+    public const uint Wireframe = 8;
+    public const uint NoDepthTest = 16;
+    public const uint NoDepthWrite = 32;
+    public const uint Blend = 64;
+    public const int ShininessShift = 8;
+    public const int SpecularShift = 16;
+}
+
+/// <summary>Layout (float indices) of the <see cref="Gfx3dOp.Lights"/> block (bz-abi <c>gfx3d_light</c>).</summary>
+public static class Gfx3dLight
+{
+    public const int Ambient = 0;
+    public const int Eye = 3;
+    public const int FogColor = 6;
+    public const int FogStart = 9;
+    public const int FogEnd = 10;
+    public const int Count = 11;
+    public const int Lights = 12;
+    public const int Stride = 8;
+    public const int MaxLights = 8;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.UserOp"/>.</summary>

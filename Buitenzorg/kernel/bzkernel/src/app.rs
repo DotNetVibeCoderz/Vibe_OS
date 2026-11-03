@@ -122,6 +122,8 @@ pub fn process_exited(pid: u64, code: u64) {
 /// tick, or at the end of its syscall). On timeout the space is leaked, never
 /// freed under another CPU's feet.
 fn destroy_when_home(space: aspace::Space) {
+    // 3D contexts, meshes and textures do not live in the address space
+    crate::gfx3d::release(space.id);
     if task::wait_space_stopped(space.id) {
         aspace::destroy(space);
     } else {

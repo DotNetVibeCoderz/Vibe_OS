@@ -73,6 +73,7 @@ mod tcp;
 mod rng;
 mod ssh;
 mod wm;
+mod gfx3d;
 
 use core::panic::PanicInfo;
 
@@ -197,6 +198,8 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     } else {
         println!("[kernel] security self-test FAILED");
     }
+    // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
+    gfx3d::self_test();
 
     // v1.0: instrumented profiler self-test — verifies zone timing records
     // exact call counts and correct relative costs (deterministic, not sampled).

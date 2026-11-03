@@ -23,6 +23,7 @@
 extern crate alloc;
 
 mod bzapi;
+mod g3d;
 mod heap;
 mod sys;
 mod threads;
@@ -128,6 +129,7 @@ extern "C" fn clr_main() -> ! {
     }
     // The OS API for managed apps (Buitenzorg.App's [DllImport("buitenzorg")]).
     bzapi::install(&mut interp);
+    g3d::install(&mut interp);
     // Libraries the program references, from /disk, before the program: a
     // TypeRef binds only to a type the loader already has.
     let dir = path.rsplit_once('/').map(|(d, _)| String::from(d)).unwrap_or_else(|| String::from("/disk"));

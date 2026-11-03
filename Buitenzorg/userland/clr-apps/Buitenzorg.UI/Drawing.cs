@@ -163,6 +163,18 @@ public sealed class DrawingContext
         Ops++;
         if (_win != 0) Native.WinBlit(_win, x, y, w, h, pixels);
     }
+
+    /// <summary>Copy a 3D picture (Buitenzorg.Graphics3D) to (x, y) -- one kernel
+    /// copy from the render context; only when wholly inside the clip. Off the
+    /// device (the simulated rasterizer) the pixels are blitted instead.</summary>
+    public void Present3D(Buitenzorg.Graphics3D.Device3D device, int x, int y)
+    {
+        if (!_clip.Covers(new Rect(x, y, device.Width, device.Height))) return;
+        Ops++;
+        if (_win == 0) return;
+        if (device.IsSimulated) Native.WinBlit(_win, x, y, device.Width, device.Height, device.ReadPixels());
+        else device.PresentTo(_win, x, y);
+    }
 }
 
 /// <summary>A drop shadow (Avalonia BoxShadow): offset, blur radius, color and opacity.</summary>
