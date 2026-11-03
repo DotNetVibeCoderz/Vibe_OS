@@ -36,6 +36,7 @@ public static class Folder
         new AppInfo("mpiano", "Piano", "Satu oktaf, mainkan dengan keyboard", IconKind.Play, 0xB99AE8),
         new AppInfo("mgallery", "Galeri Kontrol", "Semua kontrol Buitenzorg.UI", IconKind.Info, 0xC7A6E0),
         new AppInfo("msetting", "Pengaturan", "Tema, wallpaper, screensaver, suara", IconKind.Gear, 0xD9B38C),
+        new AppInfo("mwaktu", "Tanggal & Waktu", "Atur waktu, zona, bahasa dan format", IconKind.Clock, 0xD3E07A),
         new AppInfo("mhwlab", "Lab Perangkat", "Sensor, LED, GPIO, I2C, SPI (Raspberry Pi)", IconKind.Cpu, 0x9BD08F),
         new AppInfo("hellogui", "Jam Analog", "Demo GUI pertama RustCLR", IconKind.Sun, 0xE3615A),
     };
@@ -161,6 +162,7 @@ public static class Folder
         Report(MNotes.NotesApp.SelfTest());
         Report(MHwLab.LabApp.SelfTest()); // board I/O: a quick "no board" check off a Raspberry Pi
         Report(MSettings.SettingsApp.SelfTest()); // the SETTING syscall, end to end (restores every value)
+        Report(MWaktu.WaktuApp.SelfTest()); // time zone / language / 12-24 h / setting the clock (restores them)
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());

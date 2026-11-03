@@ -3,3 +3,15 @@
 # running on the host. Stable cargo does not support this yet.
 [unstable]
 bindeps = true
+
+# Kernels are soft-float (no SSE / NEON / F-D state is saved for kernel code):
+# the crypto crates must use their portable backends, not SIMD ones (LLVM
+# also refuses vector code on x86_64-unknown-none: "Do not know how to split
+# the result of this operator"). sha2 gets the `force-soft` feature in
+# bzkernel/Cargo.toml.
+[target.x86_64-unknown-none]
+rustflags = ["--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
+[target.riscv64imac-unknown-none-elf]
+rustflags = ["--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']

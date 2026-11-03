@@ -612,6 +612,9 @@ public class TextBox : Control
     public int CaretIndex { get; set; }
     public event Action<TextBox>? TextChanged;
     int _scrollX, _scrollLine;
+    int _followedCaret = -1, _followedLen = -1;
+    /// <summary>First line shown by a multi-line box (scrolled by the caret or the wheel).</summary>
+    public int FirstVisibleLine => _scrollLine;
     bool _caretOn = true;
     DispatcherTimer? _blink;
     long _lastKey;
@@ -740,6 +743,24 @@ public class TextBox : Control
         base.OnPointerPressed(e);
     }
 
+    protected internal override void OnPointerWheelChanged(PointerEventArgs e)
+    {
+        if (AcceptsReturn)
+        {
+            int lines = LineCol(Text.Length).Item1 + 1;
+            int visible = Math.Max(1, ContentRect(Bounds).Height / Lh);
+            int max = Math.Max(0, lines - visible);
+            int next = Math.Max(0, Math.Min(max, _scrollLine - e.WheelDelta * 3));
+            if (next != _scrollLine)
+            {
+                _scrollLine = next;
+                e.Handled = true;
+                InvalidateVisual();
+            }
+        }
+        base.OnPointerWheelChanged(e);
+    }
+
     public override void Render(DrawingContext dc)
     {
         base.Render(dc);
@@ -753,11 +774,15 @@ public class TextBox : Control
             if (cc < _scrollX) _scrollX = cc;
             if (cc > _scrollX + visibleCols - 1) _scrollX = cc - visibleCols + 1;
         }
-        else
+        else if (CaretIndex != _followedCaret || Text.Length != _followedLen)
         {
+            // follow the caret only when it moved or the text changed, so the wheel can
+            // scroll away from it
             if (cl < _scrollLine) _scrollLine = cl;
             if (cl > _scrollLine + visibleLines - 1) _scrollLine = cl - visibleLines + 1;
         }
+        _followedCaret = CaretIndex;
+        _followedLen = Text.Length;
         dc.PushClip(r);
         if (text.Length == 0 && Watermark.Length > 0 && !IsFocused)
             dc.Text(r.X, r.Y + (AcceptsReturn ? 0 : (r.Height - lh) / 2 + 1), Watermark, Theme.TextFaint, style);

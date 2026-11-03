@@ -101,6 +101,22 @@ public sealed class NotesViewModel : ObservableObject
         return ok;
     }
 
+    /// <summary>Write every note with unsaved changes (autosave). Returns how many were written.</summary>
+    public int SaveDirty()
+    {
+        int n = 0;
+        bool failed = false;
+        foreach (var note in Notes)
+        {
+            if (!note.Dirty) continue;
+            if (Files.WriteAllText(note.Path, note.Text)) { note.Dirty = false; n++; }
+            else failed = true;
+        }
+        if (failed) Status = "Gagal menyimpan otomatis ke " + _dir;
+        else if (n > 0) Status = "Tersimpan otomatis ke " + _dir;
+        return n;
+    }
+
     public void Delete()
     {
         if (_current == null) return;
@@ -149,7 +165,20 @@ public static class NotesApp
         }
         vm.PropertyChanged += (_, n) => { if (n == nameof(NotesViewModel.Current)) ShowCurrent(); };
         list.SelectionChanged += l => { if (!syncing && l.SelectedItem is Note n && n != vm.Current) vm.Current = n; };
-        editor.TextChanged += t => { if (!syncing && vm.Current != null) { vm.Current.Text = t.Text; vm.Touch(); } };
+        // Autosave: 1.5 s after the last change, and whenever the note in view changes.
+        var autosave = new DispatcherTimer(1500);
+        autosave.Tick += () => { autosave.Stop(); vm.SaveDirty(); };
+        editor.TextChanged += t =>
+        {
+            if (!syncing && vm.Current != null)
+            {
+                vm.Current.Text = t.Text;
+                vm.Touch();
+                autosave.Stop();
+                autosave.Start();
+            }
+        };
+        vm.PropertyChanged += (_, n) => { if (n == nameof(NotesViewModel.Current)) vm.SaveDirty(); };
 
         void Save()
         {
@@ -239,11 +268,21 @@ public static class NotesApp
         w.SimulateKeys("Ide kedua");
         c.Equal("Ide kedua", vm.Notes[0].Title, "new note title follows its text");
         c.That(list.ItemCount == count0 + 1, "list shows the new note too");
+        string newPath = vm.Notes[0].Path;
         int old = -1;
         for (int i = 0; i < vm.Notes.Count; i++) if (vm.Notes[i].Path.EndsWith("CATAT01.TXT")) old = i;
         list.SelectedIndex = old;
         c.Equal("Daftar belanja", vm.Current!.Title, "selecting in the list switches the note");
         c.That(editor.Text.StartsWith("Daftar"), "editor shows the selected note");
+        c.Equal("Ide kedua", Files.ReadAllText(newPath), "switching notes autosaved the new one");
+        w.SimulateKeys("x");
+        c.That(vm.Current!.Dirty && vm.SaveDirty() == 1 && !vm.Current.Dirty, "autosave writes the edited note");
+        // the wheel scrolls a long note without moving the caret
+        editor.Text = string.Join("\n", Enumerable.Range(1, 80).Select(i => "baris " + i));
+        editor.CaretIndex = 0;
+        w.RenderFrame();
+        w.DispatchWheel(editor.Bounds.X + 40, editor.Bounds.Y + 40, -5);
+        c.That(editor.CaretIndex == 0 && editor.FirstVisibleLine == 15, "wheel scrolled the editor to line " + editor.FirstVisibleLine);
         w.RenderFrame();
         c.That(w.LastFrameOps > 20, "frame drew " + w.LastFrameOps + " ops");
         return c;

@@ -144,6 +144,9 @@ public static class Keys
     public const char Home = '', End = '', Delete = '', PageUp = '', PageDown = '';
     public const char Enter = '\n', Tab = '\t', Backspace = '\b', Escape = (char)27, Space = ' ';
     public const char Rubout = (char)127;
+    /// <summary>F1..F12 (U+F709..U+F714, keyboard::nav_char).</summary>
+    public const char F1 = '', F2 = '', F3 = '', F4 = '', F5 = '', F6 = '',
+        F7 = '', F8 = '', F9 = '', F10 = '', F11 = '', F12 = '';
 
     public static bool IsNavigation(char c) => c >= '' && c <= '';
     public static bool IsPrintable(char c) => c >= ' ' && c != Rubout && !IsNavigation(c);

@@ -30,12 +30,18 @@ public sealed class BuitenzorgPlugin
         : _settings.BuitenzorgRoot;
 
     [KernelFunction, Description(
-        "Return the API reference and zerolib gotchas for a Buitenzorg library " +
-        "so generated code compiles under bflat --stdlib:zero. library is one of: " +
-        "drawing, ui, audio, bcl, syscalls, gotchas.")]
-    public string GetApiReference([Description("drawing|ui|audio|bcl|syscalls|gotchas")] string library)
+        "Return the exact API reference for a Buitenzorg library. NATIVE C# (bflat --stdlib:zero): " +
+        "drawing, ui, audio, bcl, syscalls, gotchas. MANAGED C# (dotnet build, RustCLR): managed (Buitenzorg.App), " +
+        "managed-ui (Buitenzorg.UI toolkit), devices (Buitenzorg.Devices GPIO/I2C/SPI/UART). SCRIPTS: scripts " +
+        "(the Python/JS/TS subset). DEVICE: deploy (how apps reach a device).")]
+    public string GetApiReference([Description("drawing|ui|audio|bcl|syscalls|gotchas|managed|managed-ui|devices|scripts|deploy")] string library)
         => library.ToLowerInvariant() switch
         {
+            "managed" or "buitenzorg.app" => ManagedApiReference.App,
+            "managed-ui" or "buitenzorg.ui" => ManagedApiReference.Ui,
+            "devices" or "buitenzorg.devices" or "gpio" => ManagedApiReference.Devices,
+            "scripts" or "python" or "js" or "ts" or "javascript" or "typescript" => ManagedApiReference.Scripts,
+            "deploy" => ManagedApiReference.Deploy,
             "drawing" =>
                 "namespace Buitenzorg.Drawing (bzgfx.cs). EXACT signatures (argument order matters):\n" +
                 "  new Color(uint argb); Color.White/Black/Transparent\n" +
@@ -155,7 +161,7 @@ public sealed class BuitenzorgPlugin
 
     [KernelFunction, Description("List the available Buitenzorg app project templates (id, language, what it contains).")]
     public string ListTemplates() =>
-        string.Join("; ", ProjectTemplates.All.Select(t => $"{t.Id} [{t.Language}] — {t.Summary}"));
+        string.Join("; ", ProjectTemplates.All.Select(t => $"{t.Id} [{t.KindLabel} {t.Language} -> NAME.{t.Artifact}] — {t.Summary}"));
 
     [KernelFunction, Description("Return the full starter source of one template, so it can be shown or extended.")]
     public string GetTemplateSource([Description("template id from ListTemplates")] string template)
@@ -175,10 +181,95 @@ public sealed class BuitenzorgPlugin
         {
             var t = ProjectTemplates.Find(template);
             if (t is null) return $"error: unknown template '{template}'. Call ListTemplates first.";
-            var file = ProjectTemplates.Scaffold(t, path, appName);
+            var file = ProjectTemplates.Scaffold(t, path, appName, Root);
             _log($"[buitenzorg] scaffolded '{t.Title}' at {path}");
             return file;
         }
+        catch (Exception ex) { return $"error: {ex.Message}"; }
+    }
+
+    [KernelFunction, Description(
+        "Build a project folder for the device: native C# -> out/NAME.ELF (bflat), managed C# (.csproj) -> " +
+        "out/NAME.DLL (dotnet build), scripts -> out/NAME.PY/.JS/.TS (with a check for unsupported constructs). " +
+        "Returns 'OK: ...' with the files or the errors to fix. Call it after writing code; fix and repeat until OK.")]
+    public async Task<string> BuildProject([Description("project folder path")] string projectDir)
+    {
+        var p = AppProject.Open(projectDir);
+        if (p is null) return $"error: no Buitenzorg project in {projectDir} (need a .csproj, a .cs or a main.py/js/ts)";
+        var r = await new ProjectBuilder(_settings, _log).BuildAsync(p);
+        if (!r.Ok) return $"BUILD FAILED ({p.KindLabel}):\n{r.Message}";
+        var sb = new StringBuilder($"OK: {p.KindLabel} build -> ");
+        sb.Append(string.Join(", ", r.Files.Select(f => $"{Path.GetFileName(f.LocalPath)} => {f.RemotePath}")));
+        if (r.Warnings.Count > 0) sb.Append("\nWARNINGS (fix these, the device would reject them):\n" + string.Join("\n", r.Warnings));
+        if (p.Kind == AppKind.Managed)
+        {
+            var (ok, output) = await new ProjectBuilder(_settings, _log).SelfTestManagedAsync(p);
+            sb.Append($"\nhost self-test (dotnet {p.Name83}.dll --selftest): {(ok ? "passed" : "FAILED")}\n{Tail(output)}");
+        }
+        return sb.ToString();
+    }
+
+    DeviceDeployer? _device;
+    DeviceDeployer Device()
+    {
+        var d = _settings.Device;
+        if (_device is null || _device.Device.Host != d.Host || _device.Device.Port != d.Port || _device.Device.Code != d.Code)
+        {
+            _device?.Dispose();
+            _device = new DeviceDeployer(d.Clone(), _log);
+        }
+        return _device;
+    }
+
+    [KernelFunction, Description(
+        "Build a project, upload it to the user's Buitenzorg device over the network (BZDP, the device in Settings) " +
+        "and optionally run it. Returns what happened plus the first console output. The device must have " +
+        "`deploy on` enabled.")]
+    public async Task<string> DeployToDevice(
+        [Description("project folder path")] string projectDir,
+        [Description("run it after uploading")] bool run = true,
+        [Description("command-line arguments for the app")] string args = "")
+    {
+        try
+        {
+            var p = AppProject.Open(projectDir);
+            if (p is null) return $"error: no Buitenzorg project in {projectDir}";
+            var r = await new ProjectBuilder(_settings, _log).BuildAsync(p);
+            if (!r.Ok) return $"BUILD FAILED:\n{r.Message}";
+            var dev = Device();
+            var info = await dev.ConnectAsync();
+            await dev.UploadAsync(r.Files);
+            var sb = new StringBuilder($"OK: uploaded {string.Join(", ", r.Files.Select(f => f.RemotePath))} to {info.Text}");
+            if (run)
+            {
+                var pid = await dev.RunAsync(p.RunCommand(args));
+                await Task.Delay(1500);
+                sb.Append(pid == 0 ? $"\nran `{p.RunCommand(args)}`" : $"\nstarted `{p.RunCommand(args)}` as pid {pid}");
+                sb.Append("\nconsole:\n" + Tail(await dev.PollLogAsync()));
+            }
+            return sb.ToString();
+        }
+        catch (Exception ex) { return $"error: {ex.Message}"; }
+    }
+
+    [KernelFunction, Description("Read new console output from the device (what apps and the shell printed since the last read).")]
+    public async Task<string> ReadDeviceLog()
+    {
+        try { var t = await Device().PollLogAsync(); return t.Length == 0 ? "(no new output)" : Tail(t); }
+        catch (Exception ex) { return $"error: {ex.Message}"; }
+    }
+
+    [KernelFunction, Description("Stop a program on the device by pid (from DeployToDevice).")]
+    public async Task<string> StopDeviceApp([Description("process id")] long pid)
+    {
+        try { await Device().KillAsync((uint)pid); return "ok"; }
+        catch (Exception ex) { return $"error: {ex.Message}"; }
+    }
+
+    [KernelFunction, Description("List files in a folder on the device, e.g. /disk.")]
+    public async Task<string> ListDeviceFiles([Description("device folder, e.g. /disk")] string path = "/disk")
+    {
+        try { return string.Join("\n", await Device().ListAsync(path)); }
         catch (Exception ex) { return $"error: {ex.Message}"; }
     }
 

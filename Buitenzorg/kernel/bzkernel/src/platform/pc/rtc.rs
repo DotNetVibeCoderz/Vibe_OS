@@ -92,7 +92,8 @@ fn decode(raw: (u8, u8, u8, u8, u8, u8, u8, u8)) -> (u16, u8, u8, u8, u8, u8) {
     (full_year, conv(month), conv(day), hour, conv(min), conv(sec))
 }
 
-/// Just (hour, minute) — what the taskbar tray clock needs.
+/// Just (hour, minute).
+#[allow(dead_code)]
 pub fn read_hm() -> (u8, u8) {
     let (_, _, _, h, m, _) = read();
     (h, m)

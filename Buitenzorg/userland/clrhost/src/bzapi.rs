@@ -38,6 +38,8 @@ const HW_SPI: u64 = 50;
 const HW_UART: u64 = 51;
 const HW_LED: u64 = 52;
 const SETTING: u64 = 53;
+const FS_OP: u64 = 54;
+const USER_OP: u64 = 55;
 const AUDIO_STAT: u64 = 23;
 const AUDIO_SET_VOLUME: u64 = 24;
 const AUDIO_TONE: u64 = 25;
@@ -436,13 +438,67 @@ fn fs_read_into(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_i32(n as i64)
 }
 
-/// `FsSize(string path)` -> the file's size in bytes (read up to 16 MiB),
-/// -1 if unreadable.
+/// `FsSize(string path)` -> the file's size in bytes (FS_OP stat), -1 if
+/// it does not exist.
 fn fs_size(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let path = cstr(&string(i, a, 0));
-    let mut buf = alloc::vec![0u8; 16 << 20];
-    let n = sys::syscall(FS_READ, path.as_ptr() as u64, buf.as_mut_ptr() as u64, buf.len() as u64);
-    Ok(Some(Value::I64(if sys::is_err(n) { -1 } else { n as i64 })))
+    let mut st = [0u64; 4];
+    let r = sys::syscall(FS_OP, 3, path.as_ptr() as u64, st.as_mut_ptr() as u64);
+    Ok(Some(Value::I64(if sys::is_err(r) { -1 } else { st[0] as i64 })))
+}
+
+/// `FsOp(int op, string path, string path2)` -> 0, or -1 when refused
+/// (FS_OP: 0 mkdir, 1 remove, 2 rename / move).
+fn fs_op(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let op = match a.first() {
+        Some(Value::I32(v)) => *v as u64,
+        Some(Value::I64(v)) => *v as u64,
+        _ => return ret_i32(-1),
+    };
+    if op > 2 {
+        return ret_i32(-1);
+    }
+    let (path, path2) = (cstr(&string(i, a, 1)), cstr(&string(i, a, 2)));
+    let r = sys::syscall(FS_OP, op, path.as_ptr() as u64, path2.as_ptr() as u64);
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
+}
+
+/// `UserOp(int op, string request)` -> 0, or -1 when refused (USER_OP 1-6;
+/// the request is the '\n'-separated fields, see bz_abi::user_op).
+fn user_op(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let op = match a.first() {
+        Some(Value::I32(v)) => *v as u64,
+        Some(Value::I64(v)) => *v as u64,
+        _ => return ret_i32(-1),
+    };
+    if op == 0 || op > 6 {
+        return ret_i32(-1);
+    }
+    let req = cstr(&string(i, a, 1));
+    let r = sys::syscall(USER_OP, op, req.as_ptr() as u64, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
+}
+
+/// `UserList()` -> one `name\tadmin\tavatar` line per account.
+fn user_list(i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
+    let mut buf = alloc::vec![0u8; 2048];
+    let n = sys::syscall(USER_OP, 0, 0, buf.as_mut_ptr() as u64);
+    let n = if sys::is_err(n) { 0 } else { (n as usize).min(buf.len()) };
+    let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+    ret_string(i, &text)
+}
+
+/// `FsStat(string path)` -> "size,isFolder,fatDate,fatTime", "" if missing.
+fn fs_stat(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    let mut st = [0u64; 4];
+    let r = sys::syscall(FS_OP, 3, path.as_ptr() as u64, st.as_mut_ptr() as u64);
+    let text = if sys::is_err(r) {
+        String::new()
+    } else {
+        alloc::format!("{},{},{},{}", st[0], st[1], st[2] >> 16, st[2] & 0xFFFF)
+    };
+    ret_string(i, &text)
 }
 
 /// `FsWriteText(string path, string text)` -> bytes written (0 = failed).
@@ -529,7 +585,7 @@ fn wait(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 35] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 39] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -565,6 +621,10 @@ pub fn install(interp: &mut Interpreter) {
         ("AudioSetVolume", audio_set_volume),
         ("AudioTone", audio_tone),
         ("FsReadInto", fs_read_into),
+        ("FsOp", fs_op),
+        ("FsStat", fs_stat),
+        ("UserOp", user_op),
+        ("UserList", user_list),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);

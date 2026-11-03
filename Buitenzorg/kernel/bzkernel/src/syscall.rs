@@ -130,6 +130,8 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FS_LIST
             | sysno::FS_READ
             | sysno::FS_WRITE
+            | sysno::FS_OP
+            | sysno::USER_OP
             | sysno::PROC_SPAWN
             | sysno::PROC_WAIT
             | sysno::NET_SOCKET
@@ -341,6 +343,8 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_READ => sys_fs_read(a0, a1, a2),
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
+        sysno::FS_OP => sys_fs_op(a0, a1, a2),
+        sysno::USER_OP => sys_user_op(a0, a1, a2),
         sysno::CLOCK_RTC => sys_clock_rtc(a0),
         sysno::NET_SOCKET => sys_net_socket(a0),
         sysno::NET_BIND => sys_net_bind(a0, a1),
@@ -369,24 +373,24 @@ fn sys_fs_list(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
             None => return syserr::INVAL,
         }
     };
-    // Empty path => list the mounts (as directories); else list the directory.
-    let (names, is_dir) = if path.is_empty() {
-        (crate::vfs::mounts(), true)
+    // Empty path => list the mounts (as directories); else list the folder.
+    let names: alloc::vec::Vec<(alloc::string::String, bool)> = if path.is_empty() {
+        crate::vfs::mounts().into_iter().map(|m| (m, true)).collect()
     } else {
-        match crate::vfs::list(&path) {
-            Ok(v) => (v, false),
+        match crate::vfs::list_entries(&path) {
+            Ok(v) => v.into_iter().map(|e| (e.name, e.is_dir)).collect(),
             Err(_) => return 0,
         }
     };
     let dst = buf_ptr as *mut bz_abi::FsEntry;
     let mut n = 0usize;
-    for name in names.iter() {
+    for (name, is_dir) in names.iter() {
         if n >= max as usize {
             break;
         }
         // Mount names come back as "/disk"; strip the leading slash for display.
         let disp = name.strip_prefix('/').unwrap_or(name);
-        let mut e = bz_abi::FsEntry { name: [0; 24], is_dir: if is_dir { 1 } else { 0 } };
+        let mut e = bz_abi::FsEntry { name: [0; 24], is_dir: if *is_dir { 1 } else { 0 } };
         let b = disp.as_bytes();
         let m = b.len().min(23);
         e.name[..m].copy_from_slice(&b[..m]);
@@ -394,6 +398,75 @@ fn sys_fs_list(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
         n += 1;
     }
     n as u64
+}
+
+/// USER_OP: accounts (see `bz_abi::user_op`, `users.rs`).
+fn sys_user_op(op: u64, req_ptr: u64, out_ptr: u64) -> u64 {
+    use bz_abi::user_op;
+    if op == user_op::LIST {
+        const CAP: u64 = 2048;
+        if !user_write(out_ptr, CAP) {
+            return syserr::INVAL;
+        }
+        let mut text = alloc::string::String::new();
+        for (name, admin, avatar) in crate::users::list() {
+            text.push_str(&alloc::format!("{}\t{}\t{}\n", name, admin as u8, avatar));
+        }
+        let bytes = &text.as_bytes()[..text.len().min(CAP as usize)];
+        let out = out_ptr as *mut u8;
+        for (i, &b) in bytes.iter().enumerate() {
+            unsafe { out.add(i).write_volatile(b) };
+        }
+        return bytes.len() as u64;
+    }
+    let Some(req) = read_user_path_checked(req_ptr) else { return syserr::INVAL };
+    let f: alloc::vec::Vec<&str> = req.split('\n').collect();
+    let arg = |i: usize| f.get(i).copied().unwrap_or("");
+    let r = match op {
+        user_op::VERIFY => {
+            if crate::users::verify(arg(0), arg(1)) { Ok(()) } else { Err("") }
+        }
+        user_op::ADD => crate::users::add(arg(0), arg(1), arg(2), arg(3), arg(4) == "1"),
+        user_op::REMOVE => crate::users::remove(arg(0), arg(1), arg(2)),
+        user_op::PASSWD => crate::users::change_password(arg(0), arg(1), arg(2)),
+        user_op::RESET => crate::users::reset_password(arg(0), arg(1), arg(2), arg(3)),
+        user_op::AVATAR => crate::users::set_avatar(arg(0), arg(1), arg(2), arg(3)),
+        _ => Err(""),
+    };
+    if r.is_ok() { 0 } else { syserr::INVAL }
+}
+
+/// FS_OP: mkdir / remove / rename-move / stat (see `bz_abi::fs_op`).
+fn sys_fs_op(op: u64, path_ptr: u64, a2: u64) -> u64 {
+    use bz_abi::fs_op;
+    let Some(path) = read_user_path_checked(path_ptr) else { return syserr::INVAL };
+    let ok = |r: Result<(), &'static str>| match r {
+        Ok(()) => 0,
+        Err(_) => syserr::INVAL,
+    };
+    match op {
+        fs_op::MKDIR => ok(crate::vfs::mkdir(&path)),
+        fs_op::REMOVE => ok(crate::vfs::remove(&path)),
+        fs_op::RENAME => {
+            let Some(to) = read_user_path_checked(a2) else { return syserr::INVAL };
+            ok(crate::vfs::rename(&path, &to))
+        }
+        fs_op::STAT => {
+            if !user_write(a2, 32) {
+                return syserr::INVAL;
+            }
+            let Ok(e) = crate::vfs::stat(&path) else { return syserr::INVAL };
+            let out = a2 as *mut u64;
+            unsafe {
+                out.write_volatile(e.size as u64);
+                out.add(1).write_volatile(e.is_dir as u64);
+                out.add(2).write_volatile((e.date as u64) << 16 | e.time as u64);
+                out.add(3).write_volatile(0);
+            }
+            0
+        }
+        _ => syserr::INVAL,
+    }
 }
 
 fn sys_fs_read(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
@@ -445,7 +518,8 @@ fn sys_clock_rtc(out_ptr: u64) -> u64 {
     if !user_write(out_ptr, core::mem::size_of::<bz_abi::RtcTime>() as u64) {
         return syserr::INVAL;
     }
-    let (year, month, day, hour, minute, second) = crate::rtc::read();
+    // local time: the RTC (UTC) + time zone + the user's correction
+    let (year, month, day, hour, minute, second) = crate::clock::now();
     let out = out_ptr as *mut u64;
     unsafe {
         out.write_volatile(year as u64);

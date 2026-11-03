@@ -253,6 +253,9 @@ pub fn self_test() -> Result<alloc::string::String, alloc::string::String> {
         }
         core::hint::spin_loop();
     }
+    // A wheel mouse expects 4 bytes per packet: start the next real packet
+    // cleanly after the 3 injected ones.
+    crate::mouse::resync();
     let (k1, _) = irq_counts(kbd_cpu);
     let (_, m1) = irq_counts(mouse_cpu);
     if k1 <= k0 {

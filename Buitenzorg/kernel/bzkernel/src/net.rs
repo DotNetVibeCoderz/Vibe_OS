@@ -405,9 +405,25 @@ fn build_ipv4_frame(
     frame
 }
 
+/// "10.0.2.15".
+pub fn fmt_ip(ip: Ipv4Addr) -> alloc::string::String {
+    alloc::format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
+}
+
+/// Send an IPv4 packet with `payload` (a transport segment) to `dest` (TCP).
+pub fn send_ipv4(dest: Ipv4Addr, proto: u8, payload: &[u8]) {
+    let mut guard = STACK.lock();
+    let Some(stack) = guard.as_mut() else { return };
+    let (src_mac, dst_mac, src_ip) = (stack.device.mac(), stack.next_hop_mac(dest), stack.ip);
+    let dst_mac = if dest == src_ip { src_mac } else { dst_mac };
+    let frame = build_ipv4_frame(src_mac, dst_mac, src_ip, dest, proto, payload);
+    stack.tx(&frame);
+}
+
 /// Drive the stack: process all currently queued received frames. Returns the
 /// number of frames handled.
 pub fn poll() -> usize {
+    crate::tcp::timers();
     let mut handled = 0;
     loop {
         let frame = {
@@ -481,6 +497,21 @@ fn handle_ipv4(frame: &[u8], ip: &[u8]) {
     let proto = ip[9];
     let src_ip: Ipv4Addr = [ip[12], ip[13], ip[14], ip[15]];
     let dst_ip: Ipv4Addr = [ip[16], ip[17], ip[18], ip[19]];
+    // learn an on-link sender's MAC, so replies (TCP) go to it, not broadcast
+    if let Some(stack) = STACK.lock().as_mut() {
+        let on_link = (0..4).all(|i| src_ip[i] & stack.mask[i] == stack.ip[i] & stack.mask[i]);
+        if on_link && src_ip != [0; 4] && src_ip != stack.ip && frame.len() >= 12 {
+            stack.learn(src_ip, [frame[6], frame[7], frame[8], frame[9], frame[10], frame[11]]);
+        }
+    }
+    if proto == crate::tcp::IPPROTO_TCP {
+        // the IP total length, not the frame: Ethernet pads short frames
+        let total = (be16(ip, 2) as usize).min(ip.len());
+        if total > ihl {
+            crate::tcp::input(src_ip, dst_ip, &ip[ihl..total]);
+        }
+        return;
+    }
     if proto == IPPROTO_UDP {
         handle_udp(src_ip, dst_ip, &ip[ihl..]);
         return;

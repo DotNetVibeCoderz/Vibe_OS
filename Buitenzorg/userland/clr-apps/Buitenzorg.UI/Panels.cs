@@ -619,6 +619,18 @@ public sealed class ScrollViewer : ContentControl
         base.OnPointerReleased(e);
     }
 
+    /// <summary>Pixels per wheel notch.</summary>
+    public int WheelStep { get; set; } = 48;
+
+    protected internal override void OnPointerWheelChanged(PointerEventArgs e)
+    {
+        // take the wheel only if it moves something; else an outer scroller gets it
+        int before = VerticalOffset;
+        if (CanScroll) VerticalOffset = before - e.WheelDelta * WheelStep;
+        if (VerticalOffset != before) e.Handled = true;
+        base.OnPointerWheelChanged(e);
+    }
+
     protected internal override void OnKeyDown(KeyEventArgs e)
     {
         int step = 40;

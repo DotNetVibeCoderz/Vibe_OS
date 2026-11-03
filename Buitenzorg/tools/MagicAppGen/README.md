@@ -1,19 +1,24 @@
 # Magic App Generator (MagicAppGen)
 
 An **Avalonia UI** code editor with an AI assistant — **"Jack - The Code Bender"** —
-that generates applications for **Buitenzorg OS** from a prompt, using
-**Microsoft Semantic Kernel**.
+that writes, builds and **deploys apps for Buitenzorg OS straight to a device over
+the network**, using **Microsoft Semantic Kernel**.
 
 Buitenzorg OS is made by **Gravicode Studios**, led by **Kang Fadhil**.
 
-This is a *host-side* developer tool (desktop .NET), not a ring-3 Buitenzorg app.
+This is a *host-side* developer tool (desktop .NET 10), not a ring-3 Buitenzorg app.
 
-![status](https://img.shields.io/badge/status-working-brightgreen)
+![main window](docs/magicappgen-main.png)
 
-> **Design** — MagicAppGen wears a "Forest at dusk" theme (`Styles/AppStyles.axaml`)
-> that borrows Buitenzorg OS's own identity: green-black chrome, a leaf-green
-> signature accent for primary actions, and the ember of the sunset horizon used
-> sparingly. Jack's presence in the chat header is the one branded moment.
+> **Design — "Kebun malam".** The Bogor Botanical Garden after dark, matching the
+> OS's own *kebun* theme: canopy greens for the chrome, the OS leaf `#7CC4A4` for
+> primary actions and focus, pollen `#E8C35A` for anything live (a connected
+> device, a running app, Jack calling a tool) and hibiscus `#E8836B` for errors.
+> Inter for the UI, Cascadia/Consolas for code and device data. The one
+> signature element is the device **specimen tag** in the Perangkat panel — a
+> herbarium label carrying the device's address, pairing code and what it
+> answered — above the real *build → deploy → run* sequence drawn as a vine
+> (*semai · tanam · tumbuh*). Tokens live in `Styles/AppStyles.axaml`.
 
 ## Run
 
@@ -23,146 +28,116 @@ dotnet build
 dotnet run
 ```
 
-Headless helpers (no display needed):
+## Three kinds of app
+
+| Kind | Built with | On the device | Started by |
+| --- | --- | --- | --- |
+| **Managed C#** (recommended for UI) | `dotnet build` against `userland/clr-apps/Buitenzorg.App` / `Buitenzorg.UI` | `/disk/NAME.DLL` (RustCLR: GC, LINQ, lambdas…) | `run name` |
+| **Native C#** | bflat `--stdlib:zero` + the `bzstart.rs` shim + rust-lld (x64, or arm64 with the patched bflat) | `/disk/NAME.ELF` (no GC, zerolib rules) | `run name` |
+| **Script** (Python / TypeScript / JavaScript) | a subset check + copy | `/disk/NAME.PY` / `.TS` / `.JS` | `script py /disk/NAME.PY` |
+
+`NAME` is the 8.3 upper-case device name (a managed project's `<AssemblyName>`).
+Builds go to `<project>/out/` and never touch the Buitenzorg checkout. Managed
+apps can be tested on the PC first (`Bangun → Uji mandiri di PC`, i.e.
+`dotnet NAME.dll --selftest`), because Buitenzorg.App falls back to simulated
+files, processes and a simulated Raspberry Pi off the device.
+
+The script check knows the in-kernel interpreter's limits (`kernel/bzkernel/src/script.rs`:
+integers, strings, functions, loops — no lists/objects/classes/imports/floats,
+braces required after `if`/`while`/`for` in JS/TS, and no apostrophes/colons in
+TypeScript comments because annotations are stripped before comments).
+
+## Deploy & run on a device (BZDP)
+
+The **Perangkat** panel (antenna icon on the rail, or the device pill in the top
+bar) talks to a Buitenzorg device with the **Buitenzorg Deploy Protocol v1**
+over UDP (port 7070): *Sapa* (HELLO), **Bangun, kirim & jalankan** (F5),
+separate *Bangun* / *Kirim* / *Henti* (KILL), the live **Konsol perangkat**
+(polls LOG), and *Lihat isi /disk* (LIST). On the device run `deploy on` in the
+terminal; it shows the pairing code. For QEMU forward the port:
+`-netdev user,id=n0,hostfwd=udp::7070-:7070`.
+
+Device profiles (name, host, UDP port, pairing code), the native architecture
+(x64 / arm64) and "also send BZAPP.DLL & BZUI.DLL" are in **Alat → Pengaturan →
+Perangkat** and in `app.config` (`Device.Profiles`, `Device.Active`,
+`Native.Arch`, `Deploy.RuntimeLibraries`).
+
+Protocol client: `Services/BzdpClient.cs` (stop-and-wait, 500 ms × 6 tries,
+resend from the device's `next_offset`, CRC-32 on END). A loopback stand-in for
+the device side is `Services/FakeBzdpDevice.cs`.
+
+## Headless modes
 
 ```powershell
 dotnet run -- --list-templates
-dotnet run -- --scaffold desktop-ui C:\path\to\MyApp Catatan
-
-# Run "Jack" end to end from the command line (real LLM call using the provider
-# in app.config). The assistant writes the generated project into <outputDir>
-# via its kernel functions; the streamed reply goes to stdout, logs to stderr.
-dotnet run -- --generate C:\path\to\out "Buatkan aplikasi console yang menjumlahkan 1..10"
+dotnet run -- --scaffold managed-ui C:\path\to\Catatan Catatan
+dotnet run -- --build C:\path\to\Catatan --selftest           # build to out/, run --selftest (managed)
+dotnet run -- --deploy C:\path\to\Catatan --host 192.168.1.50 [--port 7070] [--code 1234] [--run] [--args "..."] [--watch 5] [--with-libs]
+dotnet run -- --fake-device [--port 7070] [--code 1234] [--drop 0.1]   # a loopback device for testing
+dotnet run -- --bzdp-selftest                                 # client vs. fake device (clean, lossy, errors, full flow)
+dotnet run -- --llm-test [--keys <file>] [--provider Claude] [--model id]   # one real round trip + tool call per provider
+dotnet run -- --generate [--provider P] [--model id] [--keys <file>] <outDir> <prompt...>
+dotnet run -- --screenshot docs\shot.png [--scene main|templates|settings|devices] [--size 1280x720]
 ```
 
-Optional model override for a harder task: `--generate --model gpt-4o <out> <prompt>`.
+`--keys` reads a loose "Section / key: value" text file **in memory only**
+(nothing is saved or printed); environment variables (`ANTHROPIC_API_KEY`,
+`ANTHROPIC_WORKSPACE_ID`, `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY` +
+`AZURE_OPENAI_ENDPOINT`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`) work too.
 
-The `--generate` mode is how the AI path is tested without the GUI. After writing
-the app Jack calls the **`CompileCheck`** kernel function, which compiles it with
-the real `bflat --stdlib:zero` (pulling the needed library sources from the app's
-`using` directives) and returns either "OK" or the compiler errors — so the
-assistant **fixes its own code and retries until it compiles** (a compile-repair
-loop).
+## LLM providers (reviewed 2026-11)
 
-Verified end to end (2026-07-24), OpenAI key in `app.config`:
+| Provider | Default model | Notes |
+| --- | --- | --- |
+| Claude (Anthropic) | `claude-opus-5-5` | Official `Anthropic` C# SDK → `IChatClient` → SK with kernel-function invocation. Also `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-1`. No `temperature` is sent (these models reject it). Optional *workspace id* for keys not scoped to a workspace. |
+| OpenAI | `gpt-5.6-sol` | gpt-5.x reasoning models get no custom temperature. |
+| Azure OpenAI | `gpt-5.6-luna` | model = deployment name, endpoint = `https://<resource>.openai.azure.com/`. |
+| Gemini | `gemini-3.5-flash` | Google AI key. |
+| DeepSeek | `deepseek-v4-flash` | OpenAI-compatible endpoint `https://api.deepseek.com`. |
+| Ollama | `qwen3` | local, no key. |
 
-- **Simple** ("console app that sums 1..10"): `SalamApp: 1..10 = 55` /
-  `MILESTONE: SALAM OK`, exit 0.
-- **Complex** ("desktop UI window with a Button that increments a counter"):
-  `gpt-4o` converged in 3 CompileCheck iterations (it first hallucinated
-  `BzMath.FormatInt`/`Invalidate`, then fixed them), producing a real
-  `Buitenzorg.UI` app — a custom `CounterDisplay : UIElement` drawn with
-  `DrawChars`, the button wired via `.Clicks` + `host.Mouse` — that compiled,
-  linked, and **ran in Buitenzorg OS**: `Penghitung: membuka jendela...` /
-  `MILESTONE: COUNTER OK`, exit 0.
-
-Note on models: `gpt-4o-mini` handles the simple app but tends not to converge
-on the UI API even with the repair loop; use `gpt-4o` (or another strong model)
-for non-trivial apps.
-
-## Features
-
-**Editor**
-- AvaloniaEdit code editor with **show/hide line numbers** (toolbar checkbox / View menu).
-- **Logs panel** at the bottom (resizable splitter) and a **status bar** showing the
-  current operation plus the active provider/model.
-
-**Menu & toolbar**
-- File: New Project **(Blank)**, New Project **(From Template)**, Open Project,
-  Open File, Save, Close Project, Exit.
-- Edit: **Go To Line…**
-- Build: **Build**, **Run**, **Deploy**.
-- View: toggle line numbers / chat panel / logs.
-- Tools: **Settings…**
-- Toolbar also carries the **programming-language selector** (default **C#**;
-  JavaScript / TypeScript / Python for the polyglot runtime).
-
-**Chat panel (right side)**
-- **Resizable width** (GridSplitter) and **hide/show** (View → Toggle Chat Panel).
-- **LLM model selector at the top** of the panel, next to the active model name.
-- **Attach an image** (📎) — sent as an `ImageContent` part with the prompt.
-- Send with **Ctrl+Enter** or the **Send** button; **Clear** wipes the thread.
-- Replies stream token by token.
-
-**LLM providers** — OpenAI, Claude (Anthropic), Gemini (Google AI), Ollama (local).
-Claude has no first-party Semantic Kernel connector, so it is bridged from
-`Anthropic.SDK`'s `IChatClient` via `AsChatCompletionService()`.
+Each provider row in Settings has an **Uji** button for a live round trip.
 
 ## Kernel functions (what Jack can actually do)
 
-`Ai/BuitenzorgPlugin.cs` — so the AI writes *correct* Buitenzorg apps:
+`Ai/BuitenzorgPlugin.cs`:
 
 | Function | Purpose |
 | --- | --- |
-| `GetApiReference(library)` | Exact signatures for `drawing` / `ui` / `audio` / `bcl` / `syscalls`, plus the **zerolib gotchas** |
-| `ListTemplates()` / `GetTemplateSource(id)` | The starter-project catalog |
-| `ScaffoldProject(path, template, appName)` | Writes a real, compiling starter project |
-| `WriteFile(path, content)` / `ReadFile(path)` | Project file I/O |
-| `BuildApp()` | Runs `scripts/build.ps1` in the repo root, streaming output to the logs panel |
-| `RunApp()` | Runs `scripts/smoke-test.ps1` (headless QEMU boot + milestone check) |
+| `GetApiReference(library)` | Exact API: native `drawing`/`ui`/`audio`/`bcl`/`syscalls`/`gotchas`, managed `managed`/`managed-ui`/`devices`, `scripts`, `deploy` (`Ai/ManagedApiReference.cs`) |
+| `ListTemplates()` / `GetTemplateSource(id)` / `ScaffoldProject(...)` | The starter catalog |
+| `WriteFile` / `ReadFile` | Project file I/O |
+| `BuildProject(dir)` | Build any kind; managed also runs `--selftest` on the host |
+| `CompileCheck(cs)` / `DeployApp(cs)` | Native-only bflat check / embed as `USERAPP.ELF` |
+| `DeployToDevice(dir, run, args)` / `ReadDeviceLog()` / `StopDeviceApp(pid)` / `ListDeviceFiles(path)` | BZDP to the active device |
+| `BuildApp()` / `RunApp()` | `scripts/build.ps1` / `scripts/smoke-test.ps1` |
 
-`Ai/CommonPlugin.cs` — general tools:
+`Ai/CommonPlugin.cs`: `SearchInternet` (Tavily), `ScrapeWebPage`, `MathCalculation`, `CheckDateTime`.
 
-| Function | Purpose |
-| --- | --- |
-| `SearchInternet(query)` | Web search via **Tavily** (answer + top results) |
-| `ScrapeWebPage(url)` | Fetch a page and strip it to readable text |
-| `MathCalculation(expression)` | Evaluate an arithmetic expression |
-| `CheckDateTime()` | Current local date/time |
+## Templates
 
-## Project templates
-
-`New Project → From Template` (also reachable by the AI). Every C# template is
-**verified to compile with bflat `--stdlib:zero`**.
-
-| Id | Language | What you get |
+| Id | Kind | What you get |
 | --- | --- | --- |
-| `console` | C# | `Console.WriteLine` + hand-rolled number formatting via `bz_write` |
-| `desktop-ui` | C# | `UIHost` window: StackPanel + TextBlock + Button + CheckBox |
-| `drawing` | C# | A `Buitenzorg.Drawing` scene (gradient, shadow, rounded gradient, AA circle) blitted to a window |
-| `game` | C# | A 4×4 board as a custom `UIElement` with a slide/merge engine (the 2048 shape) |
-| `audio` | C# | AC'97 mixer round-trip + a C-major arpeggio via `Mixer.Beep` |
-| `js` | JavaScript | Runs on the in-kernel polyglot interpreter (`js main.js`) |
-| `ts` | TypeScript | Transpiled in-kernel, then interpreted (`ts main.ts`) |
-| `python` | Python | Indentation-based subset (`py main.py`) |
-
-Each template also drops an `app.manifest` and a `README.md`.
+| `managed-ui` | Managed | Buitenzorg.UI window: counter button + live system info, `--selftest` |
+| `managed-console` | Managed | Files, processes, system info via Buitenzorg.App + LINQ, `--selftest` |
+| `managed-gpio` | Managed | Raspberry Pi: board sensors, ACT LED, GPIO 17, I2C scan (simulated on the PC) |
+| `console`, `desktop-ui`, `drawing`, `game`, `audio` | Native | The bflat `--stdlib:zero` starters |
+| `python`, `ts`, `js` | Script | Programs inside the interpreter subset (verified against `script.rs`) |
 
 ## Configuration
 
-Everything lives in **`app.config`** (`<appSettings>`) and is editable from
-**Tools → Settings**, which writes the file back:
-
-| Key | Meaning |
-| --- | --- |
-| `ActiveProvider` | `OpenAI` \| `Claude` \| `Gemini` \| `Ollama` |
-| `Language` | Default programming language (`C#`) |
-| `Temperature` | Sampling temperature |
-| `ShowLineNumbers` | Editor line-number gutter |
-| `SystemPrompt` | Jack's system prompt (ships with the Buitenzorg/zerolib rules) |
-| `<Provider>.Model` / `.ApiKey` / `.Endpoint` | Per-provider settings |
-| `Tavily.ApiKey` | Key for `SearchInternet` |
-| `Buitenzorg.Root` | Repo root, so `BuildApp`/`RunApp` can find `scripts/` |
-
-> Note: .NET's `ConfigurationManager` reads and writes the **deployed** copy —
-> `bin/<config>/net10.0/MagicAppGen.dll.config` — which MSBuild generates from
-> `app.config`. Settings saved from the UI land there; edit `app.config` in the
-> project to change the defaults that get deployed on the next build.
+Everything lives in **`app.config`** and is editable from **Alat → Pengaturan**
+(tabs Umum, Model AI, Perangkat, Alat), which writes the deployed
+`bin/<config>/net10.0/MagicAppGen.dll.config`. API keys are never committed;
+`Buitenzorg.Root` empty means "find the checkout from MagicAppGen's folder".
 
 ## Screenshots
 
 | | |
 | --- | --- |
-| Main window | ![main](../../docs/img/magicappgen.png) |
-| New Project → From Template | ![templates](../../docs/img/magicappgen-templates.png) |
-| Settings (all of app.config) | ![settings](../../docs/img/magicappgen-settings.png) |
+| Main window (1280×720) | ![main](docs/magicappgen-main.png) |
+| New project | ![templates](docs/magicappgen-templates.png) |
+| Settings → Model AI | ![settings](docs/magicappgen-settings.png) |
+| Settings → Perangkat | ![devices](docs/magicappgen-devices.png) |
 
-## Notes
-
-Generated C# must respect the zerolib limits (Jack is prompted with these, and
-`GetApiReference("gotchas")` restates them):
-
-1. No **static reference fields** — GC statics are uninitialized; keep state in locals/instance fields.
-2. No **method-group → delegate** conversions — use function pointers (`delegate*<int,bool>` + `&Method`).
-3. No storing a reference into an **`object[]` element** (`stelem.ref` faults) — use linked lists or object fields.
-4. No `new string()` / `ToString()` / string concat / `string ==` — build `char[]` and use `Graphics.DrawChars`.
+All rendered with `--screenshot` (Avalonia headless + Skia).

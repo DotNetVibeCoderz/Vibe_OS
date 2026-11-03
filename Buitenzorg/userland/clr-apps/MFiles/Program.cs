@@ -1,6 +1,8 @@
 // Berkas -- the managed file browser: a tree of mounts, a GridSplitter, a
-// sortable DataGrid of files with their kind, a preview read on demand, and
-// launching programs. Buitenzorg.UI.
+// sortable DataGrid of files and folders with their kind, a preview read on
+// demand, launching programs, and file management: new folder / file,
+// rename, move, delete and properties (FS_OP syscall: folders on FAT).
+// Buitenzorg.UI.
 
 using Buitenzorg.UI;
 using FileEntry = Buitenzorg.App.FileEntry;
@@ -54,11 +56,116 @@ public sealed class FilesViewModel : ObservableObject
     {
         Path = path;
         var list = Files.List(path);
+        // folders first, then files, each by name
+        list.Sort((a, b) => a.IsDirectory != b.IsDirectory ? (a.IsDirectory ? -1 : 1) : string.CompareOrdinal(a.Name, b.Name));
         Entries.ResetWith(list);
-        int programs = 0;
-        foreach (var e in list) if (Kinds.IsProgram(e)) programs++;
-        Summary = list.Count + " berkas" + (programs > 0 ? ", " + programs + " program" : "");
+        int programs = 0, folders = 0;
+        foreach (var e in list) { if (Kinds.IsProgram(e)) programs++; if (e.IsDirectory) folders++; }
+        Summary = path.Length == 0 ? list.Count + " media"
+            : (folders > 0 ? folders + " folder, " : "") + (list.Count - folders) + " berkas" + (programs > 0 ? ", " + programs + " program" : "");
         Preview = "";
+    }
+
+    /// <summary>The folder above the current one ("" above a mount).</summary>
+    public string Parent
+    {
+        get
+        {
+            int i = Path.TrimEnd('/').LastIndexOf('/');
+            return i <= 0 ? "" : Path.Substring(0, i);
+        }
+    }
+
+    public bool CanEdit => Path.Length > 0;
+    string Child(string name) => Path.TrimEnd('/') + "/" + name.Trim().ToUpperInvariant();
+
+    /// <summary>Result of a file operation: null on success, else the reason shown to the user.</summary>
+    static string? Check(string name)
+    {
+        if (!Files.IsValidName(name.Trim().ToUpperInvariant()))
+            return "Nama harus 8.3: maksimal 8 huruf/angka, titik, lalu 3 untuk ekstensi (mis. CATATAN.TXT).";
+        return null;
+    }
+
+    public string? NewFolder(string name)
+    {
+        if (!CanEdit) return "Pilih media dulu.";
+        var why = Check(name);
+        if (why != null) return why;
+        if (Files.GetInfo(Child(name)) != null) return "Sudah ada berkas atau folder bernama " + name.ToUpperInvariant() + ".";
+        if (!Files.CreateDirectory(Child(name))) return "Folder tidak bisa dibuat di " + Path + ".";
+        Open(Path);
+        return null;
+    }
+
+    public string? NewFile(string name)
+    {
+        if (!CanEdit) return "Pilih media dulu.";
+        var why = Check(name);
+        if (why != null) return why;
+        if (Files.GetInfo(Child(name)) != null) return "Sudah ada berkas atau folder bernama " + name.ToUpperInvariant() + ".";
+        if (!Files.WriteAllText(Child(name), "")) return "Berkas tidak bisa dibuat di " + Path + ".";
+        Open(Path);
+        return null;
+    }
+
+    public string? Rename(FileEntry f, string name)
+    {
+        var why = Check(name);
+        if (why != null) return why;
+        if (name.Trim().ToUpperInvariant() == f.Name) return null;
+        if (Files.GetInfo(Child(name)) != null) return "Sudah ada berkas atau folder bernama " + name.ToUpperInvariant() + ".";
+        if (!Files.Move(f.Path, Child(name))) return "Tidak bisa mengganti nama " + f.Name + ".";
+        Open(Path);
+        return null;
+    }
+
+    /// <summary>Move into `folder` (an absolute folder path, e.g. "/disk/ARSIP" or "/ram").</summary>
+    public string? MoveTo(FileEntry f, string folder)
+    {
+        folder = folder.Trim().TrimEnd('/').ToUpperInvariant().Replace("/DISK", "/disk").Replace("/RAM", "/ram");
+        var target = Files.GetInfo(folder);
+        if (target == null || !target.IsDirectory) return "Folder tujuan " + folder + " tidak ada.";
+        if (folder == Path.TrimEnd('/')) return "Sudah berada di folder itu.";
+        if (f.IsDirectory && (folder + "/").StartsWith(f.Path + "/")) return "Folder tidak bisa dipindah ke dalam dirinya sendiri.";
+        string to = folder + "/" + f.Name;
+        if (Files.GetInfo(to) != null) return "Di " + folder + " sudah ada " + f.Name + ".";
+        if (!Files.Move(f.Path, to))
+            return f.IsDirectory && !folder.StartsWith(Path.Substring(0, Math.Max(1, Path.IndexOf('/', 1) < 0 ? Path.Length : Path.IndexOf('/', 1))))
+                ? "Folder hanya bisa dipindah di media yang sama."
+                : "Tidak bisa memindahkan " + f.Name + ".";
+        Open(Path);
+        return null;
+    }
+
+    public string? Delete(FileEntry f)
+    {
+        if (!Files.Delete(f.Path))
+            return f.IsDirectory ? "Folder " + f.Name + " belum kosong." : "Tidak bisa menghapus " + f.Name + ".";
+        Open(Path);
+        return null;
+    }
+
+    /// <summary>The properties of an entry, as label / value rows.</summary>
+    public List<(string, string)> Properties(FileEntry f)
+    {
+        var rows = new List<(string, string)> { ("Nama", f.Name), ("Lokasi", Parent.Length == 0 && Path.Length == 0 ? "/" : Path), ("Jenis", Kinds.Describe(f)) };
+        var info = Files.GetInfo(f.Path);
+        if (f.IsDirectory)
+        {
+            int files = 0, folders = 0;
+            long bytes = 0;
+            foreach (var e in Files.List(f.Path))
+            {
+                if (e.IsDirectory) folders++;
+                else { files++; bytes += Math.Max(0, Files.GetInfo(e.Path)?.Size ?? 0); }
+            }
+            rows.Add(("Isi", files + " berkas, " + folders + " folder"));
+            rows.Add(("Ukuran", FormatSize(bytes) + " (tanpa subfolder)"));
+        }
+        else rows.Add(("Ukuran", info == null ? "?" : FormatSize(info.Size) + " (" + info.Size + " byte)"));
+        rows.Add(("Diubah", info?.Modified is DateTime m ? m.ToString("dd-MM-yyyy HH:mm") : "-"));
+        return rows;
     }
 
     public void Select(FileEntry? f)
@@ -103,6 +210,55 @@ public static class FilesApp
         grid.ItemsSource = vm.Entries;
         grid.SelectionChanged += g => vm.Select(g.SelectedItem as FileEntry);
 
+        void Toast(string? error, string ok)
+        {
+            if (error == null) notes?.Show(new Notification(ok, vm.Path, NotificationType.Success, 2000));
+            else notes?.Show(new Notification("Tidak bisa", error, NotificationType.Error));
+        }
+
+        // a small form: a hint and a text box; OK runs `act` with the text
+        void Ask(string title, string hint, string initial, string ok, Func<string, string?> act, string done)
+        {
+            var box = new TextBox { Text = initial, Width = 300 };
+            box.CaretIndex = initial.Length;
+            var body = new StackPanel { Spacing = 8 };
+            body.Children.Add(new TextBlock(hint) { TextWrapping = TextWrapping.Wrap }.WithClass("muted"));
+            body.Children.Add(box);
+            Dialog.Show(w, title, body, ok, "Batal", go => { if (go) Toast(act(box.Text), done); grid.Focus(); });
+            box.Focus();
+        }
+
+        FileEntry? Selected() => grid.SelectedItem as FileEntry;
+        void NewFolder() => Ask("Folder baru", "Nama folder (8.3, mis. ARSIP).", "", "Buat", vm.NewFolder, "Folder dibuat");
+        void NewFile() => Ask("Berkas baru", "Nama berkas (8.3, mis. CATATAN.TXT).", "BARU.TXT", "Buat", vm.NewFile, "Berkas dibuat");
+        void Rename() { if (Selected() is FileEntry f) Ask("Ganti nama", "Nama baru untuk " + f.Name + ".", f.Name, "Ganti", n => vm.Rename(f, n), "Nama diganti"); }
+        void Move()
+        {
+            if (Selected() is not FileEntry f) return;
+            Ask("Pindahkan " + f.Name, "Folder tujuan, mis. /disk/ARSIP, /disk atau /ram (berkas bisa pindah media).", vm.Path, "Pindahkan", t => vm.MoveTo(f, t), "Dipindahkan");
+        }
+        void Delete()
+        {
+            if (Selected() is not FileEntry f) return;
+            Dialog.Show(w, "Hapus " + (f.IsDirectory ? "folder" : "berkas") + "?", f.Path + (f.IsDirectory ? " (harus kosong)" : "") + " akan dihapus permanen.", "Hapus", "Batal",
+                go => { if (go) Toast(vm.Delete(f), "Dihapus"); grid.Focus(); });
+        }
+        void Properties()
+        {
+            if (Selected() is not FileEntry f) return;
+            var table = new Grid { ColumnDefinitions = "90,*", RowSpacing = 6 };
+            var rows = vm.Properties(f);
+            var defs = new List<string>();
+            for (int i = 0; i < rows.Count; i++) defs.Add("Auto");
+            table.RowDefinitions = string.Join(",", defs);
+            for (int i = 0; i < rows.Count; i++)
+            {
+                table.Children.Add(new TextBlock(rows[i].Item1).WithClass("faint").Cell(i, 0));
+                table.Children.Add(new TextBlock(rows[i].Item2) { TextWrapping = TextWrapping.Wrap }.Cell(i, 1));
+            }
+            Dialog.Show(w, "Properti", table, "Tutup", null, _ => grid.Focus());
+        }
+
         void OpenSelected()
         {
             if (grid.SelectedItem is not FileEntry f) return;
@@ -117,10 +273,23 @@ public static class FilesApp
                 catch (Exception e) { notes?.Show(new Notification("Gagal", e.Message, NotificationType.Error)); }
             }
         }
-        grid.KeyDown += (_, e) => { if (e.Key == Keys.Enter) { OpenSelected(); e.Handled = true; } };
+        grid.KeyDown += (_, e) =>
+        {
+            if (e.Key == Keys.Enter) { OpenSelected(); e.Handled = true; }
+            else if (e.Key == Keys.F2) { Rename(); e.Handled = true; }
+            else if (e.Key == Keys.Delete) { Delete(); e.Handled = true; }
+        };
 
         var menu = new MenuFlyout()
             .Add(new MenuItem("Buka", _ => OpenSelected(), "Enter", IconKind.Play))
+            .Add(MenuItem.Separator())
+            .Add(new MenuItem("Folder baru", _ => NewFolder(), "", IconKind.Folder))
+            .Add(new MenuItem("Berkas baru", _ => NewFile(), "Ctrl+N", IconKind.Plus))
+            .Add(new MenuItem("Ganti nama", _ => Rename(), "F2", IconKind.File))
+            .Add(new MenuItem("Pindahkan...", _ => Move(), "", IconKind.ChevronRight))
+            .Add(new MenuItem("Hapus", _ => Delete(), "Del", IconKind.Trash))
+            .Add(MenuItem.Separator())
+            .Add(new MenuItem("Properti", _ => Properties(), "", IconKind.Info))
             .Add(new MenuItem("Muat ulang", _ => vm.Open(vm.Path), "F5", IconKind.Refresh));
         grid.WithContextMenu(menu);
 
@@ -128,12 +297,30 @@ public static class FilesApp
             .WithClass("strong").Bind(TextBlock.TextProperty, vm, () => vm.Path.Length == 0 ? "Semua media" : vm.Path, nameof(FilesViewModel.Path));
         var summary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0) }.WithClass("faint")
             .Bind(TextBlock.TextProperty, vm, () => vm.Summary, nameof(FilesViewModel.Summary));
-        var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
         bar.Children.Add(new Button(new Icon(IconKind.Play, 14), _ => OpenSelected()).WithClass("accent").WithTip("Buka / jalankan (Enter)").DockTo(Dock.Right));
         bar.Children.Add(new Button(new Icon(IconKind.Refresh, 14), _ => vm.Open(vm.Path)) { Margin = new Thickness(0, 0, 6, 0) }.WithTip("Muat ulang").DockTo(Dock.Right));
-        bar.Children.Add(new Icon(IconKind.Folder, 16) { Margin = new Thickness(0, 0, 8, 0) }.WithClass("accent").DockTo(Dock.Left));
+        bar.Children.Add(new Button(new Icon(IconKind.ChevronLeft, 14), _ => vm.Open(vm.Parent)) { Margin = new Thickness(0, 0, 8, 0) }.WithClass("subtle").WithTip("Naik satu folder (Backspace)").DockTo(Dock.Left));
         bar.Children.Add(summary.DockTo(Dock.Right));
         bar.Children.Add(path);
+
+        // the file-management toolbar
+        Button Tool(IconKind glyph, string label, Action act, string tip)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            row.Children.Add(new Icon(glyph, 12) { VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(new TextBlock(label));
+            var b = new Button(row, _ => act()) { Padding = new Thickness(8, 4), Tag = label };
+            b.Classes.Add("subtle");
+            return (Button)b.WithTip(tip);
+        }
+        var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        tools.Children.Add(Tool(IconKind.Folder, "Folder baru", NewFolder, "Buat folder di sini"));
+        tools.Children.Add(Tool(IconKind.Plus, "Berkas baru", NewFile, "Buat berkas teks kosong (Ctrl+N)"));
+        tools.Children.Add(Tool(IconKind.File, "Ganti nama", Rename, "Ganti nama yang dipilih (F2)"));
+        tools.Children.Add(Tool(IconKind.ChevronRight, "Pindahkan", Move, "Pindahkan ke folder lain"));
+        tools.Children.Add(Tool(IconKind.Trash, "Hapus", Delete, "Hapus yang dipilih (Del)"));
+        tools.Children.Add(Tool(IconKind.Info, "Properti", Properties, "Ukuran, jenis, tanggal"));
 
         var preview = new TextBlock { TextWrapping = TextWrapping.Wrap }.WithClass("muted")
             .Bind(TextBlock.TextProperty, vm, () => vm.Preview.Length == 0 ? "Pilih berkas untuk melihat isinya." : vm.Preview, nameof(FilesViewModel.Preview));
@@ -141,6 +328,7 @@ public static class FilesApp
 
         var right = new DockPanel { Margin = new Thickness(12) };
         right.Children.Add(bar.DockTo(Dock.Top));
+        right.Children.Add(tools.DockTo(Dock.Top));
         right.Children.Add(previewBox.DockTo(Dock.Bottom));
         right.Children.Add(new Border { Child = grid }.WithClass("inset"));
 
@@ -153,7 +341,15 @@ public static class FilesApp
         layout.Children.Add(new GridSplitter().Col(1));
         layout.Children.Add(right.Col(2));
         w.Content = layout;
-        w.UnhandledKey += e => { if (e.Key == Keys.Backspace) { vm.Open(""); e.Handled = true; } };
+        w.UnhandledKey += e =>
+        {
+            switch (e.Key)
+            {
+                case Keys.Backspace: vm.Open(vm.Parent); e.Handled = true; break;   // up one folder
+                case (char)14: NewFile(); e.Handled = true; break;                  // Ctrl+N
+                case Keys.F5: vm.Open(vm.Path); e.Handled = true; break;
+            }
+        };
 
         // start in /disk when present
         TreeViewItem? start = null;
@@ -196,6 +392,29 @@ public static class FilesApp
         grid.SortBy(0);
         grid.SortBy(0);
         c.That(true, "sorting both ways");
+
+        // file management
+        vm.Open(dir);
+        foreach (var leftover in new[] { "/ARSIP/BACA.TXT", "/ARSIP/LAMA/X.TXT", "/ARSIP/LAMA", "/ARSIP", "/BACA2.TXT" }) Files.Delete(dir + leftover);
+        c.That(vm.NewFolder("arsip") == null && Files.GetInfo(dir + "/ARSIP")?.IsDirectory == true, "new folder ARSIP");
+        c.That(vm.NewFolder("ARSIP") != null, "a second ARSIP is refused");
+        c.That(vm.NewFolder("nama-terlalu-panjang") != null, "a name that is not 8.3 is refused");
+        FileEntry? Find(string n) { foreach (var e in vm.Entries) if (e.Name == n) return e; return null; }
+        c.That(vm.Rename(Find("BACA.TXT")!, "BACA2.TXT") == null && Find("BACA2.TXT") != null && Find("BACA.TXT") == null, "rename BACA.TXT -> BACA2.TXT");
+        c.That(vm.MoveTo(Find("BACA2.TXT")!, dir + "/ARSIP") == null && Files.ReadAllText(dir + "/ARSIP/BACA2.TXT").Contains("Kebun"), "move into ARSIP keeps the content");
+        c.That(Find("ARSIP")!.IsDirectory && vm.Entries.IndexOf(Find("ARSIP")!) == 0, "folders are listed first");
+        var props = vm.Properties(Find("ARSIP")!);
+        c.That(props.Exists(r => r.Item1 == "Isi" && r.Item2.StartsWith("1 berkas")), "properties count the folder's content");
+        c.That(vm.Delete(Find("ARSIP")!) != null, "a non-empty folder is not deleted");
+        vm.Open(dir + "/ARSIP");
+        c.That(vm.Parent == dir, "parent of " + vm.Path + " is " + vm.Parent);
+        c.That(vm.Delete(Find("BACA2.TXT")!) == null, "delete a file");
+        vm.Open(dir);
+        c.That(vm.Delete(Find("ARSIP")!) == null && Files.GetInfo(dir + "/ARSIP") == null, "delete the empty folder");
+        Control? newFolder = null;
+        foreach (var d in w.Descendants()) if (d is Button b && (b.Tag as string) == "Folder baru") newFolder = d;
+        if (newFolder != null) w.SimulateClick(newFolder);
+        c.That(w.Popups.Count == 1, "the toolbar's Folder baru opens a form");
         w.RenderFrame();
         c.That(w.LastFrameOps > 20, "frame drew " + w.LastFrameOps + " ops");
         return c;

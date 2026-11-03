@@ -53,6 +53,23 @@ pub fn inject_absolute(x: i64, y: i64, max_x: i64, max_y: i64, buttons: u8) {
     PACKETS.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Wheel notches not yet taken by the desktop (positive = away from the user,
+/// i.e. scroll up -- the Linux REL_WHEEL convention).
+static WHEEL: AtomicI64 = AtomicI64::new(0);
+
+/// Wheel notches from any pointing device (PS/2 IntelliMouse, virtio, USB).
+pub fn inject_wheel(notches: i64) {
+    if notches != 0 {
+        WHEEL.fetch_add(notches, Ordering::Relaxed);
+        PACKETS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Take the wheel notches accumulated since the last call.
+pub fn take_wheel() -> i64 {
+    WHEEL.swap(0, Ordering::Relaxed)
+}
+
 /// Left-button presses seen (0 -> 1 transitions), so the desktop loop can
 /// replay a click that went down and up between two of its samples -- a busy
 /// app (a managed one redrawing a blinking caret) can delay the loop past a

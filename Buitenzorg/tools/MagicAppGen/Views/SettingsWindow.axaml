@@ -1,81 +1,120 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="MagicAppGen.Views.SettingsWindow"
-        Width="640" Height="620"
+        Width="820" Height="640" MinWidth="680" MinHeight="500"
         WindowStartupLocation="CenterOwner"
-        Title="Settings" Background="#101512">
-  <DockPanel Margin="14">
-    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal"
-                HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
-      <Button Content="Cancel" Click="OnCancel" />
-      <Button Classes="primary" Content="Save" Click="OnSave" IsDefault="True" />
-    </StackPanel>
+        Title="Pengaturan" Background="{StaticResource Canopy}">
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Vein}" BorderThickness="0,1,0,0" Padding="18,12">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock x:Name="ConfigPath" Classes="faint code" FontSize="10.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+          <Button Content="Batal" Click="OnCancel" IsCancel="True" />
+          <Button Classes="primary" Content="Simpan" Click="OnSave" IsDefault="True" />
+        </StackPanel>
+      </Grid>
+    </Border>
 
-    <ScrollViewer>
-      <StackPanel Spacing="10">
-        <TextBlock Text="General" FontWeight="Bold" Foreground="#5FD46E" />
-        <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto">
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="Active provider" VerticalAlignment="Center" />
-          <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ProviderBox" Width="180" HorizontalAlignment="Left">
-            <ComboBoxItem>OpenAI</ComboBoxItem>
-            <ComboBoxItem>Claude</ComboBoxItem>
-            <ComboBoxItem>Gemini</ComboBoxItem>
-            <ComboBoxItem>Ollama</ComboBoxItem>
-          </ComboBox>
+    <TabControl x:Name="Tabs" TabStripPlacement="Left" Padding="0">
+      <!-- ===== General ===== -->
+      <TabItem Header="Umum">
+        <ScrollViewer>
+          <StackPanel Margin="22,18" Spacing="10" MaxWidth="560" HorizontalAlignment="Left">
+            <TextBlock Text="Umum" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="REPO BUITENZORG" Classes="eyebrow" Margin="0,8,0,0" />
+            <TextBox x:Name="RootBox" Classes="code" Watermark="C:\path\to\Buitenzorg" />
+            <TextBlock Classes="faint" TextWrapping="Wrap"
+                       Text="Dipakai untuk bflat, pustaka Buitenzorg.App/UI dan skrip build. Kosongkan untuk deteksi otomatis dari lokasi MagicAppGen." />
 
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="Temperature" VerticalAlignment="Center" Margin="0,6,0,0" />
-          <TextBox Grid.Row="1" Grid.Column="1" x:Name="TempBox" Width="180" HorizontalAlignment="Left" Margin="0,6,0,0" />
+            <TextBlock Text="SUHU (TEMPERATURE)" Classes="eyebrow" Margin="0,10,0,0" />
+            <TextBox x:Name="TempBox" Width="120" HorizontalAlignment="Left" />
+            <TextBlock Classes="faint" TextWrapping="Wrap"
+                       Text="Model Claude terbaru dan model penalaran OpenAI (gpt-5.x) menolak suhu khusus; MagicAppGen tidak mengirimnya ke model-model itu." />
 
-          <TextBlock Grid.Row="2" Grid.Column="0" Text="Language" VerticalAlignment="Center" Margin="0,6,0,0" />
-          <TextBox Grid.Row="2" Grid.Column="1" x:Name="LangBox" Width="180" HorizontalAlignment="Left" Margin="0,6,0,0" />
+            <TextBlock Text="PROMPT SISTEM JACK" Classes="eyebrow" Margin="0,10,0,0" />
+            <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="150" MaxHeight="260"
+                     Watermark="Kosongkan untuk memakai prompt bawaan (tahu jalur native, managed, dan skrip)." />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-          <TextBlock Grid.Row="3" Grid.Column="0" Text="Buitenzorg repo root" VerticalAlignment="Center" Margin="0,6,0,0" />
-          <TextBox Grid.Row="3" Grid.Column="1" x:Name="RootBox" Margin="0,6,0,0"
-                   Watermark="C:\path\to\Buitenzorg" />
-        </Grid>
+      <!-- ===== AI providers ===== -->
+      <TabItem Header="Model AI">
+        <ScrollViewer>
+          <StackPanel Margin="22,18" Spacing="10">
+            <TextBlock Text="Model AI" FontSize="18" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Text="Penyedia aktif" Classes="muted" VerticalAlignment="Center" Margin="0,0,12,0" />
+              <ComboBox Grid.Column="1" x:Name="ProviderBox" Width="220" />
+            </Grid>
+            <TextBlock Classes="faint" TextWrapping="Wrap"
+                       Text="Kunci disimpan di MagicAppGen.dll.config di folder bin (tidak masuk git). Daftar model hanya saran — ketik ID model apa pun." />
+            <StackPanel x:Name="ProviderRows" Spacing="10" Margin="0,6,0,0" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-        <TextBlock Text="System prompt (Jack - The Code Bender)" FontWeight="Bold" Foreground="#5FD46E" Margin="0,8,0,0" />
-        <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="110"
-                 Watermark="Leave empty to use the built-in Buitenzorg system prompt." />
+      <!-- ===== Devices ===== -->
+      <TabItem Header="Perangkat">
+        <ScrollViewer>
+          <StackPanel Margin="22,18" Spacing="10">
+            <TextBlock Text="Perangkat" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Classes="faint" TextWrapping="Wrap"
+                       Text="MagicAppGen mengirim dan menjalankan aplikasi lewat BZDP (UDP). Di perangkat, jalankan `deploy on` di terminal; ia menampilkan kode pemasangan 4 digit." />
+            <Grid ColumnDefinitions="220,16,*">
+              <DockPanel Grid.Column="0">
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+                  <Button Content="+ Tambah" Click="OnAddDevice" />
+                  <Button Classes="danger" Content="Hapus" Click="OnRemoveDevice" />
+                </StackPanel>
+                <Border Classes="card" Padding="4">
+                  <ListBox x:Name="DeviceList" MinHeight="200" SelectionChanged="OnDeviceSelected" />
+                </Border>
+              </DockPanel>
+              <StackPanel Grid.Column="2" Spacing="8">
+                <TextBlock Text="NAMA" Classes="eyebrow" />
+                <TextBox x:Name="DevName" TextChanged="OnDeviceEdited" />
+                <TextBlock Text="ALAMAT IP / HOST" Classes="eyebrow" />
+                <TextBox x:Name="DevHost" Classes="code" TextChanged="OnDeviceEdited" Watermark="192.168.1.50" />
+                <Grid ColumnDefinitions="*,12,*">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="PORT UDP" Classes="eyebrow" />
+                    <TextBox x:Name="DevPort" Classes="code" TextChanged="OnDeviceEdited" Watermark="7070" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Spacing="8">
+                    <TextBlock Text="KODE PEMASANGAN" Classes="eyebrow" />
+                    <TextBox x:Name="DevCode" Classes="code" TextChanged="OnDeviceEdited" Watermark="0000" MaxLength="4" />
+                  </StackPanel>
+                </Grid>
+                <TextBlock x:Name="DevError" Classes="error" IsVisible="False" />
+                <TextBlock Classes="faint" TextWrapping="Wrap" Margin="0,4,0,0"
+                           Text="QEMU lokal: tambahkan -netdev user,id=n0,hostfwd=udp::7070-:7070 lalu pakai 127.0.0.1. Raspberry Pi: IP dari router (alamat DHCP tampil di log boot)." />
+              </StackPanel>
+            </Grid>
 
-        <TextBlock Text="Providers" FontWeight="Bold" Foreground="#5FD46E" Margin="0,8,0,0" />
-        <Grid ColumnDefinitions="90,*,*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
-          <Grid.Styles>
-            <Style Selector="Grid > TextBox">
-              <Setter Property="Margin" Value="3" />
-            </Style>
-          </Grid.Styles>
-          <TextBlock Grid.Row="0" Grid.Column="1" Text="Model" Foreground="#92A899" />
-          <TextBlock Grid.Row="0" Grid.Column="2" Text="API key" Foreground="#92A899" />
-          <TextBlock Grid.Row="0" Grid.Column="3" Text="Endpoint" Foreground="#92A899" />
+            <TextBlock Text="C# NATIVE" Classes="eyebrow" Margin="0,14,0,0" />
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Text="Arsitektur native" Classes="muted" VerticalAlignment="Center" Margin="0,0,12,0" />
+              <ComboBox Grid.Column="1" x:Name="ArchBox" Width="220">
+                <ComboBoxItem>x64 (PC, QEMU x86-64)</ComboBoxItem>
+                <ComboBoxItem>arm64 (Raspberry Pi, QEMU virt)</ComboBoxItem>
+              </ComboBox>
+            </Grid>
+            <TextBlock Classes="faint" TextWrapping="Wrap"
+                       Text="RISC-V tidak punya target bflat: pakai proyek managed atau skrip. arm64 membutuhkan bflat yang ditambal (jalankan scripts/build-hello-csharp-arm64.ps1 sekali)." />
+            <CheckBox x:Name="LibsCheck" Content="Untuk managed: kirim juga BZAPP.DLL &amp; BZUI.DLL" Margin="0,6,0,0" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="OpenAI" VerticalAlignment="Center" />
-          <TextBox Grid.Row="1" Grid.Column="1" x:Name="OpenAiModel" />
-          <TextBox Grid.Row="1" Grid.Column="2" x:Name="OpenAiKey" PasswordChar="*" />
-          <TextBox Grid.Row="1" Grid.Column="3" x:Name="OpenAiEndpoint" />
-
-          <TextBlock Grid.Row="2" Grid.Column="0" Text="Claude" VerticalAlignment="Center" />
-          <TextBox Grid.Row="2" Grid.Column="1" x:Name="ClaudeModel" />
-          <TextBox Grid.Row="2" Grid.Column="2" x:Name="ClaudeKey" PasswordChar="*" />
-          <TextBox Grid.Row="2" Grid.Column="3" x:Name="ClaudeEndpoint" />
-
-          <TextBlock Grid.Row="3" Grid.Column="0" Text="Gemini" VerticalAlignment="Center" />
-          <TextBox Grid.Row="3" Grid.Column="1" x:Name="GeminiModel" />
-          <TextBox Grid.Row="3" Grid.Column="2" x:Name="GeminiKey" PasswordChar="*" />
-          <TextBox Grid.Row="3" Grid.Column="3" x:Name="GeminiEndpoint" />
-
-          <TextBlock Grid.Row="4" Grid.Column="0" Text="Ollama" VerticalAlignment="Center" />
-          <TextBox Grid.Row="4" Grid.Column="1" x:Name="OllamaModel" />
-          <TextBox Grid.Row="4" Grid.Column="2" x:Name="OllamaKey" PasswordChar="*" />
-          <TextBox Grid.Row="4" Grid.Column="3" x:Name="OllamaEndpoint" />
-        </Grid>
-
-        <TextBlock Text="Tools" FontWeight="Bold" Foreground="#5FD46E" Margin="0,8,0,0" />
-        <Grid ColumnDefinitions="150,*">
-          <TextBlock Grid.Column="0" Text="Tavily API key" VerticalAlignment="Center" />
-          <TextBox Grid.Column="1" x:Name="TavilyBox" PasswordChar="*" />
-        </Grid>
-      </StackPanel>
-    </ScrollViewer>
+      <!-- ===== Tools ===== -->
+      <TabItem Header="Alat">
+        <StackPanel Margin="22,18" Spacing="10" MaxWidth="560" HorizontalAlignment="Left">
+          <TextBlock Text="Alat" FontSize="18" FontWeight="SemiBold" />
+          <TextBlock Text="KUNCI API TAVILY (PENCARIAN WEB JACK)" Classes="eyebrow" Margin="0,8,0,0" />
+          <TextBox x:Name="TavilyBox" PasswordChar="•" Classes="code" />
+        </StackPanel>
+      </TabItem>
+    </TabControl>
   </DockPanel>
 </Window>

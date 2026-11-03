@@ -24,6 +24,57 @@ pub enum Effect {
     Redraw, // theme/workspace changed; recompose the desktop
 }
 
+/// `ssh [on | off]`: the SSH server (port 22, accounts from Pengaturan > Pengguna).
+fn ssh_cmd(arg: Option<&str>) -> Vec<String> {
+    match arg {
+        Some("on") => {
+            if let Err(e) = crate::ssh::start(true) {
+                return vec![format!("ssh: {}", e)];
+            }
+        }
+        Some("off") => crate::ssh::stop(),
+        None | Some("status") => {}
+        Some(_) => return vec![String::from("pakai: ssh [on | off]")],
+    }
+    let (on, sessions, logins) = crate::ssh::status();
+    let ip = crate::net::local_ip().map_or(String::from("(tanpa jaringan)"), crate::net::fmt_ip);
+    if on {
+        vec![
+            format!("ssh: AKTIF di {}:{} -- {} sesi, {} login berhasil", ip, crate::ssh::PORT, sessions, logins),
+            format!("     kunci host {}", crate::ssh::fingerprint()),
+            String::from("     masuk: ssh administrator@<ip> (ganti kata sandi bawaan di Pengaturan > Pengguna)"),
+        ]
+    } else {
+        vec![String::from("ssh: mati ('ssh on' untuk menyalakan server SSH di port 22)")]
+    }
+}
+
+/// `deploy [on [code] | off]`: the remote deploy service for the Magic App
+/// Generator (BZDP over UDP 7070, `deploy.rs`).
+fn deploy_cmd(args: &[&str]) -> Vec<String> {
+    match args.first().copied() {
+        Some("on") => {
+            let code = args.get(1).and_then(|c| c.parse::<u16>().ok()).filter(|c| *c < 10_000).unwrap_or_else(crate::deploy::random_code);
+            if !crate::deploy::enable(code) {
+                return vec![String::from("deploy: port UDP 7070 tidak bisa dibuka")];
+            }
+        }
+        Some("off") => crate::deploy::disable(),
+        None | Some("status") => {}
+        Some(_) => return vec![String::from("pakai: deploy [on [kode] | off]")],
+    }
+    let (on, code, served) = crate::deploy::status();
+    let ip = crate::net::local_ip().map_or(String::from("(tanpa jaringan)"), |ip| format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
+    if on {
+        vec![
+            format!("deploy: AKTIF di {}:{} (UDP), kode pairing {:04}", ip, crate::deploy::PORT, code),
+            format!("         {} permintaan dilayani; Magic App Generator > Perangkat", served),
+        ]
+    } else {
+        vec![String::from("deploy: mati ('deploy on' untuk menerima app dari Magic App Generator)")]
+    }
+}
+
 pub fn cwd() -> String {
     let s = STATE.lock();
     if s.cwd.is_empty() { String::from("/disk") } else { s.cwd.clone() }
@@ -70,6 +121,8 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         }
         "cpu" | "cpus" => (cpu_cmd(args.first().copied()), Effect::None),
         "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
+        "deploy" => (deploy_cmd(&args), Effect::None),
+        "ssh" | "sshd" => (ssh_cmd(args.first().copied()), Effect::None),
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
         "cursor" => cursor_cmd(args.first().copied()),
@@ -139,6 +192,8 @@ fn help() -> Vec<String> {
      "  rm <file>         hapus file",
      "  df                ruang kosong tiap mount",
      "  kill <pid>        hentikan proses app",
+     "  deploy on|off     terima app dari Magic App Generator (UDP 7070)",
+     "  ssh on|off        server SSH (port 22) untuk akses jarak jauh",
      "  ask <prompt>      AI: lengkapi teks (LLM lokal)",
      "  vm <sub>          virtualisasi (list/create/start/snapshot/restore)",
      "  script <lang> [f] polyglot: js|ts|py (jalankan demo/file)",

@@ -249,6 +249,56 @@ impl<'a> Canvas<'a> {
     }
 }
 
+impl<'a> Canvas<'a> {
+    /// Width of `text` drawn by [`Canvas::draw_text_scaled`].
+    pub fn text_width_scaled(&self, text: &str, style: TextStyle, scale: i32, tracking: i32) -> i32 {
+        let n = text.chars().count() as i32;
+        if n == 0 {
+            return 0;
+        }
+        let (weight, height) = style.font();
+        n * get_raster_width(weight, height) as i32 * scale + (n - 1) * tracking
+    }
+
+    /// Draw `text` with every glyph pixel enlarged to `scale` x `scale`,
+    /// `tracking` extra pixels between letters, at `alpha` (boot splash title).
+    pub fn draw_text_scaled(&mut self, x: i32, y: i32, text: &str, color: Color, style: TextStyle, scale: i32, tracking: i32, alpha: u8) {
+        let (weight, height) = style.font();
+        let gw = get_raster_width(weight, height) as i32 * scale + tracking;
+        let mut cx = x;
+        for c in text.chars() {
+            if let Some(raster) = get_raster(c, weight, height).or_else(|| get_raster('?', weight, height)) {
+                // Bilinear upscale of the glyph's coverage (8.8 fixed point),
+                // so a scaled title has smooth edges instead of blocks.
+                let rows = raster.raster();
+                let (srh, srw) = (rows.len() as i32, rows.first().map_or(0, |r| r.len()) as i32);
+                let at = |x: i32, y: i32| -> i32 {
+                    if x < 0 || y < 0 || x >= srw || y >= srh { 0 } else { rows[y as usize][x as usize] as i32 }
+                };
+                for oy in 0..srh * scale {
+                    let fy = ((oy * 2 + 1) * 128) / scale - 128;
+                    let (y0, wy) = (fy >> 8, fy & 0xFF);
+                    for ox in 0..srw * scale {
+                        let fx = ((ox * 2 + 1) * 128) / scale - 128;
+                        let (x0, wx) = (fx >> 8, fx & 0xFF);
+                        let top = at(x0, y0) * (256 - wx) + at(x0 + 1, y0) * wx;
+                        let bot = at(x0, y0 + 1) * (256 - wx) + at(x0 + 1, y0 + 1) * wx;
+                        let v = (top * (256 - wy) + bot * wy) >> 16;
+                        if v <= 0 {
+                            continue;
+                        }
+                        let (px, py) = (cx + ox, y + oy);
+                        if px >= 0 && py >= 0 {
+                            self.blend(px as usize, py as usize, color, (v.min(255) as u32 * alpha as u32 / 255) as u8);
+                        }
+                    }
+                }
+            }
+            cx += gw;
+        }
+    }
+}
+
 pub fn glyph_width() -> usize {
     get_raster_width(FONT_WEIGHT, FONT_HEIGHT)
 }

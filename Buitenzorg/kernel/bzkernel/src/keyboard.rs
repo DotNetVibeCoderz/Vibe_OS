@@ -69,6 +69,19 @@ fn nav_char(code: pc_keyboard::KeyCode) -> Option<char> {
         K::Delete => 6,
         K::PageUp => 7,
         K::PageDown => 8,
+        // F1..F12 -> F709..F714 (F2 rename, F5 refresh in the managed apps)
+        K::F1 => 9,
+        K::F2 => 10,
+        K::F3 => 11,
+        K::F4 => 12,
+        K::F5 => 13,
+        K::F6 => 14,
+        K::F7 => 15,
+        K::F8 => 16,
+        K::F9 => 17,
+        K::F10 => 18,
+        K::F11 => 19,
+        K::F12 => 20,
         _ => return None,
     };
     char::from_u32(NAV_FIRST as u32 + n)

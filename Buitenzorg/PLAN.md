@@ -679,6 +679,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
   timer; `bz prof <app>`. **Log**: `bz logs [-f] [app]`.
 
 ### E. Deploy & Run — lokal maupun remote
+> **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`
+> (protokol **BZDP v1**, UDP 7070, mati bawaan, `deploy on [kode]` dengan kode
+> pairing, unggah dengan CRC-32, RUN/LOG/KILL/LIST) + klien di **Magic App
+> Generator** (panel Perangkat, mode `--deploy`). Akses shell jarak jauh lewat
+> **SSH** (`ssh on`, port 22). Berikutnya: BZDP lewat TCP, VS Code.
 - **Lokal**: `run <path>` menjalankan ELF/skrip dari path mana pun (bukan hanya
   registry); "Run" dari Studio; hot-reload skrip.
 - **Agen `bzd` (bz-link) di OS + perintah host `bz remote`**: `bz device list/
@@ -710,6 +715,24 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 Buitenzorg yang sedang berjalan (QEMU) **tanpa build ulang image**, app jalan,
 log mengalir balik, dan breakpoint kena; di dalam OS, Studio mengedit & menjalankan
 skrip Python, dan app yang crash menampilkan backtrace ter-simbolisasi.
+
+## 🎮 Akselerasi GPU & 3D (permintaan 2026-11-03)
+
+Tujuan: layar dan aplikasi digambar lebih cepat, lalu akselerasi 3D. Bertahap,
+karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
+
+- **G1 — Compositor cepat (semua perangkat, tanpa GPU):** komposisi
+  *dirty-rectangle* (hanya area yang berubah), permukaan jendela **shared-memory
+  zero-copy** (ganti `BLIT` per piksel), komposisi paralel per-ubin di semua core,
+  salinan SIMD di compositor ring-3. Dampak terbesar untuk Pi 4 & QEMU.
+- **G2 — 2D di GPU:** virtio-gpu satu resource per jendela + `TRANSFER_TO_HOST_2D`
+  hanya untuk rect yang berubah; di **Raspberry Pi 4** pakai **HVS** (Hardware
+  Video Scaler VideoCore) sebagai plane overlay per jendela = komposisi hardware.
+- **G3 — API 3D `Buitenzorg.Graphics3D`:** vertex/index buffer, transform, z-buffer,
+  tekstur, shading sederhana; backend **software rasterizer** dulu (jalan di
+  semua arsitektur), lalu **virgl** (QEMU `virtio-gpu-gl`) dan **V3D** Pi 4
+  (VideoCore VI, mengikuti driver Mesa `v3d`). Demo: kubus/teapot berputar, game 3D kecil.
+- Prasyarat: FPU/SIMD untuk kode grafis (ring-3), timer resolusi tinggi untuk frame pacing.
 
 ## 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)
 Tujuan: Buitenzorg layak dipakai untuk **memutar musik/video, menjelajah
@@ -756,6 +779,11 @@ HTML mini. App ring-3 jalan **satu per satu**.
   perekam layar, widget "Now Playing" + OSD volume di tray.
 
 ### B. Internet
+- **Status 2026-11-03:** ✅ **TCP** (`tcp.rs`: handshake server+klien, retransmit
+  + backoff, window, FIN/RST; uji loopback `TCP OK`), ✅ **CSPRNG** (`rng.rs`:
+  ChaCha20 + RDRAND/jitter/seed tersimpan), ✅ X25519/Ed25519/ChaCha20-Poly1305
+  (crate no_std), ✅ **server SSH** (`ssh.rs`). Belum: socket `STREAM` untuk
+  ring-3, DNS, TLS.
 - **Stack jaringan**: driver **virtio-net** (QEMU) → **e1000** → Realtek;
   **TCP** penuh (state machine, retransmit, window), **DHCP**, **DNS resolver**,
   socket `STREAM` + `poll`, IPv6 menyusul; Wi-Fi jangka panjang.

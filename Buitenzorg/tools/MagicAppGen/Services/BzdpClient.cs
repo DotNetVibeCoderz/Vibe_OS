@@ -1,0 +1,279 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.IO.Hashing;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace MagicAppGen.Services;
+
+/// <summary>BZDP v1 operation codes. Replies carry <c>op | 0x80</c>.</summary>
+public enum BzdpOp : byte
+{
+    Hello = 1, Begin = 2, Data = 3, End = 4, Run = 5, Log = 6, Kill = 7, List = 8,
+}
+
+/// <summary>The status byte that starts every reply payload.</summary>
+public enum BzdpStatus : byte
+{
+    Ok = 0, BadCode = 1, BadRequest = 2, IoError = 3, NotFound = 4, Busy = 5,
+}
+
+/// <summary>A device answered, but not with "ok".</summary>
+public sealed class BzdpException : Exception
+{
+    public BzdpStatus Status { get; }
+    public BzdpException(BzdpStatus status, string message) : base(message) => Status = status;
+}
+
+/// <summary>No reply after every retry.</summary>
+public sealed class BzdpTimeoutException : Exception
+{
+    public BzdpTimeoutException(string message) : base(message) { }
+}
+
+/// <summary>What HELLO tells us about the device.</summary>
+public sealed record BzdpDeviceInfo(string Text, string Arch, string Hostname, int MaxChunk);
+
+/// <summary>Upload progress: bytes acknowledged by the device out of the total.</summary>
+public readonly record struct BzdpProgress(string RemotePath, long Sent, long Total);
+
+/// <summary>
+/// Client of the Buitenzorg Deploy Protocol v1: UDP, little-endian,
+/// stop-and-wait. Each request is one datagram; the client waits up to
+/// <see cref="ReplyTimeout"/> for a reply with the same sequence number and
+/// resends it up to <see cref="Attempts"/> times in total.
+///
+/// <code>
+/// datagram = "BZDP" | u8 version=1 | u8 op | u32 seq | u16 code | payload
+/// reply    = same header with op|0x80, code 0; payload starts with u8 status
+/// </code>
+/// </summary>
+public sealed class BzdpClient : IDisposable
+{
+    public const int DefaultPort = 7070;
+    public const byte Version = 1;
+    public const int HeaderSize = 12;
+    static readonly byte[] Magic = "BZDP"u8.ToArray();
+
+    readonly UdpClient _udp;
+    readonly IPEndPoint _device;
+    readonly SemaphoreSlim _gate = new(1, 1);
+    uint _seq;
+
+    public string Host { get; }
+    public int Port { get; }
+    public ushort Code { get; }
+    public TimeSpan ReplyTimeout { get; init; } = TimeSpan.FromMilliseconds(500);
+    public int Attempts { get; init; } = 6;
+    /// <summary>Payload size per DATA, until HELLO reports the device's own limit.</summary>
+    public int MaxChunk { get; private set; } = 1024;
+    /// <summary>Diagnostic sink (retries, resends); may be null.</summary>
+    public Action<string>? Trace { get; init; }
+
+    public BzdpClient(string host, int port = DefaultPort, int code = 0)
+    {
+        if (code is < 0 or > 9999) throw new ArgumentOutOfRangeException(nameof(code), "pairing code is 0000-9999");
+        Host = host;
+        Port = port;
+        Code = (ushort)code;
+        var addr = IPAddress.TryParse(host, out var ip)
+            ? ip
+            : Array.Find(Dns.GetHostAddresses(host), a => a.AddressFamily == AddressFamily.InterNetwork)
+              ?? throw new ArgumentException($"cannot resolve '{host}' to an IPv4 address");
+        _device = new IPEndPoint(addr, port);
+        _udp = new UdpClient(AddressFamily.InterNetwork);
+        _udp.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
+        // Windows reports an ICMP "port unreachable" for an earlier datagram as an
+        // exception on the next receive; switch that off so a stale error cannot
+        // eat a retry (SIO_UDP_CONNRESET = 0x9800000C).
+        if (OperatingSystem.IsWindows())
+            try { _udp.Client.IOControl(unchecked((int)0x9800000C), new byte[] { 0 }, null); } catch { }
+        _seq = (uint)Random.Shared.Next(1, int.MaxValue);
+    }
+
+    public void Dispose() { _udp.Dispose(); _gate.Dispose(); }
+
+    // ---- operations ---------------------------------------------------------
+
+    public async Task<BzdpDeviceInfo> HelloAsync(CancellationToken ct = default)
+    {
+        var data = await RequestAsync(BzdpOp.Hello, ReadOnlyMemory<byte>.Empty, ct);
+        var text = Encoding.UTF8.GetString(data.Span);
+        var info = ParseHello(text);
+        if (info.MaxChunk > 0) MaxChunk = Math.Min(info.MaxChunk, 60_000);
+        return info;
+    }
+
+    /// <summary>Parse "Buitenzorg OS &lt;arch&gt; &lt;hostname&gt;; max_chunk=&lt;n&gt;".</summary>
+    public static BzdpDeviceInfo ParseHello(string text)
+    {
+        string head = text, arch = "?", host = "?";
+        int maxChunk = 1024;
+        int semi = text.IndexOf(';');
+        if (semi >= 0)
+        {
+            head = text[..semi];
+            foreach (var part in text[(semi + 1)..].Split(';', StringSplitOptions.TrimEntries))
+                if (part.StartsWith("max_chunk=", StringComparison.Ordinal) &&
+                    int.TryParse(part["max_chunk=".Length..], out var n) && n > 0)
+                    maxChunk = n;
+        }
+        var words = head.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // "Buitenzorg" "OS" arch hostname
+        if (words.Length >= 3) arch = words[2];
+        if (words.Length >= 4) host = string.Join(' ', words, 3, words.Length - 3);
+        return new BzdpDeviceInfo(text, arch, host, maxChunk);
+    }
+
+    /// <summary>Upload one file: BEGIN, DATA until the device has every byte, END with the CRC-32.</summary>
+    public async Task UploadAsync(string remotePath, byte[] content, IProgress<BzdpProgress>? progress = null,
+                                  CancellationToken ct = default)
+    {
+        var path = Encoding.UTF8.GetBytes(remotePath);
+        if (path.Length > ushort.MaxValue) throw new ArgumentException("path too long", nameof(remotePath));
+        var begin = new byte[4 + 2 + path.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(begin, (uint)content.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(begin.AsSpan(4), (ushort)path.Length);
+        path.CopyTo(begin, 6);
+        await RequestAsync(BzdpOp.Begin, begin, ct);
+        progress?.Report(new BzdpProgress(remotePath, 0, content.Length));
+
+        uint offset = 0;
+        int stalls = 0;
+        while (offset < content.Length)
+        {
+            int n = Math.Min(MaxChunk, content.Length - (int)offset);
+            var msg = new byte[4 + n];
+            BinaryPrimitives.WriteUInt32LittleEndian(msg, offset);
+            Buffer.BlockCopy(content, (int)offset, msg, 4, n);
+            var reply = await RequestAsync(BzdpOp.Data, msg, ct);
+            if (reply.Length < 4) throw new BzdpException(BzdpStatus.BadRequest, "DATA reply without next_offset");
+            uint next = BinaryPrimitives.ReadUInt32LittleEndian(reply.Span);
+            if (next > content.Length) throw new BzdpException(BzdpStatus.BadRequest, $"device reports offset {next} past the end ({content.Length})");
+            if (next <= offset)
+            {
+                // The device did not take this chunk (e.g. an earlier one went missing):
+                // resend from where it says it is, but never loop for ever.
+                if (++stalls > Attempts * 4) throw new BzdpException(BzdpStatus.IoError, $"upload stuck at byte {next}");
+                Trace?.Invoke($"[bzdp] device at {next}, resending from there");
+            }
+            else stalls = 0;
+            offset = next;
+            progress?.Report(new BzdpProgress(remotePath, offset, content.Length));
+        }
+
+        var end = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(end, Crc32.HashToUInt32(content));
+        await RequestAsync(BzdpOp.End, end, ct);
+    }
+
+    /// <summary>Run a shell command line on the device. Returns the pid, or 0 when it ran synchronously.</summary>
+    public async Task<uint> RunAsync(string commandLine, CancellationToken ct = default)
+    {
+        var reply = await RequestAsync(BzdpOp.Run, Encoding.UTF8.GetBytes(commandLine), ct);
+        return reply.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(reply.Span) : 0;
+    }
+
+    /// <summary>Read device console output from <paramref name="cursor"/>. Returns the next cursor and the text.</summary>
+    public async Task<(uint Next, string Text)> LogAsync(uint cursor, CancellationToken ct = default)
+    {
+        var msg = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(msg, cursor);
+        var reply = await RequestAsync(BzdpOp.Log, msg, ct);
+        if (reply.Length < 4) throw new BzdpException(BzdpStatus.BadRequest, "LOG reply without next_cursor");
+        uint next = BinaryPrimitives.ReadUInt32LittleEndian(reply.Span);
+        return (next, Encoding.UTF8.GetString(reply.Span[4..]));
+    }
+
+    public async Task KillAsync(uint pid, CancellationToken ct = default)
+    {
+        var msg = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(msg, pid);
+        await RequestAsync(BzdpOp.Kill, msg, ct);
+    }
+
+    public async Task<IReadOnlyList<string>> ListAsync(string path, CancellationToken ct = default)
+    {
+        var reply = await RequestAsync(BzdpOp.List, Encoding.UTF8.GetBytes(path), ct);
+        return Encoding.UTF8.GetString(reply.Span).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    // ---- transport ----------------------------------------------------------
+
+    public static byte[] Encode(BzdpOp op, uint seq, ushort code, ReadOnlySpan<byte> payload, bool reply = false)
+    {
+        var d = new byte[HeaderSize + payload.Length];
+        Magic.CopyTo(d, 0);
+        d[4] = Version;
+        d[5] = (byte)((byte)op | (reply ? 0x80 : 0));
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(6), seq);
+        BinaryPrimitives.WriteUInt16LittleEndian(d.AsSpan(10), code);
+        payload.CopyTo(d.AsSpan(HeaderSize));
+        return d;
+    }
+
+    /// <summary>Decode a header; false for anything that is not a BZDP v1 datagram.</summary>
+    public static bool TryDecode(ReadOnlySpan<byte> d, out byte op, out uint seq, out ushort code)
+    {
+        op = 0; seq = 0; code = 0;
+        if (d.Length < HeaderSize || !d[..4].SequenceEqual(Magic) || d[4] != Version) return false;
+        op = d[5];
+        seq = BinaryPrimitives.ReadUInt32LittleEndian(d[6..]);
+        code = BinaryPrimitives.ReadUInt16LittleEndian(d[10..]);
+        return true;
+    }
+
+    /// <summary>Send one request and wait for its reply; returns the reply data after the status byte.</summary>
+    async Task<ReadOnlyMemory<byte>> RequestAsync(BzdpOp op, ReadOnlyMemory<byte> payload, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            uint seq = unchecked(++_seq);
+            var datagram = Encode(op, seq, Code, payload.Span);
+            for (int attempt = 1; attempt <= Attempts; attempt++)
+            {
+                await _udp.SendAsync(datagram, _device, ct);
+                var deadline = DateTime.UtcNow + ReplyTimeout;
+                while (true)
+                {
+                    var left = deadline - DateTime.UtcNow;
+                    if (left <= TimeSpan.Zero) break;
+                    using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    wait.CancelAfter(left);
+                    UdpReceiveResult r;
+                    try { r = await _udp.ReceiveAsync(wait.Token); }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { break; }
+                    catch (SocketException) { break; } // e.g. ICMP port unreachable on Windows: treat as no reply
+                    if (!TryDecode(r.Buffer, out var rop, out var rseq, out _)) continue;
+                    if (rseq != seq || rop != ((byte)op | 0x80)) continue; // a late reply to an earlier request
+                    if (r.Buffer.Length < HeaderSize + 1) throw new BzdpException(BzdpStatus.BadRequest, $"{op}: reply without a status byte");
+                    var status = (BzdpStatus)r.Buffer[HeaderSize];
+                    if (status != BzdpStatus.Ok) throw new BzdpException(status, Describe(op, status));
+                    return r.Buffer.AsMemory(HeaderSize + 1);
+                }
+                if (attempt < Attempts) Trace?.Invoke($"[bzdp] {op} seq {seq}: no reply, retry {attempt}/{Attempts - 1}");
+            }
+            throw new BzdpTimeoutException(
+                $"device not reachable at {Host}:{Port} ({op} unanswered after {Attempts} tries): " +
+                $"is `deploy on` enabled and port {Port} forwarded?");
+        }
+        finally { _gate.Release(); }
+    }
+
+    public static string Describe(BzdpOp op, BzdpStatus s) => s switch
+    {
+        BzdpStatus.BadCode => "the device rejected the pairing code (check the code shown by `deploy on`)",
+        BzdpStatus.BadRequest => $"the device rejected the {op} request as malformed",
+        BzdpStatus.IoError => op == BzdpOp.End
+            ? "the device could not write the file (CRC mismatch or a full/read-only disk)"
+            : $"I/O error on the device during {op}",
+        BzdpStatus.NotFound => op == BzdpOp.Run ? "the device could not find that program" : $"{op}: not found on the device",
+        BzdpStatus.Busy => "the device is busy; try again in a moment",
+        _ => $"{op}: status {(byte)s}",
+    };
+}

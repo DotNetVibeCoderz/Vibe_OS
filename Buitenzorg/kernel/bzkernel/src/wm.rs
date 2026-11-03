@@ -74,7 +74,7 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Pengaturan",
         leaf: gfx::rgb(0xD9, 0xB3, 0x8C),
-        apps: &[("msetting", "Pengaturan"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
+        apps: &[("msetting", "Pengaturan"), ("mwaktu", "Tanggal & Waktu"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
     },
 ];
 
@@ -149,8 +149,7 @@ fn icon_name(name: &str) -> &str {
         "mtasks" => "taskmgr",
         "mimage" => "imgview",
         "mpiano" => "piano",
-        "mpaint" | "mgallery" => "paint",
-        "msetting" => "audiopanel",
+        "mpaint" => "paint",
         n => n.trim_start_matches('@'),
     }
 }
@@ -168,8 +167,6 @@ fn draw_app_icon(canvas: &mut Canvas, name: &str, label: &str, x: i32, y: i32, b
 }
 
 /// Day/month names for the tray and start-menu date.
-const DAYS: [&str; 7] = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 
 /// Weekday (0 = Sunday) by Sakamoto's method.
 fn weekday(y: i32, m: i32, d: i32) -> usize {
@@ -178,11 +175,12 @@ fn weekday(y: i32, m: i32, d: i32) -> usize {
     ((y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d).rem_euclid(7)) as usize
 }
 
-/// Today as (weekday name, day, month name), from the CMOS clock.
+/// Today as (weekday name, day, month name), local time (`clock.rs`), in
+/// the interface language.
 fn today() -> (&'static str, u8, &'static str) {
-    let (y, mo, d, _, _, _) = crate::rtc::read();
+    let (y, mo, d, _, _, _) = crate::clock::now();
     let mo = mo.clamp(1, 12);
-    (DAYS[weekday(y as i32, mo as i32, d as i32)], d, MONTHS[(mo - 1) as usize])
+    (crate::clock::day_name(weekday(y as i32, mo as i32, d as i32)), d, crate::clock::month_name(mo))
 }
 
 /// Format `n` as two digits into `buf` (no allocation in the render path).
@@ -191,9 +189,58 @@ fn two_digits(buf: &mut [u8], n: u8) {
     buf[1] = b'0' + n % 10;
 }
 
-/// Read wall-clock (hour, minute) from the CMOS RTC (see `rtc.rs`).
+/// Local (hour, minute) for the tray (`clock.rs`: RTC + time zone).
 fn read_clock() -> (u8, u8) {
-    crate::rtc::read_hm()
+    let (_, _, _, h, m, _) = crate::clock::now();
+    (h, m)
+}
+
+/// The tray clock text ("16:05", or "4:05 PM" with the 12-hour clock).
+fn tray_time() -> ([u8; 8], usize) {
+    let (hh, mm) = read_clock();
+    let mut t = [b' '; 8];
+    if crate::clock::h24() {
+        two_digits(&mut t[0..2], hh);
+        t[2] = b':';
+        two_digits(&mut t[3..5], mm);
+        (t, 5)
+    } else {
+        let h12 = if hh % 12 == 0 { 12 } else { hh % 12 };
+        let mut n = 0;
+        if h12 >= 10 {
+            t[n] = b'1';
+            n += 1;
+        }
+        t[n] = b'0' + h12 % 10;
+        t[n + 1] = b':';
+        two_digits(&mut t[n + 2..n + 4], mm);
+        t[n + 4] = b' ';
+        t[n + 5] = if hh < 12 { b'A' } else { b'P' };
+        t[n + 6] = b'M';
+        (t, n + 7)
+    }
+}
+
+/// Workspace button `ws` (0-based) at the right end of the taskbar.
+fn ws_button_rect(width: i32, height: i32, ws: u8) -> (i32, i32, i32, i32) {
+    let i = (WORKSPACES - 1 - ws) as i32; // rightmost = the last workspace
+    (width - 10 - 22 - i * 26, height - TASKBAR_H + 7, 22, TASKBAR_H - 14)
+}
+
+/// The tray's date + time block (left x, width); clicking it opens the
+/// "Tanggal & Waktu" app.
+fn clock_area(width: i32) -> (i32, i32) {
+    let right = width - 10 - WORKSPACES as i32 * 26 - 10;
+    let (t, n) = tray_time();
+    let tw = gfx::text_width(core::str::from_utf8(&t[..n]).unwrap_or(""), gfx::TextStyle::Strong);
+    let (day, d, mon) = today();
+    let dd = if d >= 10 { 2 } else { 1 };
+    let date_w = gfx::text_width(&day[..3], gfx::TextStyle::Body)
+        + dd * gfx::glyph_width() as i32
+        + gfx::text_width(mon, gfx::TextStyle::Body)
+        + 2 * gfx::glyph_width() as i32;
+    let w = tw + 12 + date_w + 12;
+    (right - w, w)
 }
 
 /// Pixel canvas owned by an app window (v0.8): the client area apps draw
@@ -1049,6 +1096,14 @@ pub fn set_cursor(x: i32, y: i32) {
 }
 
 /// Feed one mouse sample (absolute position + left button) into the WM.
+/// Mouse wheel notches (positive = scroll up) for the window under the
+/// pointer. True if an app window took them.
+pub fn wheel(notches: i64) -> bool {
+    let mut guard = WM.lock();
+    let Some(wm) = guard.as_mut() else { return false };
+    wm.route_wheel(notches)
+}
+
 pub fn handle_mouse(x: i32, y: i32, left: bool) {
     let mut guard = WM.lock();
     let Some(wm) = guard.as_mut() else { return };
@@ -1138,6 +1193,23 @@ impl Wm {
         } else if moved || released {
             w.push_event(pack_event(if released { UP } else { MOVE }, lx, ly, buttons));
         }
+    }
+
+    /// Wheel notches to the app window under the pointer (not over the shell).
+    fn route_wheel(&mut self, notches: i64) -> bool {
+        let (cx, cy) = self.cursor;
+        if self.start_open || cy >= self.height - TASKBAR_H {
+            return false;
+        }
+        let Some(i) = self.window_at(cx, cy) else { return false };
+        let w = &mut self.windows[i];
+        if w.owner == 0 {
+            return false;
+        }
+        let Some((lx, ly)) = w.client_point(cx, cy) else { return false };
+        let n = notches.clamp(-32768, 32767) as i16 as u16 as u64;
+        w.push_event(pack_event(bz_abi::pointer_event::WHEEL, lx, ly, 0) | (n << 40));
+        true
     }
 
     /// Index of the top-most window on the current workspace at (x, y).
@@ -1343,8 +1415,22 @@ impl Wm {
         }
     }
 
-    /// Handle a click on the taskbar's window buttons (restore/focus).
+    /// Handle a click on the taskbar: desktop buttons 1-4, the clock (opens
+    /// "Tanggal & Waktu"), or a window button (restore/focus).
     fn taskbar_click(&mut self, x: i32) {
+        let y = self.height - TASKBAR_H + TASKBAR_H / 2;
+        for ws in 0..WORKSPACES {
+            if hit(x, y, ws_button_rect(self.width, self.height, ws)) {
+                self.workspace = ws;
+                self.drag = Drag::None;
+                return;
+            }
+        }
+        let (cx0, cw) = clock_area(self.width);
+        if x >= cx0 && x < cx0 + cw {
+            self.pending = Some(String::from("mwaktu"));
+            return;
+        }
         // Mirror the running-window button strip in draw_taskbar (after the
         // Start button). Restores/focuses the clicked window.
         let mut bx = 6 + START_W + 8;
@@ -1562,20 +1648,26 @@ impl Wm {
         let label_c = if glass { th.text } else { th.title_text };
         canvas.draw_text_styled(28, y + 9, "Mulai", label_c, 6 + START_W - 2, gfx::TextStyle::Strong);
 
-        // --- tray (right): date, time, workspace dots ------------------------
-        let mut rx = self.width - 12;
-        for ws in (0..WORKSPACES).rev() {
+        // --- tray (right): date + time (opens Tanggal & Waktu), desktops 1-4 --
+        for ws in 0..WORKSPACES {
+            let (bx, by, bw, bh) = ws_button_rect(self.width, self.height, ws);
             let sel = ws == self.workspace;
-            let c = if sel { th.accent } else { th.win_border };
-            canvas.ellipse(rx - 8, y + 13, 8, 8, c, true);
-            rx -= 13;
+            let hover = hit(self.cursor.0, self.cursor.1, (bx, by, bw, bh));
+            let bg = if sel { th.accent } else if hover { shift(th.taskbar_bg, 40) } else { shift(th.taskbar_bg, 18) };
+            fill_rounded(canvas, bx, by, bw, bh, 5, bg);
+            let label = [b'1' + ws];
+            let ls = core::str::from_utf8(&label).unwrap();
+            let fg = if sel { th.taskbar_bg } else { th.text };
+            let lx = bx + (bw - gfx::text_width(ls, gfx::TextStyle::Strong)) / 2;
+            canvas.draw_text_styled(lx, by + (bh - 16) / 2, ls, fg, bx + bw, gfx::TextStyle::Strong);
         }
-        rx -= 10;
-        let (hh, mm) = read_clock();
-        let mut t = [b'0', b'0', b':', b'0', b'0'];
-        two_digits(&mut t[0..2], hh);
-        two_digits(&mut t[3..5], mm);
-        let ts = core::str::from_utf8(&t).unwrap();
+        let (cx0, cw) = clock_area(self.width);
+        if hit(self.cursor.0, self.cursor.1, (cx0, y + 5, cw, TASKBAR_H - 10)) {
+            fill_rounded(canvas, cx0, y + 5, cw, TASKBAR_H - 10, 6, shift(th.taskbar_bg, 18));
+        }
+        let mut rx = cx0 + cw - 6;
+        let (t, tn) = tray_time();
+        let ts = core::str::from_utf8(&t[..tn]).unwrap();
         let tw = gfx::text_width(ts, gfx::TextStyle::Strong);
         rx -= tw;
         let time_c = if glass { crate::theme::POLLEN } else { th.accent };

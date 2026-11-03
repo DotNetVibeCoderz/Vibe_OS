@@ -1,15 +1,15 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="MagicAppGen.Views.GoToLineDialog"
-        Width="280" Height="130" CanResize="False"
+        Width="300" Height="150" CanResize="False"
         WindowStartupLocation="CenterOwner"
-        Title="Go To Line" Background="#151C17">
-  <StackPanel Margin="16" Spacing="10">
-    <TextBlock Text="Line number:" Foreground="#EAF1EB" />
-    <TextBox x:Name="LineInput" Watermark="e.g. 42" />
+        Title="Ke baris" Background="{StaticResource Understory}">
+  <StackPanel Margin="18" Spacing="10">
+    <TextBlock Text="NOMOR BARIS" Classes="eyebrow" />
+    <TextBox x:Name="LineInput" Watermark="mis. 42" Classes="code" />
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-      <Button Content="Cancel" Click="OnCancel" />
-      <Button Classes="primary" Content="Go" Click="OnGo" IsDefault="True" />
+      <Button Content="Batal" Click="OnCancel" IsCancel="True" />
+      <Button Classes="primary" Content="Ke baris" Click="OnGo" IsDefault="True" />
     </StackPanel>
   </StackPanel>
 </Window>

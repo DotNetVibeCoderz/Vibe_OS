@@ -64,6 +64,14 @@ mod usb;
 mod virtio;
 mod vmm;
 mod wallpaper;
+mod splash;
+mod clock;
+mod deploy;
+mod logring;
+mod users;
+mod tcp;
+mod rng;
+mod ssh;
 mod wm;
 
 use core::panic::PanicInfo;
@@ -1350,7 +1358,11 @@ fn batang_demo() {
     virtio::snd::init();
     if mouse::init() {
         let (_, _, _, packets) = mouse::state();
-        println!("[kernel] PS/2 mouse streaming enabled ({} packets so far)", packets);
+        println!(
+            "[kernel] PS/2 mouse streaming enabled ({} packets so far, {})",
+            packets,
+            if mouse::has_wheel() { "IntelliMouse: wheel on" } else { "no wheel" }
+        );
         println!("[kernel] MILESTONE: MOUSE OK");
     } else {
         println!("[kernel] PS/2 mouse not detected");
@@ -1532,6 +1544,20 @@ fn dahan_demo() {
         }
     }
     println!("[vfs] mounts: {}", vfs::mounts().join(" "));
+    // From here the boot runs under the splash (its image lives on /disk):
+    // ~88 milestones follow with /disk, ~48 on media without it.
+    clock::load();
+    rng::init();
+    users::load();
+    match users::self_test() {
+        Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
+        Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+    }
+    splash::start(if vfs::mounts().iter().any(|m| m == "/disk") { 88 } else { 48 });
+    match vfs::folder_self_test("/ram") {
+        Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
+        Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+    }
     disk_persist_demo();
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).
     let n_icons = icons::load();
@@ -1594,6 +1620,10 @@ fn dahan_demo() {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack)");
     } else {
         println!("[net] no ICMP reply (stack error)");
+    }
+    match tcp::self_test() {
+        Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
+        Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
     }
     virtio_net_demo();
 
@@ -1860,6 +1890,7 @@ fn syscall_smoke_test() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    splash::abort();
     println!("\n[kernel] PANIC: {}", info);
     loop {
         arch::cpu::halt();

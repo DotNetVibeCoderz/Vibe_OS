@@ -246,8 +246,20 @@ public sealed class Window : Control
         {
             if (kind == 0) c.OnPointerPressed(e);
             else if (kind == 1) c.OnPointerReleased(e);
+            else if (kind == 3) c.OnPointerWheelChanged(e);
             else c.OnPointerMoved(e);
         }
+    }
+
+    /// <summary>The wheel turned over (x, y): bubbles from the control under the pointer
+    /// until a scrollable one takes it (bz-abi pointer_event WHEEL).</summary>
+    public void DispatchWheel(int x, int y, int notches)
+    {
+        _pointer = new Point(x, y);
+        HideTip();
+        var e = new PointerEventArgs { X = x, Y = y, WheelDelta = notches };
+        Bubble(Enabled(Hit(x, y)), e, 3);
+        UpdateLayout();
     }
 
     /// <summary>Handle a packed pointer event (bz-abi pointer_event).</summary>
@@ -475,7 +487,8 @@ public sealed class Window : Control
                 int kind = (int)((ev >> 56) & 0xFF);
                 int x = (short)(ev & 0xFFFF), y = (short)((ev >> 16) & 0xFFFF);
                 bool left = ((ev >> 32) & 1) != 0;
-                DispatchPointer(kind, x, y, left);
+                if (kind == 5) DispatchWheel(x, y, (short)((ev >> 40) & 0xFFFF));
+                else DispatchPointer(kind, x, y, left);
             }
             for (int n = 0; n < 32; n++)
             {

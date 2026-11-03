@@ -43,6 +43,9 @@ pub fn ensure_session_windows() {
 /// keyboard input to the terminal, drive animations, and blank to the
 /// screensaver after an idle timeout (v0.11).
 pub fn run() -> ! {
+    // The boot is over: fill the splash's bar and hand the screen over.
+    crate::splash::finish();
+    crate::ssh::autostart();
     ensure_session_windows();
     // From here on a real user can type: shell-launched apps may block on input.
     interactive::set_active();
@@ -85,6 +88,7 @@ pub fn run() -> ! {
     let mut last_left = false;
     let mut last_right = mouse::right_presses();
     let mut last_presses = mouse::presses();
+    let mut wheel_logs = 0u32;
     let mut last_input = interrupts::ticks();
     let mut last_keys = keyboard::pushed();
     let mut saver_active = false;
@@ -109,6 +113,8 @@ pub fn run() -> ! {
         virtio::input::poll();
         // USB HID keyboards / mice (roadmap R4).
         crate::usb::poll();
+        crate::deploy::poll();
+        crate::ssh::poll();
         let now = interrupts::ticks();
         let mut input = false;
 
@@ -143,6 +149,15 @@ pub fn run() -> ! {
 
         let (mx, my, buttons, packets) = mouse::state();
         let left = buttons & 0x01 != 0;
+        let notches = mouse::take_wheel();
+        if notches != 0 && !saver_active {
+            let taken = wm::wheel(notches);
+            if wheel_logs < 5 {
+                wheel_logs += 1;
+                println!("[desktop] wheel {:+} at ({}, {}): {}", notches, mx, my, if taken { "to the app window" } else { "nothing to scroll" });
+            }
+            input = true;
+        }
         // Right button: the desktop's context menu. Counted presses, so a press
         // and release that both fell between two samples still open it.
         let rp = mouse::right_presses();

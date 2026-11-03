@@ -124,11 +124,15 @@ pub fn keyboard(old: &[u8; 8], new: &[u8; 8]) {
     }
 }
 
-/// A boot mouse report: buttons, dx, dy (and maybe a wheel byte, ignored).
+/// A boot mouse report: buttons, dx, dy and -- most mice send it even in the
+/// boot protocol -- a wheel byte (positive = away from the user).
 pub fn mouse(r: &[u8]) {
     if r.len() < 3 {
         return;
     }
     crate::mouse::inject_relative(r[1] as i8 as i64, r[2] as i8 as i64, r[0] & 7);
+    if r.len() >= 4 {
+        crate::mouse::inject_wheel(r[3] as i8 as i64);
+    }
     POINTER.fetch_add(1, Ordering::Relaxed);
 }

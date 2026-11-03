@@ -12,7 +12,9 @@ pub fn count(k: u64) -> u64 {
         key::THEME => crate::theme::names().len() as u64,
         key::WALLPAPER => crate::wallpaper::OFFICIAL.len() as u64,
         key::SCREENSAVER => crate::screensaver::NAMES.len() as u64 + 1,
-        key::ANIMATIONS | key::LARGE_CURSOR => 2,
+        key::ANIMATIONS | key::LARGE_CURSOR | key::CLOCK_24H => 2,
+        key::TIMEZONE => crate::clock::ZONES.len() as u64,
+        key::LANGUAGE => crate::clock::LANGUAGES.len() as u64,
         _ => 0,
     }
 }
@@ -35,6 +37,10 @@ pub fn get(k: u64) -> u64 {
         key::SCREENSAVER_DELAY => crate::screensaver::timeout_seconds(),
         key::ANIMATIONS => crate::wm::options().0 as u64,
         key::LARGE_CURSOR => (crate::wm::cursor_scale() > 1) as u64,
+        key::TIMEZONE => crate::clock::zone() as u64,
+        key::LANGUAGE => crate::clock::language() as u64,
+        key::CLOCK_24H => crate::clock::h24() as u64,
+        key::CLOCK => crate::clock::local_unix().max(0) as u64,
         _ => INVAL,
     }
 }
@@ -68,6 +74,17 @@ pub fn set(k: u64, v: u64) -> u64 {
             crate::wm::set_cursor_scale(if v == 1 { 2 } else { 1 });
             true
         }
+        key::TIMEZONE => crate::clock::set_zone(v as usize),
+        key::LANGUAGE => crate::clock::set_language(v as usize),
+        key::CLOCK_24H if v <= 1 => {
+            crate::clock::set_h24(v == 1);
+            true
+        }
+        // 2000-01-01 .. 2099-12-31
+        key::CLOCK if (946_684_800..4_102_444_800).contains(&v) => {
+            crate::clock::set_local(v as i64);
+            true
+        }
         _ => false,
     };
     if ok {
@@ -90,6 +107,8 @@ pub fn label(k: u64, index: usize, detail: bool) -> Option<&'static str> {
                 crate::screensaver::NAMES.get(index).copied()
             }
         }
+        key::TIMEZONE => crate::clock::ZONES.get(index).map(|(n, d, _)| if detail { *d } else { *n }),
+        key::LANGUAGE => crate::clock::LANGUAGES.get(index).map(|(c, n)| if detail { *c } else { *n }),
         _ => None,
     }
 }

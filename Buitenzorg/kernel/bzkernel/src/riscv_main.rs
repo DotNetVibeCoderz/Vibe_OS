@@ -66,6 +66,14 @@ mod usb;
 mod virtio;
 mod vmm;
 mod wallpaper;
+mod splash;
+mod clock;
+mod deploy;
+mod logring;
+mod users;
+mod tcp;
+mod rng;
+mod ssh;
 mod wm;
 
 pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode, vmx};
@@ -182,6 +190,19 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     let plic_up = fdt.as_ref().map_or(false, |f| plic_init(f, hart));
     rtc_self_test();
     storage_self_test();
+    match vfs::folder_self_test("/disk") {
+        Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
+        Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+    }
+    // The rest of the boot runs under the splash (its image is on /disk).
+    clock::load();
+    rng::init();
+    users::load();
+    match users::self_test() {
+        Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
+        Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+    }
+    splash::start(26);
 
     // The periodic tick: the SBI timer at 100 Hz.
     let has_time = sbi::probe(sbi::EXT_TIME);
@@ -907,6 +928,10 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
     if net::counters().0 > 0 {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on RISC-V)");
     }
+    match tcp::self_test() {
+        Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
+        Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
+    }
     if let Some(nic) = virtio::net::probe() {
         const ME: [u8; 4] = [10, 0, 2, 15];
         const GW: [u8; 4] = [10, 0, 2, 2];
@@ -975,6 +1000,7 @@ fn show_desktop() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    splash::abort();
     println!("\n[kernel] PANIC: {}", info);
     loop {
         arch::cpu::halt();

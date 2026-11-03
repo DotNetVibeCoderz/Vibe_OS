@@ -169,8 +169,35 @@ public static class SyscallNumbers
     /// <summary>Desktop settings: a0 = <see cref="SettingOp"/>, a1 = <see cref="SettingKey"/> (| index &lt;&lt; 16 for names), a2 = value or 64-byte buffer.</summary>
     public const ulong Setting = 53;
 
+    /// <summary>Files and folders: a0 = <see cref="FsOp"/>, a1 = path, a2 = second path (rename) or a pointer to 4 ulongs (stat: size, is-folder, FAT date &lt;&lt; 16 | time, 0).</summary>
+    public const ulong FsOp = 54;
+
+    /// <summary>User accounts: a0 = <see cref="UserOp"/>, a1 = NUL-terminated request of '\n'-separated fields, a2 = output buffer (list).</summary>
+    public const ulong UserOp = 55;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 54;
+    public const ulong Count = 56;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.UserOp"/>.</summary>
+public static class UserOp
+{
+    public const ulong List = 0;
+    public const ulong Verify = 1;
+    public const ulong Add = 2;
+    public const ulong Remove = 3;
+    public const ulong Passwd = 4;
+    public const ulong Reset = 5;
+    public const ulong Avatar = 6;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.FsOp"/>.</summary>
+public static class FsOp
+{
+    public const ulong Mkdir = 0;
+    public const ulong Remove = 1;
+    public const ulong Rename = 2;
+    public const ulong Stat = 3;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Setting"/>.</summary>

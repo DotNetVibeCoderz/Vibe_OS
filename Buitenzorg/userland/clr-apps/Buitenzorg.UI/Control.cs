@@ -10,6 +10,8 @@ public class PointerEventArgs
     public int X { get; internal set; }
     public int Y { get; internal set; }
     public bool LeftButton { get; internal set; }
+    /// <summary>Wheel notches (wheel events only): positive = away from the user, scroll up.</summary>
+    public int WheelDelta { get; internal set; }
     public bool Handled { get; set; }
     public Control? Source { get; internal set; }
 }
@@ -75,6 +77,7 @@ public class Control : UIObject
     public event Action<Control, PointerEventArgs>? PointerPressed;
     public event Action<Control, PointerEventArgs>? PointerReleased;
     public event Action<Control, PointerEventArgs>? PointerMoved;
+    public event Action<Control, PointerEventArgs>? PointerWheelChanged;
     public event Action<Control>? PointerEntered;
     public event Action<Control>? PointerExited;
     public event Action<Control, KeyEventArgs>? KeyDown;
@@ -511,6 +514,7 @@ public class Control : UIObject
     protected internal virtual void OnPointerPressed(PointerEventArgs e) => PointerPressed?.Invoke(this, e);
     protected internal virtual void OnPointerReleased(PointerEventArgs e) => PointerReleased?.Invoke(this, e);
     protected internal virtual void OnPointerMoved(PointerEventArgs e) => PointerMoved?.Invoke(this, e);
+    protected internal virtual void OnPointerWheelChanged(PointerEventArgs e) => PointerWheelChanged?.Invoke(this, e);
     protected internal virtual void OnPointerEntered() => PointerEntered?.Invoke(this);
     protected internal virtual void OnPointerExited() => PointerExited?.Invoke(this);
     protected internal virtual void OnKeyDown(KeyEventArgs e) => KeyDown?.Invoke(this, e);

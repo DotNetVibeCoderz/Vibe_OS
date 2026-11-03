@@ -10,6 +10,7 @@ pub const SERVERS: [Ipv4Addr; 2] = [[162, 159, 200, 1], [216, 239, 35, 0]];
 
 /// The local time zone the clock shows: WIB (UTC+7). The software clock keeps
 /// local time, like a PC's CMOS clock.
+#[allow(dead_code)]
 pub const LOCAL_OFFSET_S: u64 = 7 * 3600;
 
 /// Seconds between 1900-01-01 (NTP era 0) and 1970-01-01.

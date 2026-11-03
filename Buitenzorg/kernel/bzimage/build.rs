@@ -80,9 +80,9 @@ const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
 
 /// App icons, in launcher order: (asset name in assets/icons, launch name used
 /// by the kernel's `icons.rs` / `wm.rs` LAUNCH list).
-const APP_ICONS: [&str; 15] = [
+const APP_ICONS: [&str; 19] = [
     "files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint",
-    "xox", "audiopanel", "wallpaper", "theme", "managed",
+    "xox", "audiopanel", "wallpaper", "theme", "managed", "msetting", "mwaktu", "mgallery", "mhwlab",
 ];
 /// Icon sizes in ICONS.BIN: desktop tile and start-menu row.
 const ICON_BIG: usize = 44;
@@ -174,7 +174,17 @@ fn build_icon_pack(dir: &std::path::Path) -> Option<Vec<u8>> {
 
 /// Decode a JPEG and box-filter it down to `tw` x `th` as a 24-bit BMP.
 fn jpeg_to_bmp(jpeg: &[u8], tw: usize, th: usize) -> Option<Vec<u8>> {
-    let (sw, sh, rgb) = decode_jpeg(jpeg)?;
+    jpeg_to_bmp_top(jpeg, tw, th, 1000)
+}
+
+/// Like [`jpeg_to_bmp`], but keep only the top `keep_permille` of the image
+/// rows, center-cropping the width to the target aspect ratio.
+fn jpeg_to_bmp_top(jpeg: &[u8], tw: usize, th: usize, keep_permille: usize) -> Option<Vec<u8>> {
+    let (full_w, full_h, rgb) = decode_jpeg(jpeg)?;
+    let sw_stride = full_w;
+    let sh = full_h * keep_permille / 1000;
+    let sw = (sh * tw / th).min(full_w);
+    let x_off = (full_w - sw) / 2;
     let row_stride = (tw * 3 + 3) & !3;
     let data_len = row_stride * th;
     let mut bmp = Vec::with_capacity(54 + data_len);
@@ -195,7 +205,7 @@ fn jpeg_to_bmp(jpeg: &[u8], tw: usize, th: usize) -> Option<Vec<u8>> {
             let mut acc = [0u32; 3];
             for sy in y0..y1 {
                 for sx in x0..x1 {
-                    let p = (sy * sw + sx) * 3;
+                    let p = (sy * sw_stride + x_off + sx) * 3;
                     for c in 0..3 {
                         acc[c] += rgb[p + c] as u32;
                     }
@@ -454,6 +464,26 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         if let Some(bmp) = std::fs::read(&path).ok().and_then(|j| jpeg_to_bmp(&j, 800, 450)) {
             add_file(&mut builder, &mut files, dest.to_lowercase().into(), bmp);
+        }
+    }
+
+    // Boot splash (`splash.rs`): assets/splash/splash.jpg -> 960x540 BMP; the
+    // kernel crops + scales it to the screen once. The bottom 12 % of the
+    // artwork is dropped (the generator painted a fake progress bar there).
+    let splash = manifest_dir().join("..").join("..").join("assets").join("splash").join("splash.jpg");
+    println!("cargo:rerun-if-changed={}", splash.display());
+    if let Some(bmp) = std::fs::read(&splash).ok().and_then(|j| jpeg_to_bmp_top(&j, 960, 540, 880)) {
+        add_file(&mut builder, &mut files, "splash.bmp".into(), bmp);
+    }
+
+    // Profile pictures for user accounts (users.rs): assets/avatars/avatarN.jpg
+    // -> /disk/AVATARn.BMP, 96x96.
+    let avatars = manifest_dir().join("..").join("..").join("assets").join("avatars");
+    for n in 1..=6 {
+        let path = avatars.join(format!("avatar{n}.jpg"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        if let Some(bmp) = std::fs::read(&path).ok().and_then(|j| jpeg_to_bmp(&j, 96, 96)) {
+            add_file(&mut builder, &mut files, format!("avatar{n}.bmp").into(), bmp);
         }
     }
 

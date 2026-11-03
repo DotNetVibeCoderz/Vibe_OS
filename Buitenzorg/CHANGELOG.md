@@ -16,6 +16,45 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **SSH server.** `ssh on` in the terminal starts an SSH-2 server on port 22
+  (curve25519-sha256, ssh-ed25519 host key, chacha20-poly1305@openssh.com):
+  `ssh administrator@<ip>` gives the Buitenzorg shell, `ssh ... <command>`
+  runs one command. Off by default; it stays on across reboots once enabled.
+- **User accounts.** Default account `administrator` / `ganteng@ku` (change
+  it!). Pengaturan has a new **Pengguna** page: add, delete, change password,
+  pick one of six Kebun Raya profile pictures. Passwords are stored as salted
+  PBKDF2-HMAC-SHA256 hashes; changes need an administrator's password.
+- **TCP** in the network stack (servers and clients), a kernel random number
+  generator, and the cryptography SSH needs.
+- **Folders.** The file system now has sub-folders on every drive, and
+  **Berkas** can create folders and files, rename, move (also between `/ram`
+  and `/disk`), delete and show properties (F2, Delete, Backspace = up).
+- **Deploy from the Magic App Generator.** `deploy on [code]` lets the
+  generator (redesigned, with a Perangkat panel) upload, run, watch and stop
+  native, managed, Python, TypeScript and JavaScript apps over the network.
+- **F1-F12** reach apps (F2 rename, F5 refresh in Berkas).
+- **Date, time and region ("Tanggal & Waktu").** Click the clock on the
+  taskbar: a live clock, a month calendar, set date and time, time zone (WIB,
+  WITA, WIT, UTC and eight more), interface language (Bahasa Indonesia /
+  English: the taskbar date follows) and a 12/24-hour switch. Settings are kept
+  in `/disk/REGION.CFG`. The hardware clock is now read as UTC everywhere
+  (the Pi's SNTP time too) and shown in the chosen zone, WIB by default.
+- **Desktop buttons 1-4 on the taskbar** replace the small workspace dots.
+- **Mouse wheel.** PS/2 (IntelliMouse), virtio and USB mice report the wheel;
+  it scrolls lists, scroll views and the text editor of managed apps under the
+  pointer (new `WHEEL` pointer event, ABI-compatible).
+- **Catatan saves by itself** 1.5 s after you stop typing and when you switch
+  notes -- no more lost edits without Ctrl+S.
+- **New app icons** for Pengaturan, Tanggal & Waktu, Galeri Kontrol and Lab
+  Perangkat (they borrowed other apps' icons or had none).
+- **Boot splash.** After the first lines of boot text, an opening screen
+  takes over: the Kebun Raya artwork (`assets/splash/splash.jpg`, shipped as
+  `/disk/SPLASH.BMP`), the BUITENZORG title, a progress bar that advances with
+  every boot milestone and the current boot step underneath. The boot demos'
+  windows no longer flash up mid-boot and log lines no longer scroll the
+  screen; the desktop appears once, when everything is done. The milestone
+  count of the last boot is kept in `/disk/BOOTPROG.TXT`, so the bar is
+  accurate from the second boot on. Same on PC, ARM64, RISC-V and the Pi.
 - **Raspberry Pi 4: sound on the headphone jack and over HDMI.** The 3.5 mm
   jack plays the test tone, Piano notes and other sounds; so does a display on
   HDMI0 that takes audio (a monitor without speakers sends it to its own audio

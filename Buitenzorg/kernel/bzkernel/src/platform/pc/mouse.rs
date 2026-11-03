@@ -1,5 +1,7 @@
 //! PS/2 mouse driver (v0.3 "Batang": input baseline alongside the keyboard).
-//! Streams 3-byte packets on IRQ12; position/buttons are tracked in atomics.
+//! Streams 3-byte packets on IRQ12 -- 4-byte IntelliMouse packets with the
+//! wheel once the mouse accepted the magic sample-rate sequence; position,
+//! buttons and wheel are tracked in atomics.
 
 use core::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
@@ -12,7 +14,9 @@ static X: AtomicI64 = AtomicI64::new(0);
 static Y: AtomicI64 = AtomicI64::new(0);
 static BUTTONS: AtomicU8 = AtomicU8::new(0);
 static PHASE: AtomicUsize = AtomicUsize::new(0);
-static PACKET: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
+static PACKET: [AtomicU8; 3] = [AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0)];
+/// 4 once the mouse reported IntelliMouse id 3 (a wheel byte per packet).
+static PACKET_LEN: AtomicUsize = AtomicUsize::new(3);
 /// Largest valid x / y (screen size - 1); 0 = unbounded until the desktop sets it.
 static MAX_X: AtomicI64 = AtomicI64::new(0);
 static MAX_Y: AtomicI64 = AtomicI64::new(0);
@@ -115,11 +119,31 @@ pub fn init() -> bool {
         }
         unsafe { Port::<u8>::new(DATA).write(config) };
 
-        mouse_cmd(0xF6) && mouse_cmd(0xF4) // defaults, then enable streaming
+        if !mouse_cmd(0xF6) {
+            return false; // defaults
+        }
+        // IntelliMouse: sample rates 200, 100, 80 then "get id" -> 3 = wheel.
+        let wheel = [200u8, 100, 80].iter().all(|&r| mouse_cmd(0xF3) && mouse_cmd(r))
+            && mouse_cmd(0xF2)
+            && wait_output_full()
+            && unsafe { Port::<u8>::new(DATA).read() } == 3;
+        PACKET_LEN.store(if wheel { 4 } else { 3 }, Ordering::Relaxed);
+        PHASE.store(0, Ordering::Relaxed);
+        mouse_cmd(0xF4) // enable streaming
     })
 }
 
-/// IRQ12 handler body: assemble 3-byte packets.
+/// True when the mouse sends a wheel byte (IntelliMouse mode).
+pub fn has_wheel() -> bool {
+    PACKET_LEN.load(Ordering::Relaxed) == 4
+}
+
+/// Start a new packet at the next byte (after bytes were injected for a test).
+pub fn resync() {
+    PHASE.store(0, Ordering::Relaxed);
+}
+
+/// IRQ12 handler body: assemble 3-byte (4 with a wheel) packets.
 pub fn handle_byte(byte: u8) {
     let phase = PHASE.load(Ordering::Relaxed);
     match phase {
@@ -136,12 +160,23 @@ pub fn handle_byte(byte: u8) {
             PACKET[1].store(byte, Ordering::Relaxed);
             PHASE.store(2, Ordering::Relaxed);
         }
+        2 if PACKET_LEN.load(Ordering::Relaxed) == 4 => {
+            PACKET[2].store(byte, Ordering::Relaxed);
+            PHASE.store(3, Ordering::Relaxed);
+        }
         _ => {
             PHASE.store(0, Ordering::Relaxed);
+            let wheel = PACKET_LEN.load(Ordering::Relaxed) == 4;
+            let (ybyte, z) = if wheel { (PACKET[2].load(Ordering::Relaxed), byte) } else { (byte, 0) };
             let flags = PACKET[0].load(Ordering::Relaxed);
             let dx = PACKET[1].load(Ordering::Relaxed) as i64
                 - if flags & 0x10 != 0 { 256 } else { 0 };
-            let dy = byte as i64 - if flags & 0x20 != 0 { 256 } else { 0 };
+            let dy = ybyte as i64 - if flags & 0x20 != 0 { 256 } else { 0 };
+            // Z: low nibble, signed; positive = toward the user (scroll down).
+            let z = ((z << 4) as i8 >> 4) as i64;
+            if z != 0 {
+                WHEEL.fetch_add(-z, Ordering::Relaxed);
+            }
             move_axis(&X, dx, &MAX_X);
             move_axis(&Y, -dy, &MAX_Y); // screen y grows downward
             set_buttons(flags);
@@ -172,6 +207,23 @@ pub fn inject_absolute(x: i64, y: i64, max_x: i64, max_y: i64, buttons: u8) {
     }
     set_buttons(buttons);
     PACKETS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Wheel notches not yet taken by the desktop (positive = away from the user,
+/// i.e. scroll up -- the Linux REL_WHEEL convention).
+static WHEEL: AtomicI64 = AtomicI64::new(0);
+
+/// Wheel notches from any pointing device (PS/2 IntelliMouse, virtio, USB).
+pub fn inject_wheel(notches: i64) {
+    if notches != 0 {
+        WHEEL.fetch_add(notches, Ordering::Relaxed);
+        PACKETS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Take the wheel notches accumulated since the last call.
+pub fn take_wheel() -> i64 {
+    WHEEL.swap(0, Ordering::Relaxed)
 }
 
 /// Left-button presses seen (0 -> 1 transitions), so the desktop loop can

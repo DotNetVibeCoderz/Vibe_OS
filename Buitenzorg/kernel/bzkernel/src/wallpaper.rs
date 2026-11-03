@@ -88,6 +88,13 @@ pub fn set_image(w: i32, h: i32, pixels: Vec<u32>, label: &str) {
 
 /// Load a 24-bit uncompressed BMP into a wallpaper. Returns (w, h) on success.
 pub fn load_bmp(bytes: &[u8], label: &str) -> Result<(i32, i32), &'static str> {
+    let (w, h, pixels) = decode_bmp(bytes)?;
+    set_image(w, h, pixels, label);
+    Ok((w, h))
+}
+
+/// Decode a 24-bit uncompressed BMP to (w, h, 0x00RRGGBB pixels).
+pub fn decode_bmp(bytes: &[u8]) -> Result<(i32, i32, Vec<u32>), &'static str> {
     if bytes.len() < 54 || &bytes[0..2] != b"BM" {
         return Err("not a BMP");
     }
@@ -119,8 +126,7 @@ pub fn load_bmp(bytes: &[u8], label: &str) -> Result<(i32, i32), &'static str> {
             pixels[(row * w + col) as usize] = rgb(r, g, b);
         }
     }
-    set_image(w, h, pixels, label);
-    Ok((w, h))
+    Ok((w, h, pixels))
 }
 
 /// Render the current wallpaper into `canvas` (full-screen).
@@ -155,7 +161,7 @@ pub fn paint(canvas: &mut Canvas, th: &Theme, workspace: u8) {
 
 /// Bilinear resample of `src` (`sw` x `sh`) to `dw` x `dh`, in 8.8 fixed point
 /// (the kernel is soft-float). Done once per wallpaper change.
-fn resample(src: &[u32], sw: i32, sh: i32, dw: i32, dh: i32) -> Vec<u32> {
+pub fn resample(src: &[u32], sw: i32, sh: i32, dw: i32, dh: i32) -> Vec<u32> {
     let mut out = alloc::vec![0u32; (dw * dh) as usize];
     let ch = |p: u32, s: u32| (p >> s) & 0xFF;
     for y in 0..dh {

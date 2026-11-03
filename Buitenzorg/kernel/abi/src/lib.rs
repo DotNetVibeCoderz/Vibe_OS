@@ -207,8 +207,49 @@ pub mod sysno {
     /// `a2` = the value (SET) or a 64-byte buffer (NAME / DESCRIPTION).
     /// Returns the value / count / text length, 0 after SET, `syserr::INVAL`.
     pub const SETTING: u64 = 53;
+    /// File and folder operations: `a0` = a [`crate::fs_op`], `a1` = a path
+    /// (NUL-terminated, absolute: `/disk/APPS/A.TXT`), `a2` = the second path
+    /// (RENAME) or, for STAT, a pointer to 4 `u64`s: size, is-folder,
+    /// FAT date << 16 | FAT time of the last change, 0. Returns 0 or
+    /// `syserr::INVAL`.
+    pub const FS_OP: u64 = 54;
+    /// User accounts: `a0` = a [`crate::user_op`], `a1` = the request, a
+    /// NUL-terminated string of fields separated by `\n` (at most 255 bytes),
+    /// `a2` = the output buffer (LIST, 2048 bytes: one `name\tadmin\tavatar\n`
+    /// line per account). Returns 0 (LIST: bytes written) or `syserr::INVAL`.
+    pub const USER_OP: u64 = 55;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 54;
+    pub const COUNT: u64 = 56;
+}
+
+/// Operations of the [`sysno::USER_OP`] syscall (request fields in order).
+pub mod user_op {
+    /// All accounts into the buffer at `a2`.
+    pub const LIST: u64 = 0;
+    /// name, password -> 0 if they match.
+    pub const VERIFY: u64 = 1;
+    /// admin, admin password, name, password, "1" for an administrator.
+    pub const ADD: u64 = 2;
+    /// admin, admin password, name (the last administrator stays).
+    pub const REMOVE: u64 = 3;
+    /// name, current password, new password.
+    pub const PASSWD: u64 = 4;
+    /// admin, admin password, name, new password.
+    pub const RESET: u64 = 5;
+    /// who, their password, name, picture path (own account, or an admin).
+    pub const AVATAR: u64 = 6;
+}
+
+/// Operations of the [`sysno::FS_OP`] syscall.
+pub mod fs_op {
+    /// Create a folder (its parent must exist).
+    pub const MKDIR: u64 = 0;
+    /// Delete a file or an empty folder.
+    pub const REMOVE: u64 = 1;
+    /// Rename and / or move `a1` to `a2` (another mount: files are copied).
+    pub const RENAME: u64 = 2;
+    /// Size, kind and date of `a1` into the 4 `u64`s at `a2`.
+    pub const STAT: u64 = 3;
 }
 
 /// Operations of the [`sysno::SETTING`] syscall.
@@ -239,6 +280,15 @@ pub mod setting_key {
     pub const ANIMATIONS: u64 = 4;
     /// Large mouse cursor (1) / normal (0).
     pub const LARGE_CURSOR: u64 = 5;
+    /// Time zone (an index; NAME = "WIB", DESCRIPTION = places + UTC offset).
+    pub const TIMEZONE: u64 = 6;
+    /// Interface language (an index: 0 Bahasa Indonesia, 1 English).
+    pub const LANGUAGE: u64 = 7;
+    /// 24-hour clock (1) / 12-hour (0).
+    pub const CLOCK_24H: u64 = 8;
+    /// Local date and time as seconds since 1970-01-01 *local* midnight
+    /// (GET reads it, SET sets the clock).
+    pub const CLOCK: u64 = 9;
 }
 
 /// Queries of the [`sysno::HW_BOARD`] syscall.
@@ -400,7 +450,8 @@ pub mod win_flags {
 
 /// Packed pointer events returned by [`sysno::WIN_EVENT`]:
 /// bits 0-15 x, 16-31 y (client coordinates, signed 16-bit), 32-39 buttons
-/// (bit 0 = left), 56-63 kind.
+/// (bit 0 = left), 40-55 wheel notches (signed 16-bit, [`WHEEL`] only),
+/// 56-63 kind.
 pub mod pointer_event {
     /// The pointer moved over the client area.
     pub const MOVE: u64 = 1;
@@ -410,6 +461,9 @@ pub mod pointer_event {
     pub const UP: u64 = 3;
     /// The pointer left the client area.
     pub const LEAVE: u64 = 4;
+    /// The wheel turned over the client area: bits 40-55 = notches,
+    /// positive = away from the user (scroll up).
+    pub const WHEEL: u64 = 5;
 }
 
 /// Operations for [`DrawCmd::op`].
@@ -698,7 +752,11 @@ mod tests {
         assert_eq!(sysno::HW_UART, 51);
         assert_eq!(sysno::HW_LED, 52);
         assert_eq!(sysno::SETTING, 53);
-        assert_eq!(sysno::COUNT, 54);
+        assert_eq!(sysno::FS_OP, 54);
+        assert_eq!(fs_op::STAT, 3);
+        assert_eq!(sysno::USER_OP, 55);
+        assert_eq!(user_op::AVATAR, 6);
+        assert_eq!(sysno::COUNT, 56);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -714,7 +772,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 54, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 56, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);
@@ -752,6 +810,10 @@ mod tests {
         assert_eq!(hw_status::TIMEOUT, 3);
         assert_eq!(setting_op::DESCRIPTION, 4);
         assert_eq!(setting_key::LARGE_CURSOR, 5);
+        assert_eq!(setting_key::TIMEZONE, 6);
+        assert_eq!(setting_key::LANGUAGE, 7);
+        assert_eq!(setting_key::CLOCK_24H, 8);
+        assert_eq!(setting_key::CLOCK, 9);
 
         // Error codes are part of the contract too.
         assert_eq!(syserr::NOSYS, u64::MAX);

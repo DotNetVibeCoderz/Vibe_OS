@@ -67,6 +67,14 @@ mod usb;
 mod virtio;
 mod vmm;
 mod wallpaper;
+mod splash;
+mod clock;
+mod deploy;
+mod logring;
+mod users;
+mod tcp;
+mod rng;
+mod ssh;
 mod wm;
 
 pub(crate) use arch::aarch64::{aspace, gdt, interrupts, smp, usermode, vmx};
@@ -163,6 +171,19 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
     rtc_self_test();
     storage_self_test();
+    match vfs::folder_self_test("/disk") {
+        Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
+        Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+    }
+    // The rest of the boot runs under the splash (its image is on /disk).
+    clock::load();
+    rng::init();
+    users::load();
+    match users::self_test() {
+        Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
+        Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+    }
+    splash::start(30);
 
     // Interrupts: the GIC (v3 on `virt`, v2 on a Raspberry Pi) + the virtual
     // timer at 100 Hz.
@@ -966,6 +987,10 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     if net::counters().0 > 0 {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)");
     }
+    match tcp::self_test() {
+        Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
+        Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
+    }
     if let Some(mut nic) = virtio::net::probe() {
         // The address from DHCP (QEMU's user network serves one), else QEMU's defaults.
         let (me, gw) = match dhcp::lease(&mut nic, 6) {
@@ -1081,7 +1106,7 @@ fn sync_time(dev: &str) {
     }
     match sntp::sync(2) {
         Some((server, utc)) => {
-            rtc::set_time(utc + sntp::LOCAL_OFFSET_S);
+            rtc::set_time(utc); // UTC; the time zone is clock.rs
             let (y, mo, d, h, mi, s) = rtc::read();
             println!(
                 "[kernel] MILESTONE: TIME SYNC OK ({}: SNTP from {}.{}.{}.{}, local time {:04}-{:02}-{:02} {:02}:{:02}:{:02} WIB)",
@@ -1112,6 +1137,7 @@ fn show_desktop() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    splash::abort();
     println!("\n[kernel] PANIC: {}", info);
     loop {
         arch::cpu::halt();

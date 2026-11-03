@@ -198,6 +198,29 @@ public sealed class Bitmap
         return b;
     }
 
+    /// <summary>Decode an uncompressed 24- or 32-bit BMP (bottom-up or top-down); null if it is not one.</summary>
+    public static Bitmap? FromBmp(byte[]? b)
+    {
+        if (b == null || b.Length < 54 || b[0] != 'B' || b[1] != 'M') return null;
+        int off = BitConverter.ToInt32(b, 10), w = BitConverter.ToInt32(b, 18), hs = BitConverter.ToInt32(b, 22);
+        int bpp = BitConverter.ToInt16(b, 28), comp = BitConverter.ToInt32(b, 30);
+        int h = Math.Abs(hs);
+        if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || (bpp != 24 && bpp != 32) || (comp != 0 && comp != 3)) return null;
+        int bytes = bpp / 8, stride = (w * bytes + 3) & ~3;
+        if (off + stride * (h - 1) + w * bytes > b.Length) return null;
+        var bmp = new Bitmap(w, h);
+        for (int y = 0; y < h; y++)
+        {
+            int row = off + (hs > 0 ? h - 1 - y : y) * stride;
+            for (int x = 0; x < w; x++)
+            {
+                int p = row + x * bytes;
+                bmp.Pixels[y * w + x] = (b[p + 2] << 16) | (b[p + 1] << 8) | b[p];
+            }
+        }
+        return bmp;
+    }
+
     /// <summary>Nearest-neighbour scale (cached by the Image control).</summary>
     public Bitmap Scale(int w, int h)
     {

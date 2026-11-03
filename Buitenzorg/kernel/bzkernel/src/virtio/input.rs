@@ -26,6 +26,7 @@ const EV_REL: u16 = 2;
 const EV_ABS: u16 = 3;
 const REL_X: u16 = 0;
 const REL_Y: u16 = 1;
+const REL_WHEEL: u16 = 8;
 const ABS_X: u16 = 0;
 const ABS_Y: u16 = 1;
 const BTN_LEFT: u16 = 0x110;
@@ -151,6 +152,11 @@ impl InputDev {
                 match code {
                     REL_X => self.dx += value as i32 as i64,
                     REL_Y => self.dy += value as i32 as i64,
+                    REL_WHEEL => {
+                        crate::mouse::inject_wheel(value as i32 as i64);
+                        POINTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        return;
+                    }
                     _ => {}
                 }
                 self.rel_dirty = true;

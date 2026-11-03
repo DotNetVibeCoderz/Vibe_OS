@@ -50,8 +50,8 @@ pub fn unix_time() -> u64 {
     let base = BASE.load(Ordering::Relaxed);
     if base == 0 {
         let epoch = match SOFT_EPOCH.load(Ordering::Relaxed) {
-            // the build time is UTC; the clock shows local time (WIB, as SNTP sets it)
-            0 => BUILD_UNIX + 7 * 3600,
+            // UTC like every RTC; clock.rs adds the time zone
+            0 => BUILD_UNIX,
             e => e,
         };
         return epoch + uptime_s();

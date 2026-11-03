@@ -11,6 +11,16 @@ bz-abi = { path = "../abi" }
 spin = "0.9"
 pc-keyboard = "0.7"
 linked_list_allocator = "0.10"
+# user accounts (users.rs): password hashing with PBKDF2-HMAC-SHA256
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+hmac = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+# SSH server (ssh.rs): curve25519-sha256 key exchange, ssh-ed25519 host key,
+# chacha20-poly1305@openssh.com
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
+ed25519-dalek = { version = "2", default-features = false }
+chacha20 = { version = "0.9", default-features = false }
+poly1305 = { version = "0.8", default-features = false }
 noto-sans-mono-bitmap = { version = "0.3", default-features = false, features = [
     "regular",
     "bold",

@@ -1,7 +1,8 @@
 //! FAT12/16/32 access over a [`BlockDevice`] (v0.3 "Batang" milestone: "baca
 //! file dari disk"; writes on all three variants since the persistent-`/disk`
-//! increment). Deliberately minimal: first FAT partition, root directory only,
-//! 8.3 names.
+//! increment). First FAT partition, 8.3 names, and **sub-directories**: paths
+//! like `APPS/DEMO/README.TXT` (relative to the volume), folders created with
+//! `.` / `..` entries, rename / move by relinking the 32-byte entry.
 //!
 //! Write ordering (no journal yet): new data clusters -> FAT chain (every FAT
 //! copy) -> directory entry -> free the old chain. A crash in between can leak
@@ -32,6 +33,46 @@ pub struct FatVolume {
     fat_size: u64,      // sectors per FAT copy
     cluster_count: u64, // data clusters; valid cluster numbers are 2..cluster_count+2
     fsinfo_sector: u64, // FAT32 FSInfo LBA (0 = none)
+}
+
+/// A directory: the volume root (fixed area on FAT12/16, a chain on FAT32)
+/// or a sub-directory's cluster chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dir {
+    Root,
+    Cluster(u32),
+}
+
+/// One directory entry as callers see it.
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u32,
+    pub cluster: u32,
+    /// FAT date / time words of the last change.
+    pub date: u16,
+    pub time: u16,
+}
+
+fn parse_entry(e: &[u8]) -> DirEntry {
+    DirEntry {
+        name: decode_83(&e[..11]),
+        is_dir: e[11] & 0x10 != 0,
+        size: u32_at(e, 28) as u32,
+        cluster: (u16_at(e, 20) as u32) << 16 | u16_at(e, 26) as u32,
+        date: u16_at(e, 24) as u16,
+        time: u16_at(e, 22) as u16,
+    }
+}
+
+/// `A/B/C.TXT` -> (`A/B`, `C.TXT`); `C.TXT` -> (``, `C.TXT`).
+fn split_parent(path: &str) -> (&str, &str) {
+    let path = path.trim_matches('/');
+    match path.rsplit_once('/') {
+        Some((dir, name)) => (dir, name),
+        None => ("", path),
+    }
 }
 
 fn u16_at(buf: &[u8], off: usize) -> u64 {
@@ -190,31 +231,147 @@ impl FatVolume {
         Ok(entry.filter(|&c| c >= 2))
     }
 
-    /// List root-directory 8.3 names (for diagnostics).
-    pub fn list_root(&self, dev: &mut dyn BlockDevice) -> Result<Vec<String>, &'static str> {
-        let mut names = Vec::new();
-        self.walk_root(dev, |entry| {
-            names.push(decode_83(&entry[..11]));
-            false
-        })?;
-        Ok(names)
+    /// LBAs of the sectors of a cluster chain (guarded against loops).
+    fn chain_sectors(&self, dev: &mut dyn BlockDevice, first: u32) -> Result<Vec<u64>, &'static str> {
+        let mut out = Vec::new();
+        let mut cluster = first;
+        let mut steps = 0u64;
+        loop {
+            if cluster < 2 || cluster as u64 >= self.cluster_count + 2 {
+                return Err("corrupt directory chain");
+            }
+            let lba = self.cluster_to_sector(cluster);
+            for s in 0..self.sectors_per_cluster {
+                out.push(lba + s);
+            }
+            steps += 1;
+            if steps > self.cluster_count {
+                return Err("directory chain loops");
+            }
+            match self.next_cluster(dev, cluster)? {
+                Some(next) => cluster = next,
+                None => break,
+            }
+        }
+        Ok(out)
     }
 
-    /// Read a file from the root directory by 8.3 name (e.g. "BATANG.TXT").
-    pub fn read_file(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<Vec<u8>, &'static str> {
-        let wanted = encode_83(name)?;
-        let mut found: Option<(u32, u64)> = None;
-        self.walk_root(dev, |entry| {
-            if entry[..11] == wanted {
-                let hi = u16_at(entry, 20) as u32;
-                let lo = u16_at(entry, 26) as u32;
-                found = Some(((hi << 16) | lo, u32_at(entry, 28)));
-                true
-            } else {
-                false
+    /// LBAs of every sector of directory `dir`.
+    fn dir_sectors(&self, dev: &mut dyn BlockDevice, dir: Dir) -> Result<Vec<u64>, &'static str> {
+        match dir {
+            Dir::Root => self.root_sectors(dev),
+            Dir::Cluster(c) => self.chain_sectors(dev, c),
+        }
+    }
+
+    /// The entries of `dir` (no deleted, long-name, volume-label, `.` or `..`).
+    pub fn entries(&self, dev: &mut dyn BlockDevice, dir: Dir) -> Result<Vec<DirEntry>, &'static str> {
+        let mut out = Vec::new();
+        let mut sector = [0u8; SECTOR_SIZE];
+        for lba in self.dir_sectors(dev, dir)? {
+            dev.read_sector(lba, &mut sector)?;
+            for e in sector.chunks_exact(32) {
+                match e[0] {
+                    0x00 => return Ok(out),
+                    0xE5 | b'.' => continue,
+                    _ => {}
+                }
+                if e[11] & 0x0F == 0x0F || e[11] & 0x08 != 0 {
+                    continue; // long-file-name entry / volume label
+                }
+                out.push(parse_entry(e));
             }
-        })?;
-        let (mut cluster, size) = found.ok_or("file not found in root directory")?;
+        }
+        Ok(out)
+    }
+
+    /// Locate `wanted` in `dir`: (sector LBA, entry offset, entry), plus the
+    /// first free slot seen (for creating it).
+    fn find_in(
+        &self,
+        dev: &mut dyn BlockDevice,
+        dir: Dir,
+        wanted: &[u8; 11],
+    ) -> Result<(Option<(u64, usize, DirEntry)>, Option<(u64, usize)>), &'static str> {
+        let mut free = None;
+        let mut sector = [0u8; SECTOR_SIZE];
+        for lba in self.dir_sectors(dev, dir)? {
+            dev.read_sector(lba, &mut sector)?;
+            for off in (0..SECTOR_SIZE).step_by(32) {
+                let first = sector[off];
+                if first == 0x00 || first == 0xE5 {
+                    if free.is_none() {
+                        free = Some((lba, off));
+                    }
+                    if first == 0x00 {
+                        return Ok((None, free)); // end of directory
+                    }
+                    continue;
+                }
+                if sector[off + 11] & 0x0F == 0x0F {
+                    continue; // long-file-name entry
+                }
+                if sector[off..off + 11] == wanted[..] {
+                    return Ok((Some((lba, off, parse_entry(&sector[off..off + 32]))), free));
+                }
+            }
+        }
+        Ok((None, free))
+    }
+
+    /// The directory a volume-relative path names (`""` = the root).
+    pub fn resolve_dir(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<Dir, &'static str> {
+        let mut dir = Dir::Root;
+        for comp in path.split('/').filter(|c| !c.is_empty()) {
+            let wanted = encode_83(comp)?;
+            let (found, _) = self.find_in(dev, dir, &wanted)?;
+            let (_, _, e) = found.ok_or("folder not found")?;
+            if !e.is_dir {
+                return Err("not a folder");
+            }
+            dir = if e.cluster == 0 { Dir::Root } else { Dir::Cluster(e.cluster) };
+        }
+        Ok(dir)
+    }
+
+    /// Entry of a volume-relative path (the root itself has none).
+    fn lookup(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<(Dir, u64, usize, DirEntry), &'static str> {
+        let (parent, name) = split_parent(path);
+        if name.is_empty() {
+            return Err("the root has no entry");
+        }
+        let dir = self.resolve_dir(dev, parent)?;
+        let (found, _) = self.find_in(dev, dir, &encode_83(name)?)?;
+        let (lba, off, e) = found.ok_or("not found")?;
+        Ok((dir, lba, off, e))
+    }
+
+    /// List root-directory 8.3 names (for diagnostics).
+    pub fn list_root(&self, dev: &mut dyn BlockDevice) -> Result<Vec<String>, &'static str> {
+        Ok(self.entries(dev, Dir::Root)?.into_iter().map(|e| e.name).collect())
+    }
+
+    /// The entries of the folder at a volume-relative path.
+    pub fn list(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<Vec<DirEntry>, &'static str> {
+        let dir = self.resolve_dir(dev, path)?;
+        self.entries(dev, dir)
+    }
+
+    /// Name, kind, size and date of a volume-relative path (`""` = the root).
+    pub fn stat(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<DirEntry, &'static str> {
+        if path.trim_matches('/').is_empty() {
+            return Ok(DirEntry { name: String::new(), is_dir: true, size: 0, cluster: 0, date: 0, time: 0 });
+        }
+        Ok(self.lookup(dev, path)?.3)
+    }
+
+    /// Read a file by volume-relative path (e.g. "BATANG.TXT", "APPS/A.TXT").
+    pub fn read_file(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<Vec<u8>, &'static str> {
+        let (_, _, _, e) = self.lookup(dev, name).map_err(|_| "file not found")?;
+        if e.is_dir {
+            return Err("that is a folder");
+        }
+        let (mut cluster, size) = (e.cluster, e.size);
 
         let mut data = Vec::with_capacity(size as usize);
         let mut sector = [0u8; SECTOR_SIZE];
@@ -240,58 +397,6 @@ impl FatVolume {
             return Err("cluster chain ended early");
         }
         Ok(data)
-    }
-
-    /// Visit every used root-directory entry; stop early when `f` returns true.
-    fn walk_root(
-        &self,
-        dev: &mut dyn BlockDevice,
-        mut f: impl FnMut(&[u8]) -> bool,
-    ) -> Result<(), &'static str> {
-        let mut sector = [0u8; SECTOR_SIZE];
-        let mut visit_sector = |dev: &mut dyn BlockDevice, lba: u64, sector: &mut [u8; SECTOR_SIZE]| -> Result<bool, &'static str> {
-            dev.read_sector(lba, sector)?;
-            for entry in sector.chunks_exact(32) {
-                match entry[0] {
-                    0x00 => return Ok(true), // end of directory
-                    0xE5 => continue,        // deleted
-                    _ => {}
-                }
-                if entry[11] & 0x0F == 0x0F {
-                    continue; // long-file-name entry
-                }
-                if f(entry) {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        };
-
-        match self.kind {
-            FatKind::Fat12 | FatKind::Fat16 => {
-                for s in 0..self.root_dir_sectors {
-                    if visit_sector(dev, self.root_dir_start + s, &mut sector)? {
-                        return Ok(());
-                    }
-                }
-            }
-            FatKind::Fat32 => {
-                let mut cluster = self.root_cluster;
-                loop {
-                    let first = self.cluster_to_sector(cluster);
-                    for s in 0..self.sectors_per_cluster {
-                        if visit_sector(dev, first + s, &mut sector)? {
-                            return Ok(());
-                        }
-                    }
-                    match self.next_cluster(dev, cluster)? {
-                        Some(next) => cluster = next,
-                        None => break,
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -522,41 +627,6 @@ impl FatVolume {
         Ok(out)
     }
 
-    /// Locate `wanted` in the root directory: (sector LBA, entry offset, first
-    /// cluster). Also returns the first free slot seen, for creating it.
-    fn find_entry(
-        &self,
-        dev: &mut dyn BlockDevice,
-        wanted: &[u8; 11],
-    ) -> Result<(Option<(u64, usize, u32)>, Option<(u64, usize)>), &'static str> {
-        let mut free = None;
-        for lba in self.root_sectors(dev)? {
-            let mut sector = [0u8; SECTOR_SIZE];
-            dev.read_sector(lba, &mut sector)?;
-            for off in (0..SECTOR_SIZE).step_by(32) {
-                let first = sector[off];
-                if first == 0x00 || first == 0xE5 {
-                    if free.is_none() {
-                        free = Some((lba, off));
-                    }
-                    if first == 0x00 {
-                        return Ok((None, free)); // end of directory
-                    }
-                    continue;
-                }
-                if sector[off + 11] & 0x0F == 0x0F {
-                    continue; // long-file-name entry
-                }
-                if sector[off..off + 11] == wanted[..] {
-                    let cluster =
-                        (u16_at(&sector, off + 20) as u32) << 16 | u16_at(&sector, off + 26) as u32;
-                    return Ok((Some((lba, off, cluster)), free));
-                }
-            }
-        }
-        Ok((None, free))
-    }
-
     /// FAT32 keeps a free-cluster hint in FSInfo; once we change the FAT it
     /// would be stale, so mark it "unknown" (0xFFFFFFFF), which every FAT
     /// implementation must accept and recompute.
@@ -577,14 +647,16 @@ impl FatVolume {
         dev.write_sector(self.fsinfo_sector, &s)
     }
 
-    /// A full FAT32 root directory (a cluster chain, unlike the fixed FAT12/16
-    /// root) gets one more cluster: zeroed first (so it reads as "end of
-    /// directory"), marked end-of-chain, then linked after the last root
-    /// cluster. Returns its first slot.
-    fn grow_root(&self, dev: &mut dyn BlockDevice) -> Result<(u64, usize), &'static str> {
-        if self.kind != FatKind::Fat32 {
-            return Err("root directory is full");
-        }
+    /// A full directory gets one more cluster (the fixed FAT12/16 root cannot
+    /// grow): zeroed first (so it reads as "end of directory"), marked
+    /// end-of-chain, then linked after the directory's last cluster. Returns
+    /// its first slot.
+    fn grow_dir(&self, dev: &mut dyn BlockDevice, dir: Dir) -> Result<(u64, usize), &'static str> {
+        let head = match dir {
+            Dir::Root if self.kind != FatKind::Fat32 => return Err("root directory is full"),
+            Dir::Root => self.root_cluster,
+            Dir::Cluster(c) => c,
+        };
         self.invalidate_fsinfo(dev)?;
         let new = *self.alloc_clusters(dev, 1)?.first().ok_or("not enough free clusters")?;
         let first = self.cluster_to_sector(new);
@@ -593,32 +665,152 @@ impl FatVolume {
             dev.write_sector(first + s, &zero)?;
         }
         self.fat_set(dev, new, self.eoc())?;
-        let mut last = self.root_cluster;
+        let mut last = head;
         let mut steps = 0u64;
         while let Some(next) = self.next_cluster(dev, last)? {
             last = next;
             steps += 1;
             if steps > self.cluster_count {
-                return Err("root directory chain loops");
+                return Err("directory chain loops");
             }
         }
         self.fat_set(dev, last, new)?;
         Ok((first, 0))
     }
 
-    /// Create or overwrite a root-directory file with `data`.
+    /// A free slot in `dir`, growing it when it is full.
+    fn free_slot(&self, dev: &mut dyn BlockDevice, dir: Dir, free: Option<(u64, usize)>) -> Result<(u64, usize), &'static str> {
+        match free {
+            Some(slot) => Ok(slot),
+            None => self.grow_dir(dev, dir),
+        }
+    }
+
+    /// Fill a 32-byte directory entry.
+    fn make_entry(entry: &mut [u8], name: &[u8; 11], attr: u8, cluster: u32, size: u32) {
+        entry.fill(0);
+        entry[..11].copy_from_slice(name);
+        entry[11] = attr;
+        let (time, date) = fat_timestamp();
+        entry[14..16].copy_from_slice(&time.to_le_bytes()); // created
+        entry[16..18].copy_from_slice(&date.to_le_bytes());
+        entry[18..20].copy_from_slice(&date.to_le_bytes()); // accessed
+        entry[20..22].copy_from_slice(&((cluster >> 16) as u16).to_le_bytes());
+        entry[22..24].copy_from_slice(&time.to_le_bytes()); // modified
+        entry[24..26].copy_from_slice(&date.to_le_bytes());
+        entry[26..28].copy_from_slice(&(cluster as u16).to_le_bytes());
+        entry[28..32].copy_from_slice(&size.to_le_bytes());
+    }
+
+    /// Create the folder `path` (its parent must exist).
+    pub fn mkdir(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<(), &'static str> {
+        let (parent, name) = split_parent(path);
+        let wanted = encode_83(name)?;
+        let dir = self.resolve_dir(dev, parent)?;
+        let (existing, free) = self.find_in(dev, dir, &wanted)?;
+        if existing.is_some() {
+            return Err("a file or folder with that name exists");
+        }
+        let (lba, off) = self.free_slot(dev, dir, free)?;
+        self.invalidate_fsinfo(dev)?;
+        // 1. the folder's own cluster: "." and "..", the rest zero
+        let new = *self.alloc_clusters(dev, 1)?.first().ok_or("not enough free clusters")?;
+        let first = self.cluster_to_sector(new);
+        let zero = [0u8; SECTOR_SIZE];
+        for s in 1..self.sectors_per_cluster {
+            dev.write_sector(first + s, &zero)?;
+        }
+        let mut sector = [0u8; SECTOR_SIZE];
+        let parent_cluster = match dir {
+            Dir::Root => 0, // ".." of a top-level folder is 0, even on FAT32
+            Dir::Cluster(c) => c,
+        };
+        Self::make_entry(&mut sector[0..32], b".          ", 0x10, new, 0);
+        Self::make_entry(&mut sector[32..64], b"..         ", 0x10, parent_cluster, 0);
+        dev.write_sector(first, &sector)?;
+        self.fat_set(dev, new, self.eoc())?;
+        // 2. its entry in the parent
+        dev.read_sector(lba, &mut sector)?;
+        Self::make_entry(&mut sector[off..off + 32], &wanted, 0x10, new, 0);
+        dev.write_sector(lba, &sector)
+    }
+
+    /// Rename and / or move `from` to `to` (both volume-relative; the target
+    /// must not exist). The 32-byte entry is relinked, so the data stays put;
+    /// a moved folder gets its ".." updated.
+    pub fn rename(&self, dev: &mut dyn BlockDevice, from: &str, to: &str) -> Result<(), &'static str> {
+        let (_, src_lba, src_off, e) = self.lookup(dev, from)?;
+        let (to_parent, to_name) = split_parent(to);
+        let wanted = encode_83(to_name)?;
+        let dest = self.resolve_dir(dev, to_parent)?;
+        if e.is_dir {
+            // never into itself or below itself
+            let mut dir = Dir::Root;
+            for comp in to_parent.split('/').filter(|c| !c.is_empty()) {
+                let (found, _) = self.find_in(dev, dir, &encode_83(comp)?)?;
+                let (_, _, d) = found.ok_or("folder not found")?;
+                if d.cluster == e.cluster {
+                    return Err("cannot move a folder into itself");
+                }
+                dir = Dir::Cluster(d.cluster);
+            }
+        }
+        let (existing, free) = self.find_in(dev, dest, &wanted)?;
+        if let Some((lba, off, _)) = existing {
+            if (lba, off) == (src_lba, src_off) {
+                return Ok(()); // same name, same place
+            }
+            return Err("a file or folder with that name exists");
+        }
+        let (dlba, doff) = self.free_slot(dev, dest, free)?;
+        // 1. the new entry (a copy of the old one with the new name)
+        let mut sector = [0u8; SECTOR_SIZE];
+        dev.read_sector(src_lba, &mut sector)?;
+        let mut entry = [0u8; 32];
+        entry.copy_from_slice(&sector[src_off..src_off + 32]);
+        entry[..11].copy_from_slice(&wanted);
+        dev.read_sector(dlba, &mut sector)?;
+        sector[doff..doff + 32].copy_from_slice(&entry);
+        dev.write_sector(dlba, &sector)?;
+        // 2. the old one is deleted (re-read: it may share the sector)
+        dev.read_sector(src_lba, &mut sector)?;
+        sector[src_off] = 0xE5;
+        dev.write_sector(src_lba, &sector)?;
+        // 3. a moved folder's ".." points at its new parent
+        if e.is_dir && e.cluster >= 2 {
+            let parent_cluster = match dest {
+                Dir::Root => 0,
+                Dir::Cluster(c) => c,
+            };
+            let first = self.cluster_to_sector(e.cluster);
+            dev.read_sector(first, &mut sector)?;
+            if &sector[32..34] == b".." {
+                sector[32 + 20..32 + 22].copy_from_slice(&((parent_cluster >> 16) as u16).to_le_bytes());
+                sector[32 + 26..32 + 28].copy_from_slice(&(parent_cluster as u16).to_le_bytes());
+                dev.write_sector(first, &sector)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Create or overwrite the file at a volume-relative path with `data`.
     pub fn write_file(
         &self,
         dev: &mut dyn BlockDevice,
         name: &str,
         data: &[u8],
     ) -> Result<(), &'static str> {
-        let wanted = encode_83(name)?;
-        let (existing, free) = self.find_entry(dev, &wanted)?;
+        let (parent, file) = split_parent(name);
+        let wanted = encode_83(file)?;
+        let dir = self.resolve_dir(dev, parent)?;
+        let (existing, free) = self.find_in(dev, dir, &wanted)?;
+        if matches!(existing, Some((_, _, ref e)) if e.is_dir) {
+            return Err("a folder with that name exists");
+        }
+        let existing = existing.map(|(lba, off, e)| (lba, off, e.cluster));
         let (lba, off) = match (existing, free) {
             (Some((lba, off, _)), _) => (lba, off),
-            (None, Some(slot)) => slot,
-            (None, None) => self.grow_root(dev)?,
+            (None, free) => self.free_slot(dev, dir, free)?,
         };
         self.invalidate_fsinfo(dev)?;
 
@@ -647,19 +839,7 @@ impl FatVolume {
         let first_cluster = chain.first().copied().unwrap_or(0);
         let mut sector = [0u8; SECTOR_SIZE];
         dev.read_sector(lba, &mut sector)?;
-        let entry = &mut sector[off..off + 32];
-        entry.fill(0);
-        entry[..11].copy_from_slice(&wanted);
-        entry[11] = 0x20; // archive
-        let (time, date) = fat_timestamp();
-        entry[14..16].copy_from_slice(&time.to_le_bytes()); // created
-        entry[16..18].copy_from_slice(&date.to_le_bytes());
-        entry[18..20].copy_from_slice(&date.to_le_bytes()); // accessed
-        entry[20..22].copy_from_slice(&((first_cluster >> 16) as u16).to_le_bytes());
-        entry[22..24].copy_from_slice(&time.to_le_bytes()); // modified
-        entry[24..26].copy_from_slice(&date.to_le_bytes());
-        entry[26..28].copy_from_slice(&(first_cluster as u16).to_le_bytes());
-        entry[28..32].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        Self::make_entry(&mut sector[off..off + 32], &wanted, 0x20, first_cluster, data.len() as u32); // archive
         dev.write_sector(lba, &sector)?;
         // 4. Only now release what the old version occupied.
         if let Some((_, _, old)) = existing {
@@ -668,11 +848,13 @@ impl FatVolume {
         Ok(())
     }
 
-    /// Delete a root-directory file and free its clusters.
+    /// Delete a file, or an empty folder, and free its clusters.
     pub fn delete_file(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<(), &'static str> {
-        let wanted = encode_83(name)?;
-        let (existing, _) = self.find_entry(dev, &wanted)?;
-        let (lba, off, first) = existing.ok_or("file not found in root directory")?;
+        let (_, lba, off, e) = self.lookup(dev, name).map_err(|_| "file not found")?;
+        if e.is_dir && e.cluster >= 2 && !self.entries(dev, Dir::Cluster(e.cluster))?.is_empty() {
+            return Err("folder is not empty");
+        }
+        let first = e.cluster;
         self.invalidate_fsinfo(dev)?;
         let mut sector = [0u8; SECTOR_SIZE];
         dev.read_sector(lba, &mut sector)?;
@@ -696,7 +878,7 @@ impl FatVolume {
 
 /// Current CMOS time as FAT (time, date) words.
 fn fat_timestamp() -> (u16, u16) {
-    let (year, month, day, hour, min, sec) = crate::rtc::read();
+    let (year, month, day, hour, min, sec) = crate::clock::now();
     let time = (hour as u16) << 11 | (min as u16) << 5 | (sec as u16) / 2;
     let date = (year.saturating_sub(1980) & 0x7F) << 9 | (month as u16) << 5 | day as u16;
     (time, date)

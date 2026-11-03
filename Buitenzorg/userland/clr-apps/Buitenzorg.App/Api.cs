@@ -29,6 +29,8 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern long FsSize(string path);
     [DllImport("buitenzorg")] internal static extern int FsReadInto(string path, byte[] buffer);
     [DllImport("buitenzorg")] internal static extern int FsWriteText(string path, string text);
+    [DllImport("buitenzorg")] internal static extern int FsOp(int op, string path, string path2);
+    [DllImport("buitenzorg")] internal static extern string FsStat(string path);
     [DllImport("buitenzorg")] internal static extern string ProcList();
     [DllImport("buitenzorg")] internal static extern int ProcKill(long pid);
     [DllImport("buitenzorg")] internal static extern long SysStat(int field);
@@ -139,6 +141,25 @@ public static class Programs
     public static long WaitForExit(long pid) => Native.Wait(pid);
 }
 
+/// <summary>Size, kind and last change of a file or folder (<see cref="Files.GetInfo"/>).</summary>
+public sealed class FileInfoData
+{
+    public string Path { get; }
+    public string Name { get; }
+    public long Size { get; }
+    public bool IsDirectory { get; }
+    /// <summary>Last change (local time, 2-second steps); null when unknown.</summary>
+    public DateTime? Modified { get; }
+    public FileInfoData(string path, long size, bool dir, DateTime? modified)
+    {
+        Path = path;
+        Name = path.TrimEnd('/').Substring(path.TrimEnd('/').LastIndexOf('/') + 1);
+        Size = size;
+        IsDirectory = dir;
+        Modified = modified;
+    }
+}
+
 /// <summary>An entry of a directory listing.</summary>
 public sealed class FileEntry
 {
@@ -149,11 +170,14 @@ public sealed class FileEntry
     public override string ToString() => Name;
 }
 
-/// <summary>The virtual file system: /disk (FAT, persistent), /ram, ... (8.3 names, root directories).
+/// <summary>The virtual file system: /disk (FAT, persistent), /ram, ... with folders
+/// (8.3 names per component: /disk/APPS/DEMO/README.TXT).
 /// Off the device (tests on a development machine) it falls back to an in-memory /ram.</summary>
 public static class Files
 {
     static Dictionary<string, string>? _sim;
+    static readonly HashSet<string> _simDirs = new HashSet<string>();
+    static readonly Dictionary<string, DateTime> _simTimes = new Dictionary<string, DateTime>();
 
     static bool Sim(Exception e)
     {
@@ -187,10 +211,108 @@ public static class Files
     static string SimList(string path)
     {
         if (path.Length == 0) return "ram/\n";
+        string prefix = path.TrimEnd('/') + "/";
+        var seen = new List<string>();
         var sb = new System.Text.StringBuilder();
+        void Add(string line) { if (!seen.Contains(line)) { seen.Add(line); sb.Append(line).Append('\n'); } }
+        foreach (var d in _simDirs)
+            if (d.StartsWith(prefix) && d.IndexOf('/', prefix.Length) < 0) Add(d.Substring(prefix.Length) + "/");
         foreach (var k in _sim!.Keys)
-            if (k.StartsWith(path.TrimEnd('/') + "/")) sb.Append(k.Substring(path.TrimEnd('/').Length + 1)).Append('\n');
+            if (k.StartsWith(prefix) && k.IndexOf('/', prefix.Length) < 0) Add(k.Substring(prefix.Length));
         return sb.ToString();
+    }
+
+    static bool SimExists(string p) => _sim!.ContainsKey(p) || _simDirs.Contains(p) || p == "/ram";
+    static string ParentOf(string p) { int i = p.TrimEnd('/').LastIndexOf('/'); return i <= 0 ? "/" : p.Substring(0, i); }
+
+    /// <summary>Create a folder (its parent must exist); false if refused (exists, bad 8.3 name, read-only).</summary>
+    public static bool CreateDirectory(string path)
+    {
+        path = path.TrimEnd('/');
+        if (_sim != null)
+        {
+            if (SimExists(path) || !SimExists(ParentOf(path))) return false;
+            _simDirs.Add(path);
+            _simTimes[path] = DateTime.Now;
+            return true;
+        }
+        try { return Native.FsOp(0, path, "") == 0; }
+        catch (Exception e) when (Sim(e)) { return CreateDirectory(path); }
+    }
+
+    /// <summary>Delete a file or an empty folder.</summary>
+    public static bool Delete(string path)
+    {
+        path = path.TrimEnd('/');
+        if (_sim != null)
+        {
+            if (_sim.Remove(path)) return true;
+            if (!_simDirs.Contains(path)) return false;
+            foreach (var k in _sim.Keys) if (k.StartsWith(path + "/")) return false;
+            foreach (var d in _simDirs) if (d.StartsWith(path + "/")) return false;
+            return _simDirs.Remove(path);
+        }
+        try { return Native.FsOp(1, path, "") == 0; }
+        catch (Exception e) when (Sim(e)) { return Delete(path); }
+    }
+
+    /// <summary>Rename and / or move a file or folder (to another drive: files only, copied).
+    /// The target must not exist.</summary>
+    public static bool Move(string from, string to)
+    {
+        from = from.TrimEnd('/'); to = to.TrimEnd('/');
+        if (_sim != null)
+        {
+            if (!SimExists(from) || SimExists(to) || !SimExists(ParentOf(to)) || to.StartsWith(from + "/")) return false;
+            if (_sim.TryGetValue(from, out var text)) { _sim.Remove(from); _sim[to] = text; return true; }
+            var moves = new List<string>();
+            foreach (var d in _simDirs) if (d == from || d.StartsWith(from + "/")) moves.Add(d);
+            foreach (var d in moves) { _simDirs.Remove(d); _simDirs.Add(to + d.Substring(from.Length)); }
+            var files = new List<string>(_sim.Keys);
+            foreach (var k in files) if (k.StartsWith(from + "/")) { var t = _sim[k]; _sim.Remove(k); _sim[to + k.Substring(from.Length)] = t; }
+            return true;
+        }
+        try { return Native.FsOp(2, from, to) == 0; }
+        catch (Exception e) when (Sim(e)) { return Move(from, to); }
+    }
+
+    /// <summary>Size, kind and last change; null if it does not exist.</summary>
+    public static FileInfoData? GetInfo(string path)
+    {
+        path = path.TrimEnd('/');
+        if (_sim != null)
+        {
+            DateTime? t = _simTimes.TryGetValue(path, out var w) ? w : null;
+            if (_sim.TryGetValue(path, out var text)) return new FileInfoData(path, System.Text.Encoding.UTF8.GetByteCount(text), false, t);
+            if (_simDirs.Contains(path) || path == "/ram") return new FileInfoData(path, 0, true, t);
+            return null;
+        }
+        string s;
+        try { s = Native.FsStat(path); }
+        catch (Exception e) when (Sim(e)) { return GetInfo(path); }
+        var f = s.Split(',');
+        if (f.Length < 4) return null;
+        int date = int.Parse(f[2]), time = int.Parse(f[3]);
+        DateTime? when = null;
+        if (date != 0)
+        {
+            int y = 1980 + (date >> 9), mo = (date >> 5) & 15, d = date & 31;
+            int h = time >> 11, mi = (time >> 5) & 63, sec = (time & 31) * 2;
+            if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h < 24 && mi < 60 && sec < 60) when = new DateTime(y, mo, d, h, mi, sec);
+        }
+        return new FileInfoData(path, long.Parse(f[0]), f[1] != "0", when);
+    }
+
+    /// <summary>True for a valid 8.3 name ("CATATAN.TXT", "FOTO"): what the FAT volumes accept.</summary>
+    public static bool IsValidName(string name)
+    {
+        if (name.Length == 0 || name.Length > 12) return false;
+        int dot = name.IndexOf('.');
+        string b = dot < 0 ? name : name.Substring(0, dot), x = dot < 0 ? "" : name.Substring(dot + 1);
+        if (b.Length == 0 || b.Length > 8 || x.Length > 3 || x.IndexOf('.') >= 0) return false;
+        foreach (char c in name)
+            if (c != '.' && !(char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '~' || c == '!' || c == '#' || c == '$' || c == '&')) return false;
+        return true;
     }
 
     /// <summary>A writable place for scratch files: /ram when it is mounted (PC), else /disk.</summary>
@@ -238,7 +360,7 @@ public static class Files
     /// <summary>Create or replace a file; false when the mount refused it.</summary>
     public static bool WriteAllText(string path, string text)
     {
-        if (_sim != null) { _sim[path] = text; return true; }
+        if (_sim != null) { if (_simDirs.Contains(path)) return false; _sim[path] = text; _simTimes[path] = DateTime.Now; return true; }
         try { return Native.FsWriteText(path, text) == System.Text.Encoding.UTF8.GetByteCount(text) || text.Length == 0; }
         catch (Exception e) when (Sim(e)) { return WriteAllText(path, text); }
     }

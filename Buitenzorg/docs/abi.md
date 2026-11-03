@@ -65,7 +65,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 42 | `PROC_ARGS` | ptr buffer | max bytes | full length of the caller's argument string |
 | 43 | `FUTEX_WAIT_TIMEOUT` | ptr u32 word | expected value | 0 woken / word changed, 1 timed out (a2 = timeout in ns, 0 = none) |
 | 44 | `CLOCK_NANOS` | — | — | monotonic nanoseconds since boot |
-| 45 | `WIN_EVENT` | window id | — | next pointer event, 0 = none (packed: x bits 0-15, y 16-31, buttons 32-39, kind 56-63: 1 move, 2 down, 3 up, 4 leave) |
+| 45 | `WIN_EVENT` | window id | — | next pointer event, 0 = none (packed: x bits 0-15, y 16-31, buttons 32-39, wheel notches 40-55 (signed, kind 5 only), kind 56-63: 1 move, 2 down, 3 up, 4 leave, 5 wheel -- positive = scroll up) |
 | 46 | `TEXT_METRICS` | style (0 body, 1 strong, 2 heading) | — | `(glyph width << 32) \| line height` |
 | 47 | `HW_BOARD` | `hw_query` code | argument (clock / voltage id) | the value; `NOSYS` without board I/O (Raspberry Pi 4 only) |
 | 48 | `HW_GPIO` | `hw_gpio` operation | pin | 0, the level (READ) or the mode (GET_MODE); a2 = value |
@@ -74,6 +74,8 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 51 | `HW_UART` | `hw_uart` operation (0 open, 1 write, 2 read, 3 close) | ptr `HwTransfer` | bytes written / read (read does not block), 0 for open / close |
 | 52 | `HW_LED` | 0 activity (green) / 1 power (red) | 1 on / 0 off | 0 |
 | 53 | `SETTING` | `setting_op` (0 get, 1 set, 2 count, 3 name, 4 description) | `setting_key` (\| index << 16 for name / description) | value / count / text length; 0 after set (a2 = value or 64-byte buffer) |
+| 54 | `FS_OP` | `fs_op` (0 mkdir, 1 remove, 2 rename/move, 3 stat) | path (NUL-terminated, absolute, folders allowed) | 0 or `INVAL`; a2 = second path (rename) or, for stat, a pointer to 4 u64: size, is-folder, FAT date << 16 \| time, 0 |
+| 55 | `USER_OP` | `user_op` (0 list, 1 verify, 2 add, 3 remove, 4 passwd, 5 reset, 6 avatar) | request: NUL-terminated `\n`-separated fields (see `user_op`) | 0 or `INVAL`; list writes `name\tadmin\tavatar\n` lines into a2 (2048 bytes) and returns their length. Changing accounts needs an administrator's password (own password: the current one); passwords are PBKDF2-HMAC-SHA256 with salt in `/disk/USERS.CFG` |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
@@ -247,7 +249,12 @@ UART OPEN; `mode` = SPI mode 0-3. I2C writes `tx` then reads `rx`; SPI clocks
 **Settings keys** (`SETTING`): `0 THEME` (index into the theme list), `1 WALLPAPER`
 (index of an official wallpaper), `2 SCREENSAVER` (index; the last choice is
 "off"), `3 SCREENSAVER_DELAY` (idle seconds, 5-3600), `4 ANIMATIONS` (0/1),
-`5 LARGE_CURSOR` (0/1). A SET recomposes the desktop at once.
+`5 LARGE_CURSOR` (0/1), `6 TIMEZONE` (index; NAME = "WIB", DESCRIPTION =
+places + UTC offset), `7 LANGUAGE` (0 Bahasa Indonesia, 1 English; NAME =
+language name, DESCRIPTION = code), `8 CLOCK_24H` (0/1), `9 CLOCK` (local
+date-time as seconds since 1970-01-01 local midnight; GET reads, SET sets the
+clock, 2000-2099). A SET recomposes the desktop at once. Region values persist
+in `/disk/REGION.CFG`; the RTC is read as UTC on every architecture.
 
 **Board I/O codes.** `hw_query`: `0 BOARD` (1 = Raspberry Pi 4), `1 TEMPERATURE`
 (m°C), `2 TEMPERATURE_MAX` (m°C), `3 CLOCK` (Hz; a1 = firmware clock id: 3 ARM,

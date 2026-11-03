@@ -1,11 +1,15 @@
 // Pengaturan -- the desktop settings app: theme (+ animations, large cursor),
-// wallpaper, screensaver (+ idle delay) and sound (volume, test tone), each a
-// page behind a side navigation. Changes apply at once: the kernel recomposes
+// wallpaper, screensaver (+ idle delay), sound (volume, test tone) and user
+// accounts (add, delete, change password, profile picture), each a page
+// behind a side navigation. Changes apply at once: the kernel recomposes
 // the desktop (SETTING syscall). Buitenzorg.UI + Buitenzorg.App.Settings / Audio.
 
 using Buitenzorg.UI;
 using AppSettings = Buitenzorg.App.Settings;
 using AppAudio = Buitenzorg.App.Audio;
+using Users = Buitenzorg.App.Users;
+using UserAccount = Buitenzorg.App.UserAccount;
+using AppFiles = Buitenzorg.App.Files;
 
 namespace MSettings;
 
@@ -46,6 +50,162 @@ public static class SettingsApp
         public Slider Delay = null!, Volume = null!;
         public ToggleSwitch Animations = null!, Cursor = null!;
         public TextBlock DelayText = null!, SoundStatus = null!;
+        // Pengguna
+        public ListBox Accounts = null!;
+        public TextBox AdminName = null!, AdminPassword = null!;
+        public TextBlock UserStatus = null!;
+        public Func<string, string, bool, string?> AddUser = null!;
+        public Func<UserAccount, string?> DeleteUser = null!;
+        public Func<UserAccount, string, string, string?> SetPassword = null!;
+        public Func<UserAccount, string, string?> SetAvatar = null!;
+    }
+
+    static readonly Dictionary<string, Bitmap?> _avatarCache = new Dictionary<string, Bitmap?>();
+
+    /// <summary>A profile picture (cached), null when the file is missing.</summary>
+    public static Bitmap? Avatar(string path)
+    {
+        if (!_avatarCache.TryGetValue(path, out var b))
+        {
+            b = Bitmap.FromBmp(AppFiles.ReadAllBytes(path));
+            _avatarCache[path] = b;
+        }
+        return b;
+    }
+
+    static Control AvatarView(string path, int size)
+    {
+        var bmp = Avatar(path);
+        if (bmp != null) return new Image { Source = bmp, Width = size, Height = size, VerticalAlignment = VerticalAlignment.Center };
+        return new GlyphTile(IconKind.Home, 0x7CC4A4, size) { VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    /// <summary>The "Pengguna" page: accounts, with an administrator's password for changes.</summary>
+    static Control UsersPage(Window w, Parts parts)
+    {
+        parts.AdminName = new TextBox { Text = Users.DefaultAdministrator, Width = 150 };
+        parts.AdminPassword = new TextBox { PasswordChar = '*', Watermark = "kata sandi", Width = 150 };
+        parts.UserStatus = new TextBlock("Perubahan akun memerlukan kata sandi administrator.") { TextWrapping = TextWrapping.Wrap }.WithClass("faint");
+        var accounts = new ObservableCollection<UserAccount>();
+        void Reload(string? select = null)
+        {
+            accounts.ResetWith(Users.List());
+            for (int i = 0; i < accounts.Count; i++) if (accounts[i].Name == select) parts.Accounts.SelectedIndex = i;
+            if (parts.Accounts.SelectedIndex < 0 && accounts.Count > 0) parts.Accounts.SelectedIndex = 0;
+        }
+        parts.Accounts = new ListBox { ItemsSource = accounts, Height = 170 };
+        parts.Accounts.ItemTemplate = o =>
+        {
+            var u = (UserAccount)o;
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            row.Children.Add(AvatarView(u.Avatar, 36));
+            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            text.Children.Add(new TextBlock(u.Name).WithClass("strong"));
+            text.Children.Add(new TextBlock(u.IsAdministrator ? "Administrator" : "Pengguna biasa").WithClass("faint"));
+            row.Children.Add(text);
+            return row;
+        };
+        string Admin() => parts.AdminName.Text.Trim();
+        string AdminPw() => parts.AdminPassword.Text;
+        string? Report(bool ok, string done, string failed) { parts.UserStatus.Text = ok ? done : failed; return ok ? null : failed; }
+
+        parts.AddUser = (name, pw, admin) =>
+        {
+            if (!Users.IsValidName(name)) return Report(false, "", "Nama: 1-16 huruf kecil/angka/_-. diawali huruf.");
+            if (!Users.IsValidPassword(pw)) return Report(false, "", "Kata sandi 4-64 karakter.");
+            bool ok = Users.Add(Admin(), AdminPw(), name, pw, admin);
+            if (ok) Reload(name);
+            return Report(ok, "Pengguna " + name + " ditambahkan.", "Tidak bisa menambah: periksa kata sandi administrator (atau nama sudah ada).");
+        };
+        parts.DeleteUser = u =>
+        {
+            bool ok = Users.Remove(Admin(), AdminPw(), u.Name);
+            if (ok) Reload();
+            return Report(ok, "Pengguna " + u.Name + " dihapus.", "Tidak bisa menghapus " + u.Name + " (kata sandi administrator salah, atau administrator terakhir).");
+        };
+        parts.SetPassword = (u, current, next) =>
+        {
+            if (!Users.IsValidPassword(next)) return Report(false, "", "Kata sandi baru 4-64 karakter.");
+            bool ok = current.Length > 0 ? Users.ChangePassword(u.Name, current, next) : Users.ResetPassword(Admin(), AdminPw(), u.Name, next);
+            return Report(ok, "Kata sandi " + u.Name + " diganti.", current.Length > 0 ? "Kata sandi sekarang salah." : "Kata sandi administrator salah.");
+        };
+        parts.SetAvatar = (u, path) =>
+        {
+            bool ok = Users.SetAvatar(Admin(), AdminPw(), u.Name, path);
+            if (ok) Reload(u.Name);
+            return Report(ok, "Foto profil " + u.Name + " diganti.", "Tidak bisa mengganti foto: kata sandi " + Admin() + " salah.");
+        };
+
+        UserAccount? Selected() => parts.Accounts.SelectedItem as UserAccount;
+        void AddDialog()
+        {
+            var name = new TextBox { Width = 260, Watermark = "mis. budi" };
+            var pw = new TextBox { Width = 260, PasswordChar = '*', Watermark = "kata sandi" };
+            var admin = new CheckBox("Jadikan administrator");
+            var body = new StackPanel { Spacing = 8 };
+            body.Children.Add(new TextBlock("Nama pengguna").WithClass("faint"));
+            body.Children.Add(name);
+            body.Children.Add(new TextBlock("Kata sandi").WithClass("faint"));
+            body.Children.Add(pw);
+            body.Children.Add(admin);
+            Dialog.Show(w, "Tambah pengguna", body, "Tambah", "Batal", go => { if (go) parts.AddUser(name.Text.Trim(), pw.Text, admin.IsChecked); });
+            name.Focus();
+        }
+        void PasswordDialog()
+        {
+            if (Selected() is not UserAccount u) return;
+            var cur = new TextBox { Width = 260, PasswordChar = '*', Watermark = "kosongkan bila memakai kata sandi administrator" };
+            var next = new TextBox { Width = 260, PasswordChar = '*' };
+            var again = new TextBox { Width = 260, PasswordChar = '*' };
+            var body = new StackPanel { Spacing = 8 };
+            body.Children.Add(new TextBlock("Kata sandi sekarang").WithClass("faint"));
+            body.Children.Add(cur);
+            body.Children.Add(new TextBlock("Kata sandi baru").WithClass("faint"));
+            body.Children.Add(next);
+            body.Children.Add(new TextBlock("Ulangi kata sandi baru").WithClass("faint"));
+            body.Children.Add(again);
+            Dialog.Show(w, "Ganti kata sandi " + u.Name, body, "Ganti", "Batal", go =>
+            {
+                if (!go) return;
+                if (next.Text != again.Text) { parts.UserStatus.Text = "Kata sandi baru tidak sama."; return; }
+                parts.SetPassword(u, cur.Text, next.Text);
+            });
+            cur.Focus();
+        }
+        void DeleteDialog()
+        {
+            if (Selected() is not UserAccount u) return;
+            Dialog.Show(w, "Hapus " + u.Name + "?", "Akun " + u.Name + " akan dihapus. Berkasnya di /disk tetap ada.", "Hapus", "Batal",
+                go => { if (go) parts.DeleteUser(u); });
+        }
+        void AvatarDialog()
+        {
+            if (Selected() is not UserAccount u) return;
+            var grid = new WrapPanel();
+            Dialog? dlg = null;
+            foreach (var path in Users.Avatars)
+            {
+                var b = new Button(AvatarView(path, 64), _ => { dlg?.Close(); parts.SetAvatar(u, path); }) { Padding = new Thickness(4), Margin = new Thickness(4), Tag = path };
+                b.Classes.Add("subtle");
+                grid.Children.Add(b);
+            }
+            dlg = Dialog.Show(w, "Foto profil " + u.Name, grid, "Batal", null, null);
+        }
+
+        var creds = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        creds.Children.Add(new TextBlock("Administrator") { VerticalAlignment = VerticalAlignment.Center }.WithClass("faint"));
+        creds.Children.Add(parts.AdminName);
+        creds.Children.Add(parts.AdminPassword);
+        var buttons = new WrapPanel();
+        foreach (var (label, act) in new (string, Action)[] { ("Tambah", AddDialog), ("Hapus", DeleteDialog), ("Ganti kata sandi", PasswordDialog), ("Foto profil", AvatarDialog) })
+        {
+            var b = new Button(label, _ => act()) { Margin = new Thickness(0, 0, 6, 6), Tag = label };
+            if (label == "Tambah") b.Classes.Add("accent");
+            buttons.Children.Add(b);
+        }
+        Reload();
+        return Page("Pengguna", "Akun untuk masuk (layar login, SSH). Bawaan: administrator / ganteng@ku -- segera ganti.",
+            creds, parts.Accounts, buttons, parts.UserStatus);
     }
 
     static ListBox Choice(List<string> labels, int current, int key, Func<int, string>? after = null)
@@ -119,12 +279,14 @@ public static class SettingsApp
         beep.Click += _ => AppAudio.Beep(880, 250);
         var sound = Page("Suara", "Volume utama sistem.", parts.SoundStatus, volText, parts.Volume, beep);
 
+        var users = UsersPage(w, parts);
         var pages = new List<(string, IconKind, Control)>
         {
             ("Tampilan", IconKind.Sun, look),
             ("Wallpaper", IconKind.Leaf, paper),
             ("Screensaver", IconKind.Moon, saver),
             ("Suara", IconKind.Play, sound),
+            ("Pengguna", IconKind.Home, users),
         };
         var host = new Border { Padding = new Thickness(16, 0, 0, 0) };
         var nav = new ListBox { BorderThickness = 0, Background = Color.Transparent, CornerRadius = 0, Padding = new Thickness(6), Width = 160 };
@@ -194,7 +356,28 @@ public static class SettingsApp
         else c.That(!p.Volume.IsEnabled, "no sound card: the volume slider is disabled");
 
         c.Equal("Mati", SaverLabel("off"), "screensaver labels");
-        p.Nav.SelectedIndex = 1;
+
+        // Pengguna: only with the default password (a changed one is left alone)
+        c.That(p.Accounts.ItemCount >= 1, "accounts listed (" + p.Accounts.ItemCount + ")");
+        if (Users.Verify(Users.DefaultAdministrator, "ganteng@ku"))
+        {
+            foreach (var u in Users.List()) if (u.Name == "tamu") { p.AdminPassword.Text = "ganteng@ku"; p.DeleteUser(u); }
+            p.AdminPassword.Text = "salah";
+            c.That(p.AddUser("tamu", "rahasia", false) != null, "a wrong administrator password is refused");
+            p.AdminPassword.Text = "ganteng@ku";
+            c.That(p.AddUser("tamu", "rahasia", false) == null && Users.Verify("tamu", "rahasia"), "add user tamu");
+            UserAccount? tamu = null;
+            foreach (var u in Users.List()) if (u.Name == "tamu") tamu = u;
+            c.That(tamu != null && !tamu.IsAdministrator, "tamu is listed, not an administrator");
+            c.That(p.SetPassword(tamu!, "rahasia", "baru123") == null && Users.Verify("tamu", "baru123"), "change own password");
+            c.That(p.SetAvatar(tamu!, Users.Avatars[3]) == null, "profile picture set");
+            foreach (var u in Users.List()) if (u.Name == "tamu") tamu = u;
+            c.Equal(Users.Avatars[3], tamu!.Avatar, "picture recorded");
+            c.That(p.DeleteUser(tamu) == null && !Users.Verify("tamu", "baru123"), "delete tamu");
+            foreach (var u in Users.List()) if (u.Name == Users.DefaultAdministrator) c.That(p.DeleteUser(u) != null, "the last administrator stays");
+            p.AdminPassword.Text = "";
+        }
+        p.Nav.SelectedIndex = 4;
         w.RenderFrame();
         c.That(w.LastFrameOps > 30, "frame drew " + w.LastFrameOps + " ops");
         return c;
