@@ -1463,7 +1463,15 @@ impl Wm {
         }
         {
             let _z = crate::profile::Guard::new("compose:icons");
-            self.draw_desktop_icons(canvas, &th);
+            let (mx, my) = self.cursor;
+            let hot = (0..DESKTOP.len()).position(|i| {
+                let (ix, iy) = icon_rect(i);
+                mx >= ix && mx < ix + ICON_W && my >= iy && my < iy + ICON_H
+            });
+            let mut key = gfx::mix(theme_key(&th), hot.map_or(u64::MAX, |i| i as u64));
+            key = gfx::mix(key, crate::icons::loaded() as u64);
+            let (_, last_y) = icon_rect(DESKTOP.len() - 1);
+            cached_layer(&ICON_LAYER, canvas, 0, 0, ICON_W + 40, last_y + ICON_H + 8, key, |c| self.draw_desktop_icons(c, &th));
         }
         let zw = crate::profile::Guard::new("compose:windows");
 
@@ -1599,12 +1607,43 @@ impl Wm {
 
         drop(zw);
         let zt = crate::profile::Guard::new("compose:taskbar");
-        self.draw_taskbar(canvas, &th);
+        let key = self.taskbar_key(&th);
+        cached_layer(&TASKBAR_LAYER, canvas, 0, self.height - TASKBAR_H, self.width, TASKBAR_H, key, |c| self.draw_taskbar(c, &th));
         drop(zt);
         self.draw_start_menu(canvas, &th);
         self.draw_ctx_menu(canvas, &th);
         self.draw_ripple(canvas, &th);
-        self.draw_cursor(canvas, &th);
+    }
+
+    /// Everything a cursor-only frame must not change: when this key is the
+    /// same as at the last full frame, moving the pointer changes nothing but
+    /// the cursor's own pixels. None = not eligible (a menu is open, a drag
+    /// or a ripple is running: the pointer position matters to the scene).
+    fn cursor_key(&self) -> Option<u64> {
+        if self.start_open || self.ctx_menu.is_some() || self.ripple.is_some() || !matches!(self.drag, Drag::None) {
+            return None;
+        }
+        let th = theme::current();
+        let (mx, my) = self.cursor;
+        let hot = (0..DESKTOP.len()).position(|i| {
+            let (ix, iy) = icon_rect(i);
+            mx >= ix && mx < ix + ICON_W && my >= iy && my < iy + ICON_H
+        });
+        let mut k = gfx::mix(self.taskbar_key(&th), hot.map_or(u64::MAX, |i| i as u64));
+        k = gfx::mix(k, self.hover.map_or(u64::MAX, |(id, b)| (id as u64) << 8 | b as u64));
+        k = gfx::mix(k, self.cursor_scale as u64);
+        k = gfx::mix(gfx::mix(k, self.rounded as u64), self.animations as u64);
+        k = gfx::mix_bytes(k, crate::wallpaper::label().as_bytes());
+        // A safety net for changes made without a present: the windows of
+        // this desktop, where they are and what they show.
+        for w in self.windows.iter().filter(|w| w.workspace == self.workspace) {
+            k = gfx::mix(k, (w.x as u32 as u64) << 32 | w.y as u32 as u64);
+            k = gfx::mix(k, (w.w as u32 as u64) << 32 | w.h as u32 as u64);
+            for line in &w.lines {
+                k = gfx::mix_bytes(k, line.as_bytes());
+            }
+        }
+        Some(gfx::mix(k, self.capture.map_or(u64::MAX, |c| c as u64)))
     }
 
     /// Draw the three title-bar buttons with a hover highlight.
@@ -1648,6 +1687,38 @@ impl Wm {
                 canvas.ellipse(rx - r, ry - r, 2 * r, 2 * r, th.accent, false);
             }
         }
+    }
+
+    /// Everything `draw_taskbar` reads besides the pixels under the bar (the
+    /// layer cache hashes those itself). Keep in sync with `draw_taskbar`.
+    fn taskbar_key(&self, th: &theme::Theme) -> u64 {
+        let mut k = gfx::mix(theme_key(th), self.start_open as u64);
+        k = gfx::mix(k, self.workspace as u64);
+        let (cx, cy) = self.cursor;
+        let ws_hover = (0..WORKSPACES).position(|ws| hit(cx, cy, ws_button_rect(self.width, self.height, ws)));
+        k = gfx::mix(k, ws_hover.map_or(u64::MAX, |i| i as u64));
+        let (cx0, cw) = clock_area(self.width);
+        k = gfx::mix(k, hit(cx, cy, (cx0, self.height - TASKBAR_H + 5, cw, TASKBAR_H - 10)) as u64);
+        let (t, tn) = tray_time();
+        k = gfx::mix_bytes(k, &t[..tn]);
+        let (day, d, mon) = today();
+        k = gfx::mix_bytes(gfx::mix_bytes(gfx::mix(k, d as u64), day.as_bytes()), mon.as_bytes());
+        let top_id = self
+            .windows
+            .iter()
+            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
+            .next_back()
+            .map(|w| w.id);
+        k = gfx::mix(k, top_id.map_or(u64::MAX, |i| i as u64));
+        for w in self.windows.iter().filter(|w| w.workspace == self.workspace) {
+            let st = match w.state {
+                WinState::Normal => 0,
+                WinState::Minimized => 1,
+                WinState::Maximized => 2,
+            };
+            k = gfx::mix_bytes(gfx::mix(gfx::mix(k, w.id as u64), st), w.title.as_bytes());
+        }
+        k
     }
 
     fn draw_taskbar(&self, canvas: &mut Canvas, th: &theme::Theme) {
@@ -1907,8 +1978,19 @@ impl Wm {
     }
 
     fn draw_cursor(&self, canvas: &mut Canvas, th: &theme::Theme) {
-        let (cx, cy) = self.cursor;
-        let s = self.cursor_scale;
+        draw_cursor_at(canvas, th, self.cursor, self.cursor_scale);
+    }
+}
+
+/// The pointer's bounding box: (x, y, w, h).
+fn cursor_rect(cursor: (i32, i32), scale: i32) -> (i32, i32, i32, i32) {
+    (cursor.0, cursor.1, 12 * scale, 12 * scale)
+}
+
+fn draw_cursor_at(canvas: &mut Canvas, th: &theme::Theme, cursor: (i32, i32), scale: i32) {
+    {
+        let (cx, cy) = cursor;
+        let s = scale;
         for dy in 0..12 {
             let len = 12 - dy;
             for dx in 0..len {
@@ -2085,6 +2167,75 @@ fn fill_rounded_gradient(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, ra
 }
 
 /// Top-left screen rect of desktop icon `i` (a vertical column).
+/// Theme fields the shell layers are drawn with (a frame-cache input).
+fn theme_key(th: &theme::Theme) -> u64 {
+    let mut k = gfx::mix_bytes(0x7468_656d_65, th.name.as_bytes());
+    for c in [th.taskbar_bg, th.win_border, th.accent, th.text, th.title_text, th.win_title_active, th.win_title_inactive, th.shadow, th.cursor] {
+        k = gfx::mix(k, c as u64);
+    }
+    gfx::mix(gfx::mix(k, th.glass as u64), th.dark as u64)
+}
+
+/// A rectangle of the composed frame kept with the key it was drawn under.
+struct LayerCache {
+    key: u64,
+    rect: (usize, usize, usize, usize),
+    px: Vec<u32>,
+}
+
+static ICON_LAYER: Mutex<Option<LayerCache>> = Mutex::new(None);
+static TASKBAR_LAYER: Mutex<Option<LayerCache>> = Mutex::new(None);
+static LAYER_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static LAYER_MISSES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// (cache hits, misses) of the shell layers since boot.
+pub fn layer_stats() -> (u64, u64) {
+    use core::sync::atomic::Ordering::Relaxed;
+    (LAYER_HITS.load(Relaxed), LAYER_MISSES.load(Relaxed))
+}
+
+/// Draw a layer that only touches the rectangle (x, y, w, h), reusing the last
+/// result when both the pixels already there and `inputs` (everything else
+/// the drawing reads) are unchanged. `draw` must not touch pixels outside the
+/// rectangle: on a hit only the rectangle is restored.
+fn cached_layer(cache: &Mutex<Option<LayerCache>>, canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, inputs: u64, draw: impl FnOnce(&mut Canvas)) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let x0 = x.max(0) as usize;
+    let y0 = y.max(0) as usize;
+    let x1 = ((x + w).max(0) as usize).min(canvas.width);
+    let y1 = ((y + h).max(0) as usize).min(canvas.height);
+    let cw = canvas.width;
+    // Another CPU composing at the same time: just draw.
+    let guard = if x1 > x0 && y1 > y0 && canvas.pixels.len() >= cw * y1 { cache.try_lock() } else { None };
+    let Some(mut guard) = guard else {
+        draw(canvas);
+        return;
+    };
+    let rw = x1 - x0;
+    let mut key = gfx::mix(inputs, (x0 | y0 << 16 | x1 << 32 | y1 << 48) as u64);
+    for row in y0..y1 {
+        key = gfx::hash_px(key, &canvas.pixels[row * cw + x0..row * cw + x1]);
+    }
+    if let Some(c) = guard.as_ref() {
+        if c.key == key && c.rect == (x0, y0, x1, y1) {
+            for (i, row) in (y0..y1).enumerate() {
+                canvas.pixels[row * cw + x0..row * cw + x1].copy_from_slice(&c.px[i * rw..(i + 1) * rw]);
+            }
+            LAYER_HITS.fetch_add(1, Relaxed);
+            return;
+        }
+    }
+    draw(canvas);
+    LAYER_MISSES.fetch_add(1, Relaxed);
+    let mut px = guard.take().map(|c| c.px).unwrap_or_default();
+    px.clear();
+    px.reserve(rw * (y1 - y0));
+    for row in y0..y1 {
+        px.extend_from_slice(&canvas.pixels[row * cw + x0..row * cw + x1]);
+    }
+    *guard = Some(LayerCache { key, rect: (x0, y0, x1, y1), px });
+}
+
 fn icon_rect(i: usize) -> (i32, i32) {
     (14, 14 + i as i32 * (ICON_H + 8))
 }
@@ -2119,26 +2270,117 @@ fn outline_rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, radius: 
 }
 
 pub fn compose_into(back: &mut [u32], width: usize, height: usize) {
+    compose_scene(back, width, height, |wm, canvas| {
+        wm.draw_cursor(canvas, &theme::current());
+        None::<()>
+    });
+}
+
+/// Full frames composed so far (any buffer): a cursor-only frame is valid
+/// only if no other compose happened since the desktop's last full frame.
+static COMPOSE_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static CURSOR_ONLY_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Cursor-only frames drawn (the pointer moved and nothing else changed).
+pub fn cursor_only_frames() -> u64 {
+    CURSOR_ONLY_FRAMES.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// The desktop's last full frame: the compose it came from, its cursor key,
+/// where the cursor was drawn and the pixels it covered.
+struct CursorFrame {
+    seq: u64,
+    key: u64,
+    rect: (usize, usize, usize, usize),
+    under: Vec<u32>,
+}
+
+static CURSOR_FRAME: Mutex<Option<CursorFrame>> = Mutex::new(None);
+
+/// Snapshot the structure (cheap: canvases are shared) and compose without
+/// holding `WM`, so other CPUs can create, move and draw into windows
+/// meanwhile; `finish` draws the cursor.
+fn compose_scene<R>(back: &mut [u32], width: usize, height: usize, finish: impl FnOnce(&Wm, &mut Canvas) -> Option<R>) -> Option<R> {
     use core::sync::atomic::Ordering;
-    // Snapshot the structure (cheap: canvases are shared) and compose without
-    // holding `WM`, so other CPUs can create, move and draw into windows
-    // meanwhile.
     let snapshot = WM.lock().clone();
-    if let Some(wm) = snapshot {
-        COMPOSING.fetch_add(1, Ordering::Relaxed);
-        let mut canvas = Canvas::new(back, width, height);
-        wm.compose(&mut canvas);
-        COMPOSING.fetch_sub(1, Ordering::Relaxed);
+    let wm = snapshot?;
+    COMPOSE_SEQ.fetch_add(1, Ordering::AcqRel);
+    COMPOSING.fetch_add(1, Ordering::Relaxed);
+    let mut canvas = Canvas::new(back, width, height);
+    wm.compose(&mut canvas);
+    let r = finish(&wm, &mut canvas);
+    COMPOSING.fetch_sub(1, Ordering::Relaxed);
+    r
+}
+
+fn clip_rect(r: (i32, i32, i32, i32), width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let x0 = r.0.clamp(0, width as i32) as usize;
+    let y0 = r.1.clamp(0, height as i32) as usize;
+    let x1 = (r.0 + r.2).clamp(0, width as i32) as usize;
+    let y1 = (r.1 + r.3).clamp(0, height as i32) as usize;
+    (x0, y0, x1.max(x0), y1.max(y0))
+}
+
+fn save_under(back: &[u32], width: usize, r: (usize, usize, usize, usize), out: &mut Vec<u32>) {
+    out.clear();
+    for y in r.1..r.3 {
+        out.extend_from_slice(&back[y * width + r.0..y * width + r.2]);
     }
 }
 
+/// The desktop loop's frame. When only the pointer moved since its last full
+/// frame (same cursor key, no compose in between), put back the pixels under
+/// the old cursor, draw the new one and present just those rows -- instead of
+/// composing and presenting the whole screen.
 pub fn render_frame(back: &mut Vec<u32>, width: usize, height: usize) {
+    render_frame_hint(back, width, height, false);
+}
+
+/// [`render_frame`] for the desktop loop, which knows whether the only input
+/// since its last frame was pointer movement (`pointer_only`): typing into the
+/// terminal, for one, changes the scene without changing the cursor key.
+pub fn render_frame_hint(back: &mut Vec<u32>, width: usize, height: usize, pointer_only: bool) {
+    use core::sync::atomic::Ordering;
     if back.len() != width * height {
         *back = vec![0u32; width * height];
+        *CURSOR_FRAME.lock() = None;
+    }
+    let now = {
+        let guard = WM.lock();
+        guard.as_ref().map(|wm| (wm.cursor_key(), wm.cursor, wm.cursor_scale))
+    };
+    if let (true, Some((Some(key), cursor, scale))) = (pointer_only, now) {
+        let mut frame = CURSOR_FRAME.lock();
+        if let Some(f) = frame.as_mut() {
+            if f.key == key && f.seq == COMPOSE_SEQ.load(Ordering::Acquire) {
+                let _z = crate::profile::Guard::new("wm::cursor-only");
+                let old = f.rect;
+                let rw = old.2 - old.0;
+                for (i, y) in (old.1..old.3).enumerate() {
+                    back[y * width + old.0..y * width + old.2].copy_from_slice(&f.under[i * rw..(i + 1) * rw]);
+                }
+                let new = clip_rect(cursor_rect(cursor, scale), width, height);
+                save_under(back, width, new, &mut f.under);
+                f.rect = new;
+                let th = theme::current();
+                draw_cursor_at(&mut Canvas::new(back, width, height), &th, cursor, scale);
+                let (y0, y1) = (old.1.min(new.1), old.3.max(new.3));
+                crate::framebuffer::present_rows_of(back, y0, y1);
+                CURSOR_ONLY_FRAMES.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
     }
     {
         let _z = crate::profile::Guard::new("wm::compose");
-        compose_into(back, width, height);
+        let recorded = compose_scene(back, width, height, |wm, canvas| {
+            let r = clip_rect(cursor_rect(wm.cursor, wm.cursor_scale), width, height);
+            let mut under = Vec::new();
+            save_under(canvas.pixels, width, r, &mut under);
+            wm.draw_cursor(canvas, &theme::current());
+            Some(wm.cursor_key().map(|key| CursorFrame { seq: COMPOSE_SEQ.load(Ordering::Acquire), key, rect: r, under }))
+        });
+        *CURSOR_FRAME.lock() = recorded.flatten();
     }
     let _z = crate::profile::Guard::new("fb::present");
     crate::framebuffer::present(back);

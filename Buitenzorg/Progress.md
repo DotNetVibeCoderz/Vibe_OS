@@ -453,7 +453,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 - **Game 3D**
   - [ ] Rasterizer software `Buitenzorg.Graphics3D`: math vektor/matriks, perspektif, clipping, z-buffer, culling, texture mapping, shading, loader OBJ/glTF
   - [ ] Demo: raycaster gaya Wolfenstein · kubus bertekstur berputar
-  - [x] **G1 langkah 1 — compositor cepat:** present per ubin 64 px berbasis hash (hanya ubin berubah ditulis), blit kanvas per baris + clipping, bayangan/badan jendela hanya area terlihat → frame desktop ×3,5 lebih murah (x86 TCG 786M → 223M siklus) · [ ] sisa G1: cache taskbar/ikon, frame hanya-kursor, permukaan shared-memory, komposisi paralel · referensi SDK 3D terkelola: ThreeNet (G3)
+  - [x] **G1 langkah 1 — compositor cepat:** present per ubin 64 px berbasis hash (hanya ubin berubah ditulis), blit kanvas per baris + clipping, bayangan/badan jendela hanya area terlihat → frame desktop ×3,5 lebih murah (x86 TCG 786M → 223M siklus) · [x] **G1 langkah 2:** frame hanya-kursor (~2,9M vs ~150M siklus per gerakan pointer), cache lapisan ikon + taskbar (21M→4M, 31M→3M), hash ubin per kata 64-bit (present 135M→~75M) · [ ] sisa G1: badan/isi jendela, permukaan shared-memory, komposisi paralel · referensi SDK 3D terkelola: ThreeNet (G3)
   - [ ] GPU: virtio-gpu 2D → virgl 3D → API gaya Vulkan/WebGPU `Buitenzorg.GPU` (+ `compute.rs` `Backend::Gpu`) · [ ] driver GPU nyata (Intel dulu)
   - [ ] Engine: scene graph · animasi skeletal · fisika rigid body · audio 3D posisional
   - [ ] Lapisan libc (musl/newlib) + subset SDL2 → **port DOOM**

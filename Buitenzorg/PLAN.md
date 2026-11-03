@@ -740,6 +740,14 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   siklus, present 446M → 116M, total **786M → 223M (×3,5)** (`prof` mencetak statistik
   ubin). Sisa: biaya hashing present (~116M), cache taskbar/ikon, frame hanya-kursor,
   permukaan shared-memory, komposisi paralel.
+- **Status G1 langkah 2 (2026-11-03 ✓):** **frame hanya-kursor** — bila satu-satunya input
+  adalah gerakan pointer dan tak ada yang lain berubah (kunci: hover ikon/tombol/taskbar,
+  jam, tema, wallpaper, posisi & isi jendela; tak ada compose lain sejak frame terakhir),
+  desktop memulihkan piksel di bawah kursor lama, menggambar kursor baru dan mem-present
+  baris itu saja: **~2,9M siklus vs ~150M** frame penuh (x86 TCG). **Cache lapisan** ikon
+  desktop dan taskbar (dipakai ulang bila piksel di bawahnya + input sama): ikon 21M → 4M,
+  taskbar 31M → 3M per frame. Hash ubin FNV per kata 64-bit: present 135M → ~75M.
+  Sisa: badan & isi jendela (~40M), permukaan shared-memory, komposisi paralel.
 - **Referensi G3:** SDK 3D terkelola tingkat tinggi mengikuti **ThreeNet**
   (`C:\experiment\VibeCoding\Vibe_Graphics\ThreeNet`, gaya three.js untuk .NET) —
   scene graph, kamera, mesh/material, loader — di atas `Buitenzorg.Graphics3D`.

@@ -27,6 +27,10 @@ Hardening toward a stable x86-64 release.
   tile and only tiles that changed are written; covered parts of windows,
   shadows and app canvases are no longer drawn. A desktop frame costs ~3.5x
   less (x86 under QEMU: 786M -> 223M cycles). `prof` shows the tile counts.
+- **Smoother pointer (G1, step 2).** Moving the mouse over the desktop now
+  redraws only the cursor (about 50x less work per move than a full frame),
+  and the desktop icons and taskbar are reused from the last frame when
+  nothing about them changed.
 - **Boot watchdog.** If the boot prints nothing for two minutes, the kernel
   writes where the CPU is, the task table and, for each blocked thread of an
   app, where in the app it waits (serial log).

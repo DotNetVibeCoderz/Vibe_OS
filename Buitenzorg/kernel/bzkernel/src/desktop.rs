@@ -117,6 +117,9 @@ pub fn run() -> ! {
         crate::ssh::poll();
         let now = interrupts::ticks();
         let mut input = false;
+        // Input other than pointer movement: anything that may change the
+        // scene, so the next frame cannot be a cursor-only one.
+        let mut other = false;
 
         // Typing is activity even when the keys are not ours: they stay
         // queued for the focused program's KEY_READ, and used to leave the
@@ -131,6 +134,7 @@ pub fn run() -> ! {
         if keys != last_keys {
             last_keys = keys;
             input = true;
+            other = true;
             if saver_active {
                 while keyboard::pop().is_some() {}
             }
@@ -141,6 +145,7 @@ pub fn run() -> ! {
         if !process::is_alive(wm::focus_owner()) {
             while let Some(c) = keyboard::pop() {
                 input = true;
+                other = true;
                 if !saver_active {
                     terminal::feed_char(c);
                 }
@@ -157,6 +162,7 @@ pub fn run() -> ! {
                 println!("[desktop] wheel {:+} at ({}, {}): {}", notches, mx, my, if taken { "to the app window" } else { "nothing to scroll" });
             }
             input = true;
+            other = true;
         }
         // Right button: the desktop's context menu. Counted presses, so a press
         // and release that both fell between two samples still open it.
@@ -164,6 +170,7 @@ pub fn run() -> ! {
         if rp != last_right && !saver_active {
             wm::right_click(mx as i32, my as i32);
             input = true;
+            other = true;
         }
         last_right = rp;
         let presses = mouse::presses();
@@ -172,9 +179,13 @@ pub fn run() -> ! {
             wm::handle_mouse(mx as i32, my as i32, true);
             wm::handle_mouse(mx as i32, my as i32, false);
             input = true;
+            other = true;
         }
         last_presses = presses;
         if packets != last_packets || left != last_left {
+            if left != last_left {
+                other = true;
+            }
             last_packets = packets;
             last_left = left;
             input = true;
@@ -206,6 +217,7 @@ pub fn run() -> ! {
                         _ => {}
                     }
                     input = true;
+                    other = true;
                 } else {
                 // Start it as its own process; the desktop keeps running.
                 match app::spawn_named(&app_name) {
@@ -213,12 +225,14 @@ pub fn run() -> ! {
                     Err(e) => println!("[desktop] launch '{}' failed: {}", app_name, e),
                 }
                 input = true;
+                other = true;
                 }
             }
             app::reap_closed_windows();
             // An app that exited leaves no frozen window behind.
             if wm::close_orphan_windows() > 0 {
                 input = true;
+                other = true;
             }
             match wm::take_pending_power() {
                 1 => power::shutdown(),
@@ -246,7 +260,7 @@ pub fn run() -> ! {
             // Redraw on input or while a micro-interaction (ripple) animates.
             let animating = wm::tick_animation(now);
             if input || animating {
-                wm::render_frame(&mut back, w, h);
+                wm::render_frame_hint(&mut back, w, h, input && !other && !animating);
             }
         }
     }

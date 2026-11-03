@@ -307,3 +307,46 @@ pub fn glyph_width() -> usize {
 pub fn glyph_height() -> usize {
     FONT_HEIGHT.val()
 }
+
+// --- Hashing for frame caches ----------------------------------------------------
+
+const HASH_M: u64 = 0x9E37_79B9_7F4A_7C15;
+
+/// Fold one value into a running hash (cache keys: theme, state, text...).
+#[inline]
+pub fn mix(h: u64, v: u64) -> u64 {
+    let x = (h ^ v).wrapping_mul(HASH_M);
+    x ^ (x >> 31)
+}
+
+/// Fold a byte string into a running hash.
+pub fn mix_bytes(mut h: u64, bytes: &[u8]) -> u64 {
+    for c in bytes.chunks(8) {
+        let mut w = [0u8; 8];
+        w[..c.len()].copy_from_slice(c);
+        h = mix(h, u64::from_le_bytes(w));
+    }
+    mix(h, bytes.len() as u64)
+}
+
+/// Hash a run of pixels: FNV-1a over 64-bit words, two pixels per step.
+/// Under an emulator the cost is the number of guest instructions per pixel,
+/// which this keeps lowest (measured: a four-lane variant with more
+/// instructions made presents 1.5x slower under QEMU TCG). Used to tell
+/// whether a screen tile or a cached layer changed.
+pub fn hash_px(seed: u64, px: &[u32]) -> u64 {
+    const P: u64 = 0x0000_0100_0000_01b3;
+    let mut h = seed;
+    // SAFETY: u32 -> u64 reinterpretation of the aligned middle part.
+    let (head, words, tail) = unsafe { px.align_to::<u64>() };
+    for &p in head {
+        h = (h ^ p as u64).wrapping_mul(P);
+    }
+    for &w in words {
+        h = (h ^ w).wrapping_mul(P);
+    }
+    for &p in tail {
+        h = (h ^ p as u64).wrapping_mul(P);
+    }
+    h
+}

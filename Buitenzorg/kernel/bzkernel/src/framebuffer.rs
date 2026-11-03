@@ -56,11 +56,7 @@ pub struct Console {
 const TILE: usize = 64;
 
 fn tile_hash(px: &[u32]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &p in px {
-        h = (h ^ p as u64).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
+    crate::gfx::hash_px(0xcbf2_9ce4_8422_2325, px)
 }
 
 impl Console {
@@ -387,6 +383,25 @@ pub fn present_splash_rows(rows: &[u32], y0: usize, y1: usize) {
             console.lock().present_rows(rows, y0, y1);
         });
     }
+}
+
+/// Present only rows `y0..y1` of a full frame `back` (a cursor-only frame).
+/// A virtio GPU takes whole frames, so it gets the whole frame.
+pub fn present_rows_of(back: &[u32], y0: usize, y1: usize) {
+    if crate::splash::active() {
+        return;
+    }
+    if let Some(console) = CONSOLE.get() {
+        crate::arch::cpu::without_interrupts(|| {
+            let mut c = console.lock();
+            let w = c.fb.info().width;
+            let y1 = y1.min(back.len() / w.max(1));
+            if y1 > y0 {
+                c.present_rows(&back[y0 * w..y1 * w], y0, y1);
+            }
+        });
+    }
+    crate::virtio::gpu::present(back);
 }
 
 /// (tile pieces written, skipped as unchanged) by presents so far.

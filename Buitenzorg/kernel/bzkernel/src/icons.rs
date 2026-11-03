@@ -61,6 +61,11 @@ pub fn load() -> usize {
     }
 }
 
+/// Whether the icon pack has been loaded (a frame-cache input).
+pub fn loaded() -> bool {
+    PACK.get().is_some()
+}
+
 /// Edge length of the big (desktop) or small (start menu) icon.
 pub fn size(big: bool) -> i32 {
     match PACK.get() {

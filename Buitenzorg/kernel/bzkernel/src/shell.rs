@@ -835,6 +835,9 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             crate::profile::report();
             let (wr, sk) = crate::framebuffer::present_stats();
             crate::println!("[profile] present tiles since boot: {} written, {} unchanged and skipped", wr, sk);
+            let (hits, misses) = crate::wm::layer_stats();
+            crate::println!("[profile] shell layers (icons, taskbar) since boot: {} reused, {} redrawn", hits, misses);
+            crate::println!("[profile] cursor-only frames since boot: {}", crate::wm::cursor_only_frames());
             (
                 vec![
                     format!("profiler: sampled {} zone(s)", crate::profile::zone_count()),
