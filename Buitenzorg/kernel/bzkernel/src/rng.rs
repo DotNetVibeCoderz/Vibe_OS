@@ -20,31 +20,15 @@ struct Drbg {
 
 static RNG: Mutex<Drbg> = Mutex::new(Drbg { key: [0; 32], counter: 0, seeded: false });
 
-#[cfg(target_arch = "x86_64")]
 fn hardware(h: &mut Sha256) -> bool {
-    // CPUID.1:ECX bit 30 = RDRAND
-    let ecx = core::arch::x86_64::__cpuid(1).ecx;
-    if ecx & (1 << 30) == 0 {
-        return false;
-    }
     let mut got = false;
     for _ in 0..16 {
-        let mut v: u64 = 0;
-        let ok: u8;
-        unsafe {
-            core::arch::asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack));
-        }
-        if ok == 1 {
+        if let Some(v) = crate::arch::cpu::hardware_random() {
             h.update(v.to_le_bytes());
             got = true;
         }
     }
     got
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn hardware(_h: &mut Sha256) -> bool {
-    false
 }
 
 /// Timing jitter: how long tiny busy loops take, in cycle-counter units.

@@ -162,6 +162,31 @@ pub mod cpu {
         if hz == 0 { 1_000_000_000 } else { hz }
     }
 
+    /// A word from the CPU's hardware random number generator, if it has one
+    /// (RDRAND on x86; `rng.rs` mixes it into its entropy pool).
+    pub fn hardware_random() -> Option<u64> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            // CPUID.1:ECX bit 30 = RDRAND
+            if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) == 0 {
+                return None;
+            }
+            for _ in 0..10 {
+                let v: u64;
+                let ok: u8;
+                unsafe {
+                    core::arch::asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack));
+                }
+                if ok == 1 {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        None
+    }
+
     /// Monotonic nanoseconds since boot (CLOCK_NANOS).
     pub fn nanos() -> u64 {
         (timestamp() as u128 * 1_000_000_000 / counter_hz() as u128) as u64
