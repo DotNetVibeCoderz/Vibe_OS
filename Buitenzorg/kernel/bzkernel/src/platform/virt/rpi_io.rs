@@ -728,3 +728,55 @@ pub fn self_test() -> bool {
     );
     ok_sensor && blink
 }
+
+// --- Hardware cursor (G2) ---------------------------------------------------
+//
+// The VideoCore firmware can show a cursor image in its own HVS plane over
+// the framebuffer: mailbox tags SET_CURSOR_INFO (0x00008010: width, height,
+// unused, bus address of 32-bit ARGB pixels, hot spot x, y) and
+// SET_CURSOR_STATE (0x00008011: enable, x, y, flags -- 1 = framebuffer
+// coordinates). Each answers 0 for "valid". QEMU's `raspi4b` does not model
+// them (it answers without touching the values), so there the desktop keeps
+// its software cursor.
+
+/// Edge of the firmware cursor image.
+pub const FW_CURSOR: usize = 32;
+
+/// (physical address, kernel address) of the cursor image frame.
+static CURSOR_FRAME: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+
+/// Upload a `FW_CURSOR`^2 ARGB image as the firmware cursor.
+pub fn cursor_image(px: &[u32]) -> bool {
+    if px.len() < FW_CURSOR * FW_CURSOR {
+        return false;
+    }
+    let mut frame = CURSOR_FRAME.lock();
+    if frame.is_none() {
+        // the VideoCore reaches the first GiB only
+        let mut rejected = alloc::vec::Vec::new();
+        for _ in 0..64 {
+            let Some((phys, va)) = crate::memory::alloc_dma_frame() else { break };
+            if phys + 4096 <= 0x4000_0000 {
+                *frame = Some((phys, va as u64));
+                break;
+            }
+            rejected.push(phys);
+        }
+        for phys in rejected {
+            crate::memory::free_frame(phys);
+        }
+    }
+    let Some((phys, va)) = *frame else { return false };
+    unsafe { core::ptr::copy_nonoverlapping(px.as_ptr(), va as *mut u32, FW_CURSOR * FW_CURSOR) };
+    cpu::dma_sync(va, 4096);
+    let bus = (phys as u32) | 0xC000_0000; // the uncached alias
+    let n = FW_CURSOR as u32;
+    let mut v = [n, n, 0, bus, 0, 0];
+    firmware_property(0x0000_8010, &mut v) && v[0] == 0
+}
+
+/// Show (or hide) the firmware cursor at (x, y) in framebuffer coordinates.
+pub fn cursor_state(visible: bool, x: i32, y: i32) -> bool {
+    let mut v = [visible as u32, x.max(0) as u32, y.max(0) as u32, 1];
+    firmware_property(0x0000_8011, &mut v) && v[0] == 0
+}

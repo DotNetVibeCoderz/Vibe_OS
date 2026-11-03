@@ -2056,9 +2056,6 @@ impl Wm {
         }
     }
 
-    fn draw_cursor(&self, canvas: &mut Canvas, th: &theme::Theme) {
-        draw_cursor_at(canvas, th, self.cursor, self.cursor_scale);
-    }
 }
 
 /// What a presented frame showed, element by element (damage tracking).
@@ -2097,6 +2094,105 @@ pub fn screen_overwritten() {
     } else {
         SINCE_FULL.store(u32::MAX / 2, core::sync::atomic::Ordering::Relaxed);
     }
+    // the screensaver and friends must not show the pointer floating above
+    hide_hw_cursors();
+}
+
+// --- Hardware cursors (G2) ---------------------------------------------------
+//
+// An output that can show the pointer itself gets frames without the
+// software cursor and a move command per pointer move: a virtio GPU (its
+// cursor queue) and the Raspberry Pi's firmware framebuffer (an HVS plane,
+// through the mailbox). The other outputs keep the software cursor.
+
+struct HwCursor {
+    /// Image key (theme colors + scale) of the uploaded image; 0 = none.
+    key: u64,
+    gpu: bool,
+    fb: bool,
+    pos: (i32, i32),
+}
+
+static HW_CURSOR: Mutex<HwCursor> = Mutex::new(HwCursor { key: 0, gpu: false, fb: false, pos: (-1, -1) });
+static HW_CURSOR_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// Use hardware cursors where an output has one (default on).
+pub fn set_hw_cursor(on: bool) {
+    HW_CURSOR_ENABLED.store(on, core::sync::atomic::Ordering::Relaxed);
+    if !on {
+        hide_hw_cursors();
+    }
+}
+
+/// (virtio GPU, board framebuffer) currently show the cursor themselves.
+pub fn hw_cursor_outputs() -> (bool, bool) {
+    let h = HW_CURSOR.lock();
+    (h.gpu, h.fb)
+}
+
+fn hide_hw_cursors() {
+    let Some(mut h) = HW_CURSOR.try_lock() else { return };
+    if h.gpu {
+        crate::virtio::gpu::hide_cursor();
+    }
+    if h.fb {
+        crate::hwio::fb_cursor_state(false, 0, 0);
+    }
+    *h = HwCursor { key: 0, gpu: false, fb: false, pos: (-1, -1) };
+}
+
+/// The cursor as an ARGB image of `size`^2 (opaque shape, clear elsewhere).
+fn cursor_image(th: &theme::Theme, scale: i32, size: usize) -> Vec<u32> {
+    let mut img = vec![0u32; size * size];
+    for dy in 0..12 {
+        let len = 12 - dy;
+        for dx in 0..len {
+            let edge = dx == 0 || dx == len - 1 || dy == 0;
+            let c = 0xFF00_0000 | if edge { th.win_border } else { th.cursor };
+            for sy in 0..scale {
+                for sx in 0..scale {
+                    let (x, y) = ((dx * scale + sx) as usize, (dy * scale + sy) as usize);
+                    if x < size && y < size {
+                        img[y * size + x] = c;
+                    }
+                }
+            }
+        }
+    }
+    img
+}
+
+/// Bring the hardware cursors to `cursor` (uploading the image when the
+/// theme or scale changed). Returns (virtio GPU shows it, board fb shows it).
+fn sync_hw_cursors(th: &theme::Theme, cursor: (i32, i32), scale: i32) -> (bool, bool) {
+    if !HW_CURSOR_ENABLED.load(core::sync::atomic::Ordering::Relaxed) {
+        return (false, false);
+    }
+    let Some(mut h) = HW_CURSOR.try_lock() else { return (false, false) };
+    let key = gfx::mix(gfx::mix(gfx::mix(1, th.cursor as u64), th.win_border as u64), scale as u64);
+    if key != h.key {
+        h.gpu = crate::virtio::gpu::cursor_capable()
+            && crate::virtio::gpu::set_cursor(&cursor_image(th, scale, crate::virtio::gpu::CURSOR_SIZE), cursor.0, cursor.1);
+        let fs = crate::hwio::fb_cursor_size();
+        let was_fb = h.fb;
+        h.fb = fs >= (12 * scale) as usize
+            && crate::hwio::fb_cursor_image(&cursor_image(th, scale, fs))
+            && crate::hwio::fb_cursor_state(true, cursor.0, cursor.1);
+        if h.fb && !was_fb {
+            crate::println!("[wm] firmware hardware cursor on ({}x{} ARGB plane)", fs, fs);
+        }
+        h.key = key;
+        h.pos = cursor;
+    } else if h.pos != cursor {
+        if h.gpu {
+            crate::virtio::gpu::move_cursor(cursor.0, cursor.1);
+        }
+        if h.fb {
+            h.fb = crate::hwio::fb_cursor_state(true, cursor.0, cursor.1);
+        }
+        h.pos = cursor;
+    }
+    (h.gpu, h.fb)
 }
 
 /// Rows that differ between two scenes, merged; None = present everything.
@@ -2152,28 +2248,69 @@ fn damage(old: &SceneDesc, new: &SceneDesc, width: i32, height: i32) -> Option<V
     Some(out)
 }
 
-/// Present a composed full frame `back` showing `scene`: only the rows that
-/// changed since the frame on the screen, or everything when unknown.
-fn present_scene(back: &[u32], width: usize, height: usize, scene: SceneDesc) {
+/// A composed frame's pointer: where, how large, and (for the desktop's own
+/// frames) the cursor key a later cursor-only frame must match.
+struct FramePointer {
+    pos: (i32, i32),
+    scale: i32,
+    key: Option<u64>,
+}
+
+/// Present a composed frame `back` (without the pointer) showing `scene`: the
+/// rows that changed since the frame on the screen, or everything when
+/// unknown. Outputs with a hardware cursor get the frame as it is and a
+/// cursor move; for the others the software cursor is drawn in first.
+/// `record` keeps what a cursor-only frame needs (the desktop's frames).
+fn present_scene(back: &mut [u32], width: usize, height: usize, scene: SceneDesc, ptr: FramePointer, record: bool) {
     use core::sync::atomic::Ordering::Relaxed;
+    let th = theme::current();
+    let (gpu_hw, fb_hw) = sync_hw_cursors(&th, ptr.pos, ptr.scale);
+    let gpu_on = crate::virtio::gpu::active();
     let mut on_screen = ON_SCREEN.lock();
     let bands = match on_screen.as_ref() {
         Some(old) if SINCE_FULL.load(Relaxed) < 64 => damage(old, &scene, width as i32, height as i32),
         _ => None,
     };
-    match bands {
+    match &bands {
         Some(bands) => {
             SINCE_FULL.fetch_add(1, Relaxed);
             DAMAGE_FRAMES.fetch_add(1, Relaxed);
-            for &(y0, y1) in &bands {
+            for &(y0, y1) in bands {
                 DAMAGE_ROWS.fetch_add((y1 - y0) as u64, Relaxed);
             }
-            crate::framebuffer::present_bands(back, &bands);
         }
-        None => {
-            SINCE_FULL.store(0, Relaxed);
-            crate::framebuffer::present_full(back);
-        }
+        None => SINCE_FULL.store(0, Relaxed),
+    }
+    let to_gpu = |back: &[u32]| match &bands {
+        Some(b) => crate::virtio::gpu::present_bands(back, b),
+        None => crate::virtio::gpu::present(back),
+    };
+    // 1. a GPU that draws the pointer itself gets the frame without it
+    if gpu_on && gpu_hw {
+        to_gpu(back);
+    }
+    // 2. the software cursor, for the outputs without one
+    let r = clip_rect(cursor_rect(ptr.pos, ptr.scale), width, height);
+    let sw = !fb_hw || (gpu_on && !gpu_hw);
+    if record {
+        let mut under = Vec::new();
+        save_under(back, width, r, &mut under);
+        *CURSOR_FRAME.lock() = ptr.key.map(|key| CursorFrame {
+            seq: COMPOSE_SEQ.load(core::sync::atomic::Ordering::Acquire),
+            key,
+            rect: r,
+            under,
+            sw,
+            hw: (gpu_hw, fb_hw),
+        });
+    }
+    if sw {
+        draw_cursor_at(&mut Canvas::new(back, width, height), &th, ptr.pos, ptr.scale);
+    }
+    // 3. the console framebuffer, and a GPU without its own cursor
+    crate::framebuffer::present_console(back, bands.as_deref());
+    if gpu_on && !gpu_hw {
+        to_gpu(back);
     }
     *on_screen = Some(scene);
 }
@@ -2581,16 +2718,13 @@ fn compose_parallel(wm: &Wm, back: &mut [u32], width: usize, height: usize) {
 
 /// Compose into `back` and present it, by damage.
 fn compose_and_present(back: &mut [u32], width: usize, height: usize) {
-    let scene = {
+    let composed = {
         let _z = crate::profile::Guard::new("wm::compose");
-        compose_scene(back, width, height, |wm, canvas| {
-            wm.draw_cursor(canvas, &theme::current());
-            None::<()>
-        })
+        compose_scene(back, width, height)
     };
     let _z = crate::profile::Guard::new("fb::present");
-    match scene {
-        Some((_, scene)) => present_scene(back, width, height, scene),
+    match composed {
+        Some((scene, ptr)) => present_scene(back, width, height, scene, ptr, false),
         None => crate::framebuffer::present_full(back),
     }
 }
@@ -2612,14 +2746,18 @@ struct CursorFrame {
     key: u64,
     rect: (usize, usize, usize, usize),
     under: Vec<u32>,
+    /// A software cursor was drawn (some output has no hardware cursor).
+    sw: bool,
+    /// (virtio GPU, board fb) showed a hardware cursor.
+    hw: (bool, bool),
 }
 
 static CURSOR_FRAME: Mutex<Option<CursorFrame>> = Mutex::new(None);
 
 /// Snapshot the structure (cheap: canvases are shared) and compose without
 /// holding `WM`, so other CPUs can create, move and draw into windows
-/// meanwhile; `finish` draws the cursor.
-fn compose_scene<R>(back: &mut [u32], width: usize, height: usize, finish: impl FnOnce(&Wm, &mut Canvas) -> Option<R>) -> Option<(Option<R>, SceneDesc)> {
+/// meanwhile. The pointer is not drawn: `present_scene` does that per output.
+fn compose_scene(back: &mut [u32], width: usize, height: usize) -> Option<(SceneDesc, FramePointer)> {
     use core::sync::atomic::Ordering;
     let snapshot = WM.lock().clone();
     let wm = snapshot?;
@@ -2630,10 +2768,8 @@ fn compose_scene<R>(back: &mut [u32], width: usize, height: usize, finish: impl 
     // presents it again.
     let scene = wm.scene_desc();
     compose_parallel(&wm, back, width, height);
-    let mut canvas = Canvas::new(back, width, height);
-    let r = finish(&wm, &mut canvas);
     COMPOSING.fetch_sub(1, Ordering::Relaxed);
-    Some((r, scene))
+    Some((scene, FramePointer { pos: wm.cursor, scale: wm.cursor_scale, key: wm.cursor_key() }))
 }
 
 fn clip_rect(r: (i32, i32, i32, i32), width: usize, height: usize) -> (usize, usize, usize, usize) {
@@ -2674,49 +2810,58 @@ pub fn render_frame_hint(back: &mut Vec<u32>, width: usize, height: usize, point
     };
     if let (true, Some((Some(key), cursor, scale))) = (pointer_only, now) {
         let mut frame = CURSOR_FRAME.lock();
-        if let Some(f) = frame.as_mut() {
-            if f.key == key && f.seq == COMPOSE_SEQ.load(Ordering::Acquire) {
+        let valid = frame.as_ref().is_some_and(|f| f.key == key && f.seq == COMPOSE_SEQ.load(Ordering::Acquire));
+        // hardware cursors: one move command each (an output whose cursor
+        // mode changed since the last full frame needs a proper one)
+        let th = theme::current();
+        let hw = if valid { Some(sync_hw_cursors(&th, cursor, scale)) } else { None };
+        if let (Some(f), Some(hw)) = (frame.as_mut(), hw) {
+            if hw == f.hw {
                 let _z = crate::profile::Guard::new("wm::cursor-only");
-                let old = f.rect;
-                let rw = old.2 - old.0;
-                for (i, y) in (old.1..old.3).enumerate() {
-                    back[y * width + old.0..y * width + old.2].copy_from_slice(&f.under[i * rw..(i + 1) * rw]);
-                }
                 let new = clip_rect(cursor_rect(cursor, scale), width, height);
-                save_under(back, width, new, &mut f.under);
+                let old = f.rect;
+                if f.sw {
+                    let rw = old.2 - old.0;
+                    for (i, y) in (old.1..old.3).enumerate() {
+                        back[y * width + old.0..y * width + old.2].copy_from_slice(&f.under[i * rw..(i + 1) * rw]);
+                    }
+                    save_under(back, width, new, &mut f.under);
+                    draw_cursor_at(&mut Canvas::new(back, width, height), &th, cursor, scale);
+                }
                 f.rect = new;
-                let th = theme::current();
-                draw_cursor_at(&mut Canvas::new(back, width, height), &th, cursor, scale);
                 let (y0, y1) = (old.1.min(new.1), old.3.max(new.3));
                 // The screen now shows the cursor here: tell damage tracking.
-                {
-                    let mut on_screen = ON_SCREEN.lock();
-                    if let Some(sc) = on_screen.as_mut() {
-                        sc.cursor = cursor_rect(cursor, scale);
-                    }
-                    crate::framebuffer::present_rows_of(back, y0, y1);
+                let mut on_screen = ON_SCREEN.lock();
+                if let Some(sc) = on_screen.as_mut() {
+                    sc.cursor = cursor_rect(cursor, scale);
                 }
+                if f.sw {
+                    let (gpu_hw, fb_hw) = hw;
+                    if !fb_hw {
+                        crate::framebuffer::present_console(back, Some(&[(y0, y1)]));
+                    }
+                    if !gpu_hw {
+                        crate::virtio::gpu::present_bands(back, &[(y0, y1)]);
+                    }
+                }
+                drop(on_screen);
                 CURSOR_ONLY_FRAMES.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
     }
+    full_frame(back, width, height);
+}
+
+/// The desktop loop's full frame: compose, then present by damage.
+fn full_frame(back: &mut [u32], width: usize, height: usize) {
     let composed = {
         let _z = crate::profile::Guard::new("wm::compose");
-        compose_scene(back, width, height, |wm, canvas| {
-            let r = clip_rect(cursor_rect(wm.cursor, wm.cursor_scale), width, height);
-            let mut under = Vec::new();
-            save_under(canvas.pixels, width, r, &mut under);
-            wm.draw_cursor(canvas, &theme::current());
-            Some(wm.cursor_key().map(|key| CursorFrame { seq: COMPOSE_SEQ.load(Ordering::Acquire), key, rect: r, under }))
-        })
+        compose_scene(back, width, height)
     };
     let _z = crate::profile::Guard::new("fb::present");
     match composed {
-        Some((recorded, scene)) => {
-            *CURSOR_FRAME.lock() = recorded.flatten();
-            present_scene(back, width, height, scene);
-        }
+        Some((scene, ptr)) => present_scene(back, width, height, scene, ptr, true),
         None => {
             *CURSOR_FRAME.lock() = None;
             crate::framebuffer::present_full(back);

@@ -98,3 +98,34 @@ pub fn uart_read(port: u32, out: &mut [u8]) -> u64 {
         NOSYS
     }
 }
+
+/// Edge of the board firmware's cursor image (0 = none).
+pub fn fb_cursor_size() -> usize {
+    #[cfg(target_arch = "aarch64")]
+    return if dev::present() { dev::FW_CURSOR } else { 0 };
+    #[cfg(not(target_arch = "aarch64"))]
+    0
+}
+
+/// Give the board firmware a cursor image (Raspberry Pi: an HVS plane over
+/// the framebuffer). False when there is no such cursor.
+pub fn fb_cursor_image(px: &[u32]) -> bool {
+    #[cfg(target_arch = "aarch64")]
+    return dev::present() && dev::cursor_image(px);
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = px;
+        false
+    }
+}
+
+/// Show / move / hide the board firmware's cursor.
+pub fn fb_cursor_state(visible: bool, x: i32, y: i32) -> bool {
+    #[cfg(target_arch = "aarch64")]
+    return dev::present() && dev::cursor_state(visible, x, y);
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = (visible, x, y);
+        false
+    }
+}

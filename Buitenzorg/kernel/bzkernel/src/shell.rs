@@ -805,6 +805,11 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             crate::profile::disable();
             (vec![String::from("profiler: off")], Effect::None)
         }
+        Some("hw") | Some("sw") => {
+            let hw = arg == Some("hw");
+            crate::wm::set_hw_cursor(hw);
+            (vec![format!("cursor: {}", if hw { "hardware where an output has one" } else { "software everywhere" })], Effect::None)
+        }
         Some("seq") | Some("par") => {
             let par = arg == Some("par");
             crate::wm::set_parallel_compose(par);
@@ -844,6 +849,9 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
             crate::println!("[profile] shell layers (icons, taskbar) since boot: {} reused, {} redrawn", hits, misses);
             crate::println!("[profile] cursor-only frames since boot: {}", crate::wm::cursor_only_frames());
             crate::println!("[profile] frames composed in two bands (parallel): {}", crate::wm::parallel_frames());
+            let (gpu_hw, fb_hw) = crate::wm::hw_cursor_outputs();
+            let (moves, bands) = crate::virtio::gpu::stats();
+            crate::println!("[profile] hardware cursor: virtio-gpu {}, board framebuffer {}; gpu cursor moves {}, gpu damage presents {}", gpu_hw, fb_hw, moves, bands);
             let (df, dr) = crate::wm::damage_stats();
             crate::println!("[profile] damage-presented frames since boot: {} ({} rows in all)", df, dr);
             (

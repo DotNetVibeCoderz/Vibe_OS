@@ -34,6 +34,10 @@ Hardening toward a stable x86-64 release.
 - **Faster text and fills (G1, step 3).** Letters are drawn from a glyph
   cache and solid areas are filled with block copies: a desktop frame with
   three text windows composes ~20% faster, and every app's text benefits.
+- **Hardware cursor (G2).** With a virtio GPU the pointer is drawn by the
+  GPU itself and only changed rows are transferred to it; on a Raspberry Pi
+  the firmware's cursor plane is used when it answers (otherwise the desktop
+  keeps its own cursor).
 - **Only what changed reaches the screen (G1 done).** The compositor tracks
   which windows, icons, taskbar and cursor changed and sends only those rows
   to the display; window text uses the glyph cache, native apps' image

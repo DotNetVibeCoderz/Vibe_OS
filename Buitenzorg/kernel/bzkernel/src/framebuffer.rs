@@ -382,26 +382,32 @@ pub fn present_full(back: &[u32]) {
     present_splash(back);
 }
 
-/// Present only the row bands `(y0, y1)` of a full frame `back` (the
-/// compositor's damage). A virtio GPU takes whole frames.
-pub fn present_bands(back: &[u32], bands: &[(usize, usize)]) {
-    if crate::splash::active() || bands.is_empty() {
+/// Present `back` on the console framebuffer only (no GPU mirror): the row
+/// bands `(y0, y1)` given, or the whole frame (tile hashes skip what did not
+/// change). The compositor feeds a virtio GPU itself, because with a
+/// hardware cursor the GPU gets the frame without the software pointer.
+pub fn present_console(back: &[u32], bands: Option<&[(usize, usize)]>) {
+    if crate::splash::active() {
         return;
     }
     if let Some(console) = CONSOLE.get() {
         crate::arch::cpu::without_interrupts(|| {
             let mut c = console.lock();
-            let w = c.fb.info().width.max(1);
-            let rows = back.len() / w;
-            for &(y0, y1) in bands {
-                let y1 = y1.min(rows);
-                if y1 > y0 {
-                    c.present_rows(&back[y0 * w..y1 * w], y0, y1);
+            match bands {
+                None => c.present(back),
+                Some(bands) => {
+                    let w = c.fb.info().width.max(1);
+                    let rows = back.len() / w;
+                    for &(y0, y1) in bands {
+                        let y1 = y1.min(rows);
+                        if y1 > y0 {
+                            c.present_rows(&back[y0 * w..y1 * w], y0, y1);
+                        }
+                    }
                 }
             }
         });
     }
-    crate::virtio::gpu::present(back);
 }
 
 /// Present screen rows `y0..y1` from `rows` (just those rows, `width` pixels
@@ -413,25 +419,6 @@ pub fn present_splash_rows(rows: &[u32], y0: usize, y1: usize) {
             console.lock().present_rows(rows, y0, y1);
         });
     }
-}
-
-/// Present only rows `y0..y1` of a full frame `back` (a cursor-only frame).
-/// A virtio GPU takes whole frames, so it gets the whole frame.
-pub fn present_rows_of(back: &[u32], y0: usize, y1: usize) {
-    if crate::splash::active() {
-        return;
-    }
-    if let Some(console) = CONSOLE.get() {
-        crate::arch::cpu::without_interrupts(|| {
-            let mut c = console.lock();
-            let w = c.fb.info().width;
-            let y1 = y1.min(back.len() / w.max(1));
-            if y1 > y0 {
-                c.present_rows(&back[y0 * w..y1 * w], y0, y1);
-            }
-        });
-    }
-    crate::virtio::gpu::present(back);
 }
 
 /// (tile pieces written, skipped as unchanged) by presents so far.

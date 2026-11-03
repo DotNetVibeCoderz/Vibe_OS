@@ -728,6 +728,18 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
 - **G2 — 2D di GPU:** virtio-gpu satu resource per jendela + `TRANSFER_TO_HOST_2D`
   hanya untuk rect yang berubah; di **Raspberry Pi 4** pakai **HVS** (Hardware
   Video Scaler VideoCore) sebagai plane overlay per jendela = komposisi hardware.
+- **Status G2 (2026-11-03):** **virtio-gpu**: present hanya mentransfer + mem-flush baris
+  damage (`TRANSFER_TO_HOST_2D` dengan offset per pita, bukan seluruh layar tiap frame) dan
+  **kursor hardware** di antrean kursor (resource 64x64 ARGB, `UPDATE_CURSOR`/`MOVE_CURSOR`):
+  GPU mendapat frame tanpa kursor software, gerakan mouse = satu perintah kecil — terverifikasi
+  (QEMU VGA + virtio-gpu-pci: selisih kedua layar tepat kotak kursor 12x12, 58 gerakan via
+  antrean kursor). **Raspberry Pi 4**: kursor hardware firmware (plane HVS lewat mailbox
+  `SET_CURSOR_INFO`/`SET_CURSOR_STATE`, gambar 32x32 ARGB di bawah 1 GiB) dengan fallback
+  otomatis ke kursor software bila firmware menolak (QEMU `raspi4b` tidak memodelkannya) —
+  **uji di board fisik menunggu**. Keputusan: "satu resource per jendela" tidak dibuat —
+  virtio-gpu 2D tidak punya komposisi di host (satu resource per scanout), jadi baru berguna
+  dengan virgl (G3); plane HVS per jendela butuh mengambil alih HVS dari firmware (gaya
+  `vc4` KMS), pekerjaan terpisah. `prof hw|sw` menyalakan/mematikan kursor hardware.
 - **G3 — API 3D `Buitenzorg.Graphics3D`:** vertex/index buffer, transform, z-buffer,
   tekstur, shading sederhana; backend **software rasterizer** dulu (jalan di
   semua arsitektur), lalu **virgl** (QEMU `virtio-gpu-gl`) dan **V3D** Pi 4
