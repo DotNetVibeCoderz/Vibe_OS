@@ -13,7 +13,8 @@ raw disk images you can write directly to a USB stick:
 
 > ✅ **Status:** booted on a physical PC: a **Dell Latitude 7290** (UEFI, from a USB
 > stick) reaches the desktop with its apps, wallpaper and icons, keyboard and touchpad,
-> files saved to the stick, restart and shutdown. Other machines are still untested.
+> files saved to the stick, sound (Intel HD Audio), restart and shutdown. Other
+> machines are still untested; its Intel I219 network card is not supported yet.
 > The smoke test boots a QEMU machine built to resemble a modern PC (`[realpc]`:
 > UEFI, no PS/2 controller, 2560x1440, booted from a USB stick on xHCI, an e1000,
 > and a second FAT disk that must stay untouched). Real firmware and chips differ,

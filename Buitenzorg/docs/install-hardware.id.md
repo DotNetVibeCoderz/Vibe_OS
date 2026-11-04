@@ -13,7 +13,8 @@ image mentah yang bisa langsung ditulis ke stik USB:
 
 > ✅ **Status:** sudah boot di PC fisik: **Dell Latitude 7290** (UEFI, dari flash disk)
 > sampai desktop dengan app, wallpaper dan ikon, keyboard dan touchpad, berkas tersimpan
-> ke flash disk, restart dan shutdown. Mesin lain belum diuji.
+> ke flash disk, suara (Intel HD Audio), restart dan shutdown. Mesin lain belum diuji;
+> kartu jaringan Intel I219-nya belum didukung.
 > Smoke test mem-boot mesin QEMU yang dibuat mirip PC modern (`[realpc]`: UEFI, tanpa
 > kontroler PS/2, 2560x1440, boot dari flash disk di xHCI, e1000, dan disk FAT kedua
 > yang tidak boleh tersentuh). Firmware dan chip asli berbeda, jadi pakai mesin dan
