@@ -87,9 +87,13 @@ fn probe(dev: &PciDevice) -> Vec<String> {
     let pte = unsafe { read_volatile(pte_at as *const u32) as u64 | (read_volatile((pte_at + 4) as *const u32) as u64) << 32 };
     let page = pte & 0x7F_FFFF_F000;
     let fb_phys = crate::framebuffer::physical_hint();
+    // the firmware's framebuffer is either the backing page itself or, as GOP
+    // usually does, the aperture window at the plane's GGTT offset (the
+    // aperture is the GGTT seen through BAR2)
     let verdict = match fb_phys {
-        Some(p) if p & !0xFFF == page => "= the boot framebuffer: GGTT understood",
-        Some(_) => "not the boot framebuffer (expected when the loader's mapping is the aperture)",
+        Some(p) if p & !0xFFF == page => "GGTT OK: = the boot framebuffer",
+        Some(p) if p >= aperture && p - aperture == surf as u64 => "GGTT OK: = boot framebuffer via aperture",
+        Some(_) => "GGTT ?: not the boot framebuffer",
         None => "",
     };
     out.push(format!(

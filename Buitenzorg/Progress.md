@@ -67,7 +67,7 @@
 - [x] Storage IDE/PATA (PIO LBA28)
 - [x] Keyboard PS/2 + Mouse PS/2
 - [x] Framebuffer graphics + direct pixel
-- [x] Driver NVMe/AHCI/USB native (polled; `/disk` di ketiganya, hanya volume berpenanda `BZDISK.ID`; smoke `[realpc]`) · [x] Network e1000 + DHCP · [ ] WiFi · [x] Audio (AC'97 v0.16, Intel HD Audio keluaran) · [x] virtio (net/blk/gpu/input/snd)
+- [x] Driver NVMe/AHCI/USB native (polled; `/disk` di ketiganya, hanya volume berpenanda `BZDISK.ID`; smoke `[realpc]`) · [x] Network e1000 + DHCP · [~] Intel I219 (e1000e, belum jalan di laptop; `ipconfig` status + `netup`) · [~] GPU Intel tahap 1 ✓ (GGTT terbukti di UHD 620) · [ ] WiFi · [x] Audio (AC'97 v0.16, Intel HD Audio keluaran) · [x] virtio (net/blk/gpu/input/snd)
 
 ### 🌉 Managed Runtime (C#)
 - [x] Port NativeAOT (via bflat + zerolib, freestanding)

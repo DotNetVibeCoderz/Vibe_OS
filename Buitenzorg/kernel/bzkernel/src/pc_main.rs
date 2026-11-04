@@ -324,7 +324,28 @@ fn fast_boot() -> ! {
 
 /// Second half of the normal boot, after the desktop is up.
 /// The network card (virtio-net or an e1000), with an address from DHCP.
+static NET_BUSY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Shell `netup`: run `network_up` again in its own task (cable plugged in late).
+fn network_retry() {
+    if net::info().is_some_and(|i| i.attached) || NET_BUSY.load(core::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    task::spawn_unlocked("netup", network_up);
+}
+
 fn network_up() {
+    use core::sync::atomic::Ordering;
+    net::set_retry(network_retry);
+    if NET_BUSY.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    network_up_inner();
+    NET_BUSY.store(false, Ordering::Release);
+}
+
+fn network_up_inner() {
+    net::set_status(alloc::string::String::from("mencari kartu jaringan..."));
     let (mut nic, name): (alloc::boxed::Box<dyn net::NetDevice>, &str) = if let Some(n) = virtio::net::probe() {
         (alloc::boxed::Box::new(n), "virtio-net")
     } else if let Some(n) = e1000::probe(&pci::scan()) {
@@ -332,12 +353,27 @@ fn network_up() {
     } else if let Some(n) = e1000e::probe(&pci::scan(), 6000) {
         (alloc::boxed::Box::new(n), "e1000e")
     } else {
+        if net::status().is_some_and(|s| s.starts_with("mencari")) {
+            let found: alloc::vec::Vec<alloc::string::String> = pci::scan()
+                .iter()
+                .filter(|d| d.class == 0x02)
+                .map(|d| alloc::format!("{:04x}:{:04x}", d.vendor_id, d.device_id))
+                .collect();
+            net::set_status(if found.is_empty() {
+                alloc::string::String::from("tidak ada kartu jaringan kabel di PCI")
+            } else {
+                alloc::format!("kartu {} belum didukung", found.join(", "))
+            });
+        }
         return;
     };
+    net::set_status(alloc::format!("{}: meminta alamat (DHCP)...", name));
     let Some(l) = dhcp::lease(nic.as_mut(), 6) else {
         println!("[net] {}: no answer from a DHCP server; the network stays off", name);
+        net::set_status(alloc::format!("{}: tidak ada jawaban DHCP (kabel/router?)", name));
         return;
     };
+    net::set_status(alloc::format!("{}: aktif", name));
     println!(
         "[net] {}: DHCP {}.{}.{}.{}, router {}.{}.{}.{}",
         name, l.ip[0], l.ip[1], l.ip[2], l.ip[3], l.router[0], l.router[1], l.router[2], l.router[3]

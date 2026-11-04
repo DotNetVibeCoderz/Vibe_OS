@@ -992,6 +992,10 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
 - **Berikutnya (dikerjakan, menunggu uji di laptop):** driver jaringan **Intel I219** (`e1000e.rs`) dan
   **dukungan GPU Intel tahap 1** (identifikasi + baca konfigurasi firmware, `gpu`). Tahap 2: mesin
   blitter untuk 2D; tahap 3: render engine untuk 3D (proyek besar, tak bisa diuji di QEMU).
+  **Uji pertama (2026-11-05): GPU tahap 1 ✓** — UHD 620, stolen 32 MiB @ 0x7d800000, pipe A
+  1366x768, plane 1A di GGTT 0x0 -> halaman 0x7d800000; framebuffer GOP = aperture + 0, jadi
+  pemahaman GGTT terbukti (siap tahap 2). **I219: belum ada kartu di `ipconfig`**; sebabnya
+  belum terlihat -> `ipconfig` kini menampilkan status bring-up dan `netup` mencoba lagi.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 

@@ -40,6 +40,12 @@ fn ipconfig() -> Vec<String> {
         format!("      frame        {} terkirim, {} diterima", i.frames_tx, i.frames_rx),
         format!("      UDP          {} terkirim, {} diterima; ICMP balasan {}", i.udp_tx, i.udp_rx, i.icmp_replies),
     ];
+    if !i.attached {
+        if let Some(s) = crate::net::status() {
+            out.push(format!("      status       {}", s));
+        }
+        out.push(String::from("      (colok kabel lalu ketik 'netup' untuk mencoba lagi; rincian: dmesg e1000e)"));
+    }
     let (ssh_on, _, _) = crate::ssh::status();
     let (dep_on, code, _) = crate::deploy::status();
     out.push(format!(
@@ -222,6 +228,14 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "deploy" => (deploy_cmd(&args), Effect::None),
         "ssh" | "sshd" => (ssh_cmd(args.first().copied()), Effect::None),
         "ipconfig" | "ifconfig" | "ip" => (ipconfig(), Effect::None),
+        "netup" | "dhcp" => (
+            vec![String::from(if crate::net::retry() {
+                "jaringan: mencoba lagi di latar belakang (10-15 detik), lalu 'ipconfig'"
+            } else {
+                "jaringan: tidak ada yang bisa dicoba di platform ini"
+            })],
+            Effect::None,
+        ),
         "ping" => (ping(&args), Effect::None),
         "arp" => (arp(), Effect::None),
         "route" => (route(), Effect::None),
@@ -370,6 +384,7 @@ fn help() -> Vec<String> {
      "  dmesg [kata]      log kernel (40 baris terakhir, opsional disaring)",
      "  lspci             perangkat PCI (kontroler disk/USB/jaringan)",
      "  gpu               GPU dan konfigurasinya",
+     "  netup             coba lagi menyalakan jaringan (DHCP)",
      "  echo <teks>       cetak teks",
      "  mounts            daftar mount VFS",
      "  theme [nama|cycle|list]     ganti tema (8 style + dark/light)",

@@ -91,6 +91,38 @@ struct Stack {
 
 static STACK: Mutex<Option<Stack>> = Mutex::new(None);
 
+/// What bringing up a real NIC came to (shown by `ipconfig` while only the
+/// loopback is attached: a PC has no serial cable to read the log from).
+static STATUS: Mutex<Option<alloc::string::String>> = Mutex::new(None);
+/// The platform's "bring the network up" routine, for the shell's `netup`.
+static RETRY: Mutex<Option<fn()>> = Mutex::new(None);
+
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+pub fn set_status(s: alloc::string::String) {
+    *STATUS.lock() = Some(s);
+}
+
+pub fn status() -> Option<alloc::string::String> {
+    STATUS.lock().clone()
+}
+
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+pub fn set_retry(f: fn()) {
+    *RETRY.lock() = Some(f);
+}
+
+/// Start the platform's network bring-up again; false when there is none.
+pub fn retry() -> bool {
+    let f = *RETRY.lock();
+    match f {
+        Some(f) => {
+            f();
+            true
+        }
+        None => false,
+    }
+}
+
 impl Stack {
     /// Send a frame: to ourselves through the local queue, otherwise out of
     /// the device.

@@ -397,6 +397,12 @@ pub fn probe(devices: &[PciDevice], link_ms: u64) -> Option<E1000e> {
             } else {
                 0
             };
+            crate::net::set_status(alloc::format!(
+                "e1000e: link {} (STATUS {:#010x}, PHY {:#06x})",
+                if n.link_up() { "up" } else { "down" },
+                n.rd(STATUS),
+                bmsr
+            ));
             crate::println!(
                 "[e1000e] MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, link {} (STATUS {:#010x}, PHY status {:#06x})",
                 m[0],
@@ -413,6 +419,7 @@ pub fn probe(devices: &[PciDevice], link_ms: u64) -> Option<E1000e> {
         }
         Err(e) => {
             crate::println!("[e1000e] 8086:{:04x}: {}", dev.device_id, e);
+            crate::net::set_status(alloc::format!("e1000e 8086:{:04x} gagal: {}", dev.device_id, e));
             None
         }
     }

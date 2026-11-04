@@ -16,6 +16,12 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **Intel GPU step 1 confirmed on the Latitude 7290** (`gpu`): the display plane's
+  GGTT entry leads to stolen memory, which is exactly what the firmware's
+  framebuffer shows through the aperture.
+- **`ipconfig` tells why there is no network** (no card / unsupported card /
+  driver error / link down / no DHCP answer) and **`netup`** tries again, e.g.
+  after plugging in the cable.
 - **Network commands in the terminal:** `ipconfig` (also `ifconfig` / `ip`:
   address, mask, gateway, MAC, device, frame counters), `ping <ip> [n]` (real
   ICMP echo with round-trip time), `arp`, `route`, `netstat` (TCP connections
