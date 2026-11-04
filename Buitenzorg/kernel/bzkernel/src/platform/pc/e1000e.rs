@@ -86,6 +86,8 @@ const DD: u8 = 1;
 /// I217, I218 and I219 (Lynx Point to Alder Point). From Ice Lake (0x15f*,
 /// 0x0d5*, 0x1a1*, ...) the chips also boot like this, with extra care Linux
 /// takes that this driver may lack: they are tried and report what happens.
+const I21X: [u16; 8] = [0x153A, 0x153B, 0x155A, 0x1559, 0x15A0, 0x15A1, 0x15A2, 0x15A3];
+const IOSFPC: usize = 0x0F28;
 const SUPPORTED: [u16; 34] = [
     0x153A, 0x153B, 0x155A, 0x1559, 0x15A0, 0x15A1, 0x15A2, 0x15A3, // I217/I218
     0x156F, 0x1570, 0x15B7, 0x15B8, 0x15B9, 0x15D6, 0x15D7, 0x15D8, 0x15E3, // I219 SPT/KBP
@@ -112,6 +114,10 @@ pub struct E1000e {
     rx_next: usize,
     tx_next: usize,
     me: bool,
+    tx_ok: u32,
+    tx_stuck: u32,
+    rx_ok: u32,
+    rx_bad: u32,
 }
 
 // The registers and DMA pages belong to this driver instance.
@@ -282,6 +288,10 @@ fn bring_up(dev: &PciDevice) -> Result<E1000e, &'static str> {
         rx_next: 0,
         tx_next: 0,
         me: false,
+        tx_ok: 0,
+        tx_stuck: 0,
+        rx_ok: 0,
+        rx_bad: 0,
     };
     n.wr(IMC, u32::MAX);
     n.me = n.rd(FWSM) & FWSM_FW_VALID != 0;
@@ -333,9 +343,15 @@ fn bring_up(dev: &PciDevice) -> Result<E1000e, &'static str> {
         return Err("the PHY does not answer after reset (ULP/SMBus)");
     }
 
-    // e1000e's per-chip bits (ich8lan: initialize_hw_bits) + the SPT fix
-    n.wr(TXDCTL, n.rd(TXDCTL) | 1 << 22);
+    // e1000e's per-chip bits (ich8lan: initialize_hw_bits) + the SPT fix;
+    // TXDCTL as e1000_configure_tx: GRAN, WTHRESH 1, PTHRESH 0x1f
+    n.wr(TXDCTL, n.rd(TXDCTL) | 1 << 22 | 1 << 24 | 1 << 16 | 0x1F);
     n.wr(TARC0, n.rd(TARC0) | 1 << 23 | 1 << 24 | 1 << 26 | 1 << 27);
+    if !I21X.contains(&dev.device_id) {
+        // I219 (Sunrise Point and later): IOSFPC RDMTS + TARC0 CB_MULTIQ_3_REQ
+        n.wr(IOSFPC, n.rd(IOSFPC) | 0x0001_0000);
+        n.wr(TARC0, n.rd(TARC0) | 3 << 28);
+    }
     n.wr(CTRL_EXT, n.rd(CTRL_EXT) | 1 << 22);
     n.wr(FEXTNVM11, n.rd(FEXTNVM11) | FEXTNVM11_DISABLE_MULR_FIX);
 
@@ -430,6 +446,21 @@ impl NetDevice for E1000e {
         self.mac
     }
 
+    fn diag(&self) -> Option<alloc::string::String> {
+        Some(alloc::format!(
+            "link {}; kirim {} ok, {} macet; terima {} ok, {} rusak; STATUS {:#x} TDH {} TDT {} RDH {}",
+            if self.link_up() { "up" } else { "DOWN" },
+            self.tx_ok,
+            self.tx_stuck,
+            self.rx_ok,
+            self.rx_bad,
+            self.rd(STATUS),
+            self.rd(TDH),
+            self.rd(TDT),
+            self.rd(RDH)
+        ))
+    }
+
     fn transmit(&mut self, frame: &[u8]) {
         if frame.is_empty() || frame.len() > BUF {
             return;
@@ -449,10 +480,12 @@ impl NetDevice for E1000e {
             self.wr(TDT, self.tx_next as u32);
             for _ in 0..2_000_000 {
                 if read_volatile(d.add(12)) & DD != 0 {
+                    self.tx_ok += 1;
                     return;
                 }
                 core::hint::spin_loop();
             }
+            self.tx_stuck += 1;
         }
     }
 
@@ -473,8 +506,10 @@ impl NetDevice for E1000e {
             self.wr(RDT, i as u32);
             self.rx_next = (i + 1) % RX_DESCS;
             if errors == 0 && status & 2 != 0 {
+                self.rx_ok += 1;
                 return Some(out);
             }
+            self.rx_bad += 1;
         }
     }
 }

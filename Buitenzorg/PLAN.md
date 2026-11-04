@@ -996,6 +996,8 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   1366x768, plane 1A di GGTT 0x0 -> halaman 0x7d800000; framebuffer GOP = aperture + 0, jadi
   pemahaman GGTT terbukti (siap tahap 2). **I219: belum ada kartu di `ipconfig`**; sebabnya
   belum terlihat -> `ipconfig` kini menampilkan status bring-up dan `netup` mencoba lagi.
+  Uji kedua: driver I219 lolos bring-up, tetapi DHCP tak dijawab -> penghitung kirim/terima +
+  status link di `ipconfig`, setelan TX ala Linux untuk I219.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 

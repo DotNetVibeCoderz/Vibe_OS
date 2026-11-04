@@ -350,7 +350,7 @@ fn network_up_inner() {
         (alloc::boxed::Box::new(n), "virtio-net")
     } else if let Some(n) = e1000::probe(&pci::scan()) {
         (alloc::boxed::Box::new(n), "e1000")
-    } else if let Some(n) = e1000e::probe(&pci::scan(), 6000) {
+    } else if let Some(n) = e1000e::probe(&pci::scan(), 10_000) {
         (alloc::boxed::Box::new(n), "e1000e")
     } else {
         if net::status().is_some_and(|s| s.starts_with("mencari")) {
@@ -368,9 +368,10 @@ fn network_up_inner() {
         return;
     };
     net::set_status(alloc::format!("{}: meminta alamat (DHCP)...", name));
-    let Some(l) = dhcp::lease(nic.as_mut(), 6) else {
-        println!("[net] {}: no answer from a DHCP server; the network stays off", name);
-        net::set_status(alloc::format!("{}: tidak ada jawaban DHCP (kabel/router?)", name));
+    let Some(l) = dhcp::lease(nic.as_mut(), 10) else {
+        let d = nic.diag().map(|d| alloc::format!("; {}", d)).unwrap_or_default();
+        println!("[net] {}: no answer from a DHCP server; the network stays off{}", name, d);
+        net::set_status(alloc::format!("{}: tidak ada jawaban DHCP (kabel/router?){}", name, d));
         return;
     };
     net::set_status(alloc::format!("{}: aktif", name));

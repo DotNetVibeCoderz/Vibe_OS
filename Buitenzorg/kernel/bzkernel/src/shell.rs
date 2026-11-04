@@ -42,7 +42,9 @@ fn ipconfig() -> Vec<String> {
     ];
     if !i.attached {
         if let Some(s) = crate::net::status() {
-            out.push(format!("      status       {}", s));
+            for (k, part) in s.split("; ").enumerate() {
+                out.push(format!("      {}  {}", if k == 0 { "status     " } else { "           " }, part));
+            }
         }
         out.push(String::from("      (colok kabel lalu ketik 'netup' untuk mencoba lagi; rincian: dmesg e1000e)"));
     }

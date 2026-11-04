@@ -28,6 +28,10 @@ pub trait NetDevice: Send {
     fn mac(&self) -> MacAddr;
     fn transmit(&mut self, frame: &[u8]);
     fn receive(&mut self) -> Option<Vec<u8>>;
+    /// Driver counters/state for diagnosis (link, frames out and in).
+    fn diag(&self) -> Option<alloc::string::String> {
+        None
+    }
 }
 
 /// Loopback: every transmitted frame is queued straight back for receive.
