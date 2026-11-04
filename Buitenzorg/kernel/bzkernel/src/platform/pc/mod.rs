@@ -3,6 +3,7 @@
 
 pub mod ata;
 pub mod audio;
+pub mod bochs_vbe;
 pub mod mouse;
 pub mod pci;
 pub mod power;

@@ -1087,6 +1087,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
 /// The normal boot's second half, behind the desktop (no BKL; yields between
 /// steps so the compose helper on this CPU is not held up).
 fn boot_background() {
+    crate::boot::wait_first_frame();
     let t0 = interrupts::ticks();
     let steps: [fn(); 5] = [
         || {

@@ -188,6 +188,55 @@ pub fn mark_kernel_start() {
     KERNEL_START.store(crate::arch::cpu::timestamp(), core::sync::atomic::Ordering::Relaxed);
 }
 
+/// Boot phases: (name, counter at its end), recorded without allocating and
+/// printed with the first desktop frame (`phase_report`).
+static PHASES: spin::Mutex<([(&str, u64); 24], usize)> = spin::Mutex::new(([("", 0); 24], 0));
+
+static FIRST_FRAME: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The desktop's first frame is on the screen.
+pub fn set_first_frame() {
+    FIRST_FRAME.store(true, core::sync::atomic::Ordering::Release);
+}
+
+/// Background start-up: let the first desktop frame go first (yielding --
+/// the compose helper may need this CPU), at most ~2 s.
+pub fn wait_first_frame() {
+    let t0 = crate::arch::cpu::timestamp();
+    let limit = crate::arch::cpu::counter_hz().max(1) * 2;
+    while !FIRST_FRAME.load(core::sync::atomic::Ordering::Acquire) && crate::arch::cpu::timestamp().wrapping_sub(t0) < limit {
+        crate::task::yield_now();
+    }
+}
+
+/// Mark the end of a boot phase.
+pub fn phase(name: &'static str) {
+    let t = crate::arch::cpu::timestamp();
+    if let Some(mut p) = PHASES.try_lock() {
+        let n = p.1;
+        if n < p.0.len() {
+            p.0[n] = (name, t);
+            p.1 = n + 1;
+        }
+    }
+}
+
+/// "name +ms, ..." for every recorded phase (the counter rate is known by now).
+pub fn phase_report() -> alloc::string::String {
+    let hz = crate::arch::cpu::counter_hz().max(1) as u128;
+    let p = PHASES.lock();
+    let mut prev = KERNEL_START.load(core::sync::atomic::Ordering::Relaxed);
+    let mut out = alloc::string::String::new();
+    for &(name, t) in &p.0[..p.1] {
+        if !out.is_empty() {
+            out.push_str(", ");
+        }
+        out.push_str(&alloc::format!("{} {}", name, (t.saturating_sub(prev) as u128 * 1000 / hz)));
+        prev = t;
+    }
+    out
+}
+
 /// (milliseconds since the kernel started, milliseconds since power-on), by
 /// the CPU counter; (0, 0) before its rate is known.
 pub fn elapsed_ms() -> (u64, u64) {

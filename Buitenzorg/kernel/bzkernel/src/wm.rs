@@ -2859,6 +2859,7 @@ fn full_frame(back: &mut [u32], width: usize, height: usize) {
         let _z = crate::profile::Guard::new("wm::compose");
         compose_scene(back, width, height)
     };
+    crate::boot::phase("compose");
     let _z = crate::profile::Guard::new("fb::present");
     match composed {
         Some((scene, ptr)) => present_scene(back, width, height, scene, ptr, true),

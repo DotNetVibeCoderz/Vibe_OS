@@ -60,7 +60,11 @@ fn tile_hash(px: &[u32]) -> u64 {
 }
 
 impl Console {
-    fn new(mut fb: FrameBuffer) -> Self {
+    fn new(fb: FrameBuffer) -> Self {
+        Self::with_clear(fb, true)
+    }
+
+    fn with_clear(mut fb: FrameBuffer, clear: bool) -> Self {
         let bg = BG;
         let info = fb.info();
         let bpp = info.bytes_per_pixel;
@@ -69,7 +73,7 @@ impl Console {
         // of boot under QEMU).
         let row = info.stride * bpp;
         let buf = fb.buffer_mut();
-        if row > 0 && buf.len() >= row {
+        if clear && row > 0 && buf.len() >= row {
             for px in buf[..row].chunks_exact_mut(bpp) {
                 write_pixel_bytes(px, info.format, bg);
             }
@@ -341,6 +345,46 @@ impl Console {
                 _ => {}
             }
         }
+        // 24-bit BGR (a BIOS VESA mode): four 0x00RRGGBB pixels packed into
+        // three 32-bit stores -- 3 stores per 4 pixels instead of 12 byte
+        // stores, the cost under QEMU being instructions and video-memory
+        // accesses. (A stack buffer + memcpy per tile was slower: a memcpy
+        // call per pixel.)
+        if bpp == 3 && matches!(format, PixelFormat::Bgr) && buffer.len() >= info.stride * h * 3 {
+            let base = buffer.as_mut_ptr();
+            for y in y0..y1 {
+                let row = &back[(y - y0) * w..(y - y0 + 1) * w];
+                for tx in 0..tiles_x {
+                    if !dirty(y, tx, row) {
+                        continue;
+                    }
+                    let x0 = tx * TILE;
+                    let n = TILE.min(w - x0);
+                    let quads = n / 4;
+                    let dst = unsafe { base.add((y * info.stride + x0) * 3) as *mut u32 };
+                    for q in 0..quads {
+                        let p = &row[x0 + q * 4..x0 + q * 4 + 4];
+                        let w0 = (p[0] & 0xFF_FFFF) | (p[1] << 24);
+                        let w1 = ((p[1] >> 8) & 0xFFFF) | (p[2] << 16);
+                        let w2 = ((p[2] >> 16) & 0xFF) | (p[3] << 8);
+                        unsafe {
+                            dst.add(q * 3).write_unaligned(w0);
+                            dst.add(q * 3 + 1).write_unaligned(w1);
+                            dst.add(q * 3 + 2).write_unaligned(w2);
+                        }
+                    }
+                    for x in x0 + quads * 4..x0 + n {
+                        let src = row[x];
+                        let off = (y * info.stride + x) * 3;
+                        write_pixel_bytes(&mut buffer[off..off + 3], format, ((src >> 16) as u8, (src >> 8) as u8, src as u8));
+                    }
+                }
+            }
+            self.tiles = tiles;
+            self.written += written;
+            self.skipped += skipped;
+            return;
+        }
         for y in y0..y1 {
             let row = &back[(y - y0) * w..(y - y0 + 1) * w];
             for tx in 0..tiles_x {
@@ -364,10 +408,38 @@ impl Console {
 pub static CONSOLE: Once<Mutex<Console>> = Once::new();
 
 pub fn init(info: FbInfo) {
+    init_with(info, true);
+}
+
+/// [`init`], optionally without clearing the screen (a normal PC boot: the
+/// console never draws and the first desktop frame covers everything).
+pub fn init_with(info: FbInfo, clear: bool) {
     // SAFETY: the loader mapped the framebuffer for the kernel; only the
     // console touches it.
     let fb = unsafe { FrameBuffer::new(info) };
-    CONSOLE.call_once(|| Mutex::new(Console::new(fb)));
+    CONSOLE.call_once(|| Mutex::new(Console::with_clear(fb, clear)));
+}
+
+/// Replace the console's framebuffer (same size, new mapping/format; the
+/// caller cleared the screen -- a mode set does); what was on the screen is
+/// gone, so the compositor redraws all.
+pub fn rebind(info: FbInfo) {
+    if let Some(c) = CONSOLE.get() {
+        let fb = unsafe { FrameBuffer::new(info) };
+        *c.lock() = Console::with_clear(fb, false);
+        crate::wm::screen_overwritten();
+    }
+}
+
+/// QEMU std VGA in a 24-bit mode (the BIOS loader's pick): switch it to
+/// 32 bpp, where a present is a row copy (`bochs_vbe`).
+#[cfg(target_arch = "x86_64")]
+pub fn upgrade_x86_display(devices: &[crate::pci::PciDevice]) {
+    let Some(info) = CONSOLE.get().map(|c| c.lock().info()) else { return };
+    if let Some(new) = crate::bochs_vbe::upgrade_to_32bpp(&info, devices) {
+        rebind(new);
+        crate::println!("[fb] std VGA switched to {}x{} at 32 bpp (was 24)", new.width, new.height);
+    }
 }
 
 /// Framebuffer dimensions in pixels, if a framebuffer exists.

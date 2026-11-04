@@ -220,6 +220,23 @@ fn root_for(map: &PageMap, va: u64) -> u64 {
 }
 
 /// Map the 4 KiB page at `va` to the frame at `pa`.
+/// Map `pages` consecutive kernel pages from `va` to the physical range from `pa`.
+pub fn map_phys_range(pm: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: u64, pages: u64, f: Flags) -> Result<(), &'static str> {
+    for k in 0..pages {
+        map(pm, frames, va + k * 4096, pa + k * 4096, f)?;
+    }
+    Ok(())
+}
+
+/// Map `pages` consecutive kernel pages from `va`, each to a fresh frame.
+pub fn map_fresh_range(pm: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pages: u64, f: Flags) -> Result<(), &'static str> {
+    for k in 0..pages {
+        let phys = frames.alloc().ok_or("out of frames")?;
+        map(pm, frames, va + k * 4096, phys, f)?;
+    }
+    Ok(())
+}
+
 pub fn map(map: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: u64, f: Flags) -> Result<(), &'static str> {
     let e = walk(root_for(map, va), va, Some(frames))?;
     unsafe {

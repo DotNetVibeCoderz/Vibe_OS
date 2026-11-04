@@ -238,6 +238,21 @@ fn calibrate_timer() {
     let cal_ticks: u64 = if crate::bootmode::selftest() { 3 } else { 1 };
     lapic_write(LAPIC_TIMER_DIV, 0x3); // divide by 16
     lapic_write(LAPIC_LVT_TIMER, (1 << 16) | TIMER_VECTOR as u32); // masked, one-shot
+    if !crate::bootmode::selftest() {
+        // normal boot: 10 ms on PIT channel 2 instead of up to two 55 ms ticks
+        const US: u64 = 10_000;
+        let tsc0 = unsafe { core::arch::x86_64::_rdtsc() };
+        lapic_write(LAPIC_TIMER_INIT, u32::MAX);
+        pit_wait_us(US as u32);
+        let elapsed = (u32::MAX - lapic_read(LAPIC_TIMER_CUR)) as u64;
+        let tsc = unsafe { core::arch::x86_64::_rdtsc() } - tsc0;
+        lapic_write(LAPIC_TIMER_INIT, 0);
+        TSC_HZ.store(tsc * 1_000_000 / US, Ordering::Relaxed);
+        let hz = elapsed * 1_000_000 / US;
+        TIMER_HZ.store(hz, Ordering::Relaxed);
+        TIMER_COUNT.store((hz / AP_TIMER_HZ).clamp(1, u32::MAX as u64) as u32, Ordering::Relaxed);
+        return;
+    }
     wait_ticks(1); // start on a PIT tick edge
     let tsc0 = unsafe { core::arch::x86_64::_rdtsc() };
     lapic_write(LAPIC_TIMER_INIT, u32::MAX);
@@ -586,6 +601,28 @@ pub fn enable_bsp_lapic() -> bool {
     true
 }
 
+/// Busy-wait `us` microseconds (<= 54 ms) on PIT channel 2 in one-shot mode,
+/// polling its output on port 0x61 -- far finer than the 55 ms system tick.
+fn pit_wait_us(us: u32) {
+    use x86_64::instructions::port::Port;
+    let count = ((us as u64 * 1_193_182 / 1_000_000).clamp(1, 0xFFFF)) as u16;
+    unsafe {
+        let mut p61 = Port::<u8>::new(0x61);
+        let v = p61.read();
+        p61.write((v & !0x02) | 0x01); // gate channel 2 on, speaker off
+        Port::<u8>::new(0x43).write(0b1011_0000); // channel 2, lo/hi byte, mode 0, binary
+        let mut ch2 = Port::<u8>::new(0x42);
+        ch2.write(count as u8);
+        ch2.write((count >> 8) as u8); // counting starts now
+        for _ in 0..50_000_000u64 {
+            if p61.read() & 0x20 != 0 {
+                break; // OUT2 went high: the count ran out
+            }
+            core::hint::spin_loop();
+        }
+    }
+}
+
 fn wait_ticks(n: u64) {
     let start = crate::interrupts::ticks();
     while crate::interrupts::ticks() - start < n {
@@ -674,14 +711,16 @@ pub fn init() -> (u64, u64) {
         lapic_write(LAPIC_ICR_HI, (id as u32) << 24);
         lapic_write(LAPIC_ICR_LO, 0x0000_4500);
         wait_icr_idle();
-        wait_ticks(1); // >= 10 ms
+        if crate::bootmode::selftest() {
+            wait_ticks(1); // >= 10 ms
+        } else {
+            pit_wait_us(10_000); // exactly the 10 ms INIT needs
+        }
         for _ in 0..2 {
             lapic_write(LAPIC_ICR_HI, (id as u32) << 24);
             lapic_write(LAPIC_ICR_LO, 0x0000_4600 | (TRAMPOLINE >> 12) as u32);
             wait_icr_idle();
-            for _ in 0..200_000 {
-                core::hint::spin_loop(); // >= 200 us
-            }
+            pit_wait_us(200); // the 200 us between STARTUPs (a pause loop is slow under TCG)
             if ONLINE.load(Ordering::SeqCst) > before {
                 break;
             }

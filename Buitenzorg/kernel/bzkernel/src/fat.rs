@@ -33,6 +33,11 @@ pub struct FatVolume {
     fat_size: u64,      // sectors per FAT copy
     cluster_count: u64, // data clusters; valid cluster numbers are 2..cluster_count+2
     fsinfo_sector: u64, // FAT32 FSInfo LBA (0 = none)
+    /// The last FAT sector read (LBA, bytes): following a cluster chain reads
+    /// the same FAT sector for hundreds of consecutive clusters, so without
+    /// it every file read did one extra PIO sector read per cluster. Only
+    /// `fat_set` writes FAT sectors, and it drops the entry.
+    fat_cache: spin::Mutex<(u64, [u8; SECTOR_SIZE])>,
 }
 
 /// A directory: the volume root (fixed area on FAT12/16, a chain on FAT32)
@@ -176,7 +181,27 @@ impl FatVolume {
             } else {
                 0
             },
+            fat_cache: spin::Mutex::new((u64::MAX, [0u8; SECTOR_SIZE])),
         })
+    }
+
+    /// Read a FAT sector through the one-entry cache.
+    fn read_fat_sector(&self, dev: &mut dyn BlockDevice, lba: u64, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), &'static str> {
+        if let Some(c) = self.fat_cache.try_lock() {
+            if c.0 == lba {
+                buf.copy_from_slice(&c.1);
+                return Ok(());
+            }
+        }
+        dev.read_sector(lba, buf)?;
+        if let Some(mut c) = self.fat_cache.try_lock() {
+            *c = (lba, *buf);
+        }
+        Ok(())
+    }
+
+    fn drop_fat_cache(&self) {
+        self.fat_cache.lock().0 = u64::MAX;
     }
 
     pub fn kind_name(&self) -> &'static str {
@@ -198,13 +223,13 @@ impl FatVolume {
                 let offset = cluster as u64 + cluster as u64 / 2;
                 let sec = self.fat_start + offset / self.bytes_per_sector;
                 let idx = (offset % self.bytes_per_sector) as usize;
-                dev.read_sector(sec, &mut sector)?;
+                self.read_fat_sector(dev, sec, &mut sector)?;
                 let lo = sector[idx] as u32;
                 // The 12-bit entry may straddle a sector boundary.
                 let hi = if idx + 1 < SECTOR_SIZE {
                     sector[idx + 1] as u32
                 } else {
-                    dev.read_sector(sec + 1, &mut sector)?;
+                    self.read_fat_sector(dev, sec + 1, &mut sector)?;
                     sector[0] as u32
                 };
                 let raw = lo | (hi << 8);
@@ -214,7 +239,7 @@ impl FatVolume {
             FatKind::Fat16 => {
                 let offset = cluster as u64 * 2;
                 let sec = self.fat_start + offset / self.bytes_per_sector;
-                dev.read_sector(sec, &mut sector)?;
+                self.read_fat_sector(dev, sec, &mut sector)?;
                 let idx = (offset % self.bytes_per_sector) as usize;
                 let val = u16_at(&sector, idx) as u32;
                 if val >= 0xFFF8 { None } else { Some(val) }
@@ -222,7 +247,7 @@ impl FatVolume {
             FatKind::Fat32 => {
                 let offset = cluster as u64 * 4;
                 let sec = self.fat_start + offset / self.bytes_per_sector;
-                dev.read_sector(sec, &mut sector)?;
+                self.read_fat_sector(dev, sec, &mut sector)?;
                 let idx = (offset % self.bytes_per_sector) as usize;
                 let val = (u32_at(&sector, idx) & 0x0FFF_FFFF) as u32;
                 if val >= 0x0FFF_FFF8 { None } else { Some(val) }
@@ -371,31 +396,43 @@ impl FatVolume {
         if e.is_dir {
             return Err("that is a folder");
         }
-        let (mut cluster, size) = (e.cluster, e.size);
+        let (mut cluster, size) = (e.cluster as u32, e.size as usize);
 
-        let mut data = Vec::with_capacity(size as usize);
-        let mut sector = [0u8; SECTOR_SIZE];
-        while data.len() < size as usize {
-            if cluster < 2 {
+        // Whole sectors, read run by run: consecutive clusters (the usual
+        // layout of a file written in one go) become one multi-sector read.
+        let total = size.div_ceil(SECTOR_SIZE);
+        let mut data = alloc::vec![0u8; total * SECTOR_SIZE];
+        let mut done = 0usize; // sectors read
+        let mut steps = 0u64;
+        while done < total {
+            if cluster < 2 || cluster as u64 >= self.cluster_count + 2 {
                 return Err("corrupt cluster chain");
             }
-            let first = self.cluster_to_sector(cluster);
-            for s in 0..self.sectors_per_cluster {
-                if data.len() >= size as usize {
-                    break;
-                }
-                dev.read_sector(first + s, &mut sector)?;
-                let remaining = size as usize - data.len();
-                data.extend_from_slice(&sector[..remaining.min(SECTOR_SIZE)]);
+            // extend the run while the chain continues in the next cluster
+            let start = cluster;
+            let mut run = 1u64;
+            let mut next = self.next_cluster(dev, cluster)?;
+            while (done as u64 + run * self.sectors_per_cluster) < total as u64 && next == Some(cluster + 1) && run < 64 {
+                cluster += 1;
+                run += 1;
+                next = self.next_cluster(dev, cluster)?;
             }
-            match self.next_cluster(dev, cluster)? {
-                Some(next) => cluster = next,
+            let n = ((run * self.sectors_per_cluster) as usize).min(total - done);
+            dev.read_sectors(self.cluster_to_sector(start), &mut data[done * SECTOR_SIZE..(done + n) * SECTOR_SIZE])?;
+            done += n;
+            steps += run;
+            if steps > self.cluster_count + 2 {
+                return Err("cluster chain loops");
+            }
+            match next {
+                Some(c) => cluster = c,
                 None => break,
             }
         }
-        if data.len() < size as usize {
+        if done < total {
             return Err("cluster chain ended early");
         }
+        data.truncate(size);
         Ok(data)
     }
 }
@@ -466,14 +503,14 @@ impl FatVolume {
     fn fat_get(&self, dev: &mut dyn BlockDevice, cluster: u32) -> Result<u32, &'static str> {
         let (sec, idx) = self.fat_pos(0, cluster);
         let mut s0 = [0u8; SECTOR_SIZE];
-        dev.read_sector(sec, &mut s0)?;
+        self.read_fat_sector(dev, sec, &mut s0)?;
         Ok(match self.kind {
             FatKind::Fat12 => {
                 let hi = if idx + 1 < SECTOR_SIZE {
                     s0[idx + 1] as u32
                 } else {
                     let mut s1 = [0u8; SECTOR_SIZE];
-                    dev.read_sector(sec + 1, &mut s1)?;
+                    self.read_fat_sector(dev, sec + 1, &mut s1)?;
                     s1[0] as u32
                 };
                 let raw = s0[idx] as u32 | (hi << 8);
@@ -486,6 +523,7 @@ impl FatVolume {
 
     /// Write `cluster`'s FAT entry into every FAT copy.
     fn fat_set(&self, dev: &mut dyn BlockDevice, cluster: u32, value: u32) -> Result<(), &'static str> {
+        self.drop_fat_cache();
         for copy in 0..self.num_fats {
             let (sec, idx) = self.fat_pos(copy, cluster);
             let mut s0 = [0u8; SECTOR_SIZE];

@@ -766,7 +766,11 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   (sebelumnya >3 menit); bagian kernel 0,2–1,5 s, sisanya firmware + loader emulasi. Image:
   log framebuffer loader BIOS dimatikan, kernel di image di-strip (4,5 → 3,0 MB), modul Limine
   ARM64/RISC-V dihapus. Langkah smoke `[fastboot]` menjaga anggaran (frame pertama ≤ 8 s
-  sejak kernel mulai). Berikutnya: hardware asli (Pi: firmware ~2–4 s sebelum kernel).
+  sejak kernel mulai). **Putaran 2:** kernel dibangun `opt-level = "s"` (3,07 → 1,46 MB; di TCG
+  kode boot sekali jalan → biaya utama = translasi), start AP dengan tunggu PIT kanal 2, VGA std
+  QEMU dialihkan ke 32 bpp (Bochs DISPI), IDE `rep insw` + READ MULTIPLE, baca FAT per run cluster +
+  cache sektor FAT, heap/framebuffer dipetakan per blok 2 MiB → desktop x86 ~4,4–5,2 s setelah
+  QEMU start (kernel ~0,14 s), ARM64 ~6,8 s (kernel ~0,12 s), RISC-V ~9,1 s (kernel ~0,24 s). Berikutnya: hardware asli (Pi: firmware ~2–4 s sebelum kernel).
 - **Status G3 (2026-11-04, langkah 2 ✓ — G3 selesai):** backend **GPU lewat virgl**
   (`virtio/virgl.rs`): bila virtio-gpu menawarkan 3D (QEMU `virtio-gpu-gl`), konteks render
   dibuat di GPU host — kernel tetap menjalankan vertex stage (hasil sama dengan software),

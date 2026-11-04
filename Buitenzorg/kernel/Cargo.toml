@@ -16,5 +16,15 @@ license = "MIT"
 panic = "abort"
 lto = true
 
+# The kernel is optimised for size: the x86-64 kernel goes from 3.07 MB to
+# 1.46 MB (stripped). Under QEMU that is ~2.5 s less boot -- the BIOS loader
+# reads the kernel through int 13h at ~1.2 s per MB -- and the kernel's own
+# part of the boot ran 2.4x faster (355 -> 145 ms to the first desktop frame):
+# most boot code runs once, so TCG spends its time translating code, and less
+# code is less to translate. "z" was 4 % smaller and no faster; size-optimised
+# dependencies saved 7 KB.
+[profile.release.package.bzkernel]
+opt-level = "s"
+
 [profile.dev]
 panic = "abort"

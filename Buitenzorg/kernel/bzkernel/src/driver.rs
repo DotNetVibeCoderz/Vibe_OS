@@ -12,6 +12,18 @@ pub trait BlockDevice: Send {
     fn sector_count(&self) -> u64;
     fn read_sector(&mut self, lba: u64, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), &'static str>;
 
+    /// Read `buf.len() / SECTOR_SIZE` consecutive sectors from `lba` (`buf`
+    /// is a whole number of sectors). Default: one `read_sector` each; a
+    /// driver with a multi-sector command overrides it.
+    fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+        let mut sector = [0u8; SECTOR_SIZE];
+        for (i, chunk) in buf.chunks_exact_mut(SECTOR_SIZE).enumerate() {
+            self.read_sector(lba + i as u64, &mut sector)?;
+            chunk.copy_from_slice(&sector);
+        }
+        Ok(())
+    }
+
     /// Write one sector. Default: read-only device.
     fn write_sector(&mut self, _lba: u64, _buf: &[u8; SECTOR_SIZE]) -> Result<(), &'static str> {
         Err("block device is read-only")

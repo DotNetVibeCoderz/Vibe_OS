@@ -22,13 +22,8 @@ static ALLOCATOR: LockedHeap = LockedHeap::empty();
 pub fn init() -> Result<(), &'static str> {
     const KERNEL_DATA: Flags = Flags { write: true, user: false, exec: false };
     memory::with_ctx(|ctx| {
-        let mut va = HEAP_START;
-        while va < HEAP_START + HEAP_SIZE {
-            let phys = ctx.frames.alloc().ok_or("out of frames for the kernel heap")?;
-            paging::map(&mut ctx.mapper, &mut ctx.frames, va, phys, KERNEL_DATA)?;
-            va += 4096;
-        }
-        Ok::<(), &'static str>(())
+        paging::map_fresh_range(&mut ctx.mapper, &mut ctx.frames, HEAP_START, HEAP_SIZE / 4096, KERNEL_DATA)
+            .map_err(|_| "out of frames for the kernel heap")
     })?;
 
     unsafe {

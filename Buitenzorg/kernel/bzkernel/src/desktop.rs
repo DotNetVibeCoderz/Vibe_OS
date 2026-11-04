@@ -46,12 +46,15 @@ pub fn run() -> ! {
     // The boot is over: fill the splash's bar and hand the screen over.
     crate::splash::finish();
     crate::ssh::autostart();
+    crate::boot::phase("ssh");
     ensure_session_windows();
+    crate::boot::phase("windows");
     // From here on a real user can type: shell-launched apps may block on input.
     interactive::set_active();
     // Start the session on a tidy desktop: drop the frozen windows the boot
     // demos left behind (their programs have exited).
     let tidied = wm::close_orphan_windows();
+    crate::boot::phase("tidy");
     println!("[desktop] tidied {} window(s) left by boot demos", tidied);
     let (w, h) = framebuffer::dimensions().unwrap_or((0, 0));
     // Lay the session out: the terminal on the left, the welcome card and the
@@ -83,6 +86,7 @@ pub fn run() -> ! {
         wm::focus_title("Terminal");
     }
     mouse::set_bounds(w, h);
+    crate::boot::phase("layout");
     let mut back: alloc::vec::Vec<u32> = alloc::vec![0u32; w * h];
     let mut last_packets = u64::MAX;
     let mut last_left = false;
@@ -96,7 +100,10 @@ pub fn run() -> ! {
     if w != 0 {
         wm::render_frame(&mut back, w, h);
     }
+    crate::boot::phase("first frame");
+    crate::boot::set_first_frame();
     let (since_kernel, since_power_on) = crate::boot::elapsed_ms();
+    println!("[boot] phases (ms): {}", crate::boot::phase_report());
     println!(
         "[boot] first desktop frame on screen {} ms after kernel start ({} ms after power-on, CPU counter: firmware + loader included)",
         since_kernel, since_power_on

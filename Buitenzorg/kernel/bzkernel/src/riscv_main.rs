@@ -1002,6 +1002,7 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
 /// The normal boot's second half, behind the desktop (no BKL; yields between
 /// steps).
 fn boot_background() {
+    crate::boot::wait_first_frame();
     let t0 = interrupts::ticks();
     let steps: [fn(); 3] = [
         || {

@@ -39,16 +39,16 @@ pub mod context {
 pub mod paging {
     #[cfg(target_arch = "x86_64")]
     pub use super::x86::paging::{
-        init, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE, KERNEL_HEAP_BASE, MMIO_BASE,
+        init, is_mapped, map, map_device, map_fresh_range, map_phys_range, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE, KERNEL_HEAP_BASE, MMIO_BASE,
     };
     #[cfg(target_arch = "aarch64")]
     pub use super::aarch64::paging::{
-        init, init_user_half, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
+        init, init_user_half, is_mapped, map, map_device, map_fresh_range, map_phys_range, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
         KERNEL_HEAP_BASE, MMIO_BASE,
     };
     #[cfg(target_arch = "riscv64")]
     pub use super::riscv64::paging::{
-        init, init_user_half, is_mapped, map, map_device, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
+        init, init_user_half, is_mapped, map, map_device, map_fresh_range, map_phys_range, protect, unmap, user_access, Flags, PageMap, ELF_MACHINE,
         KERNEL_HEAP_BASE, MMIO_BASE,
     };
 }

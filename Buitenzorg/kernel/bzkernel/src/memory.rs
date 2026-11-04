@@ -369,6 +369,22 @@ pub fn map_mmio(phys: u64, len: u64) -> Option<u64> {
     })
 }
 
+/// Map `len` bytes of physical memory at `phys` with ordinary (write-back)
+/// page attributes in the device window -- for a linear framebuffer, which
+/// the loader maps the same way (the firmware's MTRRs give VRAM its memory
+/// type). Mappings live forever.
+pub fn map_phys_normal(phys: u64, len: u64) -> Option<u64> {
+    let first = phys & !0xFFF;
+    let pages = ((phys + len.max(1) + 0xFFF) & !0xFFF).saturating_sub(first) / 4096;
+    let va = MMIO_NEXT.fetch_add(pages * 4096, Ordering::SeqCst);
+    if va + pages * 4096 > MMIO_WINDOW + MMIO_WINDOW_SIZE {
+        return None;
+    }
+    let f = Flags { write: true, user: false, exec: false };
+    with_ctx(|ctx| paging::map_phys_range(&mut ctx.mapper, &mut ctx.frames, va, first, pages, f).ok())?;
+    Some(va + (phys - first))
+}
+
 /// Physically contiguous zeroed DMA frames (`pages` of them), for buffers a
 /// device reads as one block. Taken from the allocator's fresh cursor, so they
 /// are contiguous unless a region boundary intervenes (then None).

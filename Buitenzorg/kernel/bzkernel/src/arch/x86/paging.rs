@@ -109,6 +109,69 @@ fn active() -> PageMap {
 /// Map the 4 KiB page at `va` to the frame at `pa`. Intermediate tables are
 /// created as needed; for user pages every level of the walk is opened to
 /// ring 3 (see [`make_user_path`]).
+/// Map `pages` consecutive kernel pages from `va` (page-aligned), each to a
+/// fresh frame. The first page of every 2 MiB block goes through `map` (which
+/// creates the intermediate tables); the block's other entries are written
+/// straight into that page table -- one walk per 512 pages instead of one per
+/// page (the 32 MiB kernel heap took ~0.1 s of boot page by page under QEMU).
+/// New mappings need no TLB flush: x86 does not cache non-present entries.
+pub fn map_fresh_range(pm: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pages: u64, f: Flags) -> Result<(), &'static str> {
+    map_range_with(pm, frames, va, pages, f, |fr, _| fr.alloc())
+}
+
+/// Map `pages` consecutive kernel pages from `va` to the physical range from
+/// `pa` (a linear framebuffer), with the same one-walk-per-2-MiB shortcut.
+pub fn map_phys_range(pm: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: u64, pages: u64, f: Flags) -> Result<(), &'static str> {
+    map_range_with(pm, frames, va, pages, f, |_, k| Some(pa + k * 4096))
+}
+
+/// `frame(frames, k)` gives the physical frame of page `k`.
+fn map_range_with(
+    pm: &mut PageMap,
+    frames: &mut BootInfoFrameAllocator,
+    va: u64,
+    pages: u64,
+    f: Flags,
+    mut frame: impl FnMut(&mut BootInfoFrameAllocator, u64) -> Option<u64>,
+) -> Result<(), &'static str> {
+    if va >= USER_TOP {
+        let flags = pte_flags(f);
+        let offset = pm.phys_offset().as_u64();
+        let end = va + pages * 4096;
+        let mut cur = va;
+        while cur < end {
+            let phys = frame(frames, (cur - va) / 4096).ok_or("out of frames")?;
+            map(pm, frames, cur, phys, f)?;
+            // the page table that maps `cur`, reached through the physical
+            // map (raw pointers from addresses, not from a shared reference)
+            let idx = |shift: u64| ((cur >> shift) & 0x1FF) as usize;
+            let mut tphys = pm.level_4_table() as *const PageTable as u64 - offset;
+            for shift in [39u64, 30, 21] {
+                let t = (offset + tphys) as *const PageTable;
+                tphys = unsafe { (&(*t))[idx(shift)].addr().as_u64() };
+            }
+            let pt = (offset + tphys) as *mut PageTable;
+            let block_end = ((cur & !0x1F_FFFF) + 0x20_0000).min(end);
+            let mut v = cur + 4096;
+            while v < block_end {
+                let phys = frame(frames, (v - va) / 4096).ok_or("out of frames")?;
+                unsafe {
+                    let table = &mut *pt;
+                    table[((v >> 12) & 0x1FF) as usize].set_addr(PhysAddr::new(phys), flags);
+                }
+                v += 4096;
+            }
+            cur = block_end;
+        }
+        return Ok(());
+    }
+    for k in 0..pages {
+        let phys = frame(frames, k).ok_or("out of frames")?;
+        map(pm, frames, va + k * 4096, phys, f)?;
+    }
+    Ok(())
+}
+
 pub fn map(map: &mut PageMap, frames: &mut BootInfoFrameAllocator, va: u64, pa: u64, f: Flags) -> Result<(), &'static str> {
     let mut local;
     let map = if va < USER_TOP {

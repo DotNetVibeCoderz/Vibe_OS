@@ -49,7 +49,11 @@ Hardening toward a stable x86-64 release.
   test program and self-test and goes straight to the desktop: under QEMU
   the desktop is on screen ~7-10 s after QEMU starts (it used to take more
   than 3 minutes), and the kernel's own part is 0.2-1.5 s -- the rest is
-  the emulated firmware and boot loader. The wallpaper, sound, network
+  the emulated firmware and boot loader. A second pass made the kernel
+  half its size (built for size: 3.1 -> 1.5 MB) and the PC desktop now
+  appears ~4.5 s after QEMU starts (kernel part ~0.14 s; ARM64 ~0.12 s,
+  RISC-V ~0.24 s), with faster disk reads (multi-sector IDE reads), a 32-bit
+  display mode on QEMU's standard VGA and quicker CPU start-up. The wallpaper, sound, network
   (DHCP), USB and accounts load in the background behind the desktop. The
   full test boot is still there for the smoke tests and CI (QEMU
   `-fw_cfg name=opt/buitenzorg/selftest,string=1`, or

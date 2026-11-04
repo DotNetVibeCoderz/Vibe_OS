@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ata, audio, mouse, pci, power, rtc, serial};
+pub(crate) use platform::pc::{ata, audio, bochs_vbe, mouse, pci, power, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -93,7 +93,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
         interactive::set_active();
     }
     if let Some(fb) = boot_info.framebuffer {
-        framebuffer::init(fb);
+        framebuffer::init_with(fb, selftest);
     }
 
     print!("{}", logo::BOOT_LOGO);
@@ -105,6 +105,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     gdt::enable_sse();
     interrupts::init();
     usermode::init();
+    boot::phase("gdt+idt");
     println!("[kernel] GDT/IDT loaded, PIC remapped, interrupts enabled, SYSCALL armed, SSE on");
 
     let mapper = unsafe { memory::init(boot_info.phys_offset) };
@@ -114,12 +115,15 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // the app launcher all map memory through it.
     memory::install_ctx(mapper, frame_allocator);
     memory::set_total_usable_mib(usable_mib as u64);
+    boot::phase("frames");
     println!("[kernel] physical memory: {} MiB usable", usable_mib);
 
     // Power management: parse ACPI from the loader-provided RSDP.
     power::init(boot_info.firmware.rsdp.unwrap_or(0));
+    boot::phase("acpi");
 
     allocator::init().expect("heap init failed");
+    boot::phase("heap");
     println!("[boot] {}", boot::describe(boot_info));
     // Route the legacy PIC's IRQs through the Local APIC (virtual wire). BIOS
     // firmware leaves it like this; UEFI firmware does not, and without it no
@@ -130,6 +134,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // A normal boot goes straight to the desktop; the demos and self-tests
     // below run only on the self-test boot (QEMU fw_cfg, see bootmode.rs).
     if !selftest {
+        boot::phase("lapic");
         fast_boot();
     }
     // Platform discovery without ACPI (multi-arch M1): the Device Tree parser.
@@ -250,13 +255,16 @@ fn fast_boot() -> ! {
     // ticks count from interrupts::init, right after kernel entry
     let ms = |t: u64| t * 1000 / 18;
     task::init();
-    let _ = pci::scan();
+    let devices = pci::scan();
+    framebuffer::upgrade_x86_display(&devices);
     let _ = ata::init() + virtio::init_block();
+    boot::phase("pci+disks");
     virtio::input::init();
     if let Some((w, h)) = framebuffer::dimensions() {
         virtio::gpu::init(w, h);
     }
     let _ = mouse::init();
+    boot::phase("input+gpu+mouse");
     if let Some(dev) = driver::take_boot_block_device() {
         if let Err(e) = vfs::mount("disk", dev, false) {
             println!("[vfs] mounting /disk failed: {}", e);
@@ -266,14 +274,17 @@ fn fast_boot() -> ! {
     if fat::format_fat12(ram.as_mut()).is_ok() {
         let _ = vfs::mount("ram", ram, false);
     }
+    boot::phase("mount");
     clock::load();
     let icons = icons::load();
+    boot::phase("icons");
     net::init([10, 0, 0, 1]);
     let t_dev = interrupts::ticks();
 
     aspace::init();
     smp::record_kernel_cr3();
     let (cpus, aps) = smp::init();
+    boot::phase("smp");
     let _ = ioapic::init();
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
     if let Some((w, h)) = framebuffer::dimensions() {
@@ -281,6 +292,7 @@ fn fast_boot() -> ! {
         mouse::set_bounds(w, h);
     }
     theme::set_default();
+    boot::phase("wm");
     // without the Big Kernel Lock: a kernel task holds it while it runs, and
     // the desktop's first frame waited ~3.5 s for this one (every subsystem it
     // touches has its own lock -- their syscalls run BKL-free too)
@@ -296,6 +308,7 @@ fn fast_boot() -> ! {
 
 /// Second half of the normal boot, after the desktop is up.
 fn boot_background() {
+    crate::boot::wait_first_frame();
     let t0 = interrupts::ticks();
     // kernel tasks are not preempted: yield between the steps, so the
     // desktop's compose helper (and anything else) gets this CPU in between
@@ -1406,6 +1419,7 @@ fn scheduler_demo() {
 fn batang_demo() {
     println!();
     let devices = pci::scan();
+    framebuffer::upgrade_x86_display(&devices);
     for dev in &devices {
         println!(
             "[pci] {:02x}:{:02x}.{} {:04x}:{:04x} class {:02x}.{:02x}.{:02x} {}",

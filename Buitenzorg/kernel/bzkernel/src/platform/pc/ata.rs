@@ -14,6 +14,8 @@ const STATUS_DRQ: u8 = 0x08;
 const STATUS_ERR: u8 = 0x01;
 
 const CMD_READ_SECTORS: u8 = 0x20;
+const CMD_READ_MULTIPLE: u8 = 0xC4;
+const CMD_SET_MULTIPLE: u8 = 0xC6;
 const CMD_WRITE_SECTORS: u8 = 0x30;
 const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
@@ -79,8 +81,9 @@ impl Channel {
         self.io_delay();
     }
 
-    /// IDENTIFY DEVICE; returns (model, sector count) for an ATA disk.
-    fn identify(&self, slave: bool) -> Option<(String, u64)> {
+    /// IDENTIFY DEVICE; returns (model, sector count, most sectors per READ
+    /// MULTIPLE block -- 0 = not supported) for an ATA disk.
+    fn identify(&self, slave: bool) -> Option<(String, u64, u8)> {
         unsafe {
             // Suppress device interrupts (nIEN): we poll.
             Port::<u8>::new(self.ctrl_base).write(0x02);
@@ -119,7 +122,56 @@ impl Channel {
             model.push((word >> 8) as u8 as char);
             model.push((word & 0xFF) as u8 as char);
         }
-        Some((String::from(model.trim()), sectors))
+        Some((String::from(model.trim()), sectors, (identify[47] & 0xFF) as u8))
+    }
+
+    /// SET MULTIPLE MODE: `count` sectors per DRQ block for READ MULTIPLE.
+    fn set_multiple(&self, slave: bool, count: u8) -> bool {
+        if self.wait_not_busy().is_err() {
+            return false;
+        }
+        self.select(slave, 0);
+        unsafe {
+            self.reg(2).write(count);
+            self.reg(7).write(CMD_SET_MULTIPLE);
+        }
+        self.io_delay();
+        matches!(self.wait_not_busy(), Ok(s) if s & STATUS_ERR == 0)
+    }
+
+    /// READ MULTIPLE: `count` (1..=256) sectors from `lba` into `buf`, in DRQ
+    /// blocks of `multi` sectors. Under QEMU each READ SECTORS sector is its
+    /// own block-layer request plus a polling round; a block of 16 is one.
+    fn read_multiple(&self, slave: bool, lba: u64, count: usize, multi: usize, buf: &mut [u8]) -> Result<(), &'static str> {
+        if lba + count as u64 > 1 << 28 {
+            return Err("LBA28 limit exceeded");
+        }
+        self.wait_not_busy()?;
+        self.select(slave, (lba >> 24) as u8);
+        unsafe {
+            self.reg(2).write(count as u8); // 0 = 256
+            self.reg(3).write(lba as u8);
+            self.reg(4).write((lba >> 8) as u8);
+            self.reg(5).write((lba >> 16) as u8);
+            self.reg(7).write(CMD_READ_MULTIPLE);
+        }
+        let mut done = 0;
+        while done < count {
+            let n = multi.min(count - done);
+            self.wait_data_request()?;
+            let dst = &mut buf[done * SECTOR_SIZE..(done + n) * SECTOR_SIZE];
+            unsafe {
+                core::arch::asm!(
+                    "rep insw",
+                    in("dx") self.io_base,
+                    inout("rdi") dst.as_mut_ptr() => _,
+                    inout("rcx") n * SECTOR_SIZE / 2 => _,
+                    options(nostack, preserves_flags)
+                );
+            }
+            done += n;
+        }
+        Ok(())
     }
 
     fn read_sector(&self, slave: bool, lba: u64, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), &'static str> {
@@ -136,10 +188,18 @@ impl Channel {
             self.reg(7).write(CMD_READ_SECTORS);
         }
         self.wait_data_request()?;
-        for chunk in buf.chunks_exact_mut(2) {
-            let word = unsafe { self.data().read() };
-            chunk[0] = word as u8;
-            chunk[1] = (word >> 8) as u8;
+        // The 256 data words with one `rep insw` (little-endian words land as
+        // the sector's bytes): under QEMU every separate port read is an exit
+        // to the device model, and a loop of 256 `in` instructions per sector
+        // made reading the icon pack take ~0.1 s of boot.
+        unsafe {
+            core::arch::asm!(
+                "rep insw",
+                in("dx") self.io_base,
+                inout("rdi") buf.as_mut_ptr() => _,
+                inout("rcx") SECTOR_SIZE / 2 => _,
+                options(nostack, preserves_flags)
+            );
         }
         Ok(())
     }
@@ -189,6 +249,8 @@ struct AtaDisk {
     slave: bool,
     model: String,
     sectors: u64,
+    /// Sectors per READ MULTIPLE block (0 = one READ SECTORS per sector).
+    multi: u8,
 }
 
 impl BlockDevice for AtaDisk {
@@ -209,6 +271,31 @@ impl BlockDevice for AtaDisk {
         self.channel.read_sector(self.slave, lba, buf)
     }
 
+    fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+        let total = buf.len() / SECTOR_SIZE;
+        if self.multi == 0 {
+            let mut sector = [0u8; SECTOR_SIZE];
+            for i in 0..total {
+                self.channel.read_sector(self.slave, lba + i as u64, &mut sector)?;
+                buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE].copy_from_slice(&sector);
+            }
+            return Ok(());
+        }
+        let mut done = 0;
+        while done < total {
+            let n = (total - done).min(256);
+            self.channel.read_multiple(
+                self.slave,
+                lba + done as u64,
+                n,
+                self.multi as usize,
+                &mut buf[done * SECTOR_SIZE..(done + n) * SECTOR_SIZE],
+            )?;
+            done += n;
+        }
+        Ok(())
+    }
+
     fn write_sector(&mut self, lba: u64, buf: &[u8; SECTOR_SIZE]) -> Result<(), &'static str> {
         if lba >= self.sectors {
             return Err("write past end of disk");
@@ -223,12 +310,17 @@ pub fn init() -> usize {
     for (io, ctrl) in [(0x1F0u16, 0x3F6u16), (0x170, 0x376)] {
         for slave in [false, true] {
             let channel = Channel::new(io, ctrl);
-            if let Some((model, sectors)) = channel.identify(slave) {
+            if let Some((model, sectors, max_multi)) = channel.identify(slave) {
+                // up to 16 sectors per DRQ block (QEMU's maximum), if the
+                // disk takes SET MULTIPLE MODE
+                let want = max_multi.min(16);
+                let multi = if want > 1 && channel.set_multiple(slave, want) { want } else { 0 };
                 driver::register_block_device(Box::new(AtaDisk {
                     channel: Channel::new(io, ctrl),
                     slave,
                     model,
                     sectors,
+                    multi,
                 }));
                 found += 1;
             }
