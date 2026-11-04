@@ -50,7 +50,7 @@
 - [x] Load kernel + page table + handoff (BootInfo)
 - [x] Boot dari NVMe / SATA-AHCI / IDE-PATA / USB (teruji QEMU)
 - [x] Boot logo ASCII Art
-- [ ] Boot manager multi-OS · [ ] boot hardware nyata
+- [ ] Boot manager multi-OS · [~] boot hardware nyata — *Raspberry Pi 4 fisik ✓; PC fisik belum diuji (QEMU `[realpc]` ✓, panduan `docs/install-hardware.md`)*
 
 ### ⚙️ Kernel Core
 - [x] Serial/VGA + framebuffer console + panic handler
@@ -67,7 +67,7 @@
 - [x] Storage IDE/PATA (PIO LBA28)
 - [x] Keyboard PS/2 + Mouse PS/2
 - [x] Framebuffer graphics + direct pixel
-- [ ] Driver NVMe/AHCI/USB native · [ ] Network e1000 · [ ] WiFi · [x] Audio (AC'97, v0.16) · [ ] virtio (net/blk/gpu)
+- [x] Driver NVMe/AHCI/USB native (polled; `/disk` di ketiganya, hanya volume berpenanda `BZDISK.ID`; smoke `[realpc]`) · [x] Network e1000 + DHCP · [ ] WiFi · [x] Audio (AC'97, v0.16) · [x] virtio (net/blk/gpu/input/snd)
 
 ### 🌉 Managed Runtime (C#)
 - [x] Port NativeAOT (via bflat + zerolib, freestanding)
@@ -99,7 +99,7 @@
 - [x] Multi-desktop / workspaces (4) + wallpaper per-desktop
 - [x] Dark/Light system theme (toggle)
 - [x] Terminal + shell (ls/dir, cat/type, cd, pwd, echo, mounts, clear/cls, ver, about, theme, ws, run, bz, settings/bg/saver/cursor/anim, ask, vm, script/js/ts/py, prof, shutdown/restart/sleep)
-- [ ] Notifikasi/action center · [ ] Settings app · [ ] Global search
+- [ ] Notifikasi/action center · [x] Settings app (Pengaturan, `msetting`) · [ ] Global search
 - [ ] Pipes/redirection/history/tab-completion · [ ] kompatibilitas `.sh` — *dijadwalkan di §Developer Workstation*
 
 ### 🧰 App Framework & SDK
@@ -190,7 +190,7 @@
 - [x] Desktop background: **file gambar milik user** (BMP 24-bit dari VFS, mis. `/disk/PHOTO.BMP`)
 - [x] Pilih screensaver · [x] pilih theme (8 tema + dark/light) · [x] kursor (normal/besar)
 - [x] Opsi: animasi on/off, rounded on/off
-- [ ] Display resolusi/scaling · [ ] simpan preferensi ke VFS (persist) · [ ] app GUI
+- [ ] Display resolusi/scaling · [~] simpan preferensi ke VFS (`REGION.CFG`, `USERS.CFG`, `SSHD.CFG`; tema/wallpaper belum) · [x] app GUI (Pengaturan)
 - [x] Milestone: **atur background/tema/saver/kursor** (`PERSONALIZE OK`)
 
 ### ✨ Micro-interactions (UI/UX)
@@ -387,8 +387,8 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] **Spawn + argv + wait dari ring 3 ✓ (2026-11-01)** — syscall `PROC_SPAWN`=40 / `PROC_WAIT`=41 / `PROC_ARGS`=42 (COUNT=43, kontrak Rust+C# + `docs/abi.md`); wait memblokir sungguhan (futex, dibangunkan saat proses keluar); `BzProcess.Start/WaitForExit/GetArgs`; shell `run <app> <arg..>`. Diverifikasi `proctest.cs`: induk men-spawn dirinya (via path `/disk/PROCTEST.ELF` + via nama app) dengan `child 7`/`child 42`, menunggu → exit 7 dan 42; wait pid tak dikenal ditolak → `MILESTONE: PROCCTL OK`
   - [x] **Multi-proses ring-3 preemptif ✓ (increment 1, 2026-11-01)** — beberapa app ring-3 jalan bersamaan, di-preempt timer, masing-masing di **address space sendiri** (`aspace.rs`: 2 page directory privat per proses untuk 2 GiB user, ditukar di PDPT saat switch); stack SYSCALL + **TSS rsp0** + **FXSAVE** per task; spawn/kill (`app::spawn_named`/`kill`); fault ring-3 (#PF/#GP) hanya mematikan app-nya (exit 0xDEAD), kernel tetap hidup; desktop + shell `run` meluncurkan app sebagai proses; `KEY_READ` mengikuti fokus window. Diverifikasi `mproc.cs` (3 salinan non-yield + 1 proses fault): memori di VA sama tetap privat, register SSE utuh, ≥10 preemption ring-3 nyata (36), 1 di-kill, 1 fault terisolasi → `MILESTONE: MULTIPROC OK`; **kontrol negatif**: tanpa preemption ring-3 tes GAGAL (`preemptions=0, concurrent=false`). Bonus: frame allocator O(n)→kursor, boot ke READY ~35 s → ~20 s (tick).
   - [x] **FS tulis persisten di `/disk` ✓ (2026-11-01)** — driver ATA kini `WRITE SECTORS` + `CACHE FLUSH`; penulisan FAT generik **FAT12/16/32** (alokasi cluster, semua salinan FAT, entri dir + stempel waktu RTC, rantai lama dibebaskan *setelah* entri baru ditulis, `delete_file`, `free_space`, FSInfo FAT32 di-invalidate); `/disk` di-mount **rw**; shell `echo > / >>`, `rm`, `df`; Editor menyimpan ke `/disk/NOTE.TXT`. **Bug laten diperbaiki:** penulis FAT12 lama menulis salinan FAT kedua *ke dalam root directory* `/ram` (offset dihitung dari `(data_start-fat_start)/2`), dan overwrite membocorkan rantai cluster lama. Diverifikasi: penghitung boot `BOOTCNT.TXT` naik 1→2 lintas reboot pada image yang sama; smoke test mencari byte yang ditulis kernel di dalam file image host; pemeriksa FAT independen (Python) → salinan FAT identik, 0 cluster bocor, tanpa cross-link → `MILESTONE: DISK WRITE OK` (IDE). Belum: FS journaled, subdirektori, nama panjang (LFN), AHCI/NVMe.
-  - [ ] Driver NIC (virtio-net → e1000) + TCP
-  - [ ] Kernel log ring buffer (`dmesg`) + log per-app
+  - [x] Driver NIC (virtio-net, e1000) + TCP (`tcp.rs`)
+  - [~] Kernel log ring buffer (`logring.rs`, log deploy, `/disk/BOOTLOG.TXT`) · [ ] `dmesg` + log per-app
 - **Terminal & Shell**
   - [ ] Line editing (kursor, Home/End, Ctrl+A/E/U/K/W) + history (↑/↓, persist) + tab-completion perintah/path
   - [ ] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`export`/`env`/`$PATH`/`$?`), alias, skrip `.bzsh` + `source`
@@ -428,8 +428,8 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [ ] Timer resolusi tinggi (APIC timer/HPET)
   - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [ ] driver Intel HDA · [ ] capture mic
   - [ ] Event keyboard tekan/lepas + status tombol (kini `KEY_READ` hanya karakter) · [ ] mouse relatif/capture
-  - [ ] Stack USB xHCI + HID (gamepad, keyboard/mouse USB) · [ ] UVC webcam · [ ] audio USB
-  - [ ] Storage AHCI/NVMe + FS tulis persisten untuk media & aset game
+  - [~] Stack USB xHCI + HID keyboard/mouse + mass storage ✓ · [ ] gamepad · [ ] UVC webcam · [ ] audio USB
+  - [x] Storage AHCI/NVMe/USB + FS tulis persisten untuk media & aset game
   - [ ] Float/SIMD di ring-3 teruji (SSE/AVX untuk decoder & 3D)
 - **Multimedia**
   - [ ] `Buitenzorg.Media`: pipeline demux→decode→render, jam media (A/V sync), `MediaPlayer`, media key
@@ -439,8 +439,8 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [ ] Video: MJPEG · container MP4/MKV/WebM · VP8/VP9/AV1 software · YUV→RGB SIMD · subtitle SRT · decode hardware
   - [ ] App: Media Player · Music Player + perpustakaan · Photo Viewer (slideshow/zoom) · Sound Recorder · Camera · screenshot/perekam layar · widget Now Playing + OSD volume
 - **Internet**
-  - [ ] Driver NIC: virtio-net → e1000 → Realtek · [ ] Wi-Fi (jangka panjang)
-  - [ ] TCP penuh · DHCP · DNS resolver · socket `STREAM` + `poll` · [ ] IPv6
+  - [~] Driver NIC: virtio-net ✓ → e1000 ✓ → [ ] Realtek · [ ] Wi-Fi (jangka panjang)
+  - [~] TCP ✓ (`tcp.rs`, dipakai SSH) · DHCP ✓ · [ ] DNS resolver · [ ] socket `STREAM` + `poll` untuk app · [ ] IPv6
   - [ ] Kripto + TLS 1.3/1.2: CSPRNG, SHA-2, AES-GCM, ChaCha20-Poly1305, X25519, RSA/ECDSA, store sertifikat root
   - [ ] `BzHttp` jadi klien nyata (HTTP/1.1 + HTTPS) · WebSocket · download manager
   - [ ] Browser: parser HTML5 · CSS (box model/flexbox/font) · layout + gambar · JS (subset ES + DOM di `script.rs`) · tab/bookmark/riwayat
@@ -451,10 +451,10 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [ ] Game bawaan: Minesweeper · Solitaire · Snake · Tetris-like · Breakout · platformer demo
   - [ ] Template game di SDK + MagicAppGen · binding game untuk JS/Python
 - **Game 3D**
-  - [ ] Rasterizer software `Buitenzorg.Graphics3D`: math vektor/matriks, perspektif, clipping, z-buffer, culling, texture mapping, shading, loader OBJ/glTF
+  - [x] Rasterizer software + `Buitenzorg.Graphics3D`: math vektor/matriks, perspektif, clipping, z-buffer, culling, texture mapping, shading, loader OBJ (G3) · [ ] loader glTF
   - [ ] Demo: raycaster gaya Wolfenstein · kubus bertekstur berputar
   - [x] **G1 langkah 1 — compositor cepat:** present per ubin 64 px berbasis hash (hanya ubin berubah ditulis), blit kanvas per baris + clipping, bayangan/badan jendela hanya area terlihat → frame desktop ×3,5 lebih murah (x86 TCG 786M → 223M siklus) · [x] **G1 langkah 2:** frame hanya-kursor (~2,9M vs ~150M siklus per gerakan pointer), cache lapisan ikon + taskbar (21M→4M, 31M→3M), hash ubin per kata 64-bit (present 135M→~75M) · [x] **G1 langkah 3:** cache glyph + blend tanpa pembagian + fill salinan blok (jendela 41M→32,5M, compose 55M→45,5M) · [x] **G1 langkah 4 (G1 selesai):** damage tracking (present frame tak berubah ~80M → ~0,13M), teks jendela lewat cache glyph (compose 45M → 34M), BLIT salinan baris, komposisi paralel dua pita (34M → 29,5M di TCG 2 vCPU) · [x] **G2:** virtio-gpu transfer per damage + kursor hardware (antrean kursor), kursor hardware firmware Pi 4 dengan fallback (uji board menunggu); resource/plane per jendela ditunda ke virgl/G3 dan pengambilalihan HVS · [x] **G3 langkah 1:** API 3D — rasterizer software kernel `gfx3d.rs` (syscall `GFX3D` 56: konteks + depth, mesh, tekstur perspektif-benar, Lambert/Phong per-vertex, kabut, clipping, blending, wireframe; fixed point, ketiga arsitektur → `MILESTONE: GFX3D OK`), `Buitenzorg.Graphics3D` + scene graph **`Buitenzorg.Three`** gaya ThreeNet, demo **Ruang 3D** (`mruang`, 12 cek di `MANAGED APPS OK`) · [x] **Optimasi boot:** boot normal langsung ke desktop (demo + self-test hanya di boot self-test lewat fw_cfg / `bz.selftest`), sisa init di `boot_background` tanpa BKL, kernel di-strip, log loader BIOS mati, modul Limine dihapus → desktop ~7–10 s di QEMU TCG (kernel 0,2–1,5 s), smoke `[fastboot]`; putaran 2: kernel `opt-level = "s"` (3,07 → 1,46 MB), PIT kanal 2 untuk start AP, VGA std 32 bpp, IDE READ MULTIPLE + baca FAT per run + cache sektor FAT, pemetaan per 2 MiB → desktop x86 ~4,5 s (kernel ~0,14 s), ARM64 kernel ~0,12 s, RISC-V ~0,24 s · [x] **G3 langkah 2 (G3 selesai):** backend **GPU virgl** (virtio-gpu 3D: vertex stage tetap di kernel, rasterisasi/depth/tekstur/blending di GPU host lewat shader TGSI; format dipilih dari capset; read-back saat present; `MILESTONE: GFX3D VIRGL OK` + Ruang 3D di GPU; `scripts/setup-virgl.ps1` + langkah smoke `[virgl]`), **V3D Pi 4** dinyalakan + diidentifikasi (`MILESTONE: RPI4 V3D OK` di board; render lewat V3D belum), **raycast/picking** + `Node.Updating`/`Scene.Update`, game **Panen Buah 3D** (`mbuah`, 10 cek), op `GFX3D INFO`, panduan `docs/graphics-3d.md` · referensi SDK 3D terkelola: ThreeNet (G3)
-  - [ ] GPU: virtio-gpu 2D → virgl 3D → API gaya Vulkan/WebGPU `Buitenzorg.GPU` (+ `compute.rs` `Backend::Gpu`) · [ ] driver GPU nyata (Intel dulu)
+  - [~] GPU: virtio-gpu 2D ✓ → virgl 3D ✓ → [ ] API gaya Vulkan/WebGPU `Buitenzorg.GPU` (+ `compute.rs` `Backend::Gpu`) · [ ] driver GPU nyata (Intel dulu)
   - [ ] Engine: scene graph · animasi skeletal · fisika rigid body · audio 3D posisional
   - [ ] Lapisan libc (musl/newlib) + subset SDL2 → **port DOOM**
 - **Hiburan & UX**

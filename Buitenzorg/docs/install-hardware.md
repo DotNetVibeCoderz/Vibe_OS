@@ -11,12 +11,13 @@ raw disk images you can write directly to a USB stick:
 
 **English** · [Bahasa Indonesia](install-hardware.id.md) · ← [Documentation index](README.md)
 
-> ⚠️ **Status:** the USB boot path is fully prepared (scripts + read-back
-> verification), but it has **not yet been verified on a physical machine** — so
-> far Buitenzorg is tested automatically in QEMU (4 media) and in VMware/
-> VirtualBox. Treat hardware boot as an **experiment**: use a machine and a USB
-> stick you can afford to lose, and read [Compatibility &
-> limitations](#-compatibility--limitations) below.
+> ⚠️ **Status:** ready for a first test on a physical PC, but **not yet verified
+> on one** (a Raspberry Pi 4 is: see [install-raspberry-pi.md](install-raspberry-pi.md)).
+> The smoke test boots a QEMU machine built to resemble a modern PC (`[realpc]`:
+> UEFI, no PS/2 controller, 2560x1440, booted from a USB stick on xHCI, an e1000,
+> and a second FAT disk that must stay untouched). Real firmware and chips differ,
+> so use a machine and a USB stick you can afford to lose. Buitenzorg writes only
+> to its own volume (the one with the file `BZDISK.ID`), never to other disks.
 
 ---
 
@@ -27,7 +28,7 @@ raw disk images you can write directly to a USB stick:
    .\scripts\build.ps1        # Windows   (Linux/macOS: ./scripts/build.sh)
    ```
    Afterwards `dist\buitenzorg-bios.img` and `dist\buitenzorg-uefi.img` exist.
-2. **A USB stick** whose contents can be erased (the image is tiny, ~5 MB — any
+2. **A USB stick** whose contents can be erased (the image is about 20 MB — any
    stick is big enough).
 3. **Pick the firmware** to match the target:
    - Older machine, or a *Legacy*/*CSM* option in the BIOS → use **bios**.
@@ -99,50 +100,43 @@ list the disks safely:
 3. Pick the USB entry:
    - the **uefi** image shows as **"UEFI: <USB name>"**,
    - the **bios** image shows as a plain USB (non-UEFI).
-4. Buitenzorg boots: ASCII logo → kernel log on screen → desktop.
+4. Buitenzorg boots straight to the desktop.
 
 If the USB doesn't appear in the boot menu: make sure **Secure Boot is OFF**, and
 for the bios image enable **Legacy/CSM**; for the uefi image ensure **UEFI** mode
 is active.
 
-## 4. Verify on physical hardware (please report)
+## 4. Check it on the machine, and report back
 
-Because hardware boot is not yet validated, note the following if you try it — it
-helps a lot toward marking it "tested":
+Go through these on the desktop, then send the results with the log file:
 
-- **Boot & framebuffer:** does the logo appear? Are the resolution and colors
-  right? The bootloader requests a linear framebuffer; some GPUs/monitors may
-  hand back a different mode.
-- **PS/2 vs USB input:** the Buitenzorg keyboard/mouse drivers are **PS/2**.
-  Modern laptops/PCs often only have **USB HID** (no USB driver yet) → input may
-  be dead even though boot succeeds. A PS/2 port or adapter, or the BIOS
-  **"USB Legacy / emulation"** option (which presents HID as PS/2), helps.
-- **Storage:** the disk driver is **IDE/SATA PIO (ATA)** only. The app suite is on
-  `/disk`, which needs it; native AHCI/NVMe are not implemented, so on an
-  NVMe-only machine `/disk` may be unreadable (the kernel still boots).
-- **Timer & interrupts:** legacy PIT + PIC 8259 (not APIC). Usually still
-  supported via legacy emulation on modern chipsets.
-- **ACPI shutdown:** the shell `shutdown` uses ACPI (the QEMU/VBox port fallback
-  does not apply on hardware) — report whether it actually powers off.
+1. **Desktop:** does it appear, with the right colours and the wallpaper? Are the
+   app icons there? (They come from the stick.)
+2. **Input:** do the USB keyboard and mouse work? Open the Terminal and type `ver`.
+3. **Storage:** in the Terminal, `ls /disk`. (`BOOTLOG.TXT` names the disk: `mounted /disk ... on`.)
+4. **Network:** with an Intel e1000-family card and a cable, `ipconfig`, then
+   `ping <router address>`.
+5. **Apps:** start Calculator and Notes from the Start menu; save a note and read
+   it back.
+6. **Power:** `restart`, then `shutdown`. Does the machine really turn off?
 
-The serial log is not automatically available on hardware as it is in QEMU; rely
-on the screen (all kernel logs are also printed to the framebuffer console).
+**The log:** every boot saves it as `BOOTLOG.TXT` on the stick. Read it on another
+computer (with the **bios** image the stick's FAT partition opens normally; with
+the **uefi** image it is the ESP). If the machine stops with a **PANIC** screen,
+take a photo of it: the panic is not in that file.
 
 ## 🧭 Compatibility & limitations
 
 | Area | Current support | Notes |
 |---|---|---|
 | Firmware | UEFI **and** legacy BIOS | Secure Boot must be OFF (unsigned) |
-| CPU | x86-64 | ARM64/RISC-V = v1.x "Rimba" |
-| Graphics | linear framebuffer from the bootloader | no GPU driver/acceleration |
-| Keyboard/Mouse | **PS/2** | no USB HID yet; use USB-legacy BIOS |
-| Storage | IDE/SATA **PIO (ATA)** | no native AHCI/NVMe/USB-MSD yet |
-| Interrupt/timer | PIC 8259 + PIT | no APIC yet (blocks SMP) |
-| Networking | loopback only | no NIC driver (e1000) yet |
-| SMP | single-core | no multi-core yet |
-
-All the "not yet" items are in the backlog in **[PLAN.md](../PLAN.md)** (Technical
-Debt) and tracked in **[Progress.md](../Progress.md)**.
+| CPU | x86-64, up to 16 cores used | ARM64: [Raspberry Pi 4](install-raspberry-pi.md); RISC-V under QEMU |
+| Graphics | the firmware's framebuffer | no GPU driver on PCs: drawn by the CPU. Tested up to 2560x1440; BIOS image 1280x720 |
+| Keyboard/mouse | USB (xHCI: HID boot protocol) and PS/2 | no USB 2.0-only (EHCI) controllers; **no hot-plug**: plug in before booting |
+| Storage | IDE, SATA (AHCI), NVMe, USB sticks on xHCI | 512-byte sectors; no RAID/Intel RST mode (set SATA to AHCI); a USB 3 hub is not supported |
+| Network | Intel e1000 family (82540, 82545, 82574, ...), virtio-net | **no** on-board Intel I217/I219, Realtek or Wi-Fi yet |
+| Sound | AC'97 and virtio-sound | **no** Intel HDA yet: most PCs stay silent |
+| File system | FAT12/16/32 | no journal: use `shutdown` |
 
 ## 🆘 Troubleshooting
 
@@ -152,8 +146,10 @@ Debt) and tracked in **[Progress.md](../Progress.md)**.
 - **Black screen after selecting the USB** → usually a firmware mismatch (you
   wrote the bios image but booted in UEFI mode, or vice versa) — write the
   matching image.
-- **Boots but the keyboard is dead** → see the PS/2 vs USB note above; enable
-  **USB Legacy** in the BIOS.
+- **Boots but the keyboard is dead** → plug it in before booting, into a port on
+  an xHCI controller (a blue USB 3 port is one; the log says `xHCI running`).
+- **Desktop without icons or wallpaper** → `/disk` was not found: see
+  `[usb]`/`[ahci]`/`[nvme]` lines. Controllers in RAID/RST mode are not supported.
 - **`flash-usb.ps1` says it needs Administrator** → open PowerShell via
   right-click → *Run as administrator*.
 - **`flash-usb.ps1` refuses the disk** → it isn't a USB/removable disk (or it is

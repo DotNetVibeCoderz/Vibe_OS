@@ -528,10 +528,10 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] UEFI init + masuk long mode (crate `bootloader` 0.11, teruji OVMF/QEMU)
 - [x] Legacy boot support (image BIOS/MBR, teruji QEMU)
 - [x] Load kernel + page table awal + handoff (BootInfo: memory map, framebuffer, phys-offset)
-- [x] Boot dari **NVMe** — *teruji QEMU (SeaBIOS + bootloader); hardware nyata belum*
-- [x] Boot dari **SATA/AHCI** — *teruji QEMU*
+- [x] Boot dari **NVMe** — *teruji QEMU; `/disk` lewat driver native; hardware nyata belum*
+- [x] Boot dari **SATA/AHCI** — *teruji QEMU; `/disk` lewat driver native*
 - [x] Boot dari **IDE/PATA** — *teruji QEMU*
-- [x] Boot dari **USB** — *teruji QEMU (usb-storage)*
+- [x] Boot dari **USB** — *teruji QEMU (usb-storage di xHCI, BIOS dan UEFI); `/disk` lewat driver native*
 - [ ] Boot manager (multi-OS)
 - [x] Boot logo ASCII Art 'Buitenzorg OS' yang keren
 
@@ -539,7 +539,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] Serial/VGA output + panic handler (COM1 + framebuffer console)
 - [x] Physical frame allocator
 - [x] Virtual memory / paging + heap (OffsetPageTable + heap 1 MiB)
-- [ ] IDT & interrupt + timer (APIC) — *IDT + exception + timer + keyboard jalan via PIC 8259; migrasi APIC belum*
+- [x] IDT & interrupt + timer (APIC) — *I/O APIC + LAPIC (2026-11-01)*
 - [x] Scheduler preemptive + context switch (round-robin single-core, preempt via timer IRQ; milestone "dua task bergantian" tercapai)
 - [x] **Multi-proses ring-3 preemptif ✓ (increment 1, 2026-11-01)** — beberapa app ring-3 jalan bersamaan, di-preempt timer, masing-masing di **address space sendiri** (`aspace.rs`: 2 page directory privat per proses untuk 2 GiB user, ditukar di PDPT saat switch); stack SYSCALL + **TSS rsp0** + **FXSAVE** per task; spawn/kill (`app::spawn_named`/`kill`); fault ring-3 (#PF/#GP) hanya mematikan app-nya (exit 0xDEAD), kernel tetap hidup; desktop + shell `run` meluncurkan app sebagai proses; `KEY_READ` mengikuti fokus window. Diverifikasi `mproc.cs` (3 salinan non-yield + 1 proses fault): memori di VA sama tetap privat, register SSE utuh, ≥10 preemption ring-3 nyata (36), 1 di-kill, 1 fault terisolasi → `MILESTONE: MULTIPROC OK`; **kontrol negatif**: tanpa preemption ring-3 tes GAGAL (`preemptions=0, concurrent=false`). Bonus: frame allocator O(n)→kursor, boot ke READY ~35 s → ~20 s (tick).
 - [x] Syscall ABI v1 — *tabel v1 + dispatcher + kontrak `bz-abi`↔C# + entry ring-3 SYSCALL/SYSRET (dipakai C# di ring 3)*
@@ -550,10 +550,10 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 
 ### 🔌 Drivers (v0.3, v0.11)
 - [ ] Driver framework (kernel-space & user-space terisolasi) — *registry block-device kernel-space + enumerasi PCI jalan; isolasi user-space belum*
-- [ ] Keyboard / mouse / touchpad — *keyboard PS/2 (IRQ1, echo) & mouse PS/2 (IRQ12, streaming) jalan; touchpad belum*
+- [~] Keyboard / mouse / touchpad — *PS/2, USB (xHCI HID) dan virtio-input jalan; touchpad belum*
 - [x] Framebuffer graphics (text console + font bitmap + direct pixel drawing, BGR/RGB/gray)
-- [ ] Storage: NVMe / SATA / IDE / USB — *IDE/PATA PIO LBA28 jalan (baca file FAT dari disk); NVMe/AHCI/USB driver belum*
-- [ ] Network (Ethernet)
+- [x] Storage: NVMe / SATA / IDE / USB — *driver native polled, `/disk` baca-tulis di semuanya; `/disk` hanya pada volume berpenanda `BZDISK.ID`*
+- [x] Network (Ethernet) — *virtio-net, Intel e1000, GENET Pi 4 + DHCP; Realtek/I219 belum*
 - [ ] WiFi
 - [~] Audio (in/out) — *AC'97 out ✓ (`audio.rs`: PCI enum + cold-reset + mixer + playback DMA 48 kHz stereo, ABI `AUDIO_*` + `Buitenzorg.Audio`); mic in / IRQ / Intel HDA belum*
 - [ ] **GPU driver** (framebuffer → 2D → 3D → compute)
@@ -601,7 +601,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] **Multi-desktop / workspaces** + wallpaper per-desktop — *4 workspace, window per-workspace, wallpaper bergeser per-desktop, switch teruji*
 - [x] **Dark/Light system theme** (auto/manual) — *design token dark & light, toggle via `theme` command/`toggle`, teruji*
 - [ ] Notifikasi & action center
-- [ ] Settings app
+- [x] Settings app — *Pengaturan (`msetting`)*
 - [ ] Global search
 - [x] **Default terminal emulator** (tab, split, truecolor, GPU-accel) — *terminal window + scrollback + line editing jalan; tab/split/GPU-accel belum*
 - [x] Shell + command populer (Unix + alias Windows) — *ls/dir, cat/type, cd, pwd, echo, clear/cls, ver/uname, mounts, theme, ws, bz*

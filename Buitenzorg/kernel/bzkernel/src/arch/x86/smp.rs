@@ -693,6 +693,7 @@ pub fn init() -> (u64, u64) {
         slot(core::ptr::addr_of!(ap_entry)).write_volatile(ap_main as *const () as u64);
     }
 
+    memory::prepare_mmio_window();
     let mut stacks: Vec<Vec<u8>> = Vec::new();
     for (cpu, &id) in order.iter().enumerate().skip(1) {
         if crate::aspace::create_ap_root(cpu).is_none() {

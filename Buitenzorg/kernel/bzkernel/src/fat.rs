@@ -19,6 +19,9 @@ enum FatKind {
     Fat32,
 }
 
+/// A file in the root of every Buitenzorg disk image.
+pub const DISK_MARKER: &str = "BZDISK.ID";
+
 pub struct FatVolume {
     partition_start: u64,
     bytes_per_sector: u64,
@@ -89,32 +92,71 @@ fn u32_at(buf: &[u8], off: usize) -> u64 {
 }
 
 impl FatVolume {
-    /// Mount `dev`: try every MBR partition, then LBA 0 as a superfloppy,
-    /// and accept the first sector that validates as a FAT VBR.
+    /// Mount `dev`: try every MBR or GPT partition, then LBA 0 as a
+    /// superfloppy. A FAT volume carrying [`DISK_MARKER`] wins; otherwise the
+    /// first sector that validates as a FAT VBR.
     pub fn mount(dev: &mut dyn BlockDevice) -> Result<Self, &'static str> {
+        let mut first = None;
+        for start in Self::partitions(dev)? {
+            if let Ok(vol) = Self::parse_vbr(dev, start) {
+                if vol.has_marker(dev) {
+                    return Ok(vol);
+                }
+                first.get_or_insert(vol);
+            }
+        }
+        first.ok_or("no FAT volume found on device")
+    }
+
+    /// Whether this is Buitenzorg's own volume. The kernel only ever mounts
+    /// such a volume as `/disk` (see `driver::boot_index`): on a real PC the
+    /// first FAT partition it finds is likely someone else's EFI system
+    /// partition, and `/disk` is written to at every boot.
+    pub fn has_marker(&self, dev: &mut dyn BlockDevice) -> bool {
+        self.lookup(dev, DISK_MARKER).is_ok()
+    }
+
+    /// Start LBAs to try: the MBR's partitions, a GPT's when the MBR is
+    /// protective, then 0 (superfloppy).
+    fn partitions(dev: &mut dyn BlockDevice) -> Result<Vec<u64>, &'static str> {
         let mut sector = [0u8; SECTOR_SIZE];
         dev.read_sector(0, &mut sector)?;
         if sector[510] != 0x55 || sector[511] != 0xAA {
             return Err("no boot signature in sector 0");
         }
-        let mut candidates = [0u64; 5];
-        let mut n = 0;
+        let mut out = Vec::new();
+        let mut gpt = false;
         for entry in 0..4 {
             let off = 0x1BE + entry * 16;
-            if sector[off + 4] != 0 {
-                candidates[n] = u32_at(&sector, off + 8);
-                n += 1;
+            match sector[off + 4] {
+                0 => {}
+                0xEE => gpt = true,
+                _ => out.push(u32_at(&sector, off + 8)),
             }
         }
-        candidates[n] = 0; // superfloppy fallback
-        n += 1;
-
-        for &start in &candidates[..n] {
-            if let Ok(vol) = Self::parse_vbr(dev, start) {
-                return Ok(vol);
+        if gpt {
+            dev.read_sector(1, &mut sector)?;
+            if &sector[..8] == b"EFI PART" {
+                let table = u64::from_le_bytes(sector[72..80].try_into().unwrap());
+                let count = u32_at(&sector, 80).min(128);
+                let size = u32_at(&sector, 84);
+                if size >= 128 && size as usize <= SECTOR_SIZE {
+                    let mut last = u64::MAX;
+                    for i in 0..count {
+                        let (lba, off) = (table + i * size / SECTOR_SIZE as u64, (i * size % SECTOR_SIZE as u64) as usize);
+                        if lba != last {
+                            dev.read_sector(lba, &mut sector)?;
+                            last = lba;
+                        }
+                        if sector[off..off + 16].iter().any(|&b| b != 0) {
+                            out.push(u64::from_le_bytes(sector[off + 32..off + 40].try_into().unwrap()));
+                        }
+                    }
+                }
             }
         }
-        Err("no FAT volume found on device")
+        out.push(0);
+        Ok(out)
     }
 
     fn parse_vbr(dev: &mut dyn BlockDevice, partition_start: u64) -> Result<Self, &'static str> {

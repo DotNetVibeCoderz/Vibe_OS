@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ata, audio, bochs_vbe, mouse, pci, power, rtc, serial};
+pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, mouse, nvme, pci, power, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -75,6 +75,7 @@ mod ssh;
 mod wm;
 mod gfx3d;
 mod bootmode;
+mod dhcp;
 
 use core::panic::PanicInfo;
 
@@ -98,7 +99,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
 
     print!("{}", logo::BOOT_LOGO);
     println!();
-    println!("[kernel] Hello Kernel -- Buitenzorg OS v0.1 'Benih'");
+    println!("[kernel] Hello Kernel -- Buitenzorg OS {}", shell::VERSION);
     println!("[kernel] MILESTONE: HELLO KERNEL OK");
 
     gdt::init();
@@ -140,7 +141,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // Platform discovery without ACPI (multi-arch M1): the Device Tree parser.
     dtb::self_test();
     heap_smoke_test();
-    println!("[kernel] paging + {} MiB kernel heap online", allocator::HEAP_SIZE / (1024 * 1024));
+    println!("[kernel] paging + {} MiB kernel heap online", allocator::heap_size() / (1024 * 1024));
     println!("[kernel] MILESTONE: MEMORY OK");
 
     syscall_smoke_test();
@@ -251,13 +252,25 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
 /// not need runs afterwards on a background kernel task (on another CPU when
 /// there is one): the wallpaper, sound, the network card, USB, the random
 /// seed file, accounts.
+/// Mount Buitenzorg's own volume as `/disk`, if a disk with one is registered.
+fn mount_disk_volume() -> bool {
+    let Some(dev) = driver::take_boot_block_device() else { return false };
+    match vfs::mount("disk", dev, false) {
+        Ok(()) => true,
+        Err(e) => {
+            println!("[vfs] mounting /disk failed: {}", e);
+            false
+        }
+    }
+}
+
 fn fast_boot() -> ! {
     // ticks count from interrupts::init, right after kernel entry
     let ms = |t: u64| t * 1000 / 18;
     task::init();
     let devices = pci::scan();
     framebuffer::upgrade_x86_display(&devices);
-    let _ = ata::init() + virtio::init_block();
+    let _ = ata::init() + ahci::init(&devices) + nvme::init(&devices) + virtio::init_block();
     boot::phase("pci+disks");
     virtio::input::init();
     if let Some((w, h)) = framebuffer::dimensions() {
@@ -265,11 +278,7 @@ fn fast_boot() -> ! {
     }
     let _ = mouse::init();
     boot::phase("input+gpu+mouse");
-    if let Some(dev) = driver::take_boot_block_device() {
-        if let Err(e) = vfs::mount("disk", dev, false) {
-            println!("[vfs] mounting /disk failed: {}", e);
-        }
-    }
+    mount_disk_volume();
     let mut ram = ramdisk::new("ram", 4096);
     if fat::format_fat12(ram.as_mut()).is_ok() {
         let _ = vfs::mount("ram", ram, false);
@@ -307,12 +316,47 @@ fn fast_boot() -> ! {
 }
 
 /// Second half of the normal boot, after the desktop is up.
+/// The network card (virtio-net or an e1000), with an address from DHCP.
+fn network_up() {
+    let (mut nic, name): (alloc::boxed::Box<dyn net::NetDevice>, &str) = if let Some(n) = virtio::net::probe() {
+        (alloc::boxed::Box::new(n), "virtio-net")
+    } else if let Some(n) = e1000::probe(&pci::scan()) {
+        (alloc::boxed::Box::new(n), "e1000")
+    } else {
+        return;
+    };
+    let Some(l) = dhcp::lease(nic.as_mut(), 6) else {
+        println!("[net] {}: no answer from a DHCP server; the network stays off", name);
+        return;
+    };
+    println!(
+        "[net] {}: DHCP {}.{}.{}.{}, router {}.{}.{}.{}",
+        name, l.ip[0], l.ip[1], l.ip[2], l.ip[3], l.router[0], l.router[1], l.router[2], l.router[3]
+    );
+    net::set_route(l.mask, l.router);
+    net::attach(nic, l.ip);
+    match net::ping_once(l.router, 1, 1000) {
+        Some(_) => println!("[kernel] MILESTONE: NIC OK ({}: DHCP + ping to the router)", name),
+        None => println!("[net] {}: the router does not answer a ping", name),
+    }
+}
+
 fn boot_background() {
     crate::boot::wait_first_frame();
     let t0 = interrupts::ticks();
     // kernel tasks are not preempted: yield between the steps, so the
     // desktop's compose helper (and anything else) gets this CPU in between
     let steps: [fn(); 6] = [
+        || {
+            // first: on a PC booted from a USB stick /disk lives there, and
+            // the wallpaper, icons and everything else come from /disk
+            usb::init_pci();
+            if !vfs::mounts().iter().any(|m| m == "/disk" || m == "disk") && mount_disk_volume() {
+                clock::load();
+                icons::load();
+                wm::present_now();
+            }
+        },
         || {
             if wallpaper::set_official("nature").is_ok() {
                 wm::present_now();
@@ -322,24 +366,31 @@ fn boot_background() {
             let _ = audio::init();
         },
         || {
-            usb::init_pci();
-        },
-        || {
-            if let Some(nic) = virtio::net::probe() {
-                net::attach(alloc::boxed::Box::new(nic), [10, 0, 2, 15]);
-            }
-        },
-        || {
             rng::init();
             users::load();
         },
         || model::seed(),
+        network_up, // last: without a DHCP server it takes seconds
     ];
-    for step in steps {
+    for (i, step) in steps.iter().enumerate() {
         task::yield_now();
         step();
+        if i == 0 {
+            save_boot_log(); // early too: a later step may be the one that hangs
+        }
     }
     println!("[boot] background start-up done in {} ms", (interrupts::ticks() - t0) * 1000 / 18);
+    save_boot_log();
+}
+
+/// The boot log, in `/disk/BOOTLOG.TXT`: a PC has no serial cable, and this way
+/// a boot on real hardware can be read back from the stick on another computer.
+fn save_boot_log() {
+    let mut log = alloc::vec![0u8; 16 * 1024];
+    let (n, _) = logring::read(0, &mut log);
+    if let Err(e) = vfs::write("/disk/BOOTLOG.TXT", &log[..n]) {
+        println!("[boot] could not save the boot log: {}", e);
+    }
 }
 
 /// Prevent the optimizer from deleting a spin loop by touching a volatile.
@@ -1431,9 +1482,9 @@ fn batang_demo() {
 
     // Legacy IDE first (it is the boot disk on the IDE media), then virtio-blk
     // (multi-arch M2: the disk interface every architecture shares).
-    let disks = ata::init() + virtio::init_block();
+    let disks = ata::init() + ahci::init(&devices) + nvme::init(&devices) + virtio::init_block();
     if disks == 0 {
-        println!("[kernel] storage: no IDE/ATA or virtio disk (boot media may be NVMe/AHCI/USB)");
+        println!("[kernel] storage: no IDE/SATA/NVMe or virtio disk (the boot medium may be USB)");
     } else {
         println!(
             "[kernel] driver framework: {} block device(s) online",
@@ -2012,7 +2063,9 @@ fn syscall_smoke_test() {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     splash::abort();
+    framebuffer::panic_mode();
     println!("\n[kernel] PANIC: {}", info);
+    println!("\nBuitenzorg OS berhenti karena kesalahan di atas. Foto layar ini untuk laporan.");
     loop {
         arch::cpu::halt();
     }

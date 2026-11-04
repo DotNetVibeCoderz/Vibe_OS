@@ -285,21 +285,26 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
     }
 }
 
+/// The OS version: one place, shown by `ver`, `about`, `bz version` and the
+/// boot log. A release candidate until v1.0 has booted on a physical PC.
+pub const VERSION: &str = "v1.0-rc1 'Buitenzorg'";
+
 fn version() -> String {
-    String::from("Buitenzorg OS v0.14 'Babel' -- Gravicode Studios (Kang Fadhil)")
+    format!("Buitenzorg OS {} -- Gravicode Studios (Kang Fadhil)", VERSION)
 }
 
 fn about() -> Vec<String> {
-    ["Buitenzorg OS",
+    let mut lines: Vec<String> = ["Buitenzorg OS",
      "  Sistem operasi hibrida & AI-native (kernel Rust, userland C#).",
      "  \"zonder zorg\" - tanpa kekhawatiran. Kebun Raya Bogor edition.",
      "",
      "  Dibuat oleh : Gravicode Studios",
-     "  Dipimpin oleh: Kang Fadhil",
-     "  Versi       : v0.14 'Babel'"]
+     "  Dipimpin oleh: Kang Fadhil"]
         .iter()
         .map(|s| String::from(*s))
-        .collect()
+        .collect();
+    lines.push(format!("  Versi       : {}", VERSION));
+    lines
 }
 
 fn help() -> Vec<String> {
@@ -962,7 +967,7 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
     match args.first().copied() {
         Some("theme") => theme_cmd(args.get(1).copied()),
         Some("ws") => ws_cmd(args.get(1).copied()),
-        Some("version") | None => (vec![String::from("bz 0.14.0 'Babel' - Buitenzorg CLI")], Effect::None),
+        Some("version") | None => (vec![format!("bz {} - Buitenzorg CLI", VERSION)], Effect::None),
         Some("list") | Some("search") => (pkg_list(args.get(1).copied()), Effect::None),
         Some("install") | Some("add") => (pkg_install(args.get(1).copied()), Effect::None),
         Some("remove") | Some("uninstall") => (pkg_remove(args.get(1).copied()), Effect::None),

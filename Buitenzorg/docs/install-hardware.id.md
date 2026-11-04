@@ -11,12 +11,13 @@ image mentah yang bisa langsung ditulis ke stik USB:
 
 [English](install-hardware.md) · **Bahasa Indonesia** · ← [Indeks dokumentasi](README.id.md)
 
-> ⚠️ **Status:** jalur boot USB ini disiapkan lengkap (skrip + verifikasi
-> baca-ulang), tetapi **belum diverifikasi di mesin fisik** — sejauh ini
-> Buitenzorg teruji otomatis di QEMU (4 media) dan di VMware/VirtualBox.
-> Perlakukan boot hardware sebagai **eksperimen**: pakai mesin dan stik USB yang
-> boleh Anda korbankan, dan baca [Kompatibilitas &
-> batasan](#-kompatibilitas--batasan) di bawah.
+> ⚠️ **Status:** siap untuk uji pertama di PC fisik, tetapi **belum diverifikasi di
+> sana** (Raspberry Pi 4 sudah: lihat [install-raspberry-pi.md](install-raspberry-pi.md)).
+> Smoke test mem-boot mesin QEMU yang dibuat mirip PC modern (`[realpc]`: UEFI, tanpa
+> kontroler PS/2, 2560x1440, boot dari flash disk di xHCI, e1000, dan disk FAT kedua
+> yang tidak boleh tersentuh). Firmware dan chip asli berbeda, jadi pakai mesin dan
+> flash disk yang boleh Anda korbankan. Buitenzorg hanya menulis ke volumenya sendiri
+> (yang berisi berkas `BZDISK.ID`), tidak pernah ke disk lain.
 
 ---
 
@@ -27,7 +28,7 @@ image mentah yang bisa langsung ditulis ke stik USB:
    .\scripts\build.ps1        # Windows   (Linux/macOS: ./scripts/build.sh)
    ```
    Setelahnya `dist\buitenzorg-bios.img` dan `dist\buitenzorg-uefi.img` ada.
-2. **Stik USB** yang isinya boleh dihapus (image kecil, ~5 MB — USB berapa pun cukup).
+2. **Stik USB** yang isinya boleh dihapus (image sekitar 20 MB — USB berapa pun cukup).
 3. **Pilih firmware** sesuai target:
    - Mesin lama, atau opsi *Legacy*/*CSM* di BIOS → pakai **bios**.
    - Mesin UEFI modern → pakai **uefi**, dan **matikan Secure Boot** (bootloader
@@ -102,43 +103,36 @@ menampilkan daftar disk dengan aman:
 Kalau USB tak muncul di boot menu: pastikan **Secure Boot OFF**, dan untuk image
 bios aktifkan **Legacy/CSM**; untuk image uefi pastikan mode **UEFI** aktif.
 
-## 4. Verifikasi di mesin fisik (mohon dilaporkan)
+## 4. Periksa di mesin, lalu laporkan
 
-Karena boot hardware belum tervalidasi, catat hal-hal ini bila Anda mencobanya —
-sangat membantu untuk menandainya "teruji":
+Lakukan ini di desktop, lalu kirim hasilnya bersama berkas log:
 
-- **Boot & framebuffer:** logo muncul? resolusi & warna benar? Bootloader meminta
-  framebuffer linear; sebagian GPU/monitor bisa memberi mode lain.
-- **Input PS/2 vs USB:** driver keyboard/mouse Buitenzorg saat ini **PS/2**.
-  Laptop/PC modern sering hanya punya **USB HID** (driver USB belum ada) → input
-  bisa mati walau boot sukses. Port PS/2 atau adaptor, atau opsi BIOS **"USB
-  Legacy / emulation"** (menyajikan HID sebagai PS/2), membantu.
-- **Penyimpanan:** driver disk hanya **IDE/SATA PIO (ATA)**. Suite app ada di
-  `/disk` yang butuh ini; AHCI/NVMe native belum ada, jadi di mesin NVMe-only
-  `/disk` mungkin tak terbaca (kernel tetap boot).
-- **Timer & interrupt:** PIT + PIC 8259 legacy (bukan APIC). Umumnya masih
-  didukung lewat legacy emulation di chipset modern.
-- **ACPI shutdown:** `shutdown` di shell memakai ACPI (fallback port QEMU/VBox
-  tak berlaku di hardware) — laporkan apakah benar-benar mematikan.
+1. **Desktop:** apakah tampil, dengan warna yang benar dan wallpaper? Apakah ikon app
+   ada? (Ikon dibaca dari flash disk.)
+2. **Input:** apakah keyboard dan mouse USB berfungsi? Buka Terminal dan ketik `ver`.
+3. **Penyimpanan:** di Terminal, `ls /disk`. (`BOOTLOG.TXT` menyebut disknya: `mounted /disk ... on`.)
+4. **Jaringan:** dengan kartu keluarga Intel e1000 dan kabel, `ipconfig`, lalu
+   `ping <alamat router>`.
+5. **App:** buka Kalkulator dan Catatan dari menu Mulai; simpan catatan dan baca lagi.
+6. **Daya:** `restart`, lalu `shutdown`. Apakah mesin benar-benar mati?
 
-Serial log tidak otomatis tersedia di hardware seperti di QEMU; andalkan layar
-(semua log kernel juga dicetak ke framebuffer console).
+**Log:** setiap boot menyimpannya sebagai `BOOTLOG.TXT` di flash disk. Baca di komputer
+lain (dengan image **bios**, partisi FAT flash disk terbuka biasa; dengan image **uefi**
+itu partisi ESP). Bila mesin berhenti dengan layar **PANIC**, foto layarnya: panic tidak
+masuk ke berkas itu.
 
 ## 🧭 Kompatibilitas & batasan
 
-| Area | Dukungan sekarang | Catatan |
+| Bidang | Dukungan saat ini | Catatan |
 |---|---|---|
-| Firmware | UEFI **dan** legacy BIOS | Secure Boot harus OFF (unsigned) |
-| CPU | x86-64 | ARM64/RISC-V = v1.x "Rimba" |
-| Grafis | framebuffer linear dari bootloader | tanpa driver GPU/akselerasi |
-| Keyboard/Mouse | **PS/2** | USB HID belum; pakai USB-legacy BIOS |
-| Storage | IDE/SATA **PIO (ATA)** | AHCI/NVMe/USB-MSD native belum |
-| Interrupt/timer | PIC 8259 + PIT | APIC belum (blok SMP) |
-| Jaringan | loopback saja | driver NIC (e1000) belum |
-| SMP | single-core | multi-core belum |
-
-Semua item "belum" ada di backlog **[PLAN.md](../PLAN.md)** (Utang Teknis) dan
-dilacak di **[Progress.md](../Progress.md)**.
+| Firmware | UEFI **dan** BIOS lama | Secure Boot harus OFF (belum ditandatangani) |
+| CPU | x86-64, hingga 16 core dipakai | ARM64: [Raspberry Pi 4](install-raspberry-pi.md); RISC-V di QEMU |
+| Grafis | framebuffer dari firmware | belum ada driver GPU di PC: digambar CPU. Teruji hingga 2560x1440; image BIOS 1280x720 |
+| Keyboard/mouse | USB (xHCI: HID boot protocol) dan PS/2 | kontroler khusus USB 2.0 (EHCI) belum; **tanpa hot-plug**: colok sebelum boot |
+| Penyimpanan | IDE, SATA (AHCI), NVMe, flash disk di xHCI | sektor 512 byte; mode RAID/Intel RST tidak didukung (set SATA ke AHCI); hub USB 3 belum |
+| Jaringan | keluarga Intel e1000 (82540, 82545, 82574, ...), virtio-net | Intel I217/I219 on-board, Realtek dan Wi-Fi **belum** |
+| Suara | AC'97 dan virtio-sound | Intel HDA **belum**: kebanyakan PC tetap senyap |
+| Sistem berkas | FAT12/16/32 | tanpa jurnal: gunakan `shutdown` |
 
 ## 🆘 Pemecahan masalah
 

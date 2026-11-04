@@ -153,7 +153,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     println!(
         "[kernel] physical memory: {} MiB usable; {} MiB kernel heap at {:#x} (TTBR1); user half root (TTBR0) at {:#x}",
         usable_mib,
-        allocator::HEAP_SIZE / (1024 * 1024),
+        allocator::heap_size() / (1024 * 1024),
         allocator::HEAP_START,
         user_root.unwrap_or(0)
     );
@@ -1238,7 +1238,9 @@ fn show_desktop() {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     splash::abort();
+    framebuffer::panic_mode();
     println!("\n[kernel] PANIC: {}", info);
+    println!("\nBuitenzorg OS berhenti karena kesalahan di atas. Foto layar ini untuk laporan.");
     loop {
         arch::cpu::halt();
     }

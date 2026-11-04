@@ -50,16 +50,24 @@ pub fn with_boot_block_device<R>(
     f: impl FnOnce(&mut dyn BlockDevice) -> R,
 ) -> Option<R> {
     let mut devices = BLOCK_DEVICES.lock();
-    devices.first_mut().map(|d| f(d.as_mut()))
+    let i = boot_index(&mut devices)?;
+    Some(f(devices[i].as_mut()))
+}
+
+/// The device holding Buitenzorg's own volume, by its marker file. Never just
+/// the first disk: on a real PC that is the owner's Windows or Linux disk, and
+/// `/disk` is written to at every boot.
+fn boot_index(devices: &mut [Box<dyn BlockDevice>]) -> Option<usize> {
+    devices.iter_mut().position(|d| {
+        let dev = d.as_mut();
+        crate::fat::FatVolume::mount(dev).is_ok_and(|v| v.has_marker(dev))
+    })
 }
 
 /// Remove and return the first registered block device (transfers ownership,
 /// e.g. to the VFS). Returns `None` if the registry is empty.
 pub fn take_boot_block_device() -> Option<Box<dyn BlockDevice>> {
     let mut devices = BLOCK_DEVICES.lock();
-    if devices.is_empty() {
-        None
-    } else {
-        Some(devices.remove(0))
-    }
+    let i = boot_index(&mut devices)?;
+    Some(devices.remove(i))
 }

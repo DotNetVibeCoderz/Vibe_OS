@@ -9,7 +9,7 @@
 > *Codename **Buitenzorg** — the old Dutch name for Bogor, "without worries"
 > (zonder zorg). Made by [Gravicode Studios](#credits), led by Kang Fadhil.*
 
-**`Status: v0.1–v0.16 complete` · `v1.0 stabilization in progress` · `License: MIT`**
+**`Status: v1.0-rc1` · `first boot on a physical PC pending` · `License: MIT`**
 
 New here? Start with the **[Tutorial](docs/tutorial.md)**. Full documentation
 index: **[docs/](docs/README.md)**. Release history: **[CHANGELOG](CHANGELOG.md)**.
@@ -72,7 +72,7 @@ USB)** via `MILESTONE: … OK` markers that the smoke test greps for.
 | v0.13–0.14 | Lapis → Babel | **Virtualization** (software VMM runs a guest OS + snapshots) · **polyglot runtime** (JS / TS / Python) |
 | v0.15 | Matang | **Managed C# runtime** — working heap + `Buitenzorg.Bcl` (collections, LINQ, System.IO/Text/Regex/Net/Tasks, …) |
 | v0.16 | Panen | **AC'97 audio** · `Buitenzorg.UI` toolkit · **8 preloaded apps** · desktop shell (start menu + tray clock) · JPEG decoder |
-| **v1.0** | Buitenzorg | *In progress* — security hardening, ABI freeze, GDB debugger + profiler, CI benchmark, USB/VM images, MIT license |
+| **v1.0** | Buitenzorg | *Release candidate* — security hardening, ABI freeze, GDB debugger + profiler, CI benchmark, USB/VM images, native AHCI/NVMe/USB storage + e1000, MIT license. Not yet booted on a physical PC ([how to test](docs/install-hardware.md)) |
 
 <details>
 <summary><b>Sample boot log</b> (serial output, click to expand)</summary>

@@ -45,6 +45,14 @@ Hardening toward a stable x86-64 release.
   app (Start menu > Permainan, `run mruang`) shows a small garden you can
   orbit with the mouse or arrow keys; shell `gfx3d` shows what 3D resources are
   in use. GPU backends (virgl, Raspberry Pi V3D) come later.
+- **Ready for a real PC (v1.0-rc1).** Buitenzorg now reads and writes its files
+  on SATA (AHCI), NVMe and USB sticks, so a PC can boot from a stick and have its
+  apps, icons and wallpaper. It only ever uses a disk with its own marker file, so
+  the other disks in the machine are left alone. Intel e1000 network cards work and
+  get an address by DHCP. Larger screens no longer run the kernel out of memory
+  (tested at 2560x1440). A kernel panic now stays on the screen, and each boot saves
+  its log as `BOOTLOG.TXT`. Tested on a QEMU machine built to resemble a modern PC;
+  a physical PC is still to come, see `docs/install-hardware.md`.
 - **Boots straight to the desktop.** A normal boot now skips every demo,
   test program and self-test and goes straight to the desktop: under QEMU
   the desktop is on screen ~7-10 s after QEMU starts (it used to take more

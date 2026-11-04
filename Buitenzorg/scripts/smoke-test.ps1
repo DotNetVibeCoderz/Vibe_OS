@@ -50,7 +50,7 @@ function Invoke-Boot {
         "nvme" { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
                    '-device', 'nvme,drive=bzdisk,serial=bz0001') }
         "usb"  { @('-drive', "id=bzdisk,format=raw,file=$image,if=none",
-                   '-usb', '-device', 'usb-storage,drive=bzdisk') }
+                   '-device', 'qemu-xhci,id=xhci', '-device', 'usb-storage,bus=xhci.0,drive=bzdisk') }
         # Multi-arch M2: the boot disk on virtio-blk (2 CPUs).
         # Multi-arch M2: the boot disk on virtio-blk, a virtio keyboard + tablet,
         # and a QEMU monitor to type/move through them once the desktop is up.
@@ -240,7 +240,9 @@ foreach ($media in @("ahci", "nvme", "usb")) {
             "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse")
         Write-Host "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
     }
-    Write-Host "smoke [$media]: boots to READY"
+    $on = @{ ahci = "ahci0"; nvme = "nvme0"; usb = "usb" }[$media]
+    Assert-Markers -Log $log -Markers @("mounted /disk (FAT16, rw) on $on")
+    Write-Host "smoke [$media]: boots to READY with /disk on $on"
 }
 
 # UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked —
@@ -266,6 +268,51 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
     Write-Host "smoke [uefi]: boots to READY on 2 CPUs"
 } else {
     Skip-Step "smoke [uefi]: skipped (OVMF not downloaded; run 'cargo run -p bzimage -- --run --uefi' once)"
+}
+
+# A modern PC, as closely as QEMU can: q35 without a PS/2 controller, UEFI, a
+# 2560x1440 screen, 4 CPUs, booted from a USB stick on xHCI with USB keyboard +
+# mouse and an e1000. The *normal* boot, the one real hardware gets. On AHCI
+# sits a stranger's FAT disk (no marker file), which must stay untouched: /disk
+# is written to at every boot, and it must never be someone's EFI partition.
+if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
+    $log = Join-Path $root "dist\boot-realpc.log"
+    $stick = Join-Path $root "dist\realpc-stick.img"
+    $other = Join-Path $root "dist\realpc-other.img"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    Copy-Item $uefiImage $stick -Force
+    $latin = [Text.Encoding]::GetEncoding(28591)
+    [IO.File]::WriteAllBytes($other, $latin.GetBytes($latin.GetString([IO.File]::ReadAllBytes($image)).Replace('BZDISK  ID ', 'XZDISK  ID ')))
+    $otherSum = (Get-FileHash $other).Hash
+    # writable variables: with read-only ones OVMF saves them in a file NvVars on
+    # the first FAT disk it finds, and this step is about what the *kernel* writes
+    $vars = Join-Path $root "dist\realpc-vars.fd"
+    Copy-Item (Join-Path $ovmf 'vars.fd') $vars -Force
+    $qargs = @('-M', 'q35,i8042=off', '-m', '2G', '-smp', '4',
+               '-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'code.fd')",
+               '-drive', "if=pflash,format=raw,file=$vars",
+               '-drive', "id=other,format=raw,file=$other,if=none", '-device', 'ahci,id=ahci0', '-device', 'ide-hd,drive=other,bus=ahci0.0',
+               '-drive', "id=stick,format=raw,file=$stick,if=none", '-device', 'qemu-xhci,id=xhci',
+               '-device', 'usb-storage,bus=xhci.0,drive=stick,bootindex=0', '-device', 'usb-kbd,bus=xhci.0', '-device', 'usb-mouse,bus=xhci.0',
+               '-netdev', 'user,id=n0', '-device', 'e1000,netdev=n0', '-device', 'VGA,xres=2560,yres=1440',
+               '-display', 'none', '-serial', "file:$log", '-no-reboot')
+    $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
+    foreach ($i in 1..280) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -SimpleMatch "background start-up done" -Quiet)) { break }
+    }
+    Start-Sleep -Seconds 2
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $p.WaitForExit() }
+    Assert-Markers -Log $log -Markers @("[boot] mode: normal", "framebuffer 2560x1440", "4 CPU(s) / 3 AP(s)", "1 keyboard(s), 1 mouse/mice, 1 disk(s)",
+        "mounted /disk (FAT16, rw) on usb", "MILESTONE: NIC OK (e1000", "[boot] background start-up done")
+    if (Select-String -Path $log -Pattern "PANIC|mounted /disk .* on ahci" -Quiet) { throw "SMOKE TEST FAILED (boot-realpc.log): panic, or /disk went to the other disk" }
+    if ((Get-FileHash $other).Hash -ne $otherSum) { throw "SMOKE TEST FAILED (boot-realpc.log): the other disk was written to" }
+    $stickText = $latin.GetString([IO.File]::ReadAllBytes($stick))
+    if (-not ($stickText.Contains("administrator") -and $stickText.Contains("[boot] mode: normal"))) { throw "SMOKE TEST FAILED (boot-realpc.log): the accounts or BOOTLOG.TXT did not reach the stick" }
+    Remove-Item $stick, $other, $vars -Force -Confirm:$false
+    Write-Host "smoke [realpc]: UEFI on q35 without PS/2, 2560x1440: /disk on a USB stick (rw), USB input, e1000 + DHCP, the other FAT disk untouched"
+} else {
+    Skip-Step "smoke [realpc]: skipped (OVMF not downloaded)"
 }
 
 # Limine boot (multi-arch M1): the same kernel through the Limine protocol,

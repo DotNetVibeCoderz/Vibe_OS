@@ -7,7 +7,8 @@
 //! root ports and behind USB 2.0 hubs (route strings; LS/FS devices behind a
 //! high-speed hub get the hub's Transaction Translator in their slot), and
 //! drive HID boot-protocol keyboards and mice through one interrupt-IN
-//! endpoint each (`super::hid`).
+//! endpoint each (`super::hid`), and USB mass storage (Bulk-Only Transport +
+//! SCSI: `msd_read` / `msd_write`, a `BlockDevice` in `super`).
 //!
 //! DMA: every structure the controller reads or writes is a 4 KiB frame from
 //! `memory::alloc_dma_frame`, addressed by its physical address (the bus
@@ -29,15 +30,25 @@ const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_ADDRESS_DEVICE: u32 = 11;
 const TRB_CONFIGURE_EP: u32 = 12;
 const TRB_EVALUATE_CTX: u32 = 13;
+const TRB_RESET_EP: u32 = 14;
+const TRB_SET_DEQUEUE: u32 = 16;
 const EV_TRANSFER: u32 = 32;
 const EV_COMMAND: u32 = 33;
 
 const IOC: u32 = 1 << 5;
 const IDT: u32 = 1 << 6;
 const ISP: u32 = 1 << 2;
+const CHAIN: u32 = 1 << 4;
 
 const CC_SUCCESS: u32 = 1;
+const CC_STALL: u32 = 6;
 const CC_SHORT: u32 = 13;
+
+/// A mass-storage command moves at most this many pages (64 KiB).
+const MSD_PAGES: usize = 16;
+const MSD_MAX_SECTORS: usize = MSD_PAGES * 4096 / 512;
+/// A stick may take seconds for a write (wear levelling) or its first read.
+const MSD_TIMEOUT_MS: u64 = 15_000;
 
 // PORTSC
 const PORT_CCS: u32 = 1 << 0;
@@ -166,7 +177,8 @@ impl Ring {
         self.idx += 1;
         if self.idx == RING_TRBS - 1 {
             let l = (RING_TRBS - 1) * 16;
-            self.page.w32(l + 12, (self.page.r32(l + 12) & !1) | self.cycle);
+            // the link TRB belongs to the TD when the TRB before it chains on
+            self.page.w32(l + 12, (self.page.r32(l + 12) & !(1 | CHAIN)) | (control & CHAIN) | self.cycle);
             self.page.sync(l, 16);
             self.idx = 0;
             self.cycle ^= 1;
@@ -231,6 +243,30 @@ struct Interrupt {
     state: u32,
 }
 
+/// A mass-storage interface: two bulk endpoints and the driver's DMA pages.
+struct Msd {
+    in_dci: u32,
+    out_dci: u32,
+    in_addr: u8,
+    out_addr: u8,
+    in_mps: u32,
+    out_mps: u32,
+    in_ring: Ring,
+    out_ring: Ring,
+    /// Command block at 0, status block at 64.
+    cmd: Page,
+    pages: Vec<Page>,
+    tag: u32,
+    sectors: u64,
+    label: alloc::string::String,
+}
+
+struct BulkEndpoints {
+    iface: u8,
+    in_ep: (u8, u32, u32),
+    out_ep: (u8, u32, u32),
+}
+
 struct Device {
     slot: u32,
     speed: u32,
@@ -244,6 +280,7 @@ struct Device {
     inp: Page,
     ep0: Ring,
     intr: Option<Interrupt>,
+    msd: Option<Msd>,
 }
 
 pub struct Xhci {
@@ -263,6 +300,7 @@ pub struct Xhci {
     pub keyboards: usize,
     pub mice: usize,
     pub hubs: usize,
+    pub disks: usize,
 }
 
 pub fn speed_name(s: u32) -> &'static str {
@@ -370,6 +408,7 @@ impl Xhci {
             keyboards: 0,
             mice: 0,
             hubs: 0,
+            disks: 0,
         })
     }
 
@@ -526,7 +565,7 @@ impl Xhci {
         self.command(inp.phys, (TRB_ADDRESS_DEVICE << 10) | (slot << 24))?;
         delay_ms(5);
         let di = self.devices.len();
-        self.devices.push(Device { slot, speed, route, root_port, depth, tt_slot, tt_port, mtt, out, inp, ep0, intr: None });
+        self.devices.push(Device { slot, speed, route, root_port, depth, tt_slot, tt_port, mtt, out, inp, ep0, intr: None, msd: None });
 
         // Device descriptor: the first 8 bytes give EP0's real packet size.
         self.control(di, 0x80, 6, 0x0100, 0, 8)?;
@@ -559,9 +598,12 @@ impl Xhci {
             self.hubs += 1;
             return self.setup_hub(di, label, protocol);
         }
-        // the first HID boot-protocol interface with an interrupt-IN endpoint
+        // the first HID boot-protocol interface with an interrupt-IN endpoint,
+        // or a mass-storage one (SCSI over Bulk-Only Transport) with two bulk ones
         let mut i = 0;
         let mut iface: Option<(u8, u8)> = None;
+        let mut storage: Option<u8> = None;
+        let (mut bulk_in, mut bulk_out) = (None, None);
         while i + 2 <= cfg.len() {
             let len = cfg[i] as usize;
             if len < 2 || i + len > cfg.len() {
@@ -574,8 +616,21 @@ impl Xhci {
                     } else {
                         None
                     };
+                    storage = (cfg[i + 5] == 8 && cfg[i + 6] == 6 && cfg[i + 7] == 0x50).then_some(cfg[i + 2]);
                 }
                 5 if len >= 7 => {
+                    if storage.is_some() && cfg[i + 3] & 3 == 2 {
+                        let mps = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]) as u32 & 0x7FF;
+                        // SuperSpeed: bMaxBurst in the companion descriptor that follows
+                        let next = i + len;
+                        let burst = if next + 3 <= cfg.len() && cfg[next + 1] == 0x30 { cfg[next + 2] as u32 } else { 0 };
+                        let ep = Some((cfg[i + 2], mps, burst));
+                        if cfg[i + 2] & 0x80 != 0 {
+                            bulk_in = bulk_in.or(ep);
+                        } else {
+                            bulk_out = bulk_out.or(ep);
+                        }
+                    }
                     if let Some((num, proto)) = iface {
                         let addr = cfg[i + 2];
                         if addr & 0x80 != 0 && cfg[i + 3] & 3 == 3 {
@@ -598,7 +653,236 @@ impl Xhci {
             }
             i += len;
         }
+        if let (Some(iface), Some(in_ep), Some(out_ep)) = (storage, bulk_in, bulk_out) {
+            crate::println!("[usb] {} port {}: {:04x}:{:04x} {} mass storage", self.name, label, vid, pid, speed_name(speed));
+            return self.setup_msd(di, label, BulkEndpoints { iface, in_ep, out_ep });
+        }
         crate::println!("[usb] {} port {}: {:04x}:{:04x} {} class {:#04x} (no driver)", self.name, label, vid, pid, speed_name(speed), class);
+        Ok(())
+    }
+
+    fn setup_msd(&mut self, di: usize, label: &str, eps: BulkEndpoints) -> Result<(), &'static str> {
+        let (in_addr, in_mps, in_burst) = eps.in_ep;
+        let (out_addr, out_mps, out_burst) = eps.out_ep;
+        if in_mps == 0 || out_mps == 0 {
+            return Err("mass storage: endpoint without a packet size");
+        }
+        let in_dci = (in_addr as u32 & 0xF) * 2 + 1;
+        let out_dci = (out_addr as u32 & 0xF) * 2;
+        let in_ring = Ring::new(self.limit)?;
+        let out_ring = Ring::new(self.limit)?;
+        let cmd = Page::new(self.limit)?;
+        let mut pages = Vec::with_capacity(MSD_PAGES);
+        for _ in 0..MSD_PAGES {
+            pages.push(Page::new(self.limit)?);
+        }
+        let s = self.csz;
+        let dev = &self.devices[di];
+        dev.inp.zero(0, 4096);
+        dev.inp.w32(4, 1 | (1 << in_dci) | (1 << out_dci));
+        dev.inp.w32(s, (in_dci.max(out_dci) << 27) | (dev.speed << 20) | if dev.mtt { 1 << 25 } else { 0 } | dev.route);
+        dev.inp.w32(s + 4, dev.root_port << 16);
+        dev.inp.w32(s + 8, (dev.tt_port << 8) | dev.tt_slot);
+        for (dci, mps, burst, ep_type, ring) in [(in_dci, in_mps, in_burst, 6u32, &in_ring), (out_dci, out_mps, out_burst, 2u32, &out_ring)] {
+            let e = (dci as usize + 1) * s;
+            dev.inp.w32(e + 4, (mps << 16) | (burst << 8) | (ep_type << 3) | (3 << 1));
+            dev.inp.w64(e + 8, ring.page.phys | 1);
+            dev.inp.w32(e + 16, 3072); // average TRB length of a bulk endpoint
+        }
+        dev.inp.sync(0, 4096);
+        let (p, slot) = (dev.inp.phys, dev.slot);
+        self.command(p, (TRB_CONFIGURE_EP << 10) | (slot << 24))?;
+        self.devices[di].msd = Some(Msd {
+            in_dci,
+            out_dci,
+            in_addr,
+            out_addr,
+            in_mps,
+            out_mps,
+            in_ring,
+            out_ring,
+            cmd,
+            pages,
+            tag: 1,
+            sectors: 0,
+            label: alloc::format!("usb{}", label),
+        });
+        let _ = eps.iface;
+        match self.msd_start(di) {
+            Ok(sectors) => {
+                crate::println!("[usb] {} port {}: disk of {} MiB", self.name, label, sectors / 2048);
+                self.disks += 1;
+                Ok(())
+            }
+            Err(e) => {
+                self.devices[di].msd = None;
+                Err(e)
+            }
+        }
+    }
+
+    /// INQUIRY, wait until the medium is ready, READ CAPACITY. Returns sectors.
+    fn msd_start(&mut self, di: usize) -> Result<u64, &'static str> {
+        self.msd_scsi(di, &[0x12, 0, 0, 0, 36, 0], 36, false)?; // INQUIRY
+        // a stick reports "not ready" for a moment after a reset
+        let t0 = now();
+        loop {
+            match self.msd_scsi(di, &[0, 0, 0, 0, 0, 0], 0, false) {
+                Ok(()) => break,
+                Err(e) if now() - t0 > ms_ticks(5000) => return Err(e),
+                Err(_) => {
+                    let _ = self.msd_scsi(di, &[0x03, 0, 0, 0, 18, 0], 18, false); // REQUEST SENSE
+                    delay_ms(50);
+                }
+            }
+        }
+        self.msd_scsi(di, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8, false)?; // READ CAPACITY (10)
+        let m = self.devices[di].msd.as_mut().ok_or("mass storage: gone")?;
+        m.pages[0].sync(0, 8);
+        let be = |o: usize| (0..4).fold(0u32, |a, k| a << 8 | m.pages[0].byte(o + k) as u32);
+        let (last, block) = (be(0), be(4));
+        if block != 512 {
+            return Err("mass storage: block size is not 512 bytes");
+        }
+        m.sectors = last as u64 + 1;
+        Ok(m.sectors)
+    }
+
+    /// Queue `bytes` of the driver's pages (IN or OUT) and wait for the end.
+    /// Returns the completion code.
+    fn msd_bulk(&mut self, di: usize, dir_in: bool, segs: &[(u64, u32)]) -> Result<u32, &'static str> {
+        let dev = &mut self.devices[di];
+        let slot = dev.slot;
+        let m = dev.msd.as_mut().ok_or("mass storage: gone")?;
+        let (dci, mps) = if dir_in { (m.in_dci, m.in_mps) } else { (m.out_dci, m.out_mps) };
+        let ring = if dir_in { &mut m.in_ring } else { &mut m.out_ring };
+        let mut left: u32 = segs.iter().map(|s| s.1).sum();
+        for (k, &(phys, len)) in segs.iter().enumerate() {
+            left -= len;
+            let last = k + 1 == segs.len();
+            // TD Size: packets still to come after this TRB
+            let td = if last { 0 } else { left.div_ceil(mps).min(31) };
+            let flags = if last { IOC | ISP } else { CHAIN };
+            ring.push(phys, len | (td << 17), (TRB_NORMAL << 10) | flags);
+        }
+        self.doorbell(slot, dci);
+        let ev = self
+            .wait_event(MSD_TIMEOUT_MS, |e| trb_type(e) == EV_TRANSFER && e[3] >> 24 == slot && (e[3] >> 16) & 0x1F == dci)
+            .ok_or("mass storage: transfer timed out")?;
+        Ok(completion(&ev))
+    }
+
+    /// A stalled bulk endpoint: reset it in the controller, skip the failed
+    /// transfer, clear the halt in the device.
+    fn msd_clear_stall(&mut self, di: usize, dir_in: bool) -> Result<(), &'static str> {
+        let dev = &self.devices[di];
+        let slot = dev.slot;
+        let m = dev.msd.as_ref().ok_or("mass storage: gone")?;
+        let (dci, addr) = if dir_in { (m.in_dci, m.in_addr) } else { (m.out_dci, m.out_addr) };
+        let ring = if dir_in { &m.in_ring } else { &m.out_ring };
+        let deq = (ring.page.phys + (ring.idx * 16) as u64) | ring.cycle as u64;
+        self.command(0, (TRB_RESET_EP << 10) | (dci << 16) | (slot << 24))?;
+        self.command(deq, (TRB_SET_DEQUEUE << 10) | (dci << 16) | (slot << 24))?;
+        self.control(di, 0x02, 1, 0, addr as u16, 0)?; // CLEAR_FEATURE(ENDPOINT_HALT)
+        Ok(())
+    }
+
+    /// One SCSI command: command block, `bytes` of data in the driver's pages
+    /// (host to device if `write`), status block.
+    fn msd_scsi(&mut self, di: usize, cdb: &[u8], bytes: usize, write: bool) -> Result<(), &'static str> {
+        let m = self.devices[di].msd.as_mut().ok_or("mass storage: gone")?;
+        m.tag = m.tag.wrapping_add(1);
+        let tag = m.tag;
+        let c = &m.cmd;
+        c.zero(0, 128);
+        c.w32(0, 0x4342_5355); // "USBC"
+        c.w32(4, tag);
+        c.w32(8, bytes as u32);
+        c.w32(12, if write || bytes == 0 { 0 } else { 0x80 } | (cdb.len() as u32) << 16);
+        for (k, b) in cdb.iter().enumerate() {
+            unsafe { c.va.add(15 + k).write_volatile(*b) };
+        }
+        c.sync(0, 128);
+        let cmd_phys = c.phys;
+        let mut segs = [(0u64, 0u32); MSD_PAGES];
+        let mut left = bytes;
+        let mut n = 0;
+        while left > 0 {
+            let len = left.min(4096);
+            segs[n] = (m.pages[n].phys, len as u32);
+            m.pages[n].sync(0, len);
+            left -= len;
+            n += 1;
+        }
+        if self.msd_bulk(di, false, &[(cmd_phys, 31)])? != CC_SUCCESS {
+            return Err("mass storage: command block refused");
+        }
+        if n > 0 {
+            match self.msd_bulk(di, !write, &segs[..n])? {
+                CC_SUCCESS | CC_SHORT => {}
+                CC_STALL => self.msd_clear_stall(di, !write)?, // the status block says why
+                _ => return Err("mass storage: data transfer failed"),
+            }
+        }
+        let status_seg = [(cmd_phys + 64, 13u32)];
+        match self.msd_bulk(di, true, &status_seg)? {
+            CC_SUCCESS | CC_SHORT => {}
+            CC_STALL => {
+                self.msd_clear_stall(di, true)?;
+                if self.msd_bulk(di, true, &status_seg)? != CC_SUCCESS {
+                    return Err("mass storage: no status block");
+                }
+            }
+            _ => return Err("mass storage: status transfer failed"),
+        }
+        let m = self.devices[di].msd.as_ref().ok_or("mass storage: gone")?;
+        m.cmd.sync(64, 13);
+        if m.cmd.r32(64) != 0x5342_5355 || m.cmd.r32(68) != tag {
+            return Err("mass storage: bad status block");
+        }
+        if n > 0 && !write {
+            for (k, s) in segs[..n].iter().enumerate() {
+                m.pages[k].sync(0, s.1 as usize);
+            }
+        }
+        match m.cmd.byte(76) {
+            0 => Ok(()),
+            1 => Err("mass storage: command failed"),
+            _ => Err("mass storage: phase error"),
+        }
+    }
+
+    /// (device index, sectors, name) of every mass-storage device.
+    pub fn disks_found(&self) -> Vec<(usize, u64, alloc::string::String)> {
+        self.devices.iter().enumerate().filter_map(|(i, d)| d.msd.as_ref().map(|m| (i, m.sectors, m.label.clone()))).collect()
+    }
+
+    /// Read whole sectors from device `di`.
+    pub fn msd_read(&mut self, di: usize, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+        let total = buf.len() / 512;
+        let mut done = 0;
+        while done < total {
+            let n = (total - done).min(MSD_MAX_SECTORS);
+            let at = (lba + done as u64) as u32;
+            let (a, c) = (at.to_be_bytes(), (n as u16).to_be_bytes());
+            self.msd_scsi(di, &[0x28, 0, a[0], a[1], a[2], a[3], 0, c[0], c[1], 0], n * 512, false)?;
+            let m = self.devices[di].msd.as_ref().ok_or("mass storage: gone")?;
+            for (k, chunk) in buf[done * 512..(done + n) * 512].chunks_mut(4096).enumerate() {
+                unsafe { core::ptr::copy_nonoverlapping(m.pages[k].va, chunk.as_mut_ptr(), chunk.len()) };
+            }
+            done += n;
+        }
+        Ok(())
+    }
+
+    /// Write one sector to device `di` and flush it to the medium.
+    pub fn msd_write(&mut self, di: usize, lba: u64, buf: &[u8]) -> Result<(), &'static str> {
+        let m = self.devices[di].msd.as_ref().ok_or("mass storage: gone")?;
+        unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), m.pages[0].va, 512) };
+        let a = (lba as u32).to_be_bytes();
+        self.msd_scsi(di, &[0x2A, 0, a[0], a[1], a[2], a[3], 0, 0, 1, 0], 512, true)?;
+        // SYNCHRONIZE CACHE: not every stick implements it
+        let _ = self.msd_scsi(di, &[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false);
         Ok(())
     }
 

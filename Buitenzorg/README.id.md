@@ -10,7 +10,7 @@
 > (zonder zorg). Dibuat oleh [Gravicode Studios](#kredit), dipimpin oleh Kang
 > Fadhil.*
 
-**`Status: v0.1–v0.16 selesai` · `stabilisasi v1.0 berjalan` · `Lisensi: MIT`**
+**`Status: v1.0-rc1` · `boot pertama di PC fisik belum` · `Lisensi: MIT`**
 
 Baru mulai? Mulai dari **[Tutorial](docs/tutorial.id.md)**. Indeks dokumentasi
 lengkap: **[docs/](docs/README.id.md)**. Riwayat rilis: **[CHANGELOG](CHANGELOG.md)** *(EN)*.
@@ -72,7 +72,7 @@ NVMe / USB)** lewat marker `MILESTONE: … OK` yang dicek smoke test.
 | v0.13–0.14 | Lapis → Babel | **Virtualisasi** (VMM software menjalankan guest OS + snapshot) · **runtime polyglot** (JS / TS / Python) |
 | v0.15 | Matang | **Managed runtime C#** — heap berfungsi + `Buitenzorg.Bcl` (koleksi, LINQ, System.IO/Text/Regex/Net/Tasks, …) |
 | v0.16 | Panen | **Audio AC'97** · toolkit `Buitenzorg.UI` · **8 app bawaan** · desktop shell (start menu + jam tray) · decoder JPEG |
-| **v1.0** | Buitenzorg | *Berjalan* — security hardening, pembekuan ABI, debugger GDB + profiler, benchmark CI, image USB/VM, lisensi MIT |
+| **v1.0** | Buitenzorg | *Kandidat rilis* — security hardening, pembekuan ABI, debugger GDB + profiler, benchmark CI, image USB/VM, penyimpanan native AHCI/NVMe/USB + e1000, lisensi MIT. Belum di-boot di PC fisik ([cara uji](docs/install-hardware.id.md)) |
 
 <details>
 <summary><b>Contoh boot log</b> (output serial, klik untuk buka)</summary>

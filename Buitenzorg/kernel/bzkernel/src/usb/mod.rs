@@ -1,5 +1,5 @@
 //! USB (roadmap R4): xHCI host controllers, USB 2.0 hubs and HID boot-protocol
-//! keyboards and mice, in generic code. A PC finds its controllers on PCI
+//! keyboards and mice and mass storage, in generic code. A PC finds its controllers on PCI
 //! (`init_pci`); a Raspberry Pi 4 brings up its PCIe root complex and the
 //! VL805 behind it first (`platform::virt::brcm_pcie`), then calls
 //! `add_controller`. The desktop loop calls `poll`.
@@ -7,7 +7,7 @@
 pub mod hid;
 pub mod xhci;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
@@ -23,21 +23,68 @@ pub fn add_controller(mmio: u64, dma_limit: u64, name: &'static str) -> Result<(
     let mut c = xhci::Xhci::new(mmio, dma_limit, name)?;
     crate::println!("[usb] {}: xHCI running, {} ports", name, c.ports());
     c.scan();
-    let (k, m, h, n) = (c.keyboards, c.mice, c.hubs, c.device_count());
+    let (k, m, h, n, d) = (c.keyboards, c.mice, c.hubs, c.device_count(), c.disks);
     if n > 0 {
         crate::println!(
-            "[kernel] MILESTONE: USB OK ({}: xHCI, {} device(s): {} hub(s), {} keyboard(s), {} mouse/mice; HID boot protocol)",
+            "[kernel] MILESTONE: USB OK ({}: xHCI, {} device(s): {} hub(s), {} keyboard(s), {} mouse/mice, {} disk(s); HID boot protocol)",
             name,
             n,
             h,
             k,
-            m
+            m,
+            d
         );
     } else {
         crate::println!("[usb] {}: no devices connected", name);
     }
-    CONTROLLERS.lock().push(c);
+    let disks = c.disks_found();
+    let controller = {
+        let mut list = CONTROLLERS.lock();
+        list.push(c);
+        list.len() - 1
+    };
+    for (device, sectors, name) in disks {
+        crate::driver::register_block_device(Box::new(UsbDisk { controller, device, sectors, name }));
+    }
     Ok((k, m))
+}
+
+/// A USB stick or disk. `/disk` can live here (a PC booted from a stick), so
+/// file operations reach the controller while the desktop polls it for input:
+/// `poll` only try_locks, and this lock is held for one command.
+struct UsbDisk {
+    controller: usize,
+    device: usize,
+    sectors: u64,
+    name: String,
+}
+
+impl crate::driver::BlockDevice for UsbDisk {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn sector_count(&self) -> u64 {
+        self.sectors
+    }
+
+    fn read_sector(&mut self, lba: u64, buf: &mut [u8; crate::driver::SECTOR_SIZE]) -> Result<(), &'static str> {
+        self.read_sectors(lba, buf)
+    }
+
+    fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+        if lba + (buf.len() / crate::driver::SECTOR_SIZE) as u64 > self.sectors {
+            return Err("USB disk: read past the end");
+        }
+        CONTROLLERS.lock()[self.controller].msd_read(self.device, lba, buf)
+    }
+
+    fn write_sector(&mut self, lba: u64, buf: &[u8; crate::driver::SECTOR_SIZE]) -> Result<(), &'static str> {
+        if lba >= self.sectors {
+            return Err("USB disk: write past the end");
+        }
+        CONTROLLERS.lock()[self.controller].msd_write(self.device, lba, buf)
+    }
 }
 
 /// Every xHCI controller on PCI (class 0C/03, interface 30).

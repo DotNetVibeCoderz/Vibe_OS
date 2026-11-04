@@ -270,6 +270,9 @@ impl Console {
     /// holds just those rows (the boot splash's bar: a full frame through the
     /// byte-wise path takes seconds under emulation).
     fn present_rows(&mut self, back: &[u32], y0: usize, y1: usize) {
+        if PANICKED.load(core::sync::atomic::Ordering::SeqCst) {
+            return; // the panic stays on the screen
+        }
         let info = self.fb.info();
         let bpp = info.bytes_per_pixel;
         let (w, h) = (info.width, info.height);
@@ -407,6 +410,26 @@ impl Console {
 
 pub static CONSOLE: Once<Mutex<Console>> = Once::new();
 
+static PANICKED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The kernel panicked: from now on the console owns the screen again, on a
+/// clean background, and frames still being presented by other CPUs are
+/// dropped. Without this a panic after the desktop came up went to serial only:
+/// on a real PC, a frozen desktop and no explanation. Must not allocate or
+/// wait: the panic may have happened while holding any lock.
+pub fn panic_mode() {
+    if PANICKED.swap(true, core::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Some(c) = CONSOLE.get() {
+        unsafe { c.force_unlock() };
+        let mut g = c.lock();
+        let fb = unsafe { FrameBuffer::new(g.info()) };
+        // the old console's tile hashes stay allocated: the heap may be locked
+        core::mem::forget(core::mem::replace(&mut *g, Console::new(fb)));
+    }
+}
+
 pub fn init(info: FbInfo) {
     init_with(info, true);
 }
@@ -533,7 +556,7 @@ pub fn _print(args: fmt::Arguments) {
     // Once the interactive desktop owns the framebuffer, kernel log lines go
     // to serial only: drawing them here scrolled the whole desktop up (the
     // console scrolls the framebuffer) and left log text under the taskbar.
-    if crate::interactive::is_active() {
+    if crate::interactive::is_active() && !PANICKED.load(core::sync::atomic::Ordering::SeqCst) {
         return;
     }
     // Under the boot splash the log feeds its status line instead.

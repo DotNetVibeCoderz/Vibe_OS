@@ -352,6 +352,21 @@ const MMIO_WINDOW: u64 = crate::arch::paging::MMIO_BASE;
 const MMIO_WINDOW_SIZE: u64 = 1 << 32;
 static MMIO_NEXT: AtomicU64 = AtomicU64::new(MMIO_WINDOW);
 
+/// Make sure the top-level page-table entry of the device window exists. x86
+/// secondary CPUs copy the top level once, when they start: a window created
+/// after that would be mapped on the boot CPU only, and the first device
+/// register touched from another CPU would fault (the background start-up runs
+/// on any CPU; on a PC with xHCI this was a panic at every normal boot). Lower
+/// tables are shared, so later mappings reach every CPU.
+pub fn prepare_mmio_window() {
+    let scratch = MMIO_WINDOW + MMIO_WINDOW_SIZE - 4096;
+    with_ctx(|ctx| {
+        if crate::arch::paging::map_device(&mut ctx.mapper, &mut ctx.frames, scratch, 0).is_ok() {
+            let _ = paging::unmap(&mut ctx.mapper, scratch);
+        }
+    })
+}
+
 /// Map `len` bytes of device memory at physical `phys` (uncached) and return
 /// the kernel virtual address of `phys` itself. Mappings live forever.
 pub fn map_mmio(phys: u64, len: u64) -> Option<u64> {

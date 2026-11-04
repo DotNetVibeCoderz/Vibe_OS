@@ -31,7 +31,7 @@
 | Polyglot | v0.14 | Babel | JS/TS + Python runtime (interpreter bersama) | ✅ Selesai |
 | Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Sebagian (GC reklamasi, async/await, EH belum) |
 | Rilis | v0.16 | Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | ✅ Selesai |
-| **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | 🔜 **Sedang berjalan** |
+| **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | 🟡 **v1.0-rc1: tinggal boot di PC fisik + Hyper-V** |
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |
@@ -976,7 +976,15 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   Konversi & pembuatan VM terverifikasi; boot Hyper-V nyata menyusul.
 - **Lisensi ✓ (2026-07-24):** **MIT** — berkas `LICENSE` (© 2026 Gravicode
   Studios).
-- *Sisa:* validasi boot di hardware nyata & Hyper-V nyata (perkakas siap).
+- **Siap PC nyata (v1.0-rc1, 2026-11-04) ✓:** driver native AHCI, NVMe, USB mass storage
+  (xHCI, Bulk-Only + SCSI), partisi GPT, `/disk` hanya pada volume berpenanda `BZDISK.ID`
+  (disk lain tak tersentuh), e1000 + DHCP, heap mengikuti ukuran layar, layar panic, log boot
+  `/disk/BOOTLOG.TXT`, versi di satu tempat (`shell::VERSION`). Langkah smoke `[realpc]`: q35
+  tanpa PS/2, UEFI, 2560x1440, boot dari flash disk, plus disk FAT asing yang checksum-nya
+  dijaga. Ini menemukan panic di setiap boot normal pada PC ber-xHCI (entri PML4 jendela MMIO
+  dibuat setelah CPU sekunder menyalin tabelnya).
+- *Sisa untuk v1.0 final:* **boot di PC fisik** dan **Hyper-V nyata** (butuh mesin + izin
+  admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 
 ## 🌍 v1.x — "Rimba" · Multi-Arch (ARM64 + RISC-V)
 Port ARM64 lalu RISC-V lewat **HAL** yang dipisahkan dulu di x86-64, lalu

@@ -474,6 +474,10 @@ fn main() {
     builder.set_boot_config(&boot_config);
     // Every /disk file, also written into the Limine image (see limine_image).
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    // The kernel only mounts a volume carrying this file as /disk (fat.rs
+    // DISK_MARKER): a real PC has other FAT partitions, and /disk gets written.
+    add_file(&mut builder, &mut files, "bzdisk.id".into(), b"Buitenzorg OS /disk volume
+".to_vec());
     // Test file for the v0.3 "Batang" milestone: the kernel reads this back
     // through its own IDE PIO driver + FAT parser ("baca file dari disk").
     add_file(&mut builder, &mut files, 

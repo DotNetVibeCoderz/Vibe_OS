@@ -174,6 +174,8 @@ pub fn lease(dev: &mut dyn NetDevice, seconds: u64) -> Option<Lease> {
                 _ => {}
             }
         }
-        core::hint::spin_loop();
+        // on a PC this runs on the background start-up task: with one CPU the
+        // desktop must keep running for the seconds a LAN without a server takes
+        crate::task::yield_now();
     }
 }

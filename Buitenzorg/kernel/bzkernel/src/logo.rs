@@ -11,7 +11,7 @@ pub const BOOT_LOGO: &str = r#"
                                              __/ |
               .   .                         |___/
                \_|_/
-              -- @ --      v0.1 "Benih" - zonder zorg, tanpa kekhawatiran
+              -- @ --      v1.0 "Buitenzorg" - zonder zorg, tanpa kekhawatiran
                / | \
                  |         kernel: Rust (ring 0)  |  userland: C# (.NET)
              ~~~~~~~~~     Kebun Raya Bogor edition

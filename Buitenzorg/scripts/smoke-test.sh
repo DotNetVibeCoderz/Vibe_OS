@@ -57,7 +57,7 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     nvme) drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device nvme,drive=bzdisk,serial=bz0001) ;;
     usb)  drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
-                 -usb -device usb-storage,drive=bzdisk) ;;
+                 -device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=bzdisk) ;;
     # Multi-arch M2: the boot disk on virtio-blk (2 CPUs).
     # Multi-arch M2: the boot disk on virtio-blk, a virtio keyboard + tablet,
     # and a QEMU monitor to type/move through them once the desktop is up.
@@ -214,8 +214,7 @@ if [ -z "$needle" ] || ! grep -a -q -F "$needle" "$img"; then
 fi
 echo "smoke [virtio]: /disk on virtio-blk, apps + processes, write persisted ($needle)"
 
-# Boot-media matrix: kernel must come up when the disk hangs off other
-# controllers (their native drivers are later roadmap work).
+# Boot-media matrix: /disk on the other disk controllers (native drivers).
 for media in ahci nvme usb; do
   boot "$media" "$root/dist/boot-$media.log"
   require "$root/dist/boot-$media.log" "${basic[@]}"
@@ -223,7 +222,13 @@ for media in ahci nvme usb; do
     require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"       "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse"
     echo "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
   fi
-  echo "smoke [$media]: boots to READY"
+  case "$media" in
+    ahci) on="ahci0" ;;
+    nvme) on="nvme0" ;;
+    usb) on="usb" ;;
+  esac
+  require "$root/dist/boot-$media.log" "mounted /disk (FAT16, rw) on $on"
+  echo "smoke [$media]: boots to READY with /disk on $on"
 done
 
 # UEFI boot (OVMF, 2 CPUs). UEFI firmware leaves the 8259 PIC fully masked â€”
@@ -257,6 +262,56 @@ if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   echo "smoke [uefi]: boots to READY on 2 CPUs"
 else
   skip "smoke [uefi]: skipped (no OVMF: run 'cargo run -p bzimage -- --run --uefi' once, or install the ovmf package)"
+fi
+
+# A modern PC, as closely as QEMU can: q35 without a PS/2 controller, UEFI, a
+# 2560x1440 screen, 4 CPUs, booted from a USB stick on xHCI with USB keyboard +
+# mouse and an e1000. The *normal* boot, the one real hardware gets. On AHCI
+# sits a stranger's FAT disk (no marker file), which must stay untouched: /disk
+# is written to at every boot, and it must never be someone's EFI partition.
+if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
+  log="$root/dist/boot-realpc.log"
+  stick="$root/dist/realpc-stick.img"
+  other="$root/dist/realpc-other.img"
+  rm -f "$log"
+  cp "$root/dist/buitenzorg-uefi.img" "$stick"
+  cp "$img" "$other"
+  LC_ALL=C sed -i 's/BZDISK  ID /XZDISK  ID /g' "$other"
+  other_sum=$(cksum < "$other")
+  # writable variables: with read-only ones OVMF saves them in a file NvVars on
+  # the first FAT disk it finds, and this step is about what the *kernel* writes
+  vars="$root/dist/realpc-vars.fd"
+  cp "$ovmf_vars" "$vars"
+  timeout --foreground 300 "$qemu" -M q35,i8042=off -m 2G -smp 4 \
+    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
+    -drive "if=pflash,format=raw,file=$vars" \
+    -drive "id=other,format=raw,file=$other,if=none" -device ahci,id=ahci0 -device ide-hd,drive=other,bus=ahci0.0 \
+    -drive "id=stick,format=raw,file=$stick,if=none" -device qemu-xhci,id=xhci \
+    -device usb-storage,bus=xhci.0,drive=stick,bootindex=0 -device usb-kbd,bus=xhci.0 -device usb-mouse,bus=xhci.0 \
+    -netdev user,id=n0 -device e1000,netdev=n0 -device VGA,xres=2560,yres=1440 \
+    -display none -serial "file:$log" -no-reboot &
+  qpid=$!
+  for _ in $(seq 280); do
+    sleep 1
+    grep -qF "background start-up done" "$log" 2>/dev/null && break
+  done
+  sleep 2
+  kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
+  require "$log" "[boot] mode: normal" "framebuffer 2560x1440" "4 CPU(s) / 3 AP(s)" "1 keyboard(s), 1 mouse/mice, 1 disk(s)" \
+    "mounted /disk (FAT16, rw) on usb" "MILESTONE: NIC OK (e1000" "[boot] background start-up done"
+  if grep -qaE "PANIC|mounted /disk .* on ahci" "$log"; then
+    echo "SMOKE TEST FAILED (boot-realpc.log): panic, or /disk went to the other disk" >&2; exit 1
+  fi
+  if [ "$(cksum < "$other")" != "$other_sum" ]; then
+    echo "SMOKE TEST FAILED (boot-realpc.log): the other disk was written to" >&2; exit 1
+  fi
+  if ! grep -qa "administrator" "$stick" || ! grep -qaF "[boot] mode: normal" "$stick"; then
+    echo "SMOKE TEST FAILED (boot-realpc.log): the accounts or BOOTLOG.TXT did not reach the stick" >&2; exit 1
+  fi
+  rm -f "$stick" "$other" "$vars"
+  echo "smoke [realpc]: UEFI on q35 without PS/2, 2560x1440: /disk on a USB stick (rw), USB input, e1000 + DHCP, the other FAT disk untouched"
+else
+  skip "smoke [realpc]: skipped (no OVMF)"
 fi
 
 # Limine boot (multi-arch M1): the same kernel through the Limine protocol,
