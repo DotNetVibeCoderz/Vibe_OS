@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, mouse, nvme, pci, power, rtc, serial};
+pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, intel_gpu, mouse, nvme, pci, power, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -329,6 +329,8 @@ fn network_up() {
         (alloc::boxed::Box::new(n), "virtio-net")
     } else if let Some(n) = e1000::probe(&pci::scan()) {
         (alloc::boxed::Box::new(n), "e1000")
+    } else if let Some(n) = e1000e::probe(&pci::scan(), 6000) {
+        (alloc::boxed::Box::new(n), "e1000e")
     } else {
         return;
     };
@@ -353,7 +355,7 @@ fn boot_background() {
     let t0 = interrupts::ticks();
     // kernel tasks are not preempted: yield between the steps, so the
     // desktop's compose helper (and anything else) gets this CPU in between
-    let steps: [fn(); 6] = [
+    let steps: [fn(); 7] = [
         || {
             // first: on a PC booted from a USB stick /disk lives there, and
             // the wallpaper, icons and everything else come from /disk
@@ -377,6 +379,7 @@ fn boot_background() {
             users::load();
         },
         || model::seed(),
+        || intel_gpu::init(&pci::scan()),
         network_up, // last: without a DHCP server it takes seconds
     ];
     for (i, step) in steps.iter().enumerate() {

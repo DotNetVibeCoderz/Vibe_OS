@@ -989,6 +989,9 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   layar, cadangan tanpa PIT, xHCI menunggu port stabil, `dmesg`/`lspci`, pemindaian PCI lewat
   bridge, driver **Intel HD Audio** (terbukti di codec Realtek laptop: Piano berbunyi), SSD NVMe
   terdeteksi. Jaringan I219 belum didukung.
+- **Berikutnya (dikerjakan, menunggu uji di laptop):** driver jaringan **Intel I219** (`e1000e.rs`) dan
+  **dukungan GPU Intel tahap 1** (identifikasi + baca konfigurasi firmware, `gpu`). Tahap 2: mesin
+  blitter untuk 2D; tahap 3: render engine untuk 3D (proyek besar, tak bisa diuji di QEMU).
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 

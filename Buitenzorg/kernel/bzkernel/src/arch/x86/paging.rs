@@ -19,6 +19,12 @@ use crate::memory::{phys_to_virt, BootInfoFrameAllocator};
 /// The kernel's handle on the active page tables.
 pub type PageMap = OffsetPageTable<'static>;
 
+/// The physical address a kernel virtual address maps to (any page size).
+pub fn translate(map: &PageMap, va: u64) -> Option<u64> {
+    use x86_64::structures::paging::Translate;
+    map.translate_addr(VirtAddr::new(va)).map(|p| p.as_u64())
+}
+
 /// ELF `e_machine` of executables for this architecture (EM_X86_64).
 pub const ELF_MACHINE: u16 = 0x3E;
 

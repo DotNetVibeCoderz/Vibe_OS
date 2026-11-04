@@ -204,6 +204,7 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "mounts" => (vfs::mounts(), Effect::None),
         "dmesg" | "log" => (dmesg(args.first().copied()), Effect::None),
         "lspci" => (lspci(), Effect::None),
+        "gpu" => (gpu_info(), Effect::None),
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
@@ -310,6 +311,18 @@ fn dmesg(filter: Option<&str>) -> Vec<String> {
     out
 }
 
+/// What the GPU is and how the firmware set it up (Intel, PCs).
+fn gpu_info() -> Vec<String> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::intel_gpu::info()
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        vec![String::from("gpu: PCs only (Raspberry Pi: V3D, see the boot log)")]
+    }
+}
+
 /// PCI devices: which controllers a PC has (and so which drivers it needs).
 fn lspci() -> Vec<String> {
     #[cfg(target_arch = "x86_64")]
@@ -356,6 +369,7 @@ fn help() -> Vec<String> {
      "  pwd               direktori sekarang",
      "  dmesg [kata]      log kernel (40 baris terakhir, opsional disaring)",
      "  lspci             perangkat PCI (kontroler disk/USB/jaringan)",
+     "  gpu               GPU dan konfigurasinya",
      "  echo <teks>       cetak teks",
      "  mounts            daftar mount VFS",
      "  theme [nama|cycle|list]     ganti tema (8 style + dark/light)",

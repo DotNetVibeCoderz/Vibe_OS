@@ -473,6 +473,13 @@ pub fn rebind(info: FbInfo) {
     }
 }
 
+/// The framebuffer's physical address (where the loader mapped it from).
+#[cfg(target_arch = "x86_64")]
+pub fn physical_hint() -> Option<u64> {
+    let va = CONSOLE.get()?.lock().info().addr;
+    crate::memory::with_ctx(|ctx| crate::arch::x86::paging::translate(&ctx.mapper, va))
+}
+
 /// QEMU std VGA in a 24-bit mode (the BIOS loader's pick): switch it to
 /// 32 bpp, where a present is a row copy (`bochs_vbe`).
 #[cfg(target_arch = "x86_64")]
