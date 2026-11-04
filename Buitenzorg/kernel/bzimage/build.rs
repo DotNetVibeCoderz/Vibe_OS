@@ -469,7 +469,9 @@ fn main() {
     // rendering + scrolling at 1280x720): under QEMU that took ~9 s before the
     // kernel started. Warnings only, and only on the serial port.
     let mut boot_config = bootloader::BootConfig::default();
-    boot_config.frame_buffer_logging = false;
+    // The loader's own log on screen: if it stops before the kernel, that is
+    // all a PC shows. Warnings and errors only (info cost ~1 s under QEMU).
+    boot_config.frame_buffer_logging = true;
     boot_config.log_level = bootloader_boot_config::LevelFilter::Warn;
     builder.set_boot_config(&boot_config);
     // Every /disk file, also written into the Limine image (see limine_image).

@@ -132,6 +132,14 @@ fn eoi() {
 extern "x86-interrupt" fn lapic_timer_handler(frame: InterruptStackFrame) {
     this_cpu().timer_ticks.fetch_add(1, Ordering::Relaxed);
     eoi();
+    if cpu_index() == 0 && LAPIC_TICKS.load(Ordering::Relaxed) {
+        // 100 Hz -> the 18.2 Hz system tick generic code counts in
+        let n = BSP_LAPIC_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if n * 182 / 1000 != (n - 1) * 182 / 1000 {
+            crate::interrupts::lapic_system_tick(&frame);
+        }
+        return;
+    }
     // After EOI, interrupts still off: the AP scheduler may switch tasks here.
     crate::task::ap_timer(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
 }
@@ -232,12 +240,164 @@ pub fn tlb_shootdown() -> bool {
 
 /// Measure the Local APIC timer against the PIT (on the BSP, timer masked) and
 /// derive the initial count of one AP timer period.
+/// The 8254 counts: channel 2 must move between two latched reads. Laptops
+/// with Intel's "8254 clock gating" (S0ix power saving) have a PIT whose
+/// registers answer but never count -- every PIT wait then hangs or runs into
+/// its iteration bound, and no timer IRQ 0 ever comes (on a Dell Latitude 7290
+/// that was a black screen at boot).
+fn pit_alive() -> bool {
+    use x86_64::instructions::port::Port;
+    unsafe {
+        let mut p61 = Port::<u8>::new(0x61);
+        let v = p61.read();
+        p61.write((v & !0x02) | 0x01);
+        Port::<u8>::new(0x43).write(0b1011_0000); // channel 2, lo/hi, mode 0
+        Port::<u8>::new(0x42).write(0xFF);
+        Port::<u8>::new(0x42).write(0xFF);
+        let read = || {
+            Port::<u8>::new(0x43).write(0b1000_0000); // latch channel 2
+            let lo = Port::<u8>::new(0x42).read() as u16;
+            let hi = Port::<u8>::new(0x42).read() as u16;
+            lo | hi << 8
+        };
+        let a = read();
+        let t0 = core::arch::x86_64::_rdtsc();
+        // ~100 us at any plausible clock; the counter moves every 0.84 us
+        while core::arch::x86_64::_rdtsc().wrapping_sub(t0) < 400_000 {
+            core::hint::spin_loop();
+        }
+        read() != a
+    }
+}
+
+/// The TSC rate from CPUID (leaf 0x15, else the base frequency in leaf 0x16).
+fn cpuid_tsc_hz() -> Option<u64> {
+    use core::arch::x86_64::__cpuid;
+    let max = unsafe { __cpuid(0) }.eax;
+    if max >= 0x15 {
+        let l = unsafe { __cpuid(0x15) };
+        if l.eax != 0 && l.ebx != 0 {
+            let mut crystal = l.ecx as u64;
+            if crystal == 0 {
+                // Skylake/Kaby Lake/Coffee Lake client parts leave it out: 24 MHz
+                let sig = unsafe { __cpuid(1) }.eax;
+                let model = ((sig >> 4) & 0xF) | ((sig >> 12) & 0xF0);
+                if (sig >> 8) & 0xF == 6 && matches!(model, 0x4E | 0x5E | 0x8E | 0x9E | 0xA5 | 0xA6) {
+                    crystal = 24_000_000;
+                }
+            }
+            if crystal != 0 {
+                return Some(crystal * l.ebx as u64 / l.eax as u64);
+            }
+        }
+    }
+    if max >= 0x16 {
+        let mhz = unsafe { __cpuid(0x16) }.eax as u64 & 0xFFFF;
+        if mhz != 0 {
+            return Some(mhz * 1_000_000);
+        }
+    }
+    None
+}
+
+/// CPU 0's LAPIC timer drives the system tick (no working PIT).
+static LAPIC_TICKS: AtomicBool = AtomicBool::new(false);
+static PIT_OK: AtomicBool = AtomicBool::new(true);
+static BSP_LAPIC_COUNT: AtomicU64 = AtomicU64::new(0);
+
+pub fn ticks_from_lapic() -> bool {
+    LAPIC_TICKS.load(Ordering::Relaxed)
+}
+
+/// Busy-wait on the TSC (once its rate is known).
+fn tsc_wait_us(us: u64) {
+    let hz = TSC_HZ.load(Ordering::Relaxed).max(1);
+    let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    while unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0) < us * hz / 1_000_000 {
+        core::hint::spin_loop();
+    }
+}
+
+/// Wait `us` microseconds: PIT channel 2 when it works, else the TSC.
+fn wait_us(us: u32) {
+    if PIT_OK.load(Ordering::Relaxed) {
+        pit_wait_us(us);
+    } else {
+        tsc_wait_us(us as u64);
+    }
+}
+
+/// The TSC rate measured against the ACPI PM timer over ~10 ms.
+fn pm_timer_tsc_hz() -> Option<u64> {
+    use x86_64::instructions::port::Port;
+    let (port, wide) = crate::power::pm_timer()?;
+    let mask: u32 = if wide { u32::MAX } else { 0xFF_FFFF };
+    let read = || unsafe { Port::<u32>::new(port).read() } & mask;
+    const PM_HZ: u64 = 3_579_545;
+    let want = PM_HZ / 100; // 10 ms
+    let start = read();
+    // the timer must move at all (a floating port reads all ones)
+    let t = unsafe { core::arch::x86_64::_rdtsc() };
+    while read() == start {
+        if unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t) > 50_000_000 {
+            return None;
+        }
+    }
+    let p0 = read();
+    let c0 = unsafe { core::arch::x86_64::_rdtsc() };
+    loop {
+        let d = (read().wrapping_sub(p0) & mask) as u64;
+        if d >= want {
+            let c = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(c0);
+            return Some(c * PM_HZ / d);
+        }
+    }
+}
+
+/// Without a PIT: the TSC rate from the ACPI PM timer (else CPUID), the LAPIC
+/// timer measured against the TSC, and CPU 0's LAPIC timer as the system tick.
+fn calibrate_without_pit() -> bool {
+    let (tsc_hz, from) = match pm_timer_tsc_hz() {
+        Some(hz) => (hz, "the ACPI PM timer"),
+        None => match cpuid_tsc_hz() {
+            Some(hz) => (hz, "CPUID"),
+            None => {
+                crate::println!("[smp] no working PIT, ACPI PM timer or CPUID TSC rate: timers stay uncalibrated");
+                return false;
+            }
+        },
+    };
+    TSC_HZ.store(tsc_hz, Ordering::Relaxed);
+    const US: u64 = 10_000;
+    lapic_write(LAPIC_TIMER_INIT, u32::MAX);
+    tsc_wait_us(US);
+    let elapsed = (u32::MAX - lapic_read(LAPIC_TIMER_CUR)) as u64;
+    lapic_write(LAPIC_TIMER_INIT, 0);
+    let hz = elapsed * 1_000_000 / US;
+    TIMER_HZ.store(hz, Ordering::Relaxed);
+    TIMER_COUNT.store((hz / AP_TIMER_HZ).clamp(1, u32::MAX as u64) as u32, Ordering::Relaxed);
+    LAPIC_TICKS.store(true, Ordering::SeqCst);
+    start_local_timer(); // on CPU 0: the handler turns it into system ticks
+    crate::println!(
+        "[smp] the 8254 PIT does not count (clock gated by the firmware): TSC {} MHz from {}, system tick from the Local APIC timer",
+        tsc_hz / 1_000_000,
+        from
+    );
+    true
+}
+
 fn calibrate_timer() {
     // 3 PIT periods on the self-test boot (its timer checks expect that
     // precision), 1 on a normal boot: the wait is boot time
     let cal_ticks: u64 = if crate::bootmode::selftest() { 3 } else { 1 };
     lapic_write(LAPIC_TIMER_DIV, 0x3); // divide by 16
     lapic_write(LAPIC_LVT_TIMER, (1 << 16) | TIMER_VECTOR as u32); // masked, one-shot
+    if !pit_alive() {
+        PIT_OK.store(false, Ordering::SeqCst);
+        if calibrate_without_pit() {
+            return;
+        }
+    }
     if !crate::bootmode::selftest() {
         // normal boot: 10 ms on PIT channel 2 instead of up to two 55 ms ticks
         const US: u64 = 10_000;
@@ -715,20 +875,24 @@ pub fn init() -> (u64, u64) {
         if crate::bootmode::selftest() {
             wait_ticks(1); // >= 10 ms
         } else {
-            pit_wait_us(10_000); // exactly the 10 ms INIT needs
+            wait_us(10_000); // exactly the 10 ms INIT needs
         }
         for _ in 0..2 {
             lapic_write(LAPIC_ICR_HI, (id as u32) << 24);
             lapic_write(LAPIC_ICR_LO, 0x0000_4600 | (TRAMPOLINE >> 12) as u32);
             wait_icr_idle();
-            pit_wait_us(200); // the 200 us between STARTUPs (a pause loop is slow under TCG)
+            wait_us(200); // the 200 us between STARTUPs (a pause loop is slow under TCG)
             if ONLINE.load(Ordering::SeqCst) > before {
                 break;
             }
         }
         // Wait (up to ~1 s) for it to report in before reusing the slots.
-        let t0 = crate::interrupts::ticks();
-        while ONLINE.load(Ordering::SeqCst) == before && crate::interrupts::ticks() - t0 < 18 {
+        let (t0, c0) = (crate::interrupts::ticks(), unsafe { core::arch::x86_64::_rdtsc() });
+        let limit = TSC_HZ.load(Ordering::Relaxed).max(1_000_000_000); // ~1 s, whatever ticks do
+        while ONLINE.load(Ordering::SeqCst) == before
+            && crate::interrupts::ticks() - t0 < 18
+            && unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(c0) < limit
+        {
             core::hint::spin_loop();
         }
     }

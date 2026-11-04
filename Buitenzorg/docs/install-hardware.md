@@ -143,6 +143,9 @@ take a photo of it: the panic is not in that file.
 - **USB not in the boot menu** → Secure Boot OFF; match the firmware
   (bios↔Legacy/CSM, uefi↔UEFI); try writing the **other** image; try a different
   USB port (sometimes only certain ports are bootable).
+- **Black screen, or the text stops** → the screen shows the boot log on real
+  hardware: photograph the last lines and report them. If nothing at all appears,
+  say whether the firmware logo disappeared.
 - **Black screen after selecting the USB** → usually a firmware mismatch (you
   wrote the bios image but booted in UEFI mode, or vice versa) — write the
   matching image.

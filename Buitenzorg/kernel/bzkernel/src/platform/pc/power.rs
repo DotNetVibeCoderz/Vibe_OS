@@ -11,6 +11,16 @@ use crate::memory::phys_to_virt;
 
 // Parsed ACPI state.
 static PM1A_CNT: AtomicU16 = AtomicU16::new(0);
+/// The ACPI PM timer (3.579545 MHz, FADT PM_TMR_BLK) and whether it is 32 bits.
+static PM_TMR: AtomicU16 = AtomicU16::new(0);
+static PM_TMR_32: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// (I/O port, 32-bit) of the ACPI PM timer, if the FADT names one. Unlike the
+/// 8254 it is never clock gated: the fallback time source on such PCs.
+pub fn pm_timer() -> Option<(u16, bool)> {
+    let p = PM_TMR.load(Ordering::Relaxed);
+    (p != 0).then(|| (p, PM_TMR_32.load(Ordering::Relaxed)))
+}
 static PM1B_CNT: AtomicU16 = AtomicU16::new(0);
 static SLP_TYPA: AtomicU16 = AtomicU16::new(0);
 static SLP_TYPB: AtomicU16 = AtomicU16::new(0);
@@ -108,6 +118,8 @@ fn parse_fadt(fadt: u64) -> bool {
     let pm1a = read_u32(fadt, 64) as u16;
     let pm1b = read_u32(fadt, 68) as u16;
     PM1A_CNT.store(pm1a, Ordering::SeqCst);
+    PM_TMR.store(read_u32(fadt, 76) as u16, Ordering::SeqCst); // PM_TMR_BLK
+    PM_TMR_32.store(read_u32(fadt, 112) & (1 << 8) != 0, Ordering::SeqCst); // flags: TMR_VAL_EXT
     PM1B_CNT.store(pm1b, Ordering::SeqCst);
 
     // RESET_REG: GAS { addr_space(1), bit_width(1), bit_offset(1), size(1),

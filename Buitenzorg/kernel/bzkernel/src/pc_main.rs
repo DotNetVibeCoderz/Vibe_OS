@@ -90,11 +90,15 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // boot keeps the log on the serial port -- drawing and scrolling it on the
     // framebuffer costs time, and the desktop covers it a moment later.
     let selftest = bootmode::detect(None);
-    if !selftest {
+    // Under QEMU a normal boot keeps the log on serial (drawing it costs boot
+    // time there). Real hardware shows it: a PC has no serial cable, and when a
+    // boot stops before the desktop, the screen says where.
+    let quiet = !selftest && arch::x86::fwcfg::present();
+    if quiet {
         interactive::set_active();
     }
     if let Some(fb) = boot_info.framebuffer {
-        framebuffer::init_with(fb, selftest);
+        framebuffer::init_with(fb, !quiet);
     }
 
     print!("{}", logo::BOOT_LOGO);

@@ -22,6 +22,12 @@ fn be32() -> u32 {
     u32::from_be_bytes([byte(), byte(), byte(), byte()])
 }
 
+/// Whether this is QEMU (its fw_cfg device answers with the signature).
+pub fn present() -> bool {
+    select(SIGNATURE);
+    [byte(), byte(), byte(), byte()] == *b"QEMU"
+}
+
 /// The first byte of fw_cfg file `name`, if QEMU provides one.
 pub fn file_first_byte(name: &str) -> Option<u8> {
     select(SIGNATURE);

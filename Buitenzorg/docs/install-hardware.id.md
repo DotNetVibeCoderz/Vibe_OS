@@ -139,6 +139,9 @@ masuk ke berkas itu.
 - **USB tak muncul di boot menu** → Secure Boot OFF; cocokkan firmware
   (bios↔Legacy/CSM, uefi↔UEFI); coba tulis image **satunya**; coba port USB lain
   (kadang hanya port tertentu bootable).
+- **Layar hitam, atau teks berhenti** → di hardware asli layar menampilkan log boot:
+  foto baris-baris terakhirnya dan laporkan. Bila tidak muncul apa pun, sebutkan apakah
+  logo firmware hilang.
 - **Layar hitam setelah pilih USB** → biasanya mismatch firmware (menulis image
   bios lalu boot mode UEFI, atau sebaliknya) — tulis image yang cocok.
 - **Boot tapi keyboard mati** → lihat catatan PS/2 vs USB di atas; aktifkan **USB

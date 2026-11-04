@@ -39,7 +39,28 @@ pub fn ticks() -> u64 {
 
 static IDT: Once<InterruptDescriptorTable> = Once::new();
 
+/// One system tick (18.2 Hz units) driven by CPU 0's LAPIC timer, on PCs whose
+/// firmware gates the 8254's clock: everything `timer_handler` does after EOI.
+pub fn lapic_system_tick(frame: &InterruptStackFrame) {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+    crate::task::account_tick();
+    crate::process::account_tick();
+    crate::task::watchdog(frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64(), from_user(frame));
+    crate::task::preempt(from_user(frame));
+}
+
+/// Program PIT channel 0 for the 18.2 Hz system tick. A BIOS leaves it like
+/// that; UEFI firmware need not (it times with the HPET or the LAPIC).
+fn program_pit() {
+    unsafe {
+        Port::<u8>::new(0x43).write(0b0011_0100); // channel 0, lo/hi, mode 2 (rate generator)
+        Port::<u8>::new(0x40).write(0); // divisor 65536
+        Port::<u8>::new(0x40).write(0);
+    }
+}
+
 pub fn init() {
+    program_pit();
     let idt = IDT.call_once(|| {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
@@ -180,6 +201,10 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
 }
 
 extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
+    if crate::smp::ticks_from_lapic() {
+        end_of_interrupt(InterruptIndex::Timer.as_u8());
+        return; // the LAPIC drives the system tick (see smp::pit_alive)
+    }
     TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::account_tick();
     crate::process::account_tick();
