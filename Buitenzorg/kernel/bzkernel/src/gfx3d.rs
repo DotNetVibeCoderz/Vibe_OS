@@ -42,6 +42,8 @@ use spin::Mutex;
 
 use bz_abi::{gfx3d_clear, gfx3d_flags as fl, gfx3d_light as gl};
 
+use crate::virtio::virgl;
+
 /// Largest context / texture edge.
 pub const MAX_DIM: u32 = 1024;
 /// Bytes all contexts, meshes and textures may use together.
@@ -228,6 +230,8 @@ pub struct Texture {
     h: u32,
     px: Vec<u32>,
     bytes: usize,
+    /// Its copy on the GPU (virgl), made on the first GPU draw that uses it.
+    gpu: spin::Once<Option<virgl::GpuTexture>>,
 }
 
 pub struct Ctx {
@@ -237,6 +241,24 @@ pub struct Ctx {
     depth: Vec<u32>,
     light: Lighting,
     bytes: usize,
+    /// The GPU render target when this context draws through virgl.
+    gpu: Option<virgl::Target>,
+    /// The GPU drew since the last read-back into `color`.
+    dirty: bool,
+}
+
+impl Ctx {
+    /// Bring `color` up to date with the GPU picture.
+    fn sync(&mut self) {
+        if self.dirty {
+            if let Some(t) = &self.gpu {
+                if let Err(e) = virgl::read(t, &mut self.color) {
+                    crate::println!("[gfx3d] GPU read-back: {}", e);
+                }
+            }
+            self.dirty = false;
+        }
+    }
 }
 
 impl Drop for Mesh {
@@ -302,16 +324,47 @@ fn ctx(owner: u64, id: u32) -> Result<Arc<Mutex<Ctx>>, &'static str> {
     }
 }
 
-/// A render context of `w` x `h` (color cleared to black, depth to far).
+/// A render context of `w` x `h` (color cleared to black, depth to far):
+/// on the GPU when virgl is there, else in software.
 pub fn create(owner: u64, w: u32, h: u32) -> Result<u32, &'static str> {
+    create_with(owner, w, h, virgl::available())
+}
+
+fn create_with(owner: u64, w: u32, h: u32, on_gpu: bool) -> Result<u32, &'static str> {
     if w == 0 || h == 0 || w > MAX_DIM || h > MAX_DIM {
         return Err("gfx3d: bad size");
     }
     let n = (w * h) as usize;
-    let bytes = n * 8;
+    // a GPU context keeps only the read-back copy here (the depth buffer is on the GPU)
+    let gpu = if on_gpu {
+        match virgl::create_target(w, h) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                crate::println!("[gfx3d] GPU target {}x{}: {} -- drawing in software", w, h, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let bytes = if gpu.is_some() { n * 4 } else { n * 8 };
     reserve(bytes)?;
-    let c = Ctx { w, h, color: alloc::vec![0; n], depth: alloc::vec![FAR_DEPTH; n], light: Lighting::default(), bytes };
+    let depth = if gpu.is_some() { Vec::new() } else { alloc::vec![FAR_DEPTH; n] };
+    let c = Ctx { w, h, color: alloc::vec![0; n], depth, light: Lighting::default(), bytes, gpu, dirty: false };
+    if let Some(t) = &c.gpu {
+        let _ = virgl::clear(t, 0, true, true);
+    }
     Ok(insert(owner, Res::Ctx(Arc::new(Mutex::new(c)))))
+}
+
+/// Whether `owner` has context `id`.
+pub fn exists(owner: u64, id: u32) -> bool {
+    ctx(owner, id).is_ok()
+}
+
+/// Whether context `id` draws on the GPU.
+pub fn on_gpu(owner: u64, id: u32) -> bool {
+    ctx(owner, id).is_ok_and(|c| c.lock().gpu.is_some())
 }
 
 /// A mesh (indices must name existing vertices; whole triangles only).
@@ -334,7 +387,7 @@ pub fn texture(owner: u64, w: u32, h: u32, px: Vec<u32>) -> Result<u32, &'static
     }
     let bytes = px.len() * 4;
     reserve(bytes)?;
-    Ok(insert(owner, Res::Tex(Arc::new(Texture { w, h, px, bytes }))))
+    Ok(insert(owner, Res::Tex(Arc::new(Texture { w, h, px, bytes, gpu: spin::Once::new() }))))
 }
 
 /// Free resource `id` of `owner` (memory returns when no draw still uses it).
@@ -363,6 +416,11 @@ pub fn release(owner: u64) {
 pub fn clear(owner: u64, id: u32, color: u32, bits: u32) -> Result<(), &'static str> {
     let c = ctx(owner, id)?;
     let mut c = c.lock();
+    if let Some(t) = &c.gpu {
+        virgl::clear(t, color & 0x00FF_FFFF, bits & gfx3d_clear::COLOR != 0, bits & gfx3d_clear::DEPTH != 0)?;
+        c.dirty = true;
+        return Ok(());
+    }
     if bits & gfx3d_clear::COLOR != 0 {
         c.color.fill(color & 0x00FF_FFFF);
     }
@@ -379,7 +437,8 @@ pub fn set_lighting(owner: u64, id: u32, l: Lighting) -> Result<(), &'static str
 
 pub fn read_pixel(owner: u64, id: u32, x: u32, y: u32) -> Result<u32, &'static str> {
     let c = ctx(owner, id)?;
-    let c = c.lock();
+    let mut c = c.lock();
+    c.sync();
     if x >= c.w || y >= c.h {
         return Err("gfx3d: outside the context");
     }
@@ -389,14 +448,16 @@ pub fn read_pixel(owner: u64, id: u32, x: u32, y: u32) -> Result<u32, &'static s
 /// Run `f` over the color buffer (w, h, pixels).
 pub fn with_color<R>(owner: u64, id: u32, f: impl FnOnce(u32, u32, &[u32]) -> R) -> Result<R, &'static str> {
     let c = ctx(owner, id)?;
-    let c = c.lock();
+    let mut c = c.lock();
+    c.sync();
     Ok(f(c.w, c.h, &c.color))
 }
 
 /// Copy the color buffer into window `win` at (x, y).
 pub fn present(owner: u64, id: u32, win: u32, x: i32, y: i32) -> Result<(), &'static str> {
     let c = ctx(owner, id)?;
-    let c = c.lock();
+    let mut c = c.lock();
+    c.sync();
     crate::wm::blit_on_window(win, x, y, c.w as i32, c.h as i32, c.color.as_ptr() as u64)
 }
 
@@ -810,6 +871,9 @@ fn raster(c: &mut Ctx, v: [Sv; 3], d: &Draw) -> Option<u32> {
 
 /// Draw `m` into `c`; returns (triangles drawn, pixels written).
 fn draw_into(c: &mut Ctx, m: &Mesh, d: &Draw) -> (u32, u32) {
+    if c.gpu.is_some() {
+        return gpu_draw(c, m, d);
+    }
     let tv = vertex_stage(c, m, d);
     let (w, h) = (c.w, c.h);
     let (mut tris, mut pixels) = (0u32, 0u32);
@@ -841,6 +905,77 @@ fn draw_into(c: &mut Ctx, m: &Mesh, d: &Draw) -> (u32, u32) {
         tris += drawn as u32;
     }
     (tris, pixels)
+}
+
+/// The GPU path: the same vertex stage, then the triangles go to virgl as
+/// clip-space vertices. Back faces are culled here when the whole triangle is
+/// in front of the eye (so counts match the software path); triangles that
+/// cross the eye plane are left to the GPU clipper. Pixels are reported as
+/// the screen area the triangles cover (the GPU does not say how many passed
+/// the depth test).
+fn gpu_draw(c: &mut Ctx, m: &Mesh, d: &Draw) -> (u32, u32) {
+    let tv = vertex_stage(c, m, d);
+    let (w, h) = (c.w, c.h);
+    let double = d.flags & fl::DOUBLE_SIDED != 0;
+    let mut out: Vec<virgl::GVertex> = Vec::with_capacity(m.idx.len());
+    let (mut tris, mut area) = (0u32, 0i64);
+    let gv = |t: &Tv| {
+        let col = |k: usize| t.col[k].clamp(0, 255) as u32;
+        virgl::GVertex([
+            virgl::f32_from_fx(t.c[0]),
+            virgl::f32_from_fx(t.c[1]),
+            virgl::f32_from_fx(t.c[2]),
+            virgl::f32_from_fx(t.c[3]),
+            col(0) | col(1) << 8 | col(2) << 16 | col(3) << 24,
+            virgl::f32_from_fx(t.uv[0]),
+            virgl::f32_from_fx(t.uv[1]),
+        ])
+    };
+    for t in m.idx.chunks_exact(3) {
+        let tri = [tv[t[0] as usize], tv[t[1] as usize], tv[t[2] as usize]];
+        let oc = [outcode(&tri[0].c), outcode(&tri[1].c), outcode(&tri[2].c)];
+        if oc[0] & oc[1] & oc[2] != 0 {
+            continue;
+        }
+        if tri.iter().all(|v| v.c[3] > MIN_W) {
+            let s = [project(&tri[0], w, h), project(&tri[1], w, h), project(&tri[2], w, h)];
+            let a = (s[1].x - s[0].x) * (s[2].y - s[0].y) - (s[2].x - s[0].x) * (s[1].y - s[0].y);
+            if a == 0 || (a > 0 && !double) {
+                continue;
+            }
+            area += if d.flags & fl::WIREFRAME != 0 {
+                // edges only: about the longer extent of each edge, in pixels
+                let e = |p: &Sv, q: &Sv| (p.x - q.x).abs().max((p.y - q.y).abs()) / 16;
+                e(&s[0], &s[1]) + e(&s[1], &s[2]) + e(&s[2], &s[0])
+            } else {
+                a.abs() / 512 // 28.4 squared, halved
+            };
+        } else {
+            area += (w * h) as i64 / 2;
+        }
+        tris += 1;
+        out.extend_from_slice(&[gv(&tri[0]), gv(&tri[1]), gv(&tri[2])]);
+    }
+    if out.is_empty() {
+        return (0, 0);
+    }
+    let tex = d.tex.and_then(|t| t.gpu.call_once(|| virgl::texture(t.w, t.h, &t.px).ok()).as_ref());
+    let r = virgl::draw(
+        c.gpu.as_ref().unwrap(),
+        &out,
+        tex,
+        !double,
+        d.flags & fl::WIREFRAME != 0,
+        d.flags & fl::NO_DEPTH_TEST == 0,
+        d.flags & fl::NO_DEPTH_WRITE == 0,
+        d.flags & fl::BLEND != 0,
+    );
+    if let Err(e) = r {
+        crate::println!("[gfx3d] GPU draw: {}", e);
+        return (0, 0);
+    }
+    c.dirty = true;
+    (tris, area.min((w * h) as i64 * 4) as u32)
 }
 
 /// Draw mesh `mesh` (with texture `tex`, 0 = none) into context `id`.
@@ -918,7 +1053,7 @@ fn cube(owner: u64) -> Result<u32, &'static str> {
 /// Boot self-test: depth test, culling, lighting, texturing, clipping and a
 /// perspective cube, rendered offscreen and checked pixel by pixel.
 pub fn self_test() -> bool {
-    match run_self_test() {
+    let sw = match run_self_test(false) {
         Ok(msg) => {
             crate::println!("MILESTONE: GFX3D OK ({})", msg);
             true
@@ -927,15 +1062,34 @@ pub fn self_test() -> bool {
             crate::println!("[gfx3d] self-test FAILED: {}", e);
             false
         }
+    };
+    // the same checks on the GPU when there is one (QEMU virtio-gpu-gl)
+    if !virgl::available() {
+        return sw;
+    }
+    match run_self_test(true) {
+        Ok(msg) => {
+            crate::println!("MILESTONE: GFX3D VIRGL OK (host GPU through virtio-gpu 3D: {})", msg);
+            sw
+        }
+        Err(e) => {
+            crate::println!("[gfx3d] GPU (virgl) self-test FAILED: {} -- contexts fall back to software", e);
+            virgl::set_enabled(false);
+            sw
+        }
     }
 }
 
-fn run_self_test() -> Result<alloc::string::String, alloc::string::String> {
+fn run_self_test(gpu: bool) -> Result<alloc::string::String, alloc::string::String> {
     use alloc::format;
     const OWNER: u64 = 0;
     const BG: u32 = 0x10_2030;
     let used0 = USED.load(Ordering::Relaxed);
-    let ctx_id = create(OWNER, 64, 64).map_err(|e| format!("{}", e))?;
+    let ctx_id = create_with(OWNER, 64, 64, gpu).map_err(|e| format!("{}", e))?;
+    if on_gpu(OWNER, ctx_id) != gpu {
+        free(OWNER, ctx_id);
+        return Err(alloc::string::String::from("no GPU render target"));
+    }
     let mut ids = alloc::vec![ctx_id];
     let r = (|| -> Result<alloc::string::String, alloc::string::String> {
         let px = |x, y| read_pixel(OWNER, ctx_id, x, y).unwrap_or(0xDEAD);
@@ -1071,7 +1225,8 @@ fn run_self_test() -> Result<alloc::string::String, alloc::string::String> {
         // the camera inside the cube's front: near-plane clipping keeps it drawable
         let close = mat_mul(&tr(-ONE * 7 / 10), &ry);
         clear(OWNER, ctx_id, BG, 3).map_err(e)?;
-        let (tn, pn) = draw_m(cube_id, &Draw { flags: fl::UNLIT | fl::DOUBLE_SIDED, color: 0xFFFF_FFFF, model: close, view_proj: proj, tex: None });
+        let (tn, _) = draw_m(cube_id, &Draw { flags: fl::UNLIT | fl::DOUBLE_SIDED, color: 0xFFFF_FFFF, model: close, view_proj: proj, tex: None });
+        let pn = (0..64u32).flat_map(|y| (0..64u32).map(move |x| (x, y))).filter(|&(x, y)| px(x, y) != BG).count();
         if tn == 0 || pn < 64 * 64 / 2 {
             return Err(format!("near clipping: {} triangles, {} pixels", tn, pn));
         }

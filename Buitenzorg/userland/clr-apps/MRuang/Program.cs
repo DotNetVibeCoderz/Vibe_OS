@@ -120,6 +120,8 @@ public sealed class Viewport3D : Control
     bool _drag;
     public RenderStats Stats;
     public int Frames;
+    /// <summary>Name of the object last clicked (picking with a ray from the camera).</summary>
+    public string Picked = "";
 
     public Viewport3D(Garden g) { Garden = g; Focusable = true; }
 
@@ -145,9 +147,19 @@ public sealed class Viewport3D : Control
         dc.Present3D(_r!.Device, Bounds.X, Bounds.Y);
     }
 
+    /// <summary>The object under view pixel (x, y), remembered in Picked.</summary>
+    public string PickAt(int x, int y)
+    {
+        if (_r == null) RenderScene();
+        var hit = _r!.Pick(Garden.Scene, Garden.Camera, x, y);
+        Picked = hit == null ? "" : hit.Node.Name;
+        return Picked;
+    }
+
     protected override void OnPointerPressed(PointerEventArgs e)
     {
         Focus();
+        PickAt(e.X - Bounds.X, e.Y - Bounds.Y);
         _drag = true; _lastX = e.X; _lastY = e.Y;
         e.Handled = true;
     }
@@ -228,7 +240,7 @@ public static class RuangApp
         view.Focus();
 
         void ShowStats() =>
-            status.Text = view.Stats + "  ·  seret / panah: putar kamera, W/S: dekat-jauh, Spasi: jeda, R: rangka, K: kabut";
+            status.Text = view.Stats + (view.Picked.Length > 0 ? "  ·  dipilih: " + view.Picked : "") + "  ·  klik: pilih objek, seret / panah: putar kamera, W/S: dekat-jauh, Spasi: jeda, R: rangka, K: kabut";
         w.KeyDown += (_, e) =>
         {
             char k = char.ToLower(e.Key);
@@ -265,7 +277,7 @@ public static class RuangApp
         var st = view.RenderScene();
         var r = view.Renderer!;
         bool sim = r.Device.IsSimulated;
-        Console.WriteLine("Ruang 3D: " + r.Width + "x" + r.Height + (sim ? " (simulated rasterizer)" : " (kernel rasterizer)") + ": " + st);
+        Console.WriteLine("Ruang 3D: " + r.Width + "x" + r.Height + " (" + r.Device.Backend + "): " + st);
         c.That(st.DrawCalls == 7, "7 objects drawn (" + st.DrawCalls + ")");
         c.That(st.Triangles > 300 && st.Pixels > r.Width * r.Height / 3, "triangles and pixels drawn (" + st + ")");
         c.That(sim || st.Lights == 2, "a sun and a lantern lit the scene (" + st.Lights + ")");
@@ -274,6 +286,7 @@ public static class RuangApp
         var (sx, sy, vis) = r.Project(g.Scene, g.Sphere.WorldPosition, g.Camera);
         int sp = r.ReadPixel(sx, sy);
         c.That(vis && R(sp) > G(sp) + 30 && R(sp) > B(sp) + 30, "the sphere shows red at its centre (" + sx + "," + sy + " = " + sp.ToString("X6") + ")");
+        c.That(view.PickAt(sx, sy) == "bola", "clicking the sphere picks it (" + view.Picked + ")");
         int sky = r.ReadPixel(r.Width / 2, 2);
         c.That(sky == g.Scene.Background, "the sky is the background (" + sky.ToString("X6") + ")");
 

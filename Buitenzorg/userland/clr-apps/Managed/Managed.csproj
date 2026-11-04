@@ -27,5 +27,6 @@
     <ProjectReference Include="..\MPaint\MPaint.csproj" />
     <ProjectReference Include="..\MPiano\MPiano.csproj" />
     <ProjectReference Include="..\MRuang\MRuang.csproj" />
+    <ProjectReference Include="..\MBuah\MBuah.csproj" />
   </ItemGroup>
 </Project>

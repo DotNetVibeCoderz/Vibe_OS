@@ -13,6 +13,7 @@
 
 pub mod blk;
 pub mod gpu;
+pub mod virgl;
 pub mod input;
 pub mod mmio;
 pub mod net;

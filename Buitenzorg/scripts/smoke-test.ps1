@@ -254,6 +254,33 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
 } else {
     Skip-Step "smoke [limine]: skipped (needs OVMF and scripts/fetch-limine.ps1 before the build)"
 }
+# G3 on a host GPU: virtio-gpu-gl (virglrenderer) with the QEMU copy that
+# scripts/setup-virgl.ps1 prepares (Mesa EGL / llvmpipe next to it). The
+# kernel runs the 3D self-test twice -- software, then through virgl -- and
+# both must pass. Optional: without kernel\target\qemu-gl the step is
+# reported and skipped even in strict mode (CI has no host GL).
+$qemuGl = Join-Path $root "kernel\target\qemu-gl\qemu-system-x86_64.exe"
+if ((Test-Path $qemuGl) -and (Test-Path $image)) {
+    $log = Join-Path $root "dist\boot-virgl.log"
+    if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    $copy = Join-Path $root "dist\virgl-test.img"
+    Copy-Item $image $copy -Force
+    $env:GALLIUM_DRIVER = "llvmpipe"
+    $qargs = @('-drive', "format=raw,file=$copy", '-m', '1G', '-smp', '2', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
+               '-device', 'virtio-gpu-gl-pci', '-display', 'egl-headless', '-L', "`"$(Join-Path (Split-Path -Parent $qemu) 'share')`"",
+               '-serial', "file:$log", '-no-reboot')
+    $p = Start-Process -FilePath $qemuGl -ArgumentList $qargs -PassThru
+    foreach ($i in 1..420) {
+        Start-Sleep -Seconds 1
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "GFX3D VIRGL OK|GPU \(virgl\) self-test FAILED|virgl\] not used" -Quiet)) { Start-Sleep 1; break }
+    }
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $copy -Force -ErrorAction SilentlyContinue
+    Assert-Markers -Log $log -Markers @("[virgl] 3D context up", "MILESTONE: GFX3D OK", "MILESTONE: GFX3D VIRGL OK", "MILESTONE: MANAGED APPS OK", "GPU (virgl)): 7 objek")
+    Write-Host "smoke [virgl]: 3D API on the host GPU (virtio-gpu-gl): self-test + Ruang 3D through virgl"
+} else {
+    Write-Host "smoke [virgl]: skipped (no kernel\target\qemu-gl -- scripts\setup-virgl.ps1 prepares one)"
+}
 } # x86_64
 
 if (Test-Arch "aarch64") {

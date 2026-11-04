@@ -45,6 +45,18 @@ Hardening toward a stable x86-64 release.
   app (Start menu > Permainan, `run mruang`) shows a small garden you can
   orbit with the mouse or arrow keys; shell `gfx3d` shows what 3D resources are
   in use. GPU backends (virgl, Raspberry Pi V3D) come later.
+- **3D on the GPU (G3 done).** With a 3D-capable virtio GPU (QEMU
+  `virtio-gpu-gl`) the 3D API draws on the host's graphics card: the
+  kernel still computes the vertices and lighting, the GPU does the pixels.
+  Elsewhere the software renderer keeps working, with the same picture.
+  `scripts/setup-virgl.ps1` prepares a QEMU that can do this on Windows.
+  On a Raspberry Pi 4 the VideoCore VI GPU (V3D) is now switched on and
+  identified at boot; drawing on it comes later.
+- **Picking and a 3D game.** Apps can find the object under the mouse
+  (`Renderer.Pick`, `Scene.Raycast`) and animate nodes (`Scene.Update`).
+  New game **Panen Buah 3D** (Start menu > Permainan, `run mbuah`): catch
+  the falling fruit, dodge the rocks. Ruang 3D shows the name of the object
+  you click. Guide: `docs/graphics-3d.md`.
 - **Fixed in the managed runtime (RustCLR `187e842`), found by the 3D work:**
   a struct's `ToString` that used its own fields crashed when called on a
   boxed value or through string concatenation; `MathF` and the `float`

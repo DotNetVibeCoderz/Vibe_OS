@@ -251,6 +251,24 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
                 let ok = crate::gfx3d::self_test();
                 out.push(String::from(if ok { "self-test 3D: OK (lihat log serial)" } else { "self-test 3D GAGAL (lihat log serial)" }));
             }
+            match args.first().copied() {
+                Some("sw") => crate::virtio::virgl::set_enabled(false),
+                Some("gpu") => crate::virtio::virgl::set_enabled(true),
+                _ => {}
+            }
+            let gpu = crate::virtio::virgl::enabled() && crate::virtio::virgl::available();
+            out.push(String::from(if gpu {
+                "backend: GPU (virgl, virtio-gpu 3D) untuk konteks baru -- 'gfx3d sw' untuk software"
+            } else {
+                "backend: rasterizer software -- 'gfx3d gpu' memakai GPU bila virtio-gpu-gl ada"
+            }));
+            #[cfg(target_arch = "aarch64")]
+            {
+                let v = crate::platform::virt::v3d::version();
+                if v != 0 {
+                    out.push(format!("GPU Raspberry Pi: V3D {}.{} terdeteksi (render lewat V3D belum ada -- rasterizer software)", v / 10, v % 10));
+                }
+            }
             let (c, m, t, used, draws, tris, px) = crate::gfx3d::summary();
             out.push(format!("3D: {} konteks, {} mesh, {} tekstur, {} KiB dari {} KiB", c, m, t, used / 1024, crate::gfx3d::BUDGET / 1024));
             out.push(format!("   {} draw, {} segitiga, {} piksel sejak boot", draws, tris, px));

@@ -968,6 +968,15 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
             }
         }
     }
+    // G3: the Pi's GPU (VideoCore VI V3D) -- powered and identified
+    if let Some(f) = fdt {
+        if let Some(v) = platform::virt::v3d::init(f) {
+            println!(
+                "[kernel] MILESTONE: RPI4 V3D OK (V3D {}.{}: {} core(s), {} slice(s) x {} QPUs, TFU {}, L3C {}, MMU {}, {} MHz)",
+                v.version / 10, v.version % 10, v.cores, v.slices, v.qpus_per_slice, v.tfu, v.l3c, v.mmu, v.clock_hz / 1_000_000
+            );
+        }
+    }
 
     if let Some(fb) = info.framebuffer {
         wm::init(fb.width, fb.height);

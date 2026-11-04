@@ -195,6 +195,7 @@ public static class Gfx3dOp
     public const uint Present = 7;
     public const uint ReadPixel = 8;
     public const uint Read = 9;
+    public const uint Info = 10;
 }
 
 /// <summary>Draw flags of <see cref="Gfx3dOp.Draw"/> (bz-abi <c>gfx3d_flags</c>).</summary>

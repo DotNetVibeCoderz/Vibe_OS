@@ -63,7 +63,7 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Permainan",
         leaf: gfx::rgb(0xF3, 0xC9, 0x69),
-        apps: &[("m2048", "2048"), ("mxox", "Tic-Tac-Toe"), ("mruang", "Ruang 3D")],
+        apps: &[("m2048", "2048"), ("mxox", "Tic-Tac-Toe"), ("mruang", "Ruang 3D"), ("mbuah", "Panen Buah 3D")],
     },
     Category {
         name: "Utilitas",

@@ -72,6 +72,7 @@ public class AbiContractTests
         Assert.Equal(6ul, UserOp.Avatar);
         Assert.Equal(56ul, SyscallNumbers.Gfx3d);
         Assert.Equal(9u, Gfx3dOp.Read);
+        Assert.Equal(10u, Gfx3dOp.Info);
         Assert.Equal(12, Gfx3dLight.Lights);
         Assert.Equal(57ul, SyscallNumbers.Count);
     }

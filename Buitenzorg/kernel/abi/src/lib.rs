@@ -262,6 +262,9 @@ pub mod gfx3d_op {
     /// Copy context `target`'s color buffer (w*h `u32`, top row first) to
     /// `ptr` (`len` bytes, at least w*h*4).
     pub const READ: u32 = 9;
+    /// Which backend context `target` draws with: 0 the software
+    /// rasterizer, 1 the host GPU through virtio-gpu 3D (virgl).
+    pub const INFO: u32 = 10;
 }
 
 /// [`gfx3d_op::CLEAR`] bits.
@@ -915,6 +918,7 @@ mod tests {
         assert_eq!(user_op::AVATAR, 6);
         assert_eq!(sysno::GFX3D, 56);
         assert_eq!(gfx3d_op::READ, 9);
+        assert_eq!(gfx3d_op::INFO, 10);
         assert_eq!(gfx3d_light::LIGHTS, 12);
         assert_eq!(sysno::COUNT, 57);
     }

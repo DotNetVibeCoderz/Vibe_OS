@@ -24,6 +24,7 @@ const DRAW: u32 = 6;
 const PRESENT: u32 = 7;
 const READ_PIXEL: u32 = 8;
 const READ: u32 = 9;
+const INFO: u32 = 10;
 
 /// `bz_abi::Gfx3dCmd`.
 #[repr(C)]
@@ -245,9 +246,15 @@ fn read(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_i32(0)
 }
 
+/// `G3dInfo(int context)` -> 0 software, 1 GPU, -1.
+fn info(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    ret(call(&Gfx3dCmd { op: INFO, target: int(a, 0) as u32, ..Default::default() }))
+}
+
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 10] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 11] = [
+        ("G3dInfo", info),
         ("G3dCreate", create),
         ("G3dFree", free),
         ("G3dClear", clear),

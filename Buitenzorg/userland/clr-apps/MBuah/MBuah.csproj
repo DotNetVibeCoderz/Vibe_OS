@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Panen Buah 3D (G3 game): /disk/MBUAH.DLL, `run mbuah`. Buitenzorg.UI +
+       Buitenzorg.Three over the kernel's 3D rasterizer. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MBuah</AssemblyName>
+    <RootNamespace>MBuah</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+    <ProjectReference Include="..\Buitenzorg.Three\Buitenzorg.Three.csproj" />
+  </ItemGroup>
+</Project>

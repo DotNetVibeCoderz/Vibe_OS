@@ -756,8 +756,22 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   box/plane/sphere/cylinder/cone/torus/OBJ, `Material` Basic/Lambert/Phong + map +
   transparan + wireframe, `Light`, `Camera`, `Renderer`). Demo **Ruang 3D** (`mruang`):
   taman 3D dengan orbit kamera. `MILESTONE: GFX3D OK` di ketiga arsitektur; self-test
-  Ruang 3D (12 cek) ikut `MANAGED APPS OK`. Berikutnya: backend **virgl** (`virtio-gpu-gl`),
-  **V3D** Pi 4, game 3D kecil, picking/raycast, animasi.
+  Ruang 3D (12 cek) ikut `MANAGED APPS OK`.
+- **Status G3 (2026-11-04, langkah 2 ✓ — G3 selesai):** backend **GPU lewat virgl**
+  (`virtio/virgl.rs`): bila virtio-gpu menawarkan 3D (QEMU `virtio-gpu-gl`), konteks render
+  dibuat di GPU host — kernel tetap menjalankan vertex stage (hasil sama dengan software),
+  verteks clip-space dikirim lewat `RESOURCE_INLINE_WRITE`, shader TGSI pass-through,
+  depth/tekstur/blending/wireframe di GPU, hasil dibaca balik (`TRANSFER_FROM_HOST_3D`) saat
+  present. Format depth/warna dipilih dari capset (host v1 tidak mengisi mask depth → Z24X8).
+  Terverifikasi: self-test yang sama lolos di GPU (`MILESTONE: GFX3D VIRGL OK`) dan Ruang 3D
+  12/12 di GPU. QEMU Windows tidak bisa membuat konteks GL di mesin ini, jadi
+  `scripts/setup-virgl.ps1` menyiapkan salinan QEMU + Mesa (EGL/llvmpipe) untuk `egl-headless`;
+  smoke `[virgl]` jalan bila salinan itu ada. **V3D Pi 4**: node DTB, power domain + clock
+  lewat mailbox, IDENT dibaca (`MILESTONE: RPI4 V3D OK` di board — QEMU tidak memodelkan V3D);
+  render lewat V3D (control list + shader QPU) belum, Pi tetap memakai rasterizer software.
+  Pelengkap: raycast/picking (`Scene.Raycast`, `Renderer.Pick`), perilaku per node
+  (`Node.Updating`, `Scene.Update`, `Spin`), game **Panen Buah 3D** (`mbuah`), op `GFX3D INFO`
+  (backend per konteks), panduan `docs/graphics-3d.md`.
 - Prasyarat: FPU/SIMD untuk kode grafis (ring-3), timer resolusi tinggi untuk frame pacing.
 - **Status G1 (2026-11-03, langkah 1 ✓):** present per **ubin 64 px** dengan hash FNV
   (hanya ubin yang berubah ditulis ke framebuffer), `fill_rect` pakai slice fill,

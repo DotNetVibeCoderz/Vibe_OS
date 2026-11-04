@@ -504,7 +504,7 @@ public sealed class Camera
 }
 
 /// <summary>An object in the scene graph.</summary>
-public sealed class Node
+public sealed partial class Node
 {
     public string Name;
     public Vector3 Position = Vector3.Zero;
@@ -569,7 +569,7 @@ public sealed class Node
 }
 
 /// <summary>A scene: the node tree plus background, ambient light and fog.</summary>
-public sealed class Scene
+public sealed partial class Scene
 {
     public Node Root { get; } = new Node("root");
     public int Background = 0x101820;
@@ -625,7 +625,7 @@ public struct RenderStats
 }
 
 /// <summary>Draws a scene into a Device3D (the kernel rasterizer).</summary>
-public sealed class Renderer : IDisposable
+public sealed partial class Renderer : IDisposable
 {
     public Device3D Device { get; private set; }
     public int Width => Device.Width;

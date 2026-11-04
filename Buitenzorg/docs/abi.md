@@ -284,6 +284,7 @@ ptr2:u64, len2:u64`. `gfx3d_op`:
 | 7 | `PRESENT` | `target`, `a` window, `b`/`c` = client x/y (`i32`) | 0 (WIN_PRESENT then shows it) |
 | 8 | `READ_PIXEL` | `target`, `a` x, `b` y | 0x00RRGGBB |
 | 9 | `READ` | `target`, `ptr` = `u32[w*h]` out, `len` bytes | 0 |
+| 10 | `INFO` | `target` | backend: 0 software rasterizer, 1 host GPU (virgl) |
 
 `Vertex3D` — `#[repr(C)]`, **40 bytes**, 4-byte aligned (an array element):
 `x, y, z, nx, ny, nz, u, v: f32, color: u32` (0xAARRGGBB, multiplied with the
@@ -302,6 +303,10 @@ distances from the eye), `11` light count (<= 8), then from `12` one block of 8
 per light: kind (0 directional, 1 point), x, y, z (directional: the direction
 the light travels; point: its position), r, g, b (color x intensity), range
 (point: fade-out distance, 0 = never).
+
+A context draws with the kernel's software rasterizer or, when the virtio GPU
+offers 3D (QEMU `virtio-gpu-gl`), on the host GPU through virgl -- same results;
+`INFO` tells which. Guide: [graphics-3d.md](graphics-3d.md).
 
 Every resource belongs to the calling process and is freed when it exits; all of
 them together are capped at 8 MiB (`gfx3d::BUDGET`). The kernel converts the

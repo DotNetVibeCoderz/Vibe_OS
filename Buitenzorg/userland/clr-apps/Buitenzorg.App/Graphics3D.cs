@@ -32,6 +32,7 @@ internal static class G3dNative
     [DllImport("buitenzorg")] internal static extern int G3dPresent(int context, int window, int x, int y);
     [DllImport("buitenzorg")] internal static extern int G3dReadPixel(int context, int x, int y);
     [DllImport("buitenzorg")] internal static extern int G3dRead(int context, int[] pixels);
+    [DllImport("buitenzorg")] internal static extern int G3dInfo(int context);
 
     static int _mode; // 0 unknown, 1 kernel, 2 simulated
 
@@ -376,6 +377,12 @@ public sealed class Device3D : IDisposable
     public int Height { get; }
     /// <summary>True off the device: a managed stand-in rasterizer draws (unlit, untextured).</summary>
     public bool IsSimulated => _sim != null;
+
+    /// <summary>True when the host GPU draws (virtio-gpu 3D / virgl), false for the kernel's software rasterizer.</summary>
+    public bool IsGpu => _sim == null && G3dNative.G3dInfo(_id) == 1;
+
+    /// <summary>Who draws: "GPU (virgl)", "kernel rasterizer" or "simulated".</summary>
+    public string Backend => _sim != null ? "simulated" : IsGpu ? "GPU (virgl)" : "kernel rasterizer";
     public DrawStats LastFrame;
 
     public Device3D(int width, int height)

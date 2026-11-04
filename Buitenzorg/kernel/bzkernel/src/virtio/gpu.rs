@@ -55,7 +55,19 @@ pub struct VirtioGpu {
     cursor_set: bool,
     pub cursor_moves: u64,
     pub band_presents: u64,
+    /// VIRTIO_GPU_F_VIRGL was negotiated (QEMU `virtio-gpu-gl`): the 3D
+    /// commands below reach a host OpenGL renderer (G3, `virgl.rs`).
+    pub(super) virgl: bool,
+    /// Physically contiguous buffer for SUBMIT_3D command streams.
+    pub(super) cbuf_phys: u64,
+    pub(super) cbuf: *mut u32,
 }
+
+/// VIRTIO_GPU_F_VIRGL.
+const F_VIRGL: u64 = 1 << 0;
+const SUBMIT_3D: u32 = 0x0207;
+/// Bytes of the SUBMIT_3D buffer.
+pub(super) const CBUF_BYTES: usize = 128 * 1024;
 
 unsafe impl Send for VirtioGpu {}
 
@@ -83,6 +95,44 @@ impl VirtioGpu {
         24 + args.len() * 4
     }
 
+    /// A command with a 3D context id in the header.
+    pub(super) fn ok_ctx(&mut self, kind: u32, ctx: u32, args: &[u32]) -> Result<(), &'static str> {
+        let n = self.put(kind, args);
+        unsafe { (self.cmd.add(16) as *mut u32).write_volatile(ctx) };
+        match self.command(n, 24)? {
+            RESP_OK_NODATA => Ok(()),
+            _ => Err("virtio-gpu: 3D command failed"),
+        }
+    }
+
+    /// A command whose response carries data; returns (response type, the
+    /// response's words after the 24-byte header).
+    pub(super) fn query(&mut self, kind: u32, args: &[u32], resp_words: usize) -> Result<(u32, alloc::vec::Vec<u32>), &'static str> {
+        let n = self.put(kind, args);
+        let t = self.command(n, 24 + resp_words * 4)?;
+        let r = (0..resp_words).map(|i| unsafe { (self.cmd.add(2048 + 24 + i * 4) as *const u32).read_volatile() }).collect();
+        Ok((t, r))
+    }
+
+    /// Run a virgl command stream in context `ctx` (SUBMIT_3D).
+    pub(super) fn submit3d(&mut self, ctx: u32, words: &[u32]) -> Result<(), &'static str> {
+        if !self.virgl || words.len() * 4 > CBUF_BYTES {
+            return Err("virtio-gpu: command stream too long");
+        }
+        unsafe { core::ptr::copy_nonoverlapping(words.as_ptr(), self.cbuf, words.len()) };
+        // header (ctx id at 16) + size + padding
+        let n = self.put(SUBMIT_3D, &[(words.len() * 4) as u32, 0]);
+        unsafe { (self.cmd.add(16) as *mut u32).write_volatile(ctx) };
+        let req = Buf { phys: self.cmd_phys, len: n as u32, device_writes: false };
+        let data = Buf { phys: self.cbuf_phys, len: (words.len() * 4) as u32, device_writes: false };
+        let resp = Buf { phys: self.cmd_phys + 2048, len: 24, device_writes: true };
+        self.q.submit_wait(self.t.as_ref(), &[req, data, resp])?;
+        match unsafe { (self.cmd.add(2048) as *const u32).read_volatile() } {
+            RESP_OK_NODATA => Ok(()),
+            _ => Err("virtio-gpu: SUBMIT_3D refused"),
+        }
+    }
+
     fn ok(&mut self, kind: u32, args: &[u32]) -> Result<(), &'static str> {
         let n = self.put(kind, args);
         match self.command(n, 24)? {
@@ -92,7 +142,7 @@ impl VirtioGpu {
     }
 
     fn new(mut t: Box<dyn Transport>, width: u32, height: u32) -> Result<VirtioGpu, &'static str> {
-        super::begin_init(t.as_mut(), 0)?;
+        let features = super::begin_init(t.as_mut(), F_VIRGL)?;
         let q = Virtqueue::new(t.as_mut(), 0)?;
         // queue 1 = the cursor queue (set up before DRIVER_OK like every queue)
         let cq = Virtqueue::new(t.as_mut(), 1).ok();
@@ -115,7 +165,17 @@ impl VirtioGpu {
             cursor_set: false,
             cursor_moves: 0,
             band_presents: 0,
+            virgl: false,
+            cbuf_phys: 0,
+            cbuf: core::ptr::null_mut(),
         };
+        if features & F_VIRGL != 0 {
+            if let Some((p, v)) = crate::memory::alloc_dma_contiguous(CBUF_BYTES / 4096) {
+                g.cbuf_phys = p;
+                g.cbuf = v as *mut u32;
+                g.virgl = true;
+            }
+        }
 
         // The host's preferred mode for scanout 0 (informational).
         let n = g.put(GET_DISPLAY_INFO, &[]);
@@ -258,6 +318,13 @@ pub fn present_bands(back: &[u32], bands: &[(usize, usize)]) {
 /// cursor).
 pub fn cursor_capable() -> bool {
     GPU.try_lock().is_some_and(|g| g.as_ref().is_some_and(|g| g.cq.is_some()))
+}
+
+/// Run `f` on the GPU (blocking for the lock: 3D work is not a frame that
+/// may be skipped).
+pub(super) fn with<R>(f: impl FnOnce(&mut VirtioGpu) -> R) -> Option<R> {
+    let mut guard = GPU.lock();
+    guard.as_mut().map(f)
 }
 
 /// Whether a virtio GPU is up at all.

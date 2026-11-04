@@ -488,6 +488,9 @@ fn sys_gfx3d(cmd_ptr: u64) -> u64 {
             }
             crate::gfx3d::draw(owner, c.target, c.a, c.b, c.c, c.d, model, vp).map(|(t, p)| (p as u64) << 32 | t as u64)
         }
+        op::INFO => {
+            if crate::gfx3d::exists(owner, c.target) { Ok(crate::gfx3d::on_gpu(owner, c.target) as u64) } else { Err("no such context") }
+        }
         op::PRESENT => crate::gfx3d::present(owner, c.target, c.a, c.b as i32, c.c as i32).map(|_| 0),
         op::READ_PIXEL => crate::gfx3d::read_pixel(owner, c.target, c.a, c.b).map(|p| p as u64),
         op::READ => {
