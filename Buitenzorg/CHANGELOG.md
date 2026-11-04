@@ -45,6 +45,15 @@ Hardening toward a stable x86-64 release.
   app (Start menu > Permainan, `run mruang`) shows a small garden you can
   orbit with the mouse or arrow keys; shell `gfx3d` shows what 3D resources are
   in use. GPU backends (virgl, Raspberry Pi V3D) come later.
+- **Boots straight to the desktop.** A normal boot now skips every demo,
+  test program and self-test and goes straight to the desktop: under QEMU
+  the desktop is on screen ~7-10 s after QEMU starts (it used to take more
+  than 3 minutes), and the kernel's own part is 0.2-1.5 s -- the rest is
+  the emulated firmware and boot loader. The wallpaper, sound, network
+  (DHCP), USB and accounts load in the background behind the desktop. The
+  full test boot is still there for the smoke tests and CI (QEMU
+  `-fw_cfg name=opt/buitenzorg/selftest,string=1`, or
+  `scripts/run-qemu.ps1 -SelfTest`); real hardware always boots normally.
 - **3D on the GPU (G3 done).** With a 3D-capable virtio GPU (QEMU
   `virtio-gpu-gl`) the 3D API draws on the host's graphics card: the
   kernel still computes the vertices and lighting, the GPU does the pixels.

@@ -6,6 +6,7 @@
 pub mod aspace;
 pub mod boot;
 pub mod context;
+pub mod fwcfg;
 pub mod gdt;
 pub mod interrupts;
 pub mod ioapic;

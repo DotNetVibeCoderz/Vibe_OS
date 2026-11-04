@@ -383,6 +383,68 @@ fn rpi4_files(dir: &std::path::Path) -> Option<Vec<(String, Vec<u8>)>> {
     Some(raw)
 }
 
+/// An ELF64 file without the contents of its `.symtab` / `.strtab` /
+/// `.comment` sections (they stay as empty headers, so section indices --
+/// and the loader's `.bootloader-config` lookup -- are unchanged). Everything
+/// the loader maps comes before them in an lld-linked kernel; the section
+/// name table and the section header table are appended after it. `None`
+/// when the file is not laid out like that (then the original is used).
+fn strip_symbols(f: &[u8]) -> Option<Vec<u8>> {
+    let u16_at = |o: usize| u16::from_le_bytes([f[o], f[o + 1]]) as usize;
+    let u32_at = |o: usize| u32::from_le_bytes(f[o..o + 4].try_into().unwrap());
+    let u64_at = |o: usize| u64::from_le_bytes(f[o..o + 8].try_into().unwrap()) as usize;
+    if f.len() < 64 || &f[..4] != b"\x7fELF" || f[4] != 2 || f[5] != 1 {
+        return None;
+    }
+    let (shoff, shentsize, shnum, shstrndx) = (u64_at(0x28), u16_at(0x3A), u16_at(0x3C), u16_at(0x3E));
+    let (phoff, phentsize, phnum) = (u64_at(0x20), u16_at(0x36), u16_at(0x38));
+    if shentsize != 64 || shstrndx >= shnum || shoff + shnum * 64 > f.len() {
+        return None;
+    }
+    let sh = |i: usize| shoff + i * 64;
+    let name_of = |i: usize| -> String {
+        let base = u64_at(sh(shstrndx) + 0x18) + u32_at(sh(i)) as usize;
+        let end = f[base..].iter().position(|&b| b == 0).map(|e| base + e).unwrap_or(base);
+        String::from_utf8_lossy(&f[base..end]).into_owned()
+    };
+    // the end of everything kept in place: every segment's file data and
+    // every section except the dropped ones and the name table
+    let drop = |i: usize| matches!(name_of(i).as_str(), ".symtab" | ".strtab" | ".comment");
+    let mut keep_end = phoff + phnum * phentsize;
+    for k in 0..phnum {
+        let ph = phoff + k * phentsize;
+        keep_end = keep_end.max(u64_at(ph + 8) + u64_at(ph + 0x20));
+    }
+    for i in 1..shnum {
+        let kind = u32_at(sh(i) + 4);
+        if i == shstrndx || drop(i) || kind == 8 {
+            continue; // NOBITS has no file data
+        }
+        keep_end = keep_end.max(u64_at(sh(i) + 0x18) + u64_at(sh(i) + 0x20));
+    }
+    let mut out = f[..keep_end].to_vec();
+    // the section name table, then the headers
+    let (str_off, str_size) = (u64_at(sh(shstrndx) + 0x18), u64_at(sh(shstrndx) + 0x20));
+    let new_str = out.len();
+    out.extend_from_slice(&f[str_off..str_off + str_size]);
+    while out.len() % 8 != 0 {
+        out.push(0);
+    }
+    let new_shoff = out.len();
+    for i in 0..shnum {
+        let mut h = f[sh(i)..sh(i) + 64].to_vec();
+        if i == shstrndx {
+            h[0x18..0x20].copy_from_slice(&(new_str as u64).to_le_bytes());
+        } else if i != 0 && drop(i) {
+            h[0x18..0x20].copy_from_slice(&0u64.to_le_bytes());
+            h[0x20..0x28].copy_from_slice(&0u64.to_le_bytes());
+        }
+        out.extend_from_slice(&h);
+    }
+    out[0x28..0x30].copy_from_slice(&(new_shoff as u64).to_le_bytes());
+    Some(out)
+}
+
 fn main() {
     let kernel = PathBuf::from(std::env::var("CARGO_BIN_FILE_BZKERNEL_bzkernel").unwrap());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -390,7 +452,26 @@ fn main() {
     let uefi_path = out_dir.join("buitenzorg-uefi.img");
     let bios_path = out_dir.join("buitenzorg-bios.img");
 
-    let mut builder = bootloader::DiskImageBuilder::new(kernel.clone());
+    // The image gets the kernel without its symbol tables: the BIOS loader
+    // reads the file through int 13h, and under QEMU every megabyte costs
+    // ~1.2 s of boot (4.5 MB -> 3.0 MB). The un-stripped ELF stays in
+    // target/ for the debugger.
+    let stripped = out_dir.join("bzkernel-stripped");
+    let kernel_img = match strip_symbols(&std::fs::read(&kernel).unwrap()) {
+        Some(b) => {
+            std::fs::write(&stripped, b).unwrap();
+            stripped
+        }
+        None => kernel.clone(),
+    };
+    let mut builder = bootloader::DiskImageBuilder::new(kernel_img);
+    // The loader prints every INFO step on the framebuffer (24-bit text
+    // rendering + scrolling at 1280x720): under QEMU that took ~9 s before the
+    // kernel started. Warnings only, and only on the serial port.
+    let mut boot_config = bootloader::BootConfig::default();
+    boot_config.frame_buffer_logging = false;
+    boot_config.log_level = bootloader_boot_config::LevelFilter::Warn;
+    builder.set_boot_config(&boot_config);
     // Every /disk file, also written into the Limine image (see limine_image).
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     // Test file for the v0.3 "Batang" milestone: the kernel reads this back
@@ -550,7 +631,10 @@ fn main() {
     if let Some(bytes) = clrhost_elf("aarch64-unknown-none") {
         arm_files.push(("CLRHOST.ELF".into(), bytes));
     }
-    let mut modules = String::new();
+    // No Limine modules any more: the programs are read from /disk, and
+    // Limine loading ~16 ELF modules through UEFI cost seconds of every boot
+    // under QEMU. (The kernel still falls back to modules a loader hands over.)
+    let modules = String::new();
     if let Ok(dir) = std::fs::read_dir(&arm_progs) {
         let mut elfs: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().map_or(false, |x| x == "elf")).collect();
         elfs.sort();
@@ -559,7 +643,6 @@ fn main() {
             let stem = path.file_stem().unwrap().to_string_lossy().to_string();
             if let Ok(bytes) = std::fs::read(&path) {
                 let file = format!("{}.ELF", stem.to_uppercase());
-                modules.push_str(&format!("    module_path: boot():/{file}\n    module_string: {stem}\n"));
                 arm_files.push((file, bytes));
             }
         }
@@ -599,12 +682,9 @@ fn main() {
     if let Some(bytes) = clrhost_elf("riscv64imac-unknown-none-elf") {
         rv_files.push(("CLRHOST.ELF".into(), bytes));
     }
-    let mut rv_modules = String::new();
+    let rv_modules = String::new(); // no Limine modules: the programs come from /disk
     for (stem, bytes) in build_riscv_programs(&out_dir) {
         let file = format!("{}.ELF", stem.to_uppercase());
-        rv_modules.push_str(&format!("    module_path: boot():/{file}
-    module_string: {stem}
-"));
         rv_files.push((file, bytes));
     }
     let rv_ok = rv_kernel.exists()

@@ -16,6 +16,10 @@ set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 img="$root/dist/buitenzorg-bios.img"
 qemu="${QEMU:-qemu-system-x86_64}"
+# Every boot below is the self-test boot (bootmode.rs): QEMU's fw_cfg file
+# switches on all demos, self-tests and milestones; a normal boot goes
+# straight to the desktop (see the [fastboot] step).
+selftest=(-fw_cfg name=opt/buitenzorg/selftest,string=1)
 arch="${SMOKE_ARCH:-all}"
 case "$arch" in
   all|x86_64|aarch64|riscv64) ;;
@@ -64,7 +68,7 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
                  -device virtio-gpu-pci -audiodev none,id=vsnd -device virtio-sound-pci,audiodev=vsnd
                  -monitor tcp:127.0.0.1:4481,server,nowait) ;;
   esac
-  timeout --foreground 450 "$qemu" "${drive[@]}" \
+  timeout --foreground 450 "$qemu" "${drive[@]}" "${selftest[@]}" \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
   local pid=$!
@@ -125,6 +129,39 @@ basic=("MILESTONE: HELLO KERNEL OK" "MILESTONE: SCHEDULER OK" "MILESTONE: IPC OK
 
 if want x86_64; then
 [ -f "$img" ] || skip "smoke [x86_64]: skipped ($img not built)"
+# Normal boot (no fw_cfg switch): straight to the desktop, no demos. The
+# kernel reports when its first desktop frame was on screen; that must stay
+# under the budget (milliseconds of kernel time; the BIOS and loader in front
+# of it are QEMU's), and no self-test may have run.
+fastlog="$root/dist/boot-fast.log"
+rm -f "$fastlog"
+cp "$img" "$root/dist/fastboot-test.img"
+t0=$(date +%s%N)
+timeout --foreground 300 "$qemu" -smp 2 -drive "format=raw,file=$root/dist/fastboot-test.img" -m 512M \
+  -audiodev none,id=snd0 -device AC97,audiodev=snd0 -display none -serial "file:$fastlog" -no-reboot &
+fpid=$!
+wall=0
+for _ in $(seq 1200); do
+  sleep 0.25
+  if grep -qF "first desktop frame" "$fastlog" 2>/dev/null; then wall=$(( ($(date +%s%N) - t0) / 1000000 )); break; fi
+done
+for _ in $(seq 60); do
+  sleep 0.5
+  grep -qF "background start-up done" "$fastlog" 2>/dev/null && break
+done
+kill "$fpid" 2>/dev/null || true
+wait "$fpid" 2>/dev/null || true
+rm -f "$root/dist/fastboot-test.img"
+require "$fastlog" "[boot] mode: normal" "BUITENZORG READY" "[boot] first desktop frame on screen" "[boot] background start-up done"
+if grep -qF "MILESTONE: SCHEDULER OK" "$fastlog"; then
+  echo "SMOKE TEST FAILED (boot-fast.log): the normal boot ran the self-test demos" >&2; exit 1
+fi
+frame_ms=$(grep -o "first desktop frame on screen [0-9]* ms" "$fastlog" | head -1 | grep -o "[0-9]*" | head -1)
+if [ "$frame_ms" -gt 8000 ]; then
+  echo "SMOKE TEST FAILED (boot-fast.log): first desktop frame $frame_ms ms after kernel start (budget 8000 ms)" >&2; exit 1
+fi
+echo "smoke [fastboot]: normal boot -- desktop on screen $frame_ms ms after kernel start, $wall ms after QEMU start (BIOS + loader included)"
+
 # Full run on IDE: storage milestones must pass (file read via own driver).
 boot ide "$root/dist/boot-ide.log"
 require "$root/dist/boot-ide.log" "${basic[@]}" \
@@ -204,7 +241,7 @@ done
 if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   log="$root/dist/boot-uefi.log"
   rm -f "$log"
-  timeout --foreground 450 "$qemu" \
+  timeout --foreground 450 "$qemu" "${selftest[@]}" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
     -drive "format=raw,file=$root/dist/buitenzorg-uefi.img" -smp 2 \
@@ -228,7 +265,7 @@ fi
 if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
   log="$root/dist/boot-limine.log"
   rm -f "$log"
-  timeout --foreground 450 "$qemu" \
+  timeout --foreground 450 "$qemu" "${selftest[@]}" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
     -drive "format=raw,file=$root/dist/buitenzorg-limine-uefi.img" -smp 2 \
@@ -261,7 +298,7 @@ done
 if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.img" ]; then
   log="$root/dist/boot-arm64.log"
   rm -f "$log"
-  timeout --foreground 450 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -smp 2 -m 512M \
+  timeout --foreground 450 "$qemu_arm" -M virt,gic-version=3,acpi=off -cpu cortex-a72 -smp 2 -m 512M "${selftest[@]}" \
     -bios "$arm_fw" -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-arm64.img,if=none" \
     -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device ramfb     -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
     -device virtio-keyboard-device -device virtio-tablet-device \
@@ -298,7 +335,7 @@ if [ -n "$qemu_arm" ] && [ -f "$kernel8" ] && "$qemu_arm" -M help | grep -q '^ra
     cp "$root/dist/buitenzorg-rpi4.img" "$root/dist/rpi4-sd-test.img"
     sdargs=(-drive "file=$root/dist/rpi4-sd-test.img,if=sd,format=raw")
   fi
-  timeout --foreground 500 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" \
+  timeout --foreground 500 "$qemu_arm" -M raspi4b -m 2G -kernel "$kernel8" -append bz.selftest \
     -dtb "$root/kernel/bzkernel/testdata/bcm2711-rpi-4-b.dtb" ${sdargs[@]+"${sdargs[@]}"} -display none -serial "file:$log" -serial null -no-reboot 2>/dev/null &
   qpid=$!
   for _ in $(seq 480); do
@@ -337,7 +374,7 @@ if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64
   log="$root/dist/boot-riscv64.log"
   rm -f "$log"
   cp "$rv_vars" "$root/dist/riscv64-vars.fd"
-  timeout --foreground 450 "$qemu_rv" -M virt,acpi=off -cpu rv64 -smp 2 -m 512M \
+  timeout --foreground 450 "$qemu_rv" -M virt,acpi=off -cpu rv64 -smp 2 -m 512M "${selftest[@]}" \
     -drive "if=pflash,format=raw,unit=0,file=$rv_code,readonly=on" -drive "if=pflash,format=raw,unit=1,file=$root/dist/riscv64-vars.fd" \
     -global virtio-mmio.force-legacy=false -drive "id=d0,format=raw,file=$root/dist/buitenzorg-riscv64.img,if=none" \
     -device virtio-blk-device,drive=d0 -device virtio-gpu-device -device virtio-keyboard-device -device virtio-tablet-device \

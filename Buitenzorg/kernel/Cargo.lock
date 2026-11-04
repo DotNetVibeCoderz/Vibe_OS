@@ -150,6 +150,7 @@ name = "bzimage"
 version = "0.1.0"
 dependencies = [
  "bootloader",
+ "bootloader-boot-config",
  "bzkernel",
  "fatfs",
  "jpeg-decoder",

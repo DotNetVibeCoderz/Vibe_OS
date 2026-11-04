@@ -96,6 +96,11 @@ pub fn run() -> ! {
     if w != 0 {
         wm::render_frame(&mut back, w, h);
     }
+    let (since_kernel, since_power_on) = crate::boot::elapsed_ms();
+    println!(
+        "[boot] first desktop frame on screen {} ms after kernel start ({} ms after power-on, CPU counter: firmware + loader included)",
+        since_kernel, since_power_on
+    );
 
     loop {
         // With user processes ready to run, give them the CPU (they are

@@ -757,6 +757,16 @@ karena driver GPU sungguhan adalah pekerjaan terbesar di OS mana pun:
   transparan + wireframe, `Light`, `Camera`, `Renderer`). Demo **Ruang 3D** (`mruang`):
   taman 3D dengan orbit kamera. `MILESTONE: GFX3D OK` di ketiga arsitektur; self-test
   Ruang 3D (12 cek) ikut `MANAGED APPS OK`.
+- **Optimasi boot (2026-11-04) ✓:** boot normal langsung ke desktop — demo, program uji,
+  self-test dan milestone hanya di **boot self-test** (`bootmode.rs`: fw_cfg QEMU
+  `opt/buitenzorg/selftest` atau `bz.selftest` di bootargs; hardware asli selalu boot normal;
+  smoke + CI menyalakannya). Jalur normal hanya init yang dibutuhkan frame desktop pertama;
+  wallpaper, suara, USB, jaringan (DHCP), seed RNG, akun dimuat di belakang desktop
+  (`boot_background`, tanpa BKL). Di QEMU TCG: desktop tampil ~7–10 s setelah QEMU start
+  (sebelumnya >3 menit); bagian kernel 0,2–1,5 s, sisanya firmware + loader emulasi. Image:
+  log framebuffer loader BIOS dimatikan, kernel di image di-strip (4,5 → 3,0 MB), modul Limine
+  ARM64/RISC-V dihapus. Langkah smoke `[fastboot]` menjaga anggaran (frame pertama ≤ 8 s
+  sejak kernel mulai). Berikutnya: hardware asli (Pi: firmware ~2–4 s sebelum kernel).
 - **Status G3 (2026-11-04, langkah 2 ✓ — G3 selesai):** backend **GPU lewat virgl**
   (`virtio/virgl.rs`): bila virtio-gpu menawarkan 3D (QEMU `virtio-gpu-gl`), konteks render
   dibuat di GPU host — kernel tetap menjalankan vertex stage (hasil sama dengan software),

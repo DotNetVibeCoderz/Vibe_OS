@@ -77,6 +77,7 @@ mod rng;
 mod ssh;
 mod wm;
 mod gfx3d;
+mod bootmode;
 
 pub(crate) use arch::aarch64::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::virt::pl011 as serial;
@@ -101,6 +102,7 @@ use core::panic::PanicInfo;
 pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     use arch::aarch64::{cpu, exceptions, gic, timer};
 
+    boot::mark_kernel_start();
     // The boot CPU is CPU 0 (TPIDR_EL1 may hold anything the loader left).
     cpu::set_id(0);
     if let Some(fb) = info.framebuffer {
@@ -128,6 +130,13 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         }
     }
 
+    // Normal boot (straight to the desktop) or the self-test boot (QEMU fw_cfg /
+    // `bz.selftest` boot argument, see bootmode.rs). A normal boot keeps the
+    // log on the serial port only.
+    let st = bootmode::detect(fdt.as_ref());
+    if !st {
+        interactive::set_active();
+    }
     print!("{}", logo::BOOT_LOGO);
     println!();
     println!("[kernel] Hello Kernel -- Buitenzorg OS (ARM64 / AArch64)");
@@ -148,16 +157,20 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         allocator::HEAP_START,
         user_root.unwrap_or(0)
     );
-    if memory_self_test() {
-        println!("[kernel] MILESTONE: MEMORY OK");
+    if st {
+        if memory_self_test() {
+            println!("[kernel] MILESTONE: MEMORY OK");
+        }
+        aspace_self_test();
+        context_self_test();
     }
-    aspace_self_test();
-    context_self_test();
     match platform.as_ref() {
         Some(p) => println!("[arm64] platform (live DTB): {}", p.summary()),
         None => println!("[arm64] no Device Tree from the loader"),
     }
-    dtb::self_test();
+    if st {
+        dtb::self_test();
+    }
 
     // Platform devices from the DTB: the PL031 clock and the virtio-mmio slots.
     if let Some(f) = fdt.as_ref() {
@@ -170,21 +183,25 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     if let Some(p) = platform.as_ref() {
         virtio::mmio::set_slots(&p.virtio_mmio);
     }
-    rtc_self_test();
+    if st {
+        rtc_self_test();
+    }
     storage_self_test();
-    match vfs::folder_self_test("/disk") {
-        Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
-        Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
-    }
-    // The rest of the boot runs under the splash (its image is on /disk).
     clock::load();
-    rng::init();
-    users::load();
-    match users::self_test() {
-        Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
-        Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+    if st {
+        match vfs::folder_self_test("/disk") {
+            Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
+            Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+        }
+        // The rest of the boot runs under the splash (its image is on /disk).
+        rng::init();
+        users::load();
+        match users::self_test() {
+            Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
+            Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+        }
+        splash::start(30);
     }
-    splash::start(30);
 
     // Interrupts: the GIC (v3 on `virt`, v2 on a Raspberry Pi) + the virtual
     // timer at 100 Hz.
@@ -213,9 +230,13 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
                 gic::enable_ppi(timer::INTID);
                 timer::start(100);
                 cpu::enable_interrupts();
+                // a normal boot does not wait the 50 ticks of the timer check
                 let t0 = cpu::timestamp();
+                if !st {
+                    timer_ok = true;
+                }
                 let hz = cpu::counter_hz();
-                while timer::ticks() < 50 && cpu::timestamp() - t0 < hz * 3 {
+                while st && timer::ticks() < 50 && cpu::timestamp() - t0 < hz * 3 {
                     cpu::halt();
                 }
                 let ms = (cpu::timestamp() - t0) * 1000 / hz.max(1);
@@ -226,8 +247,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
                 );
                 // 50 ticks at 100 Hz = 500 ms of counter time; never faster,
                 // but under TCG on a busy host interrupts can arrive late.
-                timer_ok = n >= 50 && (450..=2000).contains(&ms);
-                if timer_ok {
+                timer_ok = timer_ok || (n >= 50 && (450..=2000).contains(&ms));
+                if st && timer_ok {
                     println!("[kernel] MILESTONE: ARM64 TIMER OK ({}; EL1 virtual timer PPI 27 at 100 Hz)", gic_name);
                 }
             }
@@ -237,17 +258,26 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         println!("[arm64] no GIC in the Device Tree");
     }
 
-    el0_self_test();
+    if st {
+        el0_self_test();
+    }
     gpu_self_test(info);
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
     start_secondary_cpus(info, fdt.as_ref());
     shared_kernel_setup(info, fdt.as_ref());
-    run_boot_programs(info);
-    // The managed C# path (RustCLR) next to the native one (bflat).
-    clr::boot_demo("ARM64");
-    show_desktop();
+    if st {
+        run_boot_programs(info);
+        // The managed C# path (RustCLR) next to the native one (bflat).
+        clr::boot_demo("ARM64");
+        show_desktop();
+    } else {
+        // the network (DHCP waits), Ethernet, USB, the wallpaper, the random
+        // seed and the accounts come up behind the desktop, without the BKL
+        task::spawn_unlocked("boot-background", boot_background);
+        println!("[boot] desktop after {} ms of kernel time (normal boot)", interrupts::ticks() * 1000 / 18);
+    }
 
     let uart = platform.as_ref().and_then(|p| p.uart.clone()).map(|u| u.0).unwrap_or_default();
     if timer_ok && !uart.is_empty() && info.loader == "limine" {
@@ -793,6 +823,10 @@ fn storage_self_test() {
         println!("[arm64] storage: mount /disk failed: {}", e);
         return;
     }
+    if !bootmode::selftest() {
+        println!("[arm64] /disk on {}", dev_name);
+        return;
+    }
     let names = vfs::list("/disk").unwrap_or_default();
     let batang = vfs::read("/disk/BATANG.TXT").ok().and_then(|b| alloc::string::String::from_utf8(b).ok());
     let (y, mo, d, h, mi, s) = rtc::read();
@@ -819,6 +853,9 @@ fn gpu_self_test(info: &boot::BootInfo) {
         return;
     }
     virtio::gpu::init(fb.width, fb.height);
+    if !bootmode::selftest() {
+        return; // the desktop's first frame goes through it
+    }
     let mut back = alloc::vec![0u32; fb.width * fb.height];
     for y in 0..fb.height {
         for x in 0..fb.width {
@@ -867,6 +904,10 @@ fn start_secondary_cpus(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         println!("[smp] single CPU ({} in the DTB)", mpidrs.len());
         return;
     };
+    if !bootmode::selftest() {
+        println!("[smp] {} of {} CPUs online via {}", online, mpidrs.len(), how);
+        return;
+    }
     let irq0: alloc::vec::Vec<u64> = (0..online).map(arch::aarch64::exceptions::irqs_on).collect();
     let t0 = arch::cpu::timestamp();
     while arch::cpu::timestamp() - t0 < arch::aarch64::cpu::counter_hz() / 5 {
@@ -920,13 +961,16 @@ fn smp_processes_test(image: &[u8]) {
 /// hardening test, PSCI power, the window manager (theme, icons, official
 /// wallpaper), virtio input, and the network (loopback, then a virtio NIC).
 fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
-    if syscall::security_self_test() {
-        println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
-    } else {
-        println!("[kernel] security self-test FAILED");
+    let st = bootmode::selftest();
+    if st {
+        if syscall::security_self_test() {
+            println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
+        } else {
+            println!("[kernel] security self-test FAILED");
+        }
+        // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
+        gfx3d::self_test();
     }
-    // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
-    gfx3d::self_test();
 
     let method = fdt
         .and_then(|f| f.find_path("/psci").map(|i| f.nodes[i].strings("method").next().unwrap_or("").into()))
@@ -962,7 +1006,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     if let Some(f) = fdt {
         if let Some(i) = f.compatible("brcm,bcm2711-gpio").next() {
             if let Some(&(pa, _)) = f.reg(i).first() {
-                if platform::virt::rpi_io::init(pa) && platform::virt::rpi_io::self_test() {
+                if platform::virt::rpi_io::init(pa) && st && platform::virt::rpi_io::self_test() {
                     println!("[kernel] MILESTONE: RPI4 IO OK (GPIO + I2C + SPI + UART2-5 + LEDs + firmware sensors for applications: HW_* syscalls)");
                 }
             }
@@ -983,10 +1027,15 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         mouse::set_bounds(fb.width, fb.height);
         theme::set_default();
         let n = icons::load();
-        let wp = wallpaper::set_official("nature").is_ok();
+        // a normal boot loads the wallpaper behind the desktop
+        let wp = st && wallpaper::set_official("nature").is_ok();
         println!("[arm64] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
     }
     virtio::input::init();
+    if !st {
+        net::init([10, 0, 0, 1]);
+        return; // USB, the NICs and the rest: boot_background
+    }
     usb_init();
 
     net::init([10, 0, 0, 1]);
@@ -1033,6 +1082,44 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         }
     }
     ethernet_init();
+}
+
+/// The normal boot's second half, behind the desktop (no BKL; yields between
+/// steps so the compose helper on this CPU is not held up).
+fn boot_background() {
+    let t0 = interrupts::ticks();
+    let steps: [fn(); 5] = [
+        || {
+            if wallpaper::set_official("nature").is_ok() {
+                wm::present_now();
+            }
+        },
+        usb_init,
+        || {
+            if let Some(mut nic) = virtio::net::probe() {
+                let (me, _gw) = match dhcp::lease(&mut nic, 6) {
+                    Some(l) => {
+                        print_lease("virtio-net", &l);
+                        net::set_route(l.mask, l.router);
+                        (l.ip, l.router)
+                    }
+                    None => ([10, 0, 2, 15], [10, 0, 2, 2]),
+                };
+                net::attach(alloc::boxed::Box::new(nic), me);
+                sync_time("virtio-net");
+            }
+        },
+        ethernet_init,
+        || {
+            rng::init();
+            users::load();
+        },
+    ];
+    for step in steps {
+        task::yield_now();
+        step();
+    }
+    println!("[boot] background start-up done in {} ms", (interrupts::ticks() - t0) * 1000 / 18);
 }
 
 /// The Raspberry Pi 4's Ethernet (roadmap R4): GENET v5 + its PHY from the

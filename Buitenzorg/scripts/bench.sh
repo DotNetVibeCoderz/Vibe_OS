@@ -35,7 +35,7 @@ qemu="${QEMU:-qemu-system-x86_64}"
 rm -f "$log"
 
 echo "bench: booting $img (headless, up to ${WAIT_S}s)"
-"$qemu" -drive "file=$img,format=raw,if=ide" -m 512M \
+"$qemu" -drive "file=$img,format=raw,if=ide" -m 512M -fw_cfg name=opt/buitenzorg/selftest,string=1 \
         -serial "file:$log" -display none \
         -audiodev none,id=snd0 -device AC97,audiodev=snd0         -monitor tcp:127.0.0.1:4486,server,nowait &
 qemu_pid=$!

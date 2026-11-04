@@ -179,6 +179,27 @@ impl BootInfo {
 
 static INFO: Once<BootInfo> = Once::new();
 
+/// The CPU counter (TSC / CNTVCT / `time`) when the kernel started; the
+/// counter itself runs from power-on, so the boot report can say both.
+static KERNEL_START: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Remember the counter at kernel entry (first thing in kernel_main).
+pub fn mark_kernel_start() {
+    KERNEL_START.store(crate::arch::cpu::timestamp(), core::sync::atomic::Ordering::Relaxed);
+}
+
+/// (milliseconds since the kernel started, milliseconds since power-on), by
+/// the CPU counter; (0, 0) before its rate is known.
+pub fn elapsed_ms() -> (u64, u64) {
+    let hz = crate::arch::cpu::counter_hz();
+    if hz == 0 {
+        return (0, 0);
+    }
+    let now = crate::arch::cpu::timestamp();
+    let start = KERNEL_START.load(core::sync::atomic::Ordering::Relaxed);
+    ((now.saturating_sub(start) as u128 * 1000 / hz as u128) as u64, (now as u128 * 1000 / hz as u128) as u64)
+}
+
 /// Record the hand-off (once, by the loader glue) and return it.
 pub fn install(info: BootInfo) -> &'static BootInfo {
     INFO.call_once(|| info)

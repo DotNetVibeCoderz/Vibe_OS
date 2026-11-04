@@ -76,6 +76,7 @@ mod rng;
 mod ssh;
 mod wm;
 mod gfx3d;
+mod bootmode;
 
 pub(crate) use arch::riscv64::{aspace, gdt, interrupts, smp, usermode, vmx};
 pub(crate) use platform::virt::goldfish_rtc as rtc;
@@ -100,6 +101,7 @@ use core::panic::PanicInfo;
 pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     use arch::riscv64::{cpu, paging, sbi, timer, trap};
 
+    boot::mark_kernel_start();
     // The boot hart is CPU 0 (`tp` may hold anything the loader left).
     cpu::set_id(0);
     trap::init();
@@ -134,6 +136,12 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         }
     }
 
+    // Normal boot (straight to the desktop) or the self-test boot (QEMU fw_cfg,
+    // see bootmode.rs). A normal boot keeps the log on the serial port only.
+    let st = bootmode::detect(fdt.as_ref());
+    if !st {
+        interactive::set_active();
+    }
     print!("{}", logo::BOOT_LOGO);
     println!();
     println!("[kernel] Hello Kernel -- Buitenzorg OS (RISC-V / RV64)");
@@ -164,16 +172,20 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         allocator::HEAP_START,
         kernel_root.unwrap_or(0)
     );
-    if memory_self_test() {
-        println!("[kernel] MILESTONE: MEMORY OK");
+    if st {
+        if memory_self_test() {
+            println!("[kernel] MILESTONE: MEMORY OK");
+        }
+        aspace_self_test();
+        context_self_test();
     }
-    aspace_self_test();
-    context_self_test();
     match platform.as_ref() {
         Some(p) => println!("[riscv] platform (live DTB): {}", p.summary()),
         None => println!("[riscv] no Device Tree from the loader"),
     }
-    dtb::self_test();
+    if st {
+        dtb::self_test();
+    }
 
     // Platform devices from the DTB: the Goldfish clock, the virtio-mmio
     // slots, the PLIC.
@@ -189,21 +201,25 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
     let hart = info.bsp_hartid.unwrap_or(fdt.as_ref().map_or(0, |f| f.boot_cpu as u64));
     let plic_up = fdt.as_ref().map_or(false, |f| plic_init(f, hart));
-    rtc_self_test();
+    if st {
+        rtc_self_test();
+    }
     storage_self_test();
-    match vfs::folder_self_test("/disk") {
-        Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
-        Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
-    }
-    // The rest of the boot runs under the splash (its image is on /disk).
     clock::load();
-    rng::init();
-    users::load();
-    match users::self_test() {
-        Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
-        Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+    if st {
+        match vfs::folder_self_test("/disk") {
+            Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
+            Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+        }
+        // The rest of the boot runs under the splash (its image is on /disk).
+        rng::init();
+        users::load();
+        match users::self_test() {
+            Ok(()) => println!("[kernel] MILESTONE: USERS OK (accounts with salted PBKDF2-HMAC-SHA256 passwords: verify, add, change password, remove, last administrator kept)"),
+            Err(e) => println!("[kernel] users self-test FAILED: {}", e),
+        }
+        splash::start(26);
     }
-    splash::start(26);
 
     // The periodic tick: the SBI timer at 100 Hz.
     let has_time = sbi::probe(sbi::EXT_TIME);
@@ -212,7 +228,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     cpu::enable_interrupts();
     let t0 = cpu::timestamp();
     let hz = cpu::counter_hz();
-    while timer::ticks() < 50 && cpu::timestamp() - t0 < hz * 3 {
+    while st && timer::ticks() < 50 && cpu::timestamp() - t0 < hz * 3 {
         cpu::halt();
     }
     let ms = (cpu::timestamp() - t0) * 1000 / hz.max(1);
@@ -225,26 +241,34 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         trap::irq_count()
     );
     // 50 ticks at 100 Hz = 500 ms; under TCG on a busy host they can be late.
-    let timer_ok = n >= 50 && (450..=2000).contains(&ms);
-    if timer_ok {
+    let timer_ok = !st || (n >= 50 && (450..=2000).contains(&ms));
+    if st && timer_ok {
         println!("[kernel] MILESTONE: RISCV TIMER OK (stvec trap vector; SBI set_timer at 100 Hz on the timebase from the DTB)");
     }
 
-    if plic_up {
-        plic_self_test(fdt.as_ref());
+    if st {
+        if plic_up {
+            plic_self_test(fdt.as_ref());
+        }
+        umode_self_test();
     }
-    umode_self_test();
     // The shared scheduler (task.rs): the boot flow becomes task 0, an idle
     // task joins, and programs run as preemptively scheduled processes.
     task::init();
     start_secondary_harts(info, fdt.as_ref());
     shared_kernel_setup(info);
-    polyglot_test();
-    run_boot_programs(info);
-    // The managed C# path (RustCLR): C# on RISC-V, where bflat has no target.
-    clr::boot_demo("RISC-V");
-    gpu_self_test(info);
-    show_desktop();
+    if st {
+        polyglot_test();
+        run_boot_programs(info);
+        // The managed C# path (RustCLR): C# on RISC-V, where bflat has no target.
+        clr::boot_demo("RISC-V");
+        gpu_self_test(info);
+        show_desktop();
+    } else {
+        gpu_self_test(info); // brings the virtio GPU up for the desktop
+        task::spawn_unlocked("boot-background", boot_background);
+        println!("[boot] desktop after {} ms of kernel time (normal boot)", interrupts::ticks() * 1000 / 18);
+    }
     if timer_ok && uart.is_some() && info.loader == "limine" {
         println!(
             "[kernel] MILESTONE: RISCV BOOT OK (Limine -> S-mode kernel; live DTB -> {} console + SBI timer; {}; framebuffer {})",
@@ -778,6 +802,9 @@ fn storage_self_test() {
         println!("[riscv] storage: mount /disk failed: {}", e);
         return;
     }
+    if !bootmode::selftest() {
+        return;
+    }
     let names = vfs::list("/disk").unwrap_or_default();
     let batang = vfs::read("/disk/BATANG.TXT").ok().and_then(|b| alloc::string::String::from_utf8(b).ok());
     let (y, mo, d, h, mi, s) = rtc::read();
@@ -804,6 +831,9 @@ fn gpu_self_test(info: &boot::BootInfo) {
         return;
     }
     virtio::gpu::init(fb.width, fb.height);
+    if !bootmode::selftest() {
+        return; // the desktop's first frame goes through it
+    }
     let mut back = alloc::vec![0u32; fb.width * fb.height];
     for y in 0..fb.height {
         for x in 0..fb.width {
@@ -837,6 +867,9 @@ fn start_secondary_harts(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     let ctx_of = |hart: u64| plic.and_then(|p| plic_context(f, p, hart));
     let online = arch::riscv64::smp::start_harts(&harts, boot_hart, base, &ctx_of);
     let irq0: alloc::vec::Vec<u64> = (0..online).map(arch::riscv64::trap::irqs_on).collect();
+    if !bootmode::selftest() {
+        return;
+    }
     let t0 = arch::cpu::timestamp();
     while arch::cpu::timestamp() - t0 < arch::riscv64::cpu::counter_hz() / 5 {
         arch::cpu::halt();
@@ -893,13 +926,16 @@ fn smp_processes_test(image: &[u8]) -> bool {
 /// official wallpaper), virtio input, and the network (loopback, then a
 /// virtio NIC).
 fn shared_kernel_setup(info: &boot::BootInfo) {
-    if syscall::security_self_test() {
-        println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
-    } else {
-        println!("[kernel] security self-test FAILED");
+    let st = bootmode::selftest();
+    if st {
+        if syscall::security_self_test() {
+            println!("[kernel] MILESTONE: SECURITY OK (syscall user-pointer validation)");
+        } else {
+            println!("[kernel] security self-test FAILED");
+        }
+        // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
+        gfx3d::self_test();
     }
-    // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
-    gfx3d::self_test();
 
     if power::init("") {
         println!(
@@ -916,10 +952,15 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
         mouse::set_bounds(fb.width, fb.height);
         theme::set_default();
         let n = icons::load();
-        let wp = wallpaper::set_official("nature").is_ok();
+        // a normal boot loads the wallpaper behind the desktop
+        let wp = st && wallpaper::set_official("nature").is_ok();
         println!("[riscv] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
     }
     virtio::input::init();
+    if !st {
+        net::init([10, 0, 0, 1]);
+        return; // the NIC and the rest: boot_background
+    }
 
     net::init([10, 0, 0, 1]);
     net::send_ping([10, 0, 0, 1], 0x5256, 1);
@@ -956,6 +997,33 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
             }
         }
     }
+}
+
+/// The normal boot's second half, behind the desktop (no BKL; yields between
+/// steps).
+fn boot_background() {
+    let t0 = interrupts::ticks();
+    let steps: [fn(); 3] = [
+        || {
+            if wallpaper::set_official("nature").is_ok() {
+                wm::present_now();
+            }
+        },
+        || {
+            if let Some(nic) = virtio::net::probe() {
+                net::attach(alloc::boxed::Box::new(nic), [10, 0, 2, 15]);
+            }
+        },
+        || {
+            rng::init();
+            users::load();
+        },
+    ];
+    for step in steps {
+        task::yield_now();
+        step();
+    }
+    println!("[boot] background start-up done in {} ms", (interrupts::ticks() - t0) * 1000 / 18);
 }
 
 /// The polyglot runtime (`script.rs`, v0.14 "Babel") on RISC-V: the same fib

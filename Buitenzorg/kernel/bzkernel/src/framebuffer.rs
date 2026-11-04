@@ -64,9 +64,20 @@ impl Console {
         let bg = BG;
         let info = fb.info();
         let bpp = info.bytes_per_pixel;
-        // Clear to background color.
-        for px in fb.buffer_mut().chunks_exact_mut(bpp) {
-            write_pixel_bytes(px, info.format, bg);
+        // Clear to background color: one row pixel by pixel, the others
+        // copied from it (a per-pixel loop over the whole screen took ~0.2 s
+        // of boot under QEMU).
+        let row = info.stride * bpp;
+        let buf = fb.buffer_mut();
+        if row > 0 && buf.len() >= row {
+            for px in buf[..row].chunks_exact_mut(bpp) {
+                write_pixel_bytes(px, info.format, bg);
+            }
+            let (first, rest) = buf.split_at_mut(row);
+            for r in rest.chunks_mut(row) {
+                let n = r.len();
+                r.copy_from_slice(&first[..n]);
+            }
         }
         Self {
             fb,

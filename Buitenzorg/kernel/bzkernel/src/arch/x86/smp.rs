@@ -233,18 +233,20 @@ pub fn tlb_shootdown() -> bool {
 /// Measure the Local APIC timer against the PIT (on the BSP, timer masked) and
 /// derive the initial count of one AP timer period.
 fn calibrate_timer() {
-    const CAL_TICKS: u64 = 3;
+    // 3 PIT periods on the self-test boot (its timer checks expect that
+    // precision), 1 on a normal boot: the wait is boot time
+    let cal_ticks: u64 = if crate::bootmode::selftest() { 3 } else { 1 };
     lapic_write(LAPIC_TIMER_DIV, 0x3); // divide by 16
     lapic_write(LAPIC_LVT_TIMER, (1 << 16) | TIMER_VECTOR as u32); // masked, one-shot
     wait_ticks(1); // start on a PIT tick edge
     let tsc0 = unsafe { core::arch::x86_64::_rdtsc() };
     lapic_write(LAPIC_TIMER_INIT, u32::MAX);
-    wait_ticks(CAL_TICKS);
+    wait_ticks(cal_ticks);
     let elapsed = (u32::MAX - lapic_read(LAPIC_TIMER_CUR)) as u64;
     let tsc = unsafe { core::arch::x86_64::_rdtsc() } - tsc0;
-    TSC_HZ.store(tsc * PIT_MILLIHZ / (CAL_TICKS * 1000), Ordering::Relaxed);
+    TSC_HZ.store(tsc * PIT_MILLIHZ / (cal_ticks * 1000), Ordering::Relaxed);
     lapic_write(LAPIC_TIMER_INIT, 0); // stop
-    let hz = elapsed * PIT_MILLIHZ / (CAL_TICKS * 1000);
+    let hz = elapsed * PIT_MILLIHZ / (cal_ticks * 1000);
     TIMER_HZ.store(hz, Ordering::Relaxed);
     TIMER_COUNT.store((hz / AP_TIMER_HZ).clamp(1, u32::MAX as u64) as u32, Ordering::Relaxed);
 }

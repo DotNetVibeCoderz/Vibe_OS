@@ -14,6 +14,10 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $image = Join-Path $root "dist\buitenzorg-bios.img"
+# Every boot below is the self-test boot (bootmode.rs): QEMU's fw_cfg file
+# switches on all demos, self-tests and milestones; a normal boot goes
+# straight to the desktop (see the [fastboot] step).
+$selftest = @('-fw_cfg', 'name=opt/buitenzorg/selftest,string=1')
 
 if (-not (Test-Path $image)) { & (Join-Path $PSScriptRoot "build.ps1") }
 
@@ -59,7 +63,7 @@ function Invoke-Boot {
     }
     $qargs += @('-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                 '-display', 'none', '-serial', "file:$Log", '-no-reboot')
-    $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
+    $p = Start-Process -FilePath $qemu -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $Log) -and (Select-String -Path $Log -Pattern "BUITENZORG READY" -Quiet)) { break }
@@ -119,6 +123,41 @@ $basic = @("MILESTONE: HELLO KERNEL OK", "MILESTONE: SCHEDULER OK",
            "BUITENZORG READY")
 
 if (Test-Arch "x86_64") {
+# Normal boot (no fw_cfg switch): straight to the desktop, no demos. The
+# kernel reports when its first desktop frame was on screen; that must stay
+# under the budget (milliseconds of kernel time; the BIOS and loader in front
+# of it are QEMU's), and no self-test may have run.
+$fastLog = Join-Path $root "dist\boot-fast.log"
+if (Test-Path $fastLog) { Remove-Item $fastLog -Force -Confirm:$false }
+$fastImg = Join-Path $root "dist\fastboot-test.img"
+Copy-Item $image $fastImg -Force
+$fargs = @('-smp', '2', '-drive', "format=raw,file=$fastImg", '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
+           '-display', 'none', '-serial', "file:$fastLog", '-no-reboot')
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$p = Start-Process -FilePath $qemu -ArgumentList $fargs -PassThru
+$wall = 0
+foreach ($i in 1..1200) {
+    Start-Sleep -Milliseconds 250
+    if ((Test-Path $fastLog) -and (Select-String -Path $fastLog -Pattern "first desktop frame" -Quiet)) { $wall = $sw.Elapsed.TotalSeconds; break }
+}
+foreach ($i in 1..60) {
+    Start-Sleep -Milliseconds 500
+    if (Select-String -Path $fastLog -Pattern "background start-up done" -Quiet) { break }
+}
+Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+Remove-Item $fastImg -Force -ErrorAction SilentlyContinue
+Assert-Markers -Log $fastLog -Markers @("[boot] mode: normal", "BUITENZORG READY", "[boot] first desktop frame on screen", "[boot] background start-up done")
+if (Select-String -Path $fastLog -Pattern "MILESTONE: SCHEDULER OK" -Quiet) {
+    Write-Error "SMOKE TEST FAILED (boot-fast.log): the normal boot ran the self-test demos"; exit 1
+}
+$frameMs = [int]((Select-String -Path $fastLog -Pattern "first desktop frame on screen (\d+) ms").Matches[0].Groups[1].Value)
+$budgetMs = 8000
+if ($frameMs -gt $budgetMs) {
+    Write-Error "SMOKE TEST FAILED (boot-fast.log): first desktop frame $frameMs ms after kernel start (budget $budgetMs ms)"; exit 1
+}
+Write-Host ("smoke [fastboot]: normal boot -- desktop on screen {0} ms after kernel start, {1:N1} s after QEMU start (BIOS + loader included)" -f $frameMs, $wall)
+
 $ideLog = Join-Path $root "dist\boot-ide.log"
 Invoke-Boot -Media ide -Log $ideLog
 $ideMarkers = $basic + @(
@@ -217,7 +256,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
                '-drive', "format=raw,file=$uefiImage", '-smp', '2',
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
-    $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
+    $p = Start-Process -FilePath $qemu -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
@@ -241,7 +280,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
                '-drive', "format=raw,file=$limineImage", '-smp', '2',
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
-    $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru
+    $p = Start-Process -FilePath $qemu -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "BUITENZORG READY" -Quiet)) { break }
@@ -269,7 +308,7 @@ if ((Test-Path $qemuGl) -and (Test-Path $image)) {
     $qargs = @('-drive', "format=raw,file=$copy", '-m', '1G', '-smp', '2', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-device', 'virtio-gpu-gl-pci', '-display', 'egl-headless', '-L', "`"$(Join-Path (Split-Path -Parent $qemu) 'share')`"",
                '-serial', "file:$log", '-no-reboot')
-    $p = Start-Process -FilePath $qemuGl -ArgumentList $qargs -PassThru
+    $p = Start-Process -FilePath $qemuGl -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "GFX3D VIRGL OK|GPU \(virgl\) self-test FAILED|virgl\] not used" -Quiet)) { Start-Sleep 1; break }
@@ -300,7 +339,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
                '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0',
                '-device', 'virtio-keyboard-device', '-device', 'virtio-tablet-device',
                '-monitor', 'tcp:127.0.0.1:4482,server,nowait', '-display', 'none', '-serial', "file:$log", '-no-reboot')
-    $p = Start-Process -FilePath $qemuArm -ArgumentList $qargs -PassThru
+    $p = Start-Process -FilePath $qemuArm -ArgumentList ($qargs + $selftest) -PassThru
     # same budget as smoke-test.sh (420 s): the managed app suite runs before READY
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
@@ -344,7 +383,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $kernel8)) {
         Copy-Item $sdImg $sdCopy -Force
         $qargs += @('-drive', "`"file=$sdCopy,if=sd,format=raw`"")
     }
-    $p = Start-Process -FilePath $qemuArm -ArgumentList $qargs -PassThru -RedirectStandardError (Join-Path $root "dist\boot-rpi4.err")
+    $p = Start-Process -FilePath $qemuArm -ArgumentList ($qargs + @('-append', 'bz.selftest')) -PassThru -RedirectStandardError (Join-Path $root "dist\boot-rpi4.err")
     foreach ($i in 1..480) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "ARM64 READY" -Quiet)) { break }
@@ -382,7 +421,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
                '-device', 'virtio-gpu-device', '-device', 'virtio-keyboard-device', '-device', 'virtio-tablet-device',
                '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0', '-device', 'ramfb',
                '-monitor', 'tcp:127.0.0.1:4484,server,nowait', '-display', 'none', '-serial', "file:$log", '-no-reboot')
-    $p = Start-Process -FilePath $qemuRv -ArgumentList $qargs -PassThru
+    $p = Start-Process -FilePath $qemuRv -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "RISCV READY" -Quiet)) { break }

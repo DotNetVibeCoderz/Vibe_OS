@@ -74,6 +74,7 @@ mod rng;
 mod ssh;
 mod wm;
 mod gfx3d;
+mod bootmode;
 
 use core::panic::PanicInfo;
 
@@ -82,7 +83,15 @@ use core::panic::PanicInfo;
 // `boot::BootInfo` and calls `kernel_main`.
 
 pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
+    boot::mark_kernel_start();
     serial::init();
+    // The boot mode first (fw_cfg needs nothing but its I/O ports): a normal
+    // boot keeps the log on the serial port -- drawing and scrolling it on the
+    // framebuffer costs time, and the desktop covers it a moment later.
+    let selftest = bootmode::detect(None);
+    if !selftest {
+        interactive::set_active();
+    }
     if let Some(fb) = boot_info.framebuffer {
         framebuffer::init(fb);
     }
@@ -112,14 +121,19 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
 
     allocator::init().expect("heap init failed");
     println!("[boot] {}", boot::describe(boot_info));
-    // Platform discovery without ACPI (multi-arch M1): the Device Tree parser.
-    dtb::self_test();
     // Route the legacy PIC's IRQs through the Local APIC (virtual wire). BIOS
     // firmware leaves it like this; UEFI firmware does not, and without it no
     // timer interrupt ever arrives on a UEFI boot.
     if !smp::enable_bsp_lapic() {
         println!("[kernel] warning: could not set up the Local APIC (virtual wire)");
     }
+    // A normal boot goes straight to the desktop; the demos and self-tests
+    // below run only on the self-test boot (QEMU fw_cfg, see bootmode.rs).
+    if !selftest {
+        fast_boot();
+    }
+    // Platform discovery without ACPI (multi-arch M1): the Device Tree parser.
+    dtb::self_test();
     heap_smoke_test();
     println!("[kernel] paging + {} MiB kernel heap online", allocator::HEAP_SIZE / (1024 * 1024));
     println!("[kernel] MILESTONE: MEMORY OK");
@@ -223,6 +237,96 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 
     desktop::run();
+}
+
+/// The normal boot: only what the desktop needs, in the order the self-test
+/// boot initializes it, without its demos, test programs and checks. The
+/// console stops drawing on the framebuffer (serial only) -- scrolling the
+/// screen per log line is costly -- and work the first desktop frame does
+/// not need runs afterwards on a background kernel task (on another CPU when
+/// there is one): the wallpaper, sound, the network card, USB, the random
+/// seed file, accounts.
+fn fast_boot() -> ! {
+    // ticks count from interrupts::init, right after kernel entry
+    let ms = |t: u64| t * 1000 / 18;
+    task::init();
+    let _ = pci::scan();
+    let _ = ata::init() + virtio::init_block();
+    virtio::input::init();
+    if let Some((w, h)) = framebuffer::dimensions() {
+        virtio::gpu::init(w, h);
+    }
+    let _ = mouse::init();
+    if let Some(dev) = driver::take_boot_block_device() {
+        if let Err(e) = vfs::mount("disk", dev, false) {
+            println!("[vfs] mounting /disk failed: {}", e);
+        }
+    }
+    let mut ram = ramdisk::new("ram", 4096);
+    if fat::format_fat12(ram.as_mut()).is_ok() {
+        let _ = vfs::mount("ram", ram, false);
+    }
+    clock::load();
+    let icons = icons::load();
+    net::init([10, 0, 0, 1]);
+    let t_dev = interrupts::ticks();
+
+    aspace::init();
+    smp::record_kernel_cr3();
+    let (cpus, aps) = smp::init();
+    let _ = ioapic::init();
+    pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
+    if let Some((w, h)) = framebuffer::dimensions() {
+        wm::init(w, h);
+        mouse::set_bounds(w, h);
+    }
+    theme::set_default();
+    // without the Big Kernel Lock: a kernel task holds it while it runs, and
+    // the desktop's first frame waited ~3.5 s for this one (every subsystem it
+    // touches has its own lock -- their syscalls run BKL-free too)
+    task::spawn_unlocked("boot-background", boot_background);
+    let t = interrupts::ticks();
+    println!(
+        "[boot] desktop after {} ms of kernel time (devices + /disk {} ms, {} CPU(s) / {} AP(s), {} icons; wallpaper, sound, network, USB load in the background)",
+        ms(t), ms(t_dev), cpus, aps, icons
+    );
+    println!("[kernel] BUITENZORG READY -- desktop (normal boot; the self-test boot runs every demo)");
+    desktop::run();
+}
+
+/// Second half of the normal boot, after the desktop is up.
+fn boot_background() {
+    let t0 = interrupts::ticks();
+    // kernel tasks are not preempted: yield between the steps, so the
+    // desktop's compose helper (and anything else) gets this CPU in between
+    let steps: [fn(); 6] = [
+        || {
+            if wallpaper::set_official("nature").is_ok() {
+                wm::present_now();
+            }
+        },
+        || {
+            let _ = audio::init();
+        },
+        || {
+            usb::init_pci();
+        },
+        || {
+            if let Some(nic) = virtio::net::probe() {
+                net::attach(alloc::boxed::Box::new(nic), [10, 0, 2, 15]);
+            }
+        },
+        || {
+            rng::init();
+            users::load();
+        },
+        || model::seed(),
+    ];
+    for step in steps {
+        task::yield_now();
+        step();
+    }
+    println!("[boot] background start-up done in {} ms", (interrupts::ticks() - t0) * 1000 / 18);
 }
 
 /// Prevent the optimizer from deleting a spin loop by touching a volatile.
