@@ -125,6 +125,8 @@ pub fn run() -> ! {
         virtio::input::poll();
         // USB HID keyboards / mice (roadmap R4).
         crate::usb::poll();
+        #[cfg(target_arch = "x86_64")]
+        crate::audio::poll();
         crate::deploy::poll();
         crate::ssh::poll();
         let now = interrupts::ticks();

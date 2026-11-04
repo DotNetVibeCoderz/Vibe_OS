@@ -6,6 +6,7 @@ pub mod ata;
 pub mod audio;
 pub mod bochs_vbe;
 pub mod e1000;
+pub mod hda;
 pub mod mouse;
 pub mod nvme;
 pub mod pci;

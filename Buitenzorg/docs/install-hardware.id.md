@@ -11,8 +11,9 @@ image mentah yang bisa langsung ditulis ke stik USB:
 
 [English](install-hardware.md) · **Bahasa Indonesia** · ← [Indeks dokumentasi](README.id.md)
 
-> ⚠️ **Status:** siap untuk uji pertama di PC fisik, tetapi **belum diverifikasi di
-> sana** (Raspberry Pi 4 sudah: lihat [install-raspberry-pi.md](install-raspberry-pi.md)).
+> ✅ **Status:** sudah boot di PC fisik: **Dell Latitude 7290** (UEFI, dari flash disk)
+> sampai desktop dengan app, wallpaper dan ikon, keyboard dan touchpad, berkas tersimpan
+> ke flash disk, restart dan shutdown. Mesin lain belum diuji.
 > Smoke test mem-boot mesin QEMU yang dibuat mirip PC modern (`[realpc]`: UEFI, tanpa
 > kontroler PS/2, 2560x1440, boot dari flash disk di xHCI, e1000, dan disk FAT kedua
 > yang tidak boleh tersentuh). Firmware dan chip asli berbeda, jadi pakai mesin dan
@@ -131,7 +132,7 @@ masuk ke berkas itu.
 | Keyboard/mouse | USB (xHCI: HID boot protocol) dan PS/2 | kontroler khusus USB 2.0 (EHCI) belum; **tanpa hot-plug**: colok sebelum boot |
 | Penyimpanan | IDE, SATA (AHCI), NVMe, flash disk di xHCI | sektor 512 byte; mode RAID/Intel RST tidak didukung (set SATA ke AHCI); hub USB 3 belum |
 | Jaringan | keluarga Intel e1000 (82540, 82545, 82574, ...), virtio-net | Intel I217/I219 on-board, Realtek dan Wi-Fi **belum** |
-| Suara | AC'97 dan virtio-sound | Intel HDA **belum**: kebanyakan PC tetap senyap |
+| Suara | Intel HD Audio, AC'97, virtio-sound | HD Audio: hanya keluaran (speaker/headphone/line out), codec pertama yang ditemukan |
 | Sistem berkas | FAT12/16/32 | tanpa jurnal: gunakan `shutdown` |
 
 ## 🆘 Pemecahan masalah

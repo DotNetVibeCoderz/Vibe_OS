@@ -102,8 +102,8 @@ pub fn init() -> bool {
             || (d.vendor_id == 0x8086 && d.device_id == 0x2415)
     });
     let Some(dev) = dev else {
-        crate::println!("[audio] no AC'97 controller found on PCI");
-        return false;
+        // most PCs since 2004: Intel High Definition Audio
+        return super::hda::init(&pci::scan());
     };
     dev.enable_io_and_bus_master();
     let nam = dev.io_bar(0);
@@ -171,21 +171,35 @@ pub fn init() -> bool {
 
 /// Is a sound card present and initialized?
 pub fn is_present() -> bool {
-    DEVICE.lock().is_some()
+    DEVICE.lock().is_some() || super::hda::present()
+}
+
+/// Let the HD Audio stream stop once its sound is over (desktop loop).
+pub fn poll() {
+    super::hda::poll();
 }
 
 /// Was the mixer write/readback check successful (proves the NAM path works)?
 pub fn mixer_ok() -> bool {
+    if super::hda::present() {
+        return true;
+    }
     DEVICE.lock().as_ref().map(|d| d.mixer_ok).unwrap_or(false)
 }
 
 /// Current master volume percentage.
 pub fn volume() -> u32 {
+    if super::hda::present() {
+        return super::hda::volume();
+    }
     DEVICE.lock().as_ref().map(|d| d.volume).unwrap_or(0)
 }
 
 /// Is output currently muted?
 pub fn is_muted() -> bool {
+    if super::hda::present() {
+        return super::hda::is_muted();
+    }
     DEVICE.lock().as_ref().map(|d| d.muted).unwrap_or(false)
 }
 
@@ -196,6 +210,9 @@ pub fn caps() -> u16 {
 
 /// Set the master output volume (0..=100). Non-zero un-mutes.
 pub fn set_volume(pct: u32) -> bool {
+    if super::hda::present() {
+        return super::hda::set_volume(pct);
+    }
     let mut guard = DEVICE.lock();
     let Some(d) = guard.as_mut() else { return false };
     d.volume = if pct > 100 { 100 } else { pct };
@@ -209,6 +226,9 @@ pub fn set_volume(pct: u32) -> bool {
 /// Toggle mute; returns the new muted state. (Audio-settings UI API.)
 #[allow(dead_code)]
 pub fn toggle_mute() -> bool {
+    if super::hda::present() {
+        return super::hda::toggle_mute();
+    }
     let mut guard = DEVICE.lock();
     let Some(d) = guard.as_mut() else { return false };
     d.muted = !d.muted;
@@ -278,6 +298,9 @@ fn sine_fx(phase: u32) -> i16 {
 
 /// Play a generated sine tone of `freq` Hz for `ms` milliseconds.
 pub fn play_tone(freq: u32, ms: u32) -> bool {
+    if super::hda::present() {
+        return super::hda::play_tone(freq, ms, fill_tone);
+    }
     let guard = DEVICE.lock();
     let Some(d) = guard.as_ref() else { return false };
     let total_frames = (SAMPLE_RATE as u64 * ms as u64 / 1000) as usize;
@@ -312,6 +335,9 @@ pub fn play_tone(freq: u32, ms: u32) -> bool {
 /// Play interleaved 16-bit stereo PCM from a caller buffer (read per-sample to
 /// avoid aliasing a user region). `len_bytes` is capped to the DMA pool size.
 pub fn play_pcm(src_ptr: u64, len_bytes: u64) -> bool {
+    if super::hda::present() {
+        return super::hda::play_pcm(src_ptr, len_bytes);
+    }
     let guard = DEVICE.lock();
     let Some(d) = guard.as_ref() else { return false };
     let cap = NUM_BUFFERS * FRAME_BYTES;
@@ -347,6 +373,9 @@ pub fn play_pcm(src_ptr: u64, len_bytes: u64) -> bool {
 /// Is the PCM-out DMA engine currently running (not halted)? (UI meter API.)
 #[allow(dead_code)]
 pub fn is_playing() -> bool {
+    if super::hda::present() {
+        return super::hda::is_playing();
+    }
     let guard = DEVICE.lock();
     let Some(d) = guard.as_ref() else { return false };
     inw(d.nabm + PO_SR) & SR_DCH == 0

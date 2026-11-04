@@ -983,7 +983,13 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   tanpa PS/2, UEFI, 2560x1440, boot dari flash disk, plus disk FAT asing yang checksum-nya
   dijaga. Ini menemukan panic di setiap boot normal pada PC ber-xHCI (entri PML4 jendela MMIO
   dibuat setelah CPU sekunder menyalin tabelnya).
-- *Sisa untuk v1.0 final:* **boot di PC fisik** dan **Hyper-V nyata** (butuh mesin + izin
+- **PC fisik pertama ✓ (2026-11-05): Dell Latitude 7290** — desktop, `/disk` dari flash disk
+  USB, app (Kalkulator, Catatan, Ruang 3D, Panen Buah 3D), keyboard + touchpad, restart/shutdown.
+  Perbaikan dari uji itu: tunggu tanpa batas pada COM1 yang tidak ada (layar hitam), log boot di
+  layar, cadangan tanpa PIT, xHCI menunggu port stabil, `dmesg`/`lspci`, pemindaian PCI lewat
+  bridge, driver **Intel HD Audio** (teruji QEMU; codec Realtek laptop belum). Jaringan I219
+  belum didukung.
+- *Sisa untuk v1.0 final:* suara di laptop terkonfirmasi, **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 
 ## 🌍 v1.x — "Rimba" · Multi-Arch (ARM64 + RISC-V)

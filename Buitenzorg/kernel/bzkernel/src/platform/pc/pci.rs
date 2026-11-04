@@ -54,7 +54,7 @@ fn read_config_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     }
 }
 
-fn write_config_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
+pub fn write_config_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
     let address: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((slot as u32) << 11)
@@ -157,19 +157,36 @@ fn probe(bus: u8, slot: u8, function: u8) -> Option<PciDevice> {
 /// default machines put everything on bus 0; bridges are followed one level.
 pub fn scan() -> Vec<PciDevice> {
     let mut devices = Vec::new();
-    for bus in 0..=1u8 {
-        for slot in 0..32 {
-            let Some(dev) = probe(bus, slot, 0) else { continue };
-            let header = (read_config_u32(bus, slot, 0, 0x0C) >> 16) as u8;
-            devices.push(dev);
-            if header & 0x80 != 0 {
-                for function in 1..8 {
-                    if let Some(dev) = probe(bus, slot, function) {
-                        devices.push(dev);
-                    }
+    let mut seen = [false; 256];
+    scan_bus(0, &mut devices, &mut seen);
+    devices
+}
+
+/// One bus, then the bus behind every PCI-to-PCI bridge on it. Scanning only
+/// buses 0 and 1 missed the NVMe SSD of a Dell Latitude 7290 (it sits behind
+/// a PCIe root port, on bus 2 or later).
+fn scan_bus(bus: u8, devices: &mut Vec<PciDevice>, seen: &mut [bool; 256]) {
+    if core::mem::replace(&mut seen[bus as usize], true) {
+        return;
+    }
+    for slot in 0..32 {
+        let Some(dev) = probe(bus, slot, 0) else { continue };
+        let multi = (read_config_u32(bus, slot, 0, 0x0C) >> 16) as u8 & 0x80 != 0;
+        let mut found = alloc::vec![dev];
+        if multi {
+            for function in 1..8 {
+                if let Some(dev) = probe(bus, slot, function) {
+                    found.push(dev);
                 }
             }
         }
+        for dev in found {
+            let bridge = dev.class == 0x06 && dev.subclass == 0x04;
+            let secondary = (read_config_u32(dev.bus, dev.slot, dev.function, 0x18) >> 8) as u8;
+            devices.push(dev);
+            if bridge && secondary > bus {
+                scan_bus(secondary, devices, seen);
+            }
+        }
     }
-    devices
 }

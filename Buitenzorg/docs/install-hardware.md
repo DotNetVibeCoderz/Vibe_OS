@@ -11,8 +11,9 @@ raw disk images you can write directly to a USB stick:
 
 **English** · [Bahasa Indonesia](install-hardware.id.md) · ← [Documentation index](README.md)
 
-> ⚠️ **Status:** ready for a first test on a physical PC, but **not yet verified
-> on one** (a Raspberry Pi 4 is: see [install-raspberry-pi.md](install-raspberry-pi.md)).
+> ✅ **Status:** booted on a physical PC: a **Dell Latitude 7290** (UEFI, from a USB
+> stick) reaches the desktop with its apps, wallpaper and icons, keyboard and touchpad,
+> files saved to the stick, restart and shutdown. Other machines are still untested.
 > The smoke test boots a QEMU machine built to resemble a modern PC (`[realpc]`:
 > UEFI, no PS/2 controller, 2560x1440, booted from a USB stick on xHCI, an e1000,
 > and a second FAT disk that must stay untouched). Real firmware and chips differ,
@@ -135,7 +136,7 @@ take a photo of it: the panic is not in that file.
 | Keyboard/mouse | USB (xHCI: HID boot protocol) and PS/2 | no USB 2.0-only (EHCI) controllers; **no hot-plug**: plug in before booting |
 | Storage | IDE, SATA (AHCI), NVMe, USB sticks on xHCI | 512-byte sectors; no RAID/Intel RST mode (set SATA to AHCI); a USB 3 hub is not supported |
 | Network | Intel e1000 family (82540, 82545, 82574, ...), virtio-net | **no** on-board Intel I217/I219, Realtek or Wi-Fi yet |
-| Sound | AC'97 and virtio-sound | **no** Intel HDA yet: most PCs stay silent |
+| Sound | Intel HD Audio, AC'97, virtio-sound | HD Audio: output only (speaker/headphone/line out), first codec found |
 | File system | FAT12/16/32 | no journal: use `shutdown` |
 
 ## 🆘 Troubleshooting
