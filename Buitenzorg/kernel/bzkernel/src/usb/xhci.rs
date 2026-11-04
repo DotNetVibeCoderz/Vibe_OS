@@ -505,8 +505,33 @@ impl Xhci {
         (0..n).map(|i| self.buf.byte(i)).collect()
     }
 
+    /// Connected root ports, once the count has been stable for 200 ms (at
+    /// least 300 ms, at most 1.5 s after the controller started). Right after
+    /// a reset a real controller still trains its links: QEMU reports every
+    /// device at once, a PC's xHCI does not, and scanning straight away missed
+    /// the USB stick on a Dell Latitude 7290 (no /disk, no apps).
+    fn settle(&self) -> u32 {
+        let count = || (1..=self.max_ports).filter(|p| rd(self.op + 0x400 + 0x10 * (*p as u64 - 1)) & PORT_CCS != 0).count() as u32;
+        let t0 = now();
+        let (mut last, mut since) = (count(), now());
+        loop {
+            delay_ms(50);
+            let n = count();
+            if n != last {
+                last = n;
+                since = now();
+            }
+            let elapsed = now() - t0;
+            if (elapsed > ms_ticks(300) && now() - since > ms_ticks(200)) || elapsed > ms_ticks(1500) {
+                return n;
+            }
+        }
+    }
+
     /// Enumerate every device on the root ports (and behind hubs).
     pub fn scan(&mut self) {
+        let connected = self.settle();
+        crate::println!("[usb] {}: {} of {} ports connected", self.name, connected, self.max_ports);
         for port in 1..=self.max_ports {
             let a = self.op + 0x400 + 0x10 * (port as u64 - 1);
             let mut sc = rd(a);

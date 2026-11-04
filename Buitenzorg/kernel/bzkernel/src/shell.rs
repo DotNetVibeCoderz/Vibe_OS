@@ -202,6 +202,8 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "ver" | "uname" => (vec![version()], Effect::None),
         "about" | "credits" => (about(), Effect::None),
         "mounts" => (vfs::mounts(), Effect::None),
+        "dmesg" | "log" => (dmesg(args.first().copied()), Effect::None),
+        "lspci" => (lspci(), Effect::None),
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
@@ -289,6 +291,45 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
 /// boot log. A release candidate until v1.0 has booted on a physical PC.
 pub const VERSION: &str = "v1.0-rc1 'Buitenzorg'";
 
+/// The kernel log (the last 16 KiB), optionally only lines containing `filter`
+/// -- on a PC without a serial cable, the way to see what the boot did.
+fn dmesg(filter: Option<&str>) -> Vec<String> {
+    let mut buf = vec![0u8; 16 * 1024];
+    let (n, _) = crate::logring::read(0, &mut buf);
+    let text = String::from_utf8_lossy(&buf[..n]);
+    let lines: Vec<String> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty() && filter.map_or(true, |f| l.to_lowercase().contains(&f.to_lowercase())))
+        .map(String::from)
+        .collect();
+    let skip = lines.len().saturating_sub(40);
+    let mut out: Vec<String> = lines.into_iter().skip(skip).collect();
+    if out.is_empty() {
+        out.push(String::from("dmesg: no matching lines"));
+    }
+    out
+}
+
+/// PCI devices: which controllers a PC has (and so which drivers it needs).
+fn lspci() -> Vec<String> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::pci::scan()
+            .iter()
+            .map(|d| {
+                format!(
+                    "{:02x}:{:02x}.{} {:04x}:{:04x} {:02x}{:02x}{:02x} {}",
+                    d.bus, d.slot, d.function, d.vendor_id, d.device_id, d.class, d.subclass, d.prog_if, d.class_name()
+                )
+            })
+            .collect()
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        vec![String::from("lspci: PCs only")]
+    }
+}
+
 fn version() -> String {
     format!("Buitenzorg OS {} -- Gravicode Studios (Kang Fadhil)", VERSION)
 }
@@ -313,6 +354,8 @@ fn help() -> Vec<String> {
      "  cat|type <file>   tampilkan isi file",
      "  cd <path>         pindah direktori",
      "  pwd               direktori sekarang",
+     "  dmesg [kata]      log kernel (40 baris terakhir, opsional disaring)",
+     "  lspci             perangkat PCI (kontroler disk/USB/jaringan)",
      "  echo <teks>       cetak teks",
      "  mounts            daftar mount VFS",
      "  theme [nama|cycle|list]     ganti tema (8 style + dark/light)",
