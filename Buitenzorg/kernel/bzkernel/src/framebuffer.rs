@@ -434,6 +434,25 @@ pub fn init(info: FbInfo) {
     init_with(info, true);
 }
 
+/// Paint a band across the top of the screen (before any text): on a PC
+/// whose screen stays black, it tells whether the kernel started at all.
+pub fn mark_alive(rgb: (u8, u8, u8)) {
+    if let Some(c) = CONSOLE.get() {
+        let mut g = c.lock();
+        let info = g.fb.info();
+        let rows = 6.min(info.height);
+        let buf = g.fb.buffer_mut();
+        for y in 0..rows {
+            for x in 0..info.width {
+                let o = (y * info.stride + x) * info.bytes_per_pixel;
+                if o + info.bytes_per_pixel <= buf.len() {
+                    write_pixel_bytes(&mut buf[o..o + info.bytes_per_pixel], info.format, rgb);
+                }
+            }
+        }
+    }
+}
+
 /// [`init`], optionally without clearing the screen (a normal PC boot: the
 /// console never draws and the first desktop frame covers everything).
 pub fn init_with(info: FbInfo, clear: bool) {

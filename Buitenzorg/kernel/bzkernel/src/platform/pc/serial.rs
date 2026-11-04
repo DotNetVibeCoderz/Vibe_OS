@@ -1,6 +1,7 @@
 //! Minimal 16550 UART driver for COM1 (kernel debug console over serial).
 
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 
@@ -43,8 +44,20 @@ impl SerialPort {
         unsafe { self.line_status.read() & 0x20 != 0 }
     }
 
+    /// Bounded: a PC without COM1 (most laptops) may never report "empty",
+    /// and an unbounded wait here hung the first println of the boot -- before
+    /// anything reached the screen (a black screen on a Dell Latitude 7290).
     fn send(&mut self, byte: u8) {
+        if !PRESENT.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut tries = 0u32;
         while !self.is_transmit_empty() {
+            tries += 1;
+            if tries > 100_000 {
+                PRESENT.store(false, Ordering::Relaxed); // give up on this port
+                return;
+            }
             core::hint::spin_loop();
         }
         unsafe { self.data.write(byte) }
@@ -65,8 +78,22 @@ impl fmt::Write for SerialPort {
 
 pub static SERIAL1: Mutex<SerialPort> = Mutex::new(SerialPort::new(COM1));
 
+/// Whether COM1 exists (its scratch register keeps a value).
+static PRESENT: AtomicBool = AtomicBool::new(false);
+
 pub fn init() {
-    SERIAL1.lock().init();
+    let mut s = SERIAL1.lock();
+    let mut scratch = Port::<u8>::new(COM1 + 7);
+    let present = unsafe {
+        scratch.write(0x5A);
+        let a = scratch.read();
+        scratch.write(0xA5);
+        a == 0x5A && scratch.read() == 0xA5
+    };
+    PRESENT.store(present, Ordering::Relaxed);
+    if present {
+        s.init();
+    }
 }
 
 /// One received byte, if any (never blocks): typing on the serial console.
@@ -74,7 +101,7 @@ pub fn read_byte() -> Option<u8> {
     crate::arch::cpu::without_interrupts(|| {
         let mut s = SERIAL1.lock();
         unsafe {
-            if s.line_status.read() & 1 == 0 {
+            if !PRESENT.load(Ordering::Relaxed) || s.line_status.read() & 1 == 0 {
                 return None;
             }
             Some(s.data.read())

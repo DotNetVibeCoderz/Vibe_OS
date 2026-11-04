@@ -471,8 +471,14 @@ fn main() {
     let mut boot_config = bootloader::BootConfig::default();
     // The loader's own log on screen: if it stops before the kernel, that is
     // all a PC shows. Warnings and errors only (info cost ~1 s under QEMU).
+    // TEMPORARY (first physical PC, black screen): every loader step on screen,
+    // to tell a loader that stops from a kernel that does. It costs ~9 s per
+    // BIOS boot under QEMU: set back to Warn once the PC boots.
     boot_config.frame_buffer_logging = true;
-    boot_config.log_level = bootloader_boot_config::LevelFilter::Warn;
+    boot_config.log_level = bootloader_boot_config::LevelFilter::Info;
+    // never the serial port: a laptop has no COM1, and the loader's UART driver
+    // waits for it without a limit
+    boot_config.serial_logging = false;
     builder.set_boot_config(&boot_config);
     // Every /disk file, also written into the Limine image (see limine_image).
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();

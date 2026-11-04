@@ -22,8 +22,8 @@ extern crate alloc;
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
-        $crate::serial::_print(format_args!($($arg)*));
         $crate::framebuffer::_print(format_args!($($arg)*));
+        $crate::serial::_print(format_args!($($arg)*));
     }};
 }
 

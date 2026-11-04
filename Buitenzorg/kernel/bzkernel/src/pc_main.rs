@@ -99,6 +99,9 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     }
     if let Some(fb) = boot_info.framebuffer {
         framebuffer::init_with(fb, !quiet);
+        if !quiet {
+            framebuffer::mark_alive((0x7C, 0xC4, 0xA4)); // leaf green: the kernel runs
+        }
     }
 
     print!("{}", logo::BOOT_LOGO);
