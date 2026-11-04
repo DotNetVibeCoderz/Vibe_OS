@@ -998,6 +998,8 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   belum terlihat -> `ipconfig` kini menampilkan status bring-up dan `netup` mencoba lagi.
   Uji kedua: driver I219 lolos bring-up, tetapi DHCP tak dijawab -> penghitung kirim/terima +
   status link di `ipconfig`, setelan TX ala Linux untuk I219.
+  **Uji keempat: jaringan I219 ✓** — DHCP 192.168.68.108, ping router berhasil (`NIC OK`).
+  Penyebab: errata Tx-hang Kaby Lake (TARC0 2 permintaan) dan bit MULR `TCTL` yang terhapus.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 

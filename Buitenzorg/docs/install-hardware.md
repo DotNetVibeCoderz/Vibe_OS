@@ -136,7 +136,7 @@ take a photo of it: the panic is not in that file.
 | Graphics | the firmware's framebuffer | no GPU driver on PCs: drawn by the CPU. Tested up to 2560x1440; BIOS image 1280x720 |
 | Keyboard/mouse | USB (xHCI: HID boot protocol) and PS/2 | no USB 2.0-only (EHCI) controllers; **no hot-plug**: plug in before booting |
 | Storage | IDE, SATA (AHCI), NVMe, USB sticks on xHCI | 512-byte sectors; no RAID/Intel RST mode (set SATA to AHCI); a USB 3 hub is not supported |
-| Network | Intel e1000 family (82540, 82545, 82574, ...), virtio-net | **no** on-board Intel I217/I219, Realtek or Wi-Fi yet |
+| Network | Intel e1000 family (82540, 82545, 82574, ...), on-board Intel I217/I218/I219 (verified: I219-LM, Latitude 7290), virtio-net | **no** Realtek or Wi-Fi yet; `ipconfig` says why the network is off, `netup` retries |
 | Sound | Intel HD Audio, AC'97, virtio-sound | HD Audio: output only (speaker/headphone/line out), first codec found |
 | File system | FAT12/16/32 | no journal: use `shutdown` |
 

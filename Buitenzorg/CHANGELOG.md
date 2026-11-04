@@ -16,6 +16,9 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 Hardening toward a stable x86-64 release.
 
 ### Added
+- **On-board Intel Ethernet (I217/I218/I219)**, verified on the Latitude 7290's
+  I219-LM: DHCP and ping to the router. It took the Kaby Lake "Tx hang"
+  erratum the right way round and keeping the transmit register's reset bits.
 - **Intel GPU step 1 confirmed on the Latitude 7290** (`gpu`): the display plane's
   GGTT entry leads to stolen memory, which is exactly what the firmware's
   framebuffer shows through the aperture.
