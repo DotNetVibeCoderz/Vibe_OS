@@ -124,6 +124,8 @@ pub fn init(devices: &[PciDevice]) {
     *INFO.lock() = lines;
     if crate::framebuffer::virtual_base().is_some() && super::intel_blt::status().len() > 0 {
         crate::println!("[gpu] {}", super::intel_blt::enable_present());
+        // GPU step 3d: 3D (gfx3d) on the render engine, if its self-test passes
+        crate::println!("{}", super::intel_render::install_gfx3d());
     } else {
         crate::println!("[gpu] drawing goes through the CPU");
     }

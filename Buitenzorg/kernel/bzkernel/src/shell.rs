@@ -271,11 +271,24 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
                 out.push(String::from(if ok { "self-test 3D: OK (lihat log serial)" } else { "self-test 3D GAGAL (lihat log serial)" }));
             }
             match args.first().copied() {
-                Some("sw") => crate::virtio::virgl::set_enabled(false),
-                Some("gpu") => crate::virtio::virgl::set_enabled(true),
+                Some("sw") => {
+                    crate::virtio::virgl::set_enabled(false);
+                    crate::gfx3d::set_native(false);
+                }
+                Some("gpu") => {
+                    crate::virtio::virgl::set_enabled(true);
+                    crate::gfx3d::set_native(true);
+                }
                 _ => {}
             }
             let gpu = crate::virtio::virgl::enabled() && crate::virtio::virgl::available();
+            if let Some((name, on)) = crate::gfx3d::native_state() {
+                out.push(format!(
+                    "backend native: {} ({}) -- 'gfx3d sw' / 'gfx3d gpu' untuk konteks baru",
+                    name,
+                    if on { "aktif" } else { "mati" }
+                ));
+            }
             out.push(String::from(if gpu {
                 "backend: GPU (virgl, virtio-gpu 3D) untuk konteks baru -- 'gfx3d sw' untuk software"
             } else {

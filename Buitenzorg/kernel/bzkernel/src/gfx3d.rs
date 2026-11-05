@@ -44,6 +44,72 @@ use bz_abi::{gfx3d_clear, gfx3d_flags as fl, gfx3d_light as gl};
 
 use crate::virtio::virgl;
 
+// --- a native GPU backend (the Intel render engine) ---------------------------
+//
+// Installed at run time by the platform (`platform::pc::intel_render`), so
+// this file stays generic. Like virgl it gets the triangles after the CPU's
+// vertex stage, but already clipped and projected: screen x, y (pixels), depth
+// 0..1, then one vec4 per vertex -- the lit color, or (u, v, 0, 1) for a
+// textured draw. Installing it runs the same self-test as the other backends;
+// a failure leaves it off.
+
+/// Per-draw switches for a native backend.
+#[derive(Clone, Copy)]
+pub struct NativeDraw {
+    pub test: bool,
+    pub write: bool,
+    pub blend: bool,
+    pub wire: bool,
+}
+
+/// The operations a native backend provides (handles are its own).
+pub struct Native {
+    pub name: &'static str,
+    pub create: fn(u32, u32) -> Result<usize, &'static str>,
+    pub release: fn(usize),
+    pub clear: fn(usize, u32, bool, bool) -> Result<(), &'static str>,
+    pub texture: fn(u32, u32, &[u32]) -> Result<usize, &'static str>,
+    pub release_texture: fn(usize),
+    pub draw: fn(usize, &[[u32; 7]], Option<usize>, NativeDraw) -> Result<(), &'static str>,
+    pub read: fn(usize, &mut [u32]) -> Result<(), &'static str>,
+}
+
+static NATIVE: spin::Once<Native> = spin::Once::new();
+static NATIVE_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn native() -> Option<&'static Native> {
+    NATIVE.get()
+}
+
+/// The native backend new contexts use, if it is installed and on.
+fn native_on() -> Option<&'static Native> {
+    if NATIVE_ON.load(Ordering::Relaxed) { NATIVE.get() } else { None }
+}
+
+/// Install a native backend and self-test it; returns a log line.
+pub fn install_native(n: Native) -> alloc::string::String {
+    let name = n.name;
+    NATIVE.call_once(|| n);
+    NATIVE_ON.store(true, Ordering::Relaxed);
+    match run_self_test(2) {
+        Ok(msg) => alloc::format!("MILESTONE: GFX3D NATIVE OK ({}: {})", name, msg),
+        Err(e) => {
+            NATIVE_ON.store(false, Ordering::Relaxed);
+            alloc::format!("[gfx3d] {} self-test FAILED: {} -- contexts draw in software", name, e)
+        }
+    }
+}
+
+/// (name, on) of the native backend, if one is installed.
+pub fn native_state() -> Option<(&'static str, bool)> {
+    NATIVE.get().map(|n| (n.name, NATIVE_ON.load(Ordering::Relaxed)))
+}
+
+/// Turn the installed native backend on or off for new contexts.
+pub fn set_native(on: bool) {
+    NATIVE_ON.store(on && NATIVE.get().is_some(), Ordering::Relaxed);
+}
+
 /// Largest context / texture edge.
 pub const MAX_DIM: u32 = 1024;
 /// Bytes all contexts, meshes and textures may use together.
@@ -232,6 +298,8 @@ pub struct Texture {
     bytes: usize,
     /// Its copy on the GPU (virgl), made on the first GPU draw that uses it.
     gpu: spin::Once<Option<virgl::GpuTexture>>,
+    /// Its copy for the native backend, made on the first native draw.
+    native: spin::Once<Option<usize>>,
 }
 
 pub struct Ctx {
@@ -243,6 +311,8 @@ pub struct Ctx {
     bytes: usize,
     /// The GPU render target when this context draws through virgl.
     gpu: Option<virgl::Target>,
+    /// The native backend's render target when this context draws through it.
+    native: Option<usize>,
     /// The GPU drew since the last read-back into `color`.
     dirty: bool,
 }
@@ -254,6 +324,11 @@ impl Ctx {
             if let Some(t) = &self.gpu {
                 if let Err(e) = virgl::read(t, &mut self.color) {
                     crate::println!("[gfx3d] GPU read-back: {}", e);
+                }
+            }
+            if let (Some(h), Some(n)) = (self.native, native()) {
+                if let Err(e) = (n.read)(h, &mut self.color) {
+                    crate::println!("[gfx3d] {} read-back: {}", n.name, e);
                 }
             }
             self.dirty = false;
@@ -269,11 +344,17 @@ impl Drop for Mesh {
 impl Drop for Texture {
     fn drop(&mut self) {
         USED.fetch_sub(self.bytes, Ordering::Relaxed);
+        if let (Some(Some(h)), Some(n)) = (self.native.get(), native()) {
+            (n.release_texture)(*h);
+        }
     }
 }
 impl Drop for Ctx {
     fn drop(&mut self) {
         USED.fetch_sub(self.bytes, Ordering::Relaxed);
+        if let (Some(h), Some(n)) = (self.native, native()) {
+            (n.release)(h);
+        }
     }
 }
 
@@ -325,18 +406,37 @@ fn ctx(owner: u64, id: u32) -> Result<Arc<Mutex<Ctx>>, &'static str> {
 }
 
 /// A render context of `w` x `h` (color cleared to black, depth to far):
-/// on the GPU when virgl is there, else in software.
+/// on the native GPU backend when one is on, else through virgl when it is
+/// there, else in software.
 pub fn create(owner: u64, w: u32, h: u32) -> Result<u32, &'static str> {
-    create_with(owner, w, h, virgl::available())
+    let mode = if native_on().is_some() {
+        2
+    } else if virgl::available() {
+        1
+    } else {
+        0
+    };
+    create_with(owner, w, h, mode)
 }
 
-fn create_with(owner: u64, w: u32, h: u32, on_gpu: bool) -> Result<u32, &'static str> {
+/// `mode`: 0 software, 1 virgl, 2 the native backend.
+fn create_with(owner: u64, w: u32, h: u32, mode: u8) -> Result<u32, &'static str> {
     if w == 0 || h == 0 || w > MAX_DIM || h > MAX_DIM {
         return Err("gfx3d: bad size");
     }
     let n = (w * h) as usize;
+    let native = match (mode, native()) {
+        (2, Some(nb)) => match (nb.create)(w, h) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                crate::println!("[gfx3d] {} target {}x{}: {} -- drawing in software", nb.name, w, h, e);
+                None
+            }
+        },
+        _ => None,
+    };
     // a GPU context keeps only the read-back copy here (the depth buffer is on the GPU)
-    let gpu = if on_gpu {
+    let gpu = if mode == 1 {
         match virgl::create_target(w, h) {
             Ok(t) => Some(t),
             Err(e) => {
@@ -347,12 +447,21 @@ fn create_with(owner: u64, w: u32, h: u32, on_gpu: bool) -> Result<u32, &'static
     } else {
         None
     };
-    let bytes = if gpu.is_some() { n * 4 } else { n * 8 };
-    reserve(bytes)?;
-    let depth = if gpu.is_some() { Vec::new() } else { alloc::vec![FAR_DEPTH; n] };
-    let c = Ctx { w, h, color: alloc::vec![0; n], depth, light: Lighting::default(), bytes, gpu, dirty: false };
+    let on_gpu = gpu.is_some() || native.is_some();
+    let bytes = if on_gpu { n * 4 } else { n * 8 };
+    if let Err(e) = reserve(bytes) {
+        if let (Some(t), Some(nb)) = (native, NATIVE.get()) {
+            (nb.release)(t);
+        }
+        return Err(e);
+    }
+    let depth = if on_gpu { Vec::new() } else { alloc::vec![FAR_DEPTH; n] };
+    let c = Ctx { w, h, color: alloc::vec![0; n], depth, light: Lighting::default(), bytes, gpu, native, dirty: false };
     if let Some(t) = &c.gpu {
         let _ = virgl::clear(t, 0, true, true);
+    }
+    if let (Some(t), Some(nb)) = (c.native, NATIVE.get()) {
+        let _ = (nb.clear)(t, 0, true, true);
     }
     Ok(insert(owner, Res::Ctx(Arc::new(Mutex::new(c)))))
 }
@@ -364,7 +473,10 @@ pub fn exists(owner: u64, id: u32) -> bool {
 
 /// Whether context `id` draws on the GPU.
 pub fn on_gpu(owner: u64, id: u32) -> bool {
-    ctx(owner, id).is_ok_and(|c| c.lock().gpu.is_some())
+    ctx(owner, id).is_ok_and(|c| {
+        let c = c.lock();
+        c.gpu.is_some() || c.native.is_some()
+    })
 }
 
 /// A mesh (indices must name existing vertices; whole triangles only).
@@ -387,7 +499,7 @@ pub fn texture(owner: u64, w: u32, h: u32, px: Vec<u32>) -> Result<u32, &'static
     }
     let bytes = px.len() * 4;
     reserve(bytes)?;
-    Ok(insert(owner, Res::Tex(Arc::new(Texture { w, h, px, bytes, gpu: spin::Once::new() }))))
+    Ok(insert(owner, Res::Tex(Arc::new(Texture { w, h, px, bytes, gpu: spin::Once::new(), native: spin::Once::new() }))))
 }
 
 /// Free resource `id` of `owner` (memory returns when no draw still uses it).
@@ -418,6 +530,11 @@ pub fn clear(owner: u64, id: u32, color: u32, bits: u32) -> Result<(), &'static 
     let mut c = c.lock();
     if let Some(t) = &c.gpu {
         virgl::clear(t, color & 0x00FF_FFFF, bits & gfx3d_clear::COLOR != 0, bits & gfx3d_clear::DEPTH != 0)?;
+        c.dirty = true;
+        return Ok(());
+    }
+    if let (Some(t), Some(n)) = (c.native, native()) {
+        (n.clear)(t, color & 0x00FF_FFFF, bits & gfx3d_clear::COLOR != 0, bits & gfx3d_clear::DEPTH != 0)?;
         c.dirty = true;
         return Ok(());
     }
@@ -874,6 +991,9 @@ fn draw_into(c: &mut Ctx, m: &Mesh, d: &Draw) -> (u32, u32) {
     if c.gpu.is_some() {
         return gpu_draw(c, m, d);
     }
+    if let (Some(h), Some(n)) = (c.native, native()) {
+        return native_draw(c, m, d, n, h);
+    }
     let tv = vertex_stage(c, m, d);
     let (w, h) = (c.w, c.h);
     let (mut tris, mut pixels) = (0u32, 0u32);
@@ -978,6 +1098,85 @@ fn gpu_draw(c: &mut Ctx, m: &Mesh, d: &Draw) -> (u32, u32) {
     (tris, area.min((w * h) as i64 * 4) as u32)
 }
 
+/// The native backend path: the same vertex stage and the same clipping as
+/// the software path, then projected triangles (fans of the clipped
+/// polygons) in screen pixels. Back faces are culled here, by the signed
+/// area of the projected polygon. Pixels are reported as covered area, as
+/// for virgl. A textured draw sends (u, v) instead of the lit color (the
+/// native kernels do not modulate yet).
+fn native_draw(c: &mut Ctx, m: &Mesh, d: &Draw, n: &Native, h: usize) -> (u32, u32) {
+    let tv = vertex_stage(c, m, d);
+    let (w, hh) = (c.w, c.h);
+    let double = d.flags & fl::DOUBLE_SIDED != 0;
+    let wire = d.flags & fl::WIREFRAME != 0;
+    let tex = d.tex.and_then(|t| *t.native.call_once(|| (n.texture)(t.w, t.h, &t.px).ok()));
+    let textured = tex.is_some();
+    let f = virgl::f32_from_fx;
+    let gv = |s: &Sv| -> [u32; 7] {
+        let col = |k: usize| f(s.col[k].clamp(0, 255) * ONE / 255);
+        let a = if textured { [f(s.uv[0]), f(s.uv[1]), 0, f(ONE)] } else { [col(0), col(1), col(2), col(3)] };
+        // 28.4 -> 16.16 is << 12; 24-bit depth -> 0..1 in 16.16 is >> 8
+        [f(s.x << 12), f(s.y << 12), f(s.z >> 8), a[0], a[1], a[2], a[3]]
+    };
+    let mut out: Vec<[u32; 7]> = Vec::with_capacity(m.idx.len());
+    let (mut tris, mut area) = (0u32, 0i64);
+    let mut poly = [Tv::default(); 12];
+    for t in m.idx.chunks_exact(3) {
+        let tri = [tv[t[0] as usize], tv[t[1] as usize], tv[t[2] as usize]];
+        let oc = [outcode(&tri[0].c), outcode(&tri[1].c), outcode(&tri[2].c)];
+        if oc[0] & oc[1] & oc[2] != 0 {
+            continue;
+        }
+        let k = if oc[0] | oc[1] | oc[2] == 0 {
+            poly[..3].copy_from_slice(&tri);
+            3
+        } else {
+            clip_poly(tri, oc[0] | oc[1] | oc[2], &mut poly)
+        };
+        if k < 3 {
+            continue;
+        }
+        let mut s = [Sv::default(); 12];
+        for i in 0..k {
+            s[i] = project(&poly[i], w, hh);
+        }
+        // twice the signed area (shoelace), 28.4 squared; > 0 = back face (as gpu_draw)
+        let mut a = 0i64;
+        for i in 0..k {
+            let (p, q) = (&s[i], &s[(i + 1) % k]);
+            a += p.x * q.y - q.x * p.y;
+        }
+        if a == 0 || (a > 0 && !double) {
+            continue;
+        }
+        area += if wire {
+            let e = |p: &Sv, q: &Sv| (p.x - q.x).abs().max((p.y - q.y).abs()) / 16;
+            (0..k).map(|i| e(&s[i], &s[(i + 1) % k])).sum::<i64>()
+        } else {
+            a.abs() / 512
+        };
+        tris += 1;
+        for i in 1..k - 1 {
+            out.extend_from_slice(&[gv(&s[0]), gv(&s[i]), gv(&s[i + 1])]);
+        }
+    }
+    if out.is_empty() {
+        return (0, 0);
+    }
+    let flags = NativeDraw {
+        test: d.flags & fl::NO_DEPTH_TEST == 0,
+        write: d.flags & fl::NO_DEPTH_WRITE == 0,
+        blend: d.flags & fl::BLEND != 0,
+        wire,
+    };
+    if let Err(e) = (n.draw)(h, &out, tex, flags) {
+        crate::println!("[gfx3d] {} draw: {}", n.name, e);
+        return (0, 0);
+    }
+    c.dirty = true;
+    (tris, area.min((w * hh) as i64 * 4) as u32)
+}
+
 /// Draw mesh `mesh` (with texture `tex`, 0 = none) into context `id`.
 pub fn draw(owner: u64, id: u32, mesh: u32, tex: u32, flags: u32, color: u32, model: [i64; 16], view_proj: [i64; 16]) -> Result<(u32, u32), &'static str> {
     let c = ctx(owner, id)?;
@@ -1053,7 +1252,7 @@ fn cube(owner: u64) -> Result<u32, &'static str> {
 /// Boot self-test: depth test, culling, lighting, texturing, clipping and a
 /// perspective cube, rendered offscreen and checked pixel by pixel.
 pub fn self_test() -> bool {
-    let sw = match run_self_test(false) {
+    let sw = match run_self_test(0) {
         Ok(msg) => {
             crate::println!("MILESTONE: GFX3D OK ({})", msg);
             true
@@ -1067,7 +1266,7 @@ pub fn self_test() -> bool {
     if !virgl::available() {
         return sw;
     }
-    match run_self_test(true) {
+    match run_self_test(1) {
         Ok(msg) => {
             crate::println!("MILESTONE: GFX3D VIRGL OK (host GPU through virtio-gpu 3D: {})", msg);
             sw
@@ -1080,12 +1279,14 @@ pub fn self_test() -> bool {
     }
 }
 
-fn run_self_test(gpu: bool) -> Result<alloc::string::String, alloc::string::String> {
+/// `mode` as for `create_with`: 0 software, 1 virgl, 2 the native backend.
+fn run_self_test(mode: u8) -> Result<alloc::string::String, alloc::string::String> {
+    let gpu = mode != 0;
     use alloc::format;
     const OWNER: u64 = 0;
     const BG: u32 = 0x10_2030;
     let used0 = USED.load(Ordering::Relaxed);
-    let ctx_id = create_with(OWNER, 64, 64, gpu).map_err(|e| format!("{}", e))?;
+    let ctx_id = create_with(OWNER, 64, 64, mode).map_err(|e| format!("{}", e))?;
     if on_gpu(OWNER, ctx_id) != gpu {
         free(OWNER, ctx_id);
         return Err(alloc::string::String::from("no GPU render target"));

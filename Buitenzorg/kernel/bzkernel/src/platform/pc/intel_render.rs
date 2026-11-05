@@ -262,7 +262,7 @@ pub fn self_test() -> Vec<String> {
     let x0 = w.saturating_sub(260);
     let screen = Target { ggtt: fb_ggtt, pitch, w, h };
     let tri = [vtx(x0 + 100, 40, 0, [0; 4]), vtx(x0 + 200, 220, 0, [0; 4]), vtx(x0, 220, 0, [0; 4])];
-    match draw(r, &Pipe { rt: screen, depth: None, texture: None, kernel: &PS_SOLID, verts: &tri }) {
+    match draw(r, &Pipe { rt: screen, depth: None, texture: None, kernel: &PS_SOLID, verts: &tri, vb: None, flags: PLAIN }) {
         Ok(us) => {
             let inside = px(x0 + 100, 150);
             out.push(format!(
@@ -281,7 +281,7 @@ pub fn self_test() -> Vec<String> {
     // 4b. diagnosis: the Gouraud kernel into the framebuffer (left of the orange one)
     let gx = x0.saturating_sub(240);
     let tri = [vtx(gx + 100, 40, 0, [256, 0, 0, 256]), vtx(gx + 200, 220, 0, [0, 256, 0, 256]), vtx(gx, 220, 0, [0, 0, 256, 256])];
-    match draw(r, &Pipe { rt: screen, depth: None, texture: None, kernel: &PS_GOURAUD, verts: &tri }) {
+    match draw(r, &Pipe { rt: screen, depth: None, texture: None, kernel: &PS_GOURAUD, verts: &tri, vb: None, flags: PLAIN }) {
         Ok(us) => out.push(format!(
             "  4b Gouraud kernel into the framebuffer: {} us, near the red corner {:#08x}, center {:#08x}",
             us,
@@ -434,7 +434,24 @@ struct Pipe<'a> {
     texture: Option<Target>,
     kernel: &'a [[u32; 4]],
     verts: &'a [[u32; 7]],
+    /// GGTT address of vertices the caller already wrote (else they go
+    /// into the state pages, at most `MAX_VERTS`).
+    vb: Option<u32>,
+    flags: Flags,
 }
+
+/// Per-draw switches (the self-tests use `PLAIN`).
+#[derive(Clone, Copy)]
+struct Flags {
+    test: bool,
+    write: bool,
+    blend: bool,
+    wire: bool,
+    /// Texture coordinates wrap (else clamp).
+    wrap: bool,
+}
+
+const PLAIN: Flags = Flags { test: true, write: true, blend: false, wire: false, wrap: false };
 
 static STATE_PAGES: Mutex<Option<usize>> = Mutex::new(None);
 
@@ -448,9 +465,10 @@ fn map_pages(r: &Rcs, ggtt: u32, phys: u64, pages: usize) {
 
 /// One draw: build the batch + state and run it. Ok(microseconds).
 fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
-    if p.verts.len() > MAX_VERTS || p.verts.is_empty() {
+    if p.verts.is_empty() || (p.vb.is_none() && p.verts.len() > MAX_VERTS) {
         return Err(format!("{} vertices (1..={})", p.verts.len(), MAX_VERTS));
     }
+    let fl = p.flags;
     let va = {
         let mut sp = STATE_PAGES.lock();
         if sp.is_none() {
@@ -488,18 +506,26 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     put(ST_SURF, &surface(rt, true));
     if let Some(t) = tex {
         put(ST_SURF_TEX, &surface(t, false));
-        put(ST_SAMPLER, &[0, 0, 0, 2 << 6 | 2 << 3 | 2]); // nearest, clamp
+        let tcm = if fl.wrap { 0 } else { 2 << 6 | 2 << 3 | 2 }; // WRAP or CLAMP
+        put(ST_SAMPLER, &[0, 0, 0, tcm]); // nearest
     }
     for (i, ins) in p.kernel.iter().enumerate() {
         put(ST_KERNEL + i as u32 * 16, ins);
     }
-    for (i, v) in p.verts.iter().enumerate() {
-        put(ST_VB + i as u32 * VSTRIDE, v);
+    if p.vb.is_none() {
+        for (i, v) in p.verts.iter().enumerate() {
+            put(ST_VB + i as u32 * VSTRIDE, v);
+        }
     }
     put(ST_CC, &[0, 0, 0, 0, 0, 0]);
     let mut blend = [0u32; 33];
     for e in 0..16 {
-        blend[1 + e * 2] = 0x11 << 21 | 1 << 26; // dest ZERO, source ONE, ADD, no blending
+        blend[1 + e * 2] = if fl.blend {
+            // color: SRC_ALPHA, INV_SRC_ALPHA, ADD; alpha: ONE, INV_SRC_ALPHA
+            1 << 31 | 3 << 26 | 19 << 21 | 1 << 13 | 19 << 8
+        } else {
+            0x11 << 21 | 1 << 26 // dest ZERO, source ONE, ADD, no blending
+        };
         blend[2 + e * 2] = 1 << 1; // pre-blend color clamp
     }
     put(ST_BLEND, &blend);
@@ -567,7 +593,8 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     // setup: one attribute read from the VUE, no viewport transform (screen coordinates)
     b.extend_from_slice(&[c3d(3, 0, 0x1f) | 4, 1 << 22 | 1 << 29 | 1 << 28 | 1 << 11 | 1 << 5, 0, 0, 3, 0]);
     zeros(&mut b, c3d(3, 0, 0x51), 11); // SBE_SWIZ
-    b.extend_from_slice(&[c3d(3, 0, 0x50) | 3, 1 << 21 | 1 << 16, 0, 0, 0]); // RASTER: CCW, no culling
+    let fill = if fl.wire { 1 << 5 | 1 << 3 } else { 0 }; // front/back fill mode WIREFRAME
+    b.extend_from_slice(&[c3d(3, 0, 0x50) | 3, 1 << 21 | 1 << 16 | fill, 0, 0, 0]); // RASTER: CCW, no culling
     zeros(&mut b, c3d(3, 0, 0x13), 4); // SF
     b.extend_from_slice(&[c3d(3, 0, 0x14), 1 << 11]); // WM: perspective pixel barycentrics
     zeros(&mut b, c3d(3, 0, 0x17), 11); // CONSTANT_PS
@@ -593,10 +620,12 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     match p.depth {
         Some((dz, dpitch)) => {
             // depth test LESS + write; a 2D D32_FLOAT buffer of the target's size
-            b.extend_from_slice(&[c3d(3, 0, 0x4e) | 2, 1 << 0 | 1 << 1 | 2 << 5, 0, 0]);
+            // test on (function LESS, or ALWAYS when the draw asks for no test), write as asked
+            let func = if fl.test { 2 } else { 0 };
+            b.extend_from_slice(&[c3d(3, 0, 0x4e) | 2, fl.write as u32 | 1 << 1 | func << 5, 0, 0]);
             b.extend_from_slice(&[
                 c3d(3, 0, 0x05) | 6,
-                (dpitch - 1) | 1 << 18 | 1 << 28 | 1 << 29,
+                (dpitch - 1) | 1 << 18 | (fl.write as u32) << 28 | 1 << 29,
                 dz,
                 0,
                 (rt.h - 1) << 18 | (rt.w - 1) << 4,
@@ -615,7 +644,7 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     b.extend_from_slice(&[c3d(3, 0, 0x04) | 1, 0x3f80_0000, 1]); // CLEAR_PARAMS: depth 1.0
     b.extend_from_slice(&[c3d(3, 1, 0x00) | 2, 0, (rt.h - 1) << 16 | (rt.w - 1), 0]); // DRAWING_RECTANGLE
     let n = p.verts.len() as u32;
-    b.extend_from_slice(&[c3d(3, 0, 0x08) | 3, 1 << 14 | VSTRIDE, STATE_GGTT + ST_VB, 0, n * VSTRIDE]);
+    b.extend_from_slice(&[c3d(3, 0, 0x08) | 3, 1 << 14 | VSTRIDE, p.vb.unwrap_or(STATE_GGTT + ST_VB), 0, n * VSTRIDE]);
     b.extend_from_slice(&[
         c3d(3, 0, 0x09) | 5, // VERTEX_ELEMENTS: pad, position (x, y, z, 1), attribute vec4
         1 << 25 | 0x000 << 16,
@@ -705,7 +734,7 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         Err(e) => out.push(format!("  5b blitter fill: {}", e)),
     }
     let tri = [vtx(40, 4, 0, [0; 4]), vtx(76, 40, 0, [0; 4]), vtx(4, 40, 0, [0; 4])];
-    match draw(r, &Pipe { rt, depth: None, texture: None, kernel: &PS_SOLID, verts: &tri }) {
+    match draw(r, &Pipe { rt, depth: None, texture: None, kernel: &PS_SOLID, verts: &tri, vb: None, flags: PLAIN }) {
         Ok(us) => out.push(format!("  5c solid kernel into it: {} us, read back {:#08x} (want 0xe6661a)", us, read(40, 30))),
         Err(e) => out.push(format!("  5c solid kernel: {}", e)),
     }
@@ -713,7 +742,7 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
 
     // 5. Gouraud: red, green, blue corners
     let tri = [vtx(128, 16, 0, [256, 0, 0, 256]), vtx(240, 240, 0, [0, 256, 0, 256]), vtx(16, 240, 0, [0, 0, 256, 256])];
-    let us = draw(r, &Pipe { rt, depth: None, texture: None, kernel: &PS_GOURAUD, verts: &tri })?;
+    let us = draw(r, &Pipe { rt, depth: None, texture: None, kernel: &PS_GOURAUD, verts: &tri, vb: None, flags: PLAIN })?;
     let (top, center) = (read(128, 30), read(128, 165));
     let ch = |v: u32, s: u32| v >> s & 0xFF;
     let red_top = ch(top, 16) > 180 && ch(top, 8) < 60 && ch(top, 0) < 60;
@@ -739,7 +768,7 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         vtx(256 + 56, 220, 192, rd),
     ];
     let z = Some((DEPTH_GGTT, OFF_W * 4));
-    let us = draw(r, &Pipe { rt, depth: z, texture: None, kernel: &PS_GOURAUD, verts: &tris })?;
+    let us = draw(r, &Pipe { rt, depth: z, texture: None, kernel: &PS_GOURAUD, verts: &tris, vb: None, flags: PLAIN })?;
     let (overlap, far_only) = (read(256 + 120, 200), read(256 + 228, 200));
     out.push(format!(
         "  6 depth test: {} us, overlap {:#08x} ({}), far only {:#08x} ({})",
@@ -762,7 +791,7 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         t(x0, y0 + 128, 0, 256),
     ];
     let texture = Some(Target { ggtt: TEX_GGTT, pitch: TEX * 4, w: TEX, h: TEX });
-    let us = draw(r, &Pipe { rt, depth: None, texture, kernel: &PS_TEXTURE, verts: &quad })?;
+    let us = draw(r, &Pipe { rt, depth: None, texture, kernel: &PS_TEXTURE, verts: &quad, vb: None, flags: PLAIN })?;
     // 2 pixels per texel: texel (2, 2) is in a yellow cell, texel (10, 2) in a blue one
     let (a, b) = (read(x0 + 5, y0 + 5), read(x0 + 21, y0 + 5));
     out.push(format!(
@@ -774,4 +803,204 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         if near_rgb(b, 0x2040e0) { "blue: ok" } else { "NOT blue" }
     ));
     Ok(rt_va)
+}
+
+// ---- step 3d: the gfx3d backend -------------------------------------------------
+//
+// `gfx3d` contexts drawn by the render engine: the CPU does the vertex stage,
+// clipping and projection (gfx3d::native_draw), these functions keep the GPU
+// surfaces. A context = a linear B8G8R8A8 render target + a D32 depth buffer
+// (pitch rounded to 128 bytes, height to 32 rows), both cleared by the
+// blitter; the picture is read back by the CPU (clflush per row). Surfaces
+// are kept on a free list for reuse (their pages stay mapped).
+
+const VB_GGTT: u32 = 0x1200_0000;
+const VB_PAGES: usize = 256; // 1 MiB of vertices per submission
+const VB_MAX: usize = VB_PAGES * 4096 / VSTRIDE as usize / 3 * 3;
+const POOL_GGTT: u32 = 0x2000_0000;
+const POOL_END: u32 = 0xF000_0000;
+
+#[derive(Clone, Copy)]
+struct Surf {
+    ggtt: u32,
+    va: usize,
+    pages: usize,
+}
+
+struct Native3d {
+    w: u32,
+    h: u32,
+    pitch: u32,
+    rows: u32,
+    rt: Surf,
+    z: Surf,
+}
+
+struct Pool {
+    next_ggtt: u32,
+    free: Vec<Surf>,
+    targets: Vec<Option<Native3d>>,
+    textures: Vec<Option<(Target, Surf)>>,
+    vb: Option<usize>,
+}
+
+static POOL: Mutex<Option<Pool>> = Mutex::new(None);
+
+/// Run `f` with the render engine up and the pool (lock order: RCS_STATE, POOL).
+fn with_gpu<R>(f: impl FnOnce(&mut Rcs, &mut Pool) -> Result<R, String>) -> Result<R, &'static str> {
+    let mut guard = RCS_STATE.lock();
+    if guard.is_none() {
+        let (regs, gtt, ..) = super::intel_blt::gt().ok_or("no Intel GPU")?;
+        *guard = Some(Rcs { regs, gtt, up: false, ring: (0, core::ptr::null_mut()), status: (0, core::ptr::null_mut()), tail: 0, seqno: 0 });
+    }
+    let r = guard.as_mut().unwrap();
+    if !r.up {
+        let mut lines = Vec::new();
+        if !r.bring_up(&mut lines) {
+            return Err("render engine did not start");
+        }
+    }
+    let mut pool = POOL.lock();
+    let pool = pool.get_or_insert(Pool { next_ggtt: POOL_GGTT, free: Vec::new(), targets: Vec::new(), textures: Vec::new(), vb: None });
+    f(r, pool).map_err(|e| {
+        crate::println!("[gfx3d] Intel render engine: {}", e);
+        "Intel render engine failed (see the log)"
+    })
+}
+
+fn alloc_surf(r: &Rcs, pool: &mut Pool, pages: usize) -> Result<Surf, String> {
+    if let Some(i) = pool.free.iter().position(|s| s.pages == pages) {
+        return Ok(pool.free.swap_remove(i));
+    }
+    let bytes = (pages * 4096) as u32;
+    if pool.next_ggtt.saturating_add(bytes) > POOL_END {
+        return Err(String::from("GGTT space used up"));
+    }
+    let (phys, va) = crate::memory::alloc_dma_contiguous(pages).ok_or_else(|| format!("no {} contiguous pages", pages))?;
+    let s = Surf { ggtt: pool.next_ggtt, va: va as usize, pages };
+    map_pages(r, s.ggtt, phys, pages);
+    pool.next_ggtt += (bytes + 0xFFFF) & !0xFFFF;
+    Ok(s)
+}
+
+fn n_create(w: u32, h: u32) -> Result<usize, &'static str> {
+    with_gpu(|r, pool| {
+        let pitch = (w * 4 + 127) & !127;
+        let rows = (h + 31) & !31;
+        let pages = (pitch * rows) as usize / 4096;
+        let rt = alloc_surf(r, pool, pages)?;
+        let z = alloc_surf(r, pool, pages)?;
+        pool.targets.push(Some(Native3d { w, h, pitch, rows, rt, z }));
+        Ok(pool.targets.len())
+    })
+}
+
+fn n_release(h: usize) {
+    if let Some(pool) = POOL.lock().as_mut() {
+        if let Some(t) = pool.targets.get_mut(h.wrapping_sub(1)).and_then(|t| t.take()) {
+            pool.free.push(t.rt);
+            pool.free.push(t.z);
+        }
+    }
+}
+
+fn n_clear(h: usize, rgb: u32, color: bool, depth: bool) -> Result<(), &'static str> {
+    with_gpu(|_, pool| {
+        let t = pool.targets.get(h.wrapping_sub(1)).and_then(|t| t.as_ref()).ok_or("no such target")?;
+        if color {
+            super::intel_blt::fill_rect(t.rt.ggtt, t.pitch, 0, 0, t.w, t.h, 0xFF00_0000 | rgb)?;
+        }
+        if depth {
+            // depth 1.0 everywhere: a uniform value needs no tiling knowledge
+            super::intel_blt::fill_rect(t.z.ggtt, t.pitch, 0, 0, t.pitch / 4, t.rows, 0x3f80_0000)?;
+        }
+        Ok(())
+    })
+}
+
+fn n_texture(w: u32, h: u32, px: &[u32]) -> Result<usize, &'static str> {
+    with_gpu(|r, pool| {
+        let pitch = (w * 4 + 63) & !63;
+        let pages = ((pitch * h) as usize).div_ceil(4096);
+        let s = alloc_surf(r, pool, pages)?;
+        for y in 0..h {
+            for x in 0..w {
+                let v = px[(y * w + x) as usize];
+                unsafe { write_volatile((s.va + (y * pitch + x * 4) as usize) as *mut u32, v) };
+            }
+        }
+        clflush(s.va as *const u8, pages * 4096);
+        pool.textures.push(Some((Target { ggtt: s.ggtt, pitch, w, h }, s)));
+        Ok(pool.textures.len())
+    })
+}
+
+fn n_release_texture(h: usize) {
+    if let Some(pool) = POOL.lock().as_mut() {
+        if let Some((_, s)) = pool.textures.get_mut(h.wrapping_sub(1)).and_then(|t| t.take()) {
+            pool.free.push(s);
+        }
+    }
+}
+
+fn n_draw(h: usize, verts: &[[u32; 7]], tex: Option<usize>, d: crate::gfx3d::NativeDraw) -> Result<(), &'static str> {
+    with_gpu(|r, pool| {
+        if pool.vb.is_none() {
+            let (phys, va) = crate::memory::alloc_dma_contiguous(VB_PAGES).ok_or("no pages for vertices")?;
+            map_pages(r, VB_GGTT, phys, VB_PAGES);
+            pool.vb = Some(va as usize);
+        }
+        let vb = pool.vb.unwrap() as *mut u32;
+        let t = pool.targets.get(h.wrapping_sub(1)).and_then(|t| t.as_ref()).ok_or("no such target")?;
+        let texture = match tex {
+            Some(i) => Some(pool.textures.get(i.wrapping_sub(1)).and_then(|t| t.as_ref()).ok_or("no such texture")?.0),
+            None => None,
+        };
+        let rt = Target { ggtt: t.rt.ggtt, pitch: t.pitch, w: t.w, h: t.h };
+        let flags = Flags { test: d.test, write: d.write, blend: d.blend, wire: d.wire, wrap: true };
+        let kernel: &[[u32; 4]] = if texture.is_some() { &PS_TEXTURE } else { &PS_GOURAUD };
+        for chunk in verts.chunks(VB_MAX) {
+            for (i, v) in chunk.iter().enumerate() {
+                for (k, w) in v.iter().enumerate() {
+                    unsafe { write_volatile(vb.add(i * 7 + k), *w) };
+                }
+            }
+            clflush(vb as *const u8, chunk.len() * VSTRIDE as usize);
+            let p = Pipe { rt, depth: Some((t.z.ggtt, t.pitch)), texture, kernel, verts: chunk, vb: Some(VB_GGTT), flags };
+            draw(r, &p)?;
+        }
+        Ok(())
+    })
+}
+
+fn n_read(h: usize, out: &mut [u32]) -> Result<(), &'static str> {
+    with_gpu(|_, pool| {
+        let t = pool.targets.get(h.wrapping_sub(1)).and_then(|t| t.as_ref()).ok_or("no such target")?;
+        let w = t.w as usize;
+        for y in 0..t.h as usize {
+            let row = t.rt.va + y * t.pitch as usize;
+            clflush(row as *const u8, w * 4);
+            for x in 0..w.min(out.len().saturating_sub(y * w)) {
+                out[y * w + x] = unsafe { read_volatile((row + x * 4) as *const u32) } & 0xFF_FFFF;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Step 3d: make the render engine a `gfx3d` backend (runs its self-test).
+pub fn install_gfx3d() -> String {
+    if let Err(e) = with_gpu(|_, _| Ok(())) {
+        return format!("[gfx3d] Intel render engine not used: {}", e);
+    }
+    crate::gfx3d::install_native(crate::gfx3d::Native {
+        name: "Intel render engine",
+        create: n_create,
+        release: n_release,
+        clear: n_clear,
+        texture: n_texture,
+        release_texture: n_release_texture,
+        draw: n_draw,
+        read: n_read,
+    })
 }
