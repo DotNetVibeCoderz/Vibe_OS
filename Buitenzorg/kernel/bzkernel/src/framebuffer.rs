@@ -565,6 +565,16 @@ pub fn geometry() -> Option<(usize, usize, usize)> {
     Some((i.stride, i.height, i.bytes_per_pixel))
 }
 
+/// Something (a GPU engine) wrote to the screen behind the console's back:
+/// forget the per-tile hashes, so the next present writes every tile again
+/// (otherwise unchanged tiles are skipped and the foreign pixels stay).
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+pub fn forget_screen() {
+    if let Some(c) = CONSOLE.get() {
+        c.lock().tiles.clear();
+    }
+}
+
 /// The framebuffer's virtual address (Intel blitter self-test readback).
 #[cfg(target_arch = "x86_64")]
 pub fn virtual_base() -> Option<u64> {

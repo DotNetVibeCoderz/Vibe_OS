@@ -528,6 +528,7 @@ pub fn self_test() -> Vec<String> {
     while us_since(t0) < 4_000_000 {
         core::hint::spin_loop();
     }
+    crate::framebuffer::forget_screen();
     crate::wm::screen_overwritten();
     crate::wm::present_now();
     out
