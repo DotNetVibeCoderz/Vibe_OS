@@ -513,6 +513,16 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
         b.extend(core::iter::repeat(0).take(n - 1));
     }
     let mut b: Vec<u32> = Vec::with_capacity(512);
+    // Every draw rewrites vertices, state and the kernel at the same
+    // addresses: without invalidating the GPU's caches the next draw used
+    // the previous draw's vertices (found on the laptop: the second triangle
+    // appeared where the first one was, offscreen draws hit nothing). As
+    // Mesa: flush render target + depth (CS stall), an empty PIPE_CONTROL
+    // (Gen9 needs one before a VF cache invalidate), then invalidate the
+    // state, constant, VF, texture and instruction caches.
+    b.extend_from_slice(&[PIPE_CONTROL, PC_CS_STALL | 1 << 12 | 1 << 5 | 1 << 0, 0, 0, 0, 0]);
+    b.extend_from_slice(&[PIPE_CONTROL, 0, 0, 0, 0, 0]);
+    b.extend_from_slice(&[PIPE_CONTROL, 1 << 2 | 1 << 3 | 1 << 4 | 1 << 10 | 1 << 11, 0, 0, 0, 0]);
     b.push(PIPELINE_SELECT_3D);
     zeros(&mut b, c3d(0, 1, 2), 3); // STATE_SIP
     for s in [0x12, 0x13, 0x14, 0x15, 0x16] {
