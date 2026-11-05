@@ -1115,6 +1115,17 @@ pub fn set_cursor(x: i32, y: i32) {
 /// Feed one mouse sample (absolute position + left button) into the WM.
 /// Mouse wheel notches (positive = scroll up) for the window under the
 /// pointer. True if an app window took them.
+/// Id of the top-most window under the pointer (current workspace).
+pub fn window_at_cursor() -> Option<u32> {
+    let guard = WM.lock();
+    let wm = guard.as_ref()?;
+    let (cx, cy) = wm.cursor;
+    if wm.start_open || cy >= wm.height - TASKBAR_H {
+        return None;
+    }
+    wm.window_at(cx, cy).map(|i| wm.windows[i].id)
+}
+
 pub fn wheel(notches: i64) -> bool {
     let mut guard = WM.lock();
     let Some(wm) = guard.as_mut() else { return false };

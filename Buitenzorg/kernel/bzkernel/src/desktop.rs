@@ -170,10 +170,11 @@ pub fn run() -> ! {
         let left = buttons & 0x01 != 0;
         let notches = mouse::take_wheel();
         if notches != 0 && !saver_active {
-            let taken = wm::wheel(notches);
+            // an app window takes it; else the terminal under the pointer scrolls
+            let taken = wm::wheel(notches) || wm::window_at_cursor().is_some_and(|id| terminal::wheel(id, notches));
             if wheel_logs < 5 {
                 wheel_logs += 1;
-                println!("[desktop] wheel {:+} at ({}, {}): {}", notches, mx, my, if taken { "to the app window" } else { "nothing to scroll" });
+                println!("[desktop] wheel {:+} at ({}, {}): {}", notches, mx, my, if taken { "scrolled the window under the pointer" } else { "nothing to scroll" });
             }
             input = true;
             other = true;
