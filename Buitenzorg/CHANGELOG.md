@@ -29,6 +29,8 @@ Hardening toward a stable x86-64 release.
   triangles with color gradients, a depth buffer and textures (verified on the
   Latitude 7290 with `gpu render`), and becomes a backend of the 3D API, so
   apps like Ruang 3D are drawn by the GPU when its self-test passes at boot.
+  Verified on the Latitude 7290: the self-test passes and Ruang 3D and Panen
+  Buah 3D run visibly smoother.
 - **The desktop reaches the screen through the Intel blitter** (step 2b): the
   CPU writes changed pixels to ordinary memory and the GPU copies them to the
   screen; `gpu cpu` / `gpu on` switch, and a failing GPU falls back to the CPU.

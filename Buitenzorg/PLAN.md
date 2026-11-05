@@ -1015,6 +1015,9 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   3d dikerjakan: render engine jadi backend `gfx3d` ketiga (native, self-test saat boot) --
   Ruang 3D / Panen Buah 3D digambar GPU. Batasan awal: tekstur belum dikali pencahayaan,
   koordinat tekstur affine.
+  **3d ✓ (2026-11-05): `GFX3D NATIVE OK` di laptop, Ruang 3D dan Panen Buah 3D lebih lancar.**
+  Dukungan GPU Intel tahap 1-3 selesai (UHD 620, Gen9). Sisa: tekstur x pencahayaan, tekstur
+  perspektif, generasi Intel lain.
 - **Terminal bisa digulir** (roda mouse, PageUp/PageDown, End), riwayat 1000 baris.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
