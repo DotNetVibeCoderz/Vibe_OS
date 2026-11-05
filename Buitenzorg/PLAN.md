@@ -1010,7 +1010,8 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   shader kecil rakitan tangan. 3a: render engine (RCS) jalan, uji `gpu render` (menunggu uji
   laptop); 3b segitiga solid; 3c Gouraud + depth + tekstur; 3d backend `gfx3d` ketiga.
   **Uji laptop: 2b ✓ (desktop lewat blitter, ~1,5 ms/frame GPU) dan 3a ✓ (RCS mode ring
-  legacy jalan).** 3b dikerjakan: segitiga oranye lewat pipeline 3D (`gpu render` langkah 4).
+  legacy jalan).** **3b ✓** (segitiga oranye dari render engine terlihat, baca balik cocok).
+  3c dikerjakan: Gouraud, depth test, tekstur di render target luar layar (`gpu render` 5-7).
 - **Terminal bisa digulir** (roda mouse, PageUp/PageDown, End), riwayat 1000 baris.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.

@@ -25,8 +25,9 @@ Hardening toward a stable x86-64 release.
 - **Terminal scrollback:** scroll back through earlier output with the mouse
   wheel or PageUp/PageDown (End, typing or Enter go back to the bottom);
   1000 lines are kept until `clear`.
-- **Intel render engine self-test** (`gpu render`, GPU support step 3a): the
-  first step toward drawing 3D on the GPU.
+- **Intel render engine self-test** (`gpu render`, GPU support step 3): the GPU
+  draws its first triangle through the 3D pipeline on the Latitude 7290; the
+  test now also checks color gradients, the depth test and texturing.
 - **The desktop reaches the screen through the Intel blitter** (step 2b): the
   CPU writes changed pixels to ordinary memory and the GPU copies them to the
   screen; `gpu cpu` / `gpu on` switch, and a failing GPU falls back to the CPU.
