@@ -70,7 +70,7 @@ pub struct Native {
     pub clear: fn(usize, u32, bool, bool) -> Result<(), &'static str>,
     pub texture: fn(u32, u32, &[u32]) -> Result<usize, &'static str>,
     pub release_texture: fn(usize),
-    pub draw: fn(usize, &[[u32; 11]], Option<usize>, NativeDraw) -> Result<(), &'static str>,
+    pub draw: fn(usize, &[[u32; 12]], Option<usize>, NativeDraw) -> Result<(), &'static str>,
     pub read: fn(usize, &mut [u32]) -> Result<(), &'static str>,
 }
 
@@ -1113,13 +1113,13 @@ fn native_draw(c: &mut Ctx, m: &Mesh, d: &Draw, n: &Native, h: usize) -> (u32, u
     let textured = tex.is_some();
     let f = virgl::f32_from_fx;
     let _ = textured;
-    let gv = |s: &Sv| -> [u32; 11] {
-        let col = |k: usize| f(s.col[k].clamp(0, 255) * ONE / 255);
-        // 28.4 -> 16.16 is << 12; 24-bit depth -> 0..1 in 16.16 is >> 8; the
-        // lit color, then the texture coordinates (the kernel multiplies)
-        [f(s.x << 12), f(s.y << 12), f(s.z >> 8), col(0), col(1), col(2), col(3), f(s.uv[0]), f(s.uv[1]), 0, f(ONE)]
+    // clip-space position (the GPU divides by w: perspective-correct
+    // interpolation), the lit color, then the texture coordinates
+    let gv = |t: &Tv| -> [u32; 12] {
+        let col = |k: usize| f(t.col[k].clamp(0, 255) * ONE / 255);
+        [f(t.c[0]), f(t.c[1]), f(t.c[2]), f(t.c[3]), col(0), col(1), col(2), col(3), f(t.uv[0]), f(t.uv[1]), 0, f(ONE)]
     };
-    let mut out: Vec<[u32; 11]> = Vec::with_capacity(m.idx.len());
+    let mut out: Vec<[u32; 12]> = Vec::with_capacity(m.idx.len());
     let (mut tris, mut area) = (0u32, 0i64);
     let mut poly = [Tv::default(); 12];
     for t in m.idx.chunks_exact(3) {
@@ -1158,7 +1158,7 @@ fn native_draw(c: &mut Ctx, m: &Mesh, d: &Draw, n: &Native, h: usize) -> (u32, u
         };
         tris += 1;
         for i in 1..k - 1 {
-            out.extend_from_slice(&[gv(&s[0]), gv(&s[i]), gv(&s[i + 1])]);
+            out.extend_from_slice(&[gv(&poly[0]), gv(&poly[i]), gv(&poly[i + 1])]);
         }
     }
     if out.is_empty() {

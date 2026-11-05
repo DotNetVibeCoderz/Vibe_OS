@@ -347,9 +347,9 @@ const ST_SURF_TEX: u32 = 0x2440;
 const ST_SAMPLER: u32 = 0x2480;
 const ST_VB: u32 = 0x2800;
 /// Bytes per vertex: x, y, z, then a vec4 attribute.
-/// Bytes per vertex: x, y, z, then two vec4 attributes: the color
-/// (r, g, b, a) and the texture coordinates (u, v, 0, 1).
-const VSTRIDE: u32 = 44;
+/// Bytes per vertex: the position (x, y, z, w), then two vec4 attributes:
+/// the color (r, g, b, a) and the texture coordinates (u, v, 0, 1).
+const VSTRIDE: u32 = 48;
 const MAX_VERTS: usize = (STATE_PAGES_N * 4096 - ST_VB as usize) / VSTRIDE as usize;
 
 /// Header of a 3D command (IGT's GEN4_3D): pipeline, opcode, sub-opcode.
@@ -431,16 +431,16 @@ fn unit_bits(n: u32) -> u32 {
 }
 
 /// A vertex: screen x, y, depth z/256, color components /256 (no texture).
-fn vtx(x: u32, y: u32, z: u32, a: [u32; 4]) -> [u32; 11] {
+fn vtx(x: u32, y: u32, z: u32, a: [u32; 4]) -> [u32; 12] {
     let o = unit_bits(256);
-    [f32_bits(x), f32_bits(y), unit_bits(z), unit_bits(a[0]), unit_bits(a[1]), unit_bits(a[2]), unit_bits(a[3]), 0, 0, 0, o]
+    [f32_bits(x), f32_bits(y), unit_bits(z), o, unit_bits(a[0]), unit_bits(a[1]), unit_bits(a[2]), unit_bits(a[3]), 0, 0, 0, o]
 }
 
 /// A textured vertex: color `a` (/256) and texture coordinates u, v (/256).
-fn vtx_uv(x: u32, y: u32, z: u32, a: [u32; 4], u: u32, v: u32) -> [u32; 11] {
+fn vtx_uv(x: u32, y: u32, z: u32, a: [u32; 4], u: u32, v: u32) -> [u32; 12] {
     let mut r = vtx(x, y, z, a);
-    r[7] = unit_bits(u);
-    r[8] = unit_bits(v);
+    r[8] = unit_bits(u);
+    r[9] = unit_bits(v);
     r
 }
 
@@ -459,7 +459,7 @@ struct Pipe<'a> {
     depth: Option<(u32, u32)>, // (GGTT, pitch)
     texture: Option<Target>,
     kernel: &'a [[u32; 4]],
-    verts: &'a [[u32; 11]],
+    verts: &'a [[u32; 12]],
     /// GGTT address of vertices the caller already wrote (else they go
     /// into the state pages, at most `MAX_VERTS`).
     vb: Option<u32>,
@@ -475,9 +475,15 @@ struct Flags {
     wire: bool,
     /// Texture coordinates wrap (else clamp).
     wrap: bool,
+    /// Vertices in clip space (x, y, z, w): the clipper divides by w and SF
+    /// maps to the viewport, so the GPU knows 1/w and interpolates
+    /// perspective-correctly. Else screen pixels with w = 1 (the self-tests).
+    clip: bool,
+    /// Drop pixels whose alpha is 0 (alpha test GREATER 0): transparent texels.
+    alpha_test: bool,
 }
 
-const PLAIN: Flags = Flags { test: true, write: true, blend: false, wire: false, wrap: false };
+const PLAIN: Flags = Flags { test: true, write: true, blend: false, wire: false, wrap: false, clip: false, alpha_test: false };
 
 static STATE_PAGES: Mutex<Option<usize>> = Mutex::new(None);
 
@@ -543,8 +549,12 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
             put(ST_VB + i as u32 * VSTRIDE, v);
         }
     }
-    put(ST_CC, &[0, 0, 0, 0, 0, 0]);
+    // COLOR_CALC_STATE: alpha test reference 0.0 as FLOAT32
+    put(ST_CC, &[fl.alpha_test as u32, 0, 0, 0, 0, 0]);
     let mut blend = [0u32; 33];
+    if fl.alpha_test {
+        blend[0] = 1 << 27 | 5 << 24; // alpha test enable, GREATER
+    }
     for e in 0..16 {
         blend[1 + e * 2] = if fl.blend {
             // color: SRC_ALPHA, INV_SRC_ALPHA, ADD; alpha: ONE, INV_SRC_ALPHA
@@ -556,7 +566,17 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     }
     put(ST_BLEND, &blend);
     put(ST_CC_VP, &[0xf99a_130c, 0x799a_130c]); // depth range -1e35 .. 1e35
-    put(ST_SF_VP, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f80_0000, 0, 0x3f80_0000, 0, 0, 0, 0]);
+    if fl.clip {
+        // viewport: x = (ndc + 1) w/2, y = (1 - ndc) h/2, z = (ndc + 1)/2 -- as gfx3d's project()
+        let f = crate::virtio::virgl::f32_from_fx;
+        let (hw, hh) = (rt.w as i64 * 32768, rt.h as i64 * 32768);
+        let half = 0x3f00_0000;
+        let g = f(-8 << 16);
+        let gp = f(8 << 16);
+        put(ST_SF_VP, &[f(hw), f(-hh), half, f(hw), f(hh), half, 0, 0, g, gp, g, gp, 0, f32_bits(rt.w), 0, f32_bits(rt.h)]);
+    } else {
+        put(ST_SF_VP, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f80_0000, 0, 0x3f80_0000, 0, 0, 0, 0]);
+    }
     put(ST_SCISSOR, &[0, 0]);
 
     // --- batch ---
@@ -615,14 +635,23 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     b.extend_from_slice(&[c3d(3, 0, 0x26), 0, c3d(3, 0, 0x2b), 0]);
     zeros(&mut b, c3d(3, 0, 0x10), 9); // VS: disabled (vertices pass through)
     zeros(&mut b, c3d(3, 0, 0x1e), 5); // STREAMOUT
-    zeros(&mut b, c3d(3, 0, 0x12), 4); // CLIP: pass-through
+    if fl.clip {
+        // CLIP on (normal mode, no clip tests: the CPU clipped already) = perspective divide
+        b.extend_from_slice(&[c3d(3, 0, 0x12) | 2, 0, 1 << 31, 0]);
+    } else {
+        zeros(&mut b, c3d(3, 0, 0x12), 4); // CLIP: pass-through
+    }
     // setup: one attribute read from the VUE, no viewport transform (screen coordinates)
     // two attributes (color, texture coordinates), both read in one 256-bit unit
     b.extend_from_slice(&[c3d(3, 0, 0x1f) | 4, 2 << 22 | 1 << 29 | 1 << 28 | 1 << 11 | 1 << 5, 0, 0, 3 | 3 << 2, 0]);
     zeros(&mut b, c3d(3, 0, 0x51), 11); // SBE_SWIZ
     let fill = if fl.wire { 1 << 5 | 1 << 3 } else { 0 }; // front/back fill mode WIREFRAME
     b.extend_from_slice(&[c3d(3, 0, 0x50) | 3, 1 << 21 | 1 << 16 | fill, 0, 0, 0]); // RASTER: CCW, no culling
-    zeros(&mut b, c3d(3, 0, 0x13), 4); // SF
+    if fl.clip {
+        b.extend_from_slice(&[c3d(3, 0, 0x13) | 2, 1 << 1, 0, 0]); // SF: viewport transform
+    } else {
+        zeros(&mut b, c3d(3, 0, 0x13), 4); // SF
+    }
     b.extend_from_slice(&[c3d(3, 0, 0x14), 1 << 11]); // WM: perspective pixel barycentrics
     zeros(&mut b, c3d(3, 0, 0x17), 11); // CONSTANT_PS
     let samplers = if tex.is_some() { 1 << 27 | 2 << 18 } else { 1 << 18 };
@@ -640,8 +669,14 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
         0,
         0,
     ]);
-    b.extend_from_slice(&[c3d(3, 0, 0x4d), 1 << 30]); // PS_BLEND: writeable RT
-    b.extend_from_slice(&[c3d(3, 0, 0x4f), 1 << 31 | 1 << 8]); // PS_EXTRA: valid, attributes
+    // PS_BLEND: writeable RT, + alpha test, + blending mirrored from entry 0
+    let mut psb = 1 << 30 | (fl.alpha_test as u32) << 8;
+    if fl.blend {
+        psb |= 1 << 29 | 3 << 14 | 19 << 9 | 1 << 24 | 19 << 19;
+    }
+    b.extend_from_slice(&[c3d(3, 0, 0x4d), psb]);
+    // PS_EXTRA: valid, attributes (+ kills pixels when alpha-testing)
+    b.extend_from_slice(&[c3d(3, 0, 0x4f), 1 << 31 | 1 << 8 | (fl.alpha_test as u32) << 28]);
     let sampler_ptr = if tex.is_some() { ST_SAMPLER } else { 0 };
     b.extend_from_slice(&[c3d(3, 0, 0x2a), ST_BT, c3d(3, 0, 0x2f), sampler_ptr, c3d(3, 0, 0x0f), ST_SCISSOR]);
     match p.depth {
@@ -673,14 +708,14 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     let n = p.verts.len() as u32;
     b.extend_from_slice(&[c3d(3, 0, 0x08) | 3, 1 << 14 | VSTRIDE, p.vb.unwrap_or(STATE_GGTT + ST_VB), 0, n * VSTRIDE]);
     b.extend_from_slice(&[
-        c3d(3, 0, 0x09) | 7, // VERTEX_ELEMENTS: pad, position (x, y, z, 1), color, texture coordinates
+        c3d(3, 0, 0x09) | 7, // VERTEX_ELEMENTS: pad, position (x, y, z, w), color, texture coordinates
         1 << 25 | 0x000 << 16,
         2 << 28 | 2 << 24 | 2 << 20 | 2 << 16,
-        1 << 25 | 0x040 << 16,
-        1 << 28 | 1 << 24 | 1 << 20 | 3 << 16,
-        1 << 25 | 0x000 << 16 | 12,
+        1 << 25 | 0x000 << 16,
         1 << 28 | 1 << 24 | 1 << 20 | 1 << 16,
-        1 << 25 | 0x000 << 16 | 28,
+        1 << 25 | 0x000 << 16 | 16,
+        1 << 28 | 1 << 24 | 1 << 20 | 1 << 16,
+        1 << 25 | 0x000 << 16 | 32,
         1 << 28 | 1 << 24 | 1 << 20 | 1 << 16,
     ]);
     b.extend_from_slice(&[c3d(3, 0, 0x4b), 0x04]); // VF_TOPOLOGY: triangle list
@@ -851,6 +886,37 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         c,
         if near_rgb(c, 0x786810) { "half yellow: ok" } else { "NOT 0x786810" }
     ));
+
+    // 7c. alpha test: yellow cells opaque, blue cells alpha 0 -> the background shows
+    for y in 0..TEX {
+        for x in 0..TEX {
+            let v = if (x / 8 + y / 8) % 2 == 0 { 0xFFF0_D020 } else { 0x0020_40E0 };
+            unsafe { write_volatile((tex_va as *mut u32).add((y * TEX + x) as usize), v) };
+        }
+    }
+    clflush(tex_va as *const u8, (TEX * TEX * 4) as usize);
+    let (x2, y2) = (512 + 64, 200);
+    let white = |x: u32, y: u32, u: u32, v: u32| vtx_uv(x, y, 0, [256, 256, 256, 256], u, v);
+    let quad = [
+        white(x2, y2, 0, 0),
+        white(x2 + 48, y2, 256, 0),
+        white(x2, y2 + 48, 0, 256),
+        white(x2 + 48, y2, 256, 0),
+        white(x2 + 48, y2 + 48, 256, 256),
+        white(x2, y2 + 48, 0, 256),
+    ];
+    let flags = Flags { alpha_test: true, ..PLAIN };
+    let us = draw(r, &Pipe { rt, depth: None, texture, kernel: &PS_TEXTURE, verts: &quad, vb: None, flags })?;
+    // 48 px over 64 texels: offset 2 -> texel 2 (yellow cell), offset 9 -> texel 12 (blue cell)
+    let (opaque, clear) = (read(x2 + 2, y2 + 2), read(x2 + 9, y2 + 2));
+    out.push(format!(
+        "  7c alpha test: {} us, opaque {:#08x} ({}), alpha 0 {:#08x} ({})",
+        us,
+        opaque,
+        if near_rgb(opaque, 0xf0d020) { "yellow: ok" } else { "NOT yellow" },
+        clear,
+        if near_rgb(clear, 0x202020) { "dropped: ok" } else { "NOT dropped" }
+    ));
     Ok(rt_va)
 }
 
@@ -992,7 +1058,7 @@ fn n_release_texture(h: usize) {
     }
 }
 
-fn n_draw(h: usize, verts: &[[u32; 11]], tex: Option<usize>, d: crate::gfx3d::NativeDraw) -> Result<(), &'static str> {
+fn n_draw(h: usize, verts: &[[u32; 12]], tex: Option<usize>, d: crate::gfx3d::NativeDraw) -> Result<(), &'static str> {
     with_gpu(|r, pool| {
         if pool.vb.is_none() {
             let (phys, va) = crate::memory::alloc_dma_contiguous(VB_PAGES).ok_or("no pages for vertices")?;
@@ -1006,12 +1072,12 @@ fn n_draw(h: usize, verts: &[[u32; 11]], tex: Option<usize>, d: crate::gfx3d::Na
             None => None,
         };
         let rt = Target { ggtt: t.rt.ggtt, pitch: t.pitch, w: t.w, h: t.h };
-        let flags = Flags { test: d.test, write: d.write, blend: d.blend, wire: d.wire, wrap: true };
+        let flags = Flags { test: d.test, write: d.write, blend: d.blend, wire: d.wire, wrap: true, clip: true, alpha_test: texture.is_some() };
         let kernel: &[[u32; 4]] = if texture.is_some() { &PS_TEXTURE } else { &PS_GOURAUD };
         for chunk in verts.chunks(VB_MAX) {
             for (i, v) in chunk.iter().enumerate() {
                 for (k, w) in v.iter().enumerate() {
-                    unsafe { write_volatile(vb.add(i * 11 + k), *w) };
+                    unsafe { write_volatile(vb.add(i * 12 + k), *w) };
                 }
             }
             clflush(vb as *const u8, chunk.len() * VSTRIDE as usize);
