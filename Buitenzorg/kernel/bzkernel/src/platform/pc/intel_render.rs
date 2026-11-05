@@ -94,6 +94,10 @@ impl Rcs {
     fn wr(&self, o: u64, v: u32) {
         unsafe { write_volatile((self.regs + o) as *mut u32, v) }
     }
+    /// The GGTT entry for `ggtt` as the GPU sees it.
+    fn pte(&self, ggtt: u32) -> u64 {
+        unsafe { read_volatile((self.gtt + (ggtt as u64 >> 12) * 8) as *const u64) }
+    }
     fn map(&self, ggtt: u32, phys: u64) {
         unsafe { write_volatile((self.gtt + (ggtt as u64 >> 12) * 8) as *mut u64, phys | 1) };
     }
@@ -272,6 +276,19 @@ pub fn self_test() -> Vec<String> {
             out.push(format!("  4 solid triangle: {}", e));
             return out;
         }
+    }
+
+    // 4b. diagnosis: the Gouraud kernel into the framebuffer (left of the orange one)
+    let gx = x0.saturating_sub(240);
+    let tri = [vtx(gx + 100, 40, 0, [256, 0, 0, 256]), vtx(gx + 200, 220, 0, [0, 256, 0, 256]), vtx(gx, 220, 0, [0, 0, 256, 256])];
+    match draw(r, &Pipe { rt: screen, depth: None, texture: None, kernel: &PS_GOURAUD, verts: &tri }) {
+        Ok(us) => out.push(format!(
+            "  4b Gouraud kernel into the framebuffer: {} us, near the red corner {:#08x}, center {:#08x}",
+            us,
+            px(gx + 100, 60),
+            px(gx + 100, 160)
+        )),
+        Err(e) => out.push(format!("  4b Gouraud into the framebuffer: {}", e)),
     }
 
     // 5-7. (3c) offscreen: three 256x256 panels in one render target
@@ -669,6 +686,20 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         clflush(p as *const u8, 4);
         (unsafe { read_volatile(p) }) & 0xFF_FFFF
     };
+
+    // diagnosis: is the offscreen target reachable? (the GGTT entry, a
+    // known-good writer = the blitter, then the known-good solid kernel)
+    out.push(format!("  5a render target: GGTT entry {:#x}, first page at {:#x}", r.pte(RT_GGTT), rt_va));
+    match super::intel_blt::fill_rect(RT_GGTT, OFF_W * 4, 0, 0, 32, 32, 0xFF00_FF00) {
+        Ok(us) => out.push(format!("  5b blitter fill into it: {} us, read back {:#08x} (want 0x00ff00)", us, read(4, 4))),
+        Err(e) => out.push(format!("  5b blitter fill: {}", e)),
+    }
+    let tri = [vtx(40, 4, 0, [0; 4]), vtx(76, 40, 0, [0; 4]), vtx(4, 40, 0, [0; 4])];
+    match draw(r, &Pipe { rt, depth: None, texture: None, kernel: &PS_SOLID, verts: &tri }) {
+        Ok(us) => out.push(format!("  5c solid kernel into it: {} us, read back {:#08x} (want 0xe6661a)", us, read(40, 30))),
+        Err(e) => out.push(format!("  5c solid kernel: {}", e)),
+    }
+    fill(rt32, n_px, 0x0020_2020);
 
     // 5. Gouraud: red, green, blue corners
     let tri = [vtx(128, 16, 0, [256, 0, 0, 256]), vtx(240, 240, 0, [0, 256, 0, 256]), vtx(16, 240, 0, [0, 0, 256, 256])];

@@ -109,6 +109,21 @@ pub fn gt() -> Option<(u64, u64, u32, u32, u32, u32)> {
     BLT.lock().as_ref().map(|b| (b.regs, b.gtt, b.fb_ggtt, b.pitch, b.w, b.h))
 }
 
+/// XY_COLOR_BLT into any GGTT surface (32 bpp, linear), waiting for it:
+/// the render engine's diagnostics use the blitter as a known-good writer.
+pub fn fill_rect(ggtt: u32, pitch: u32, x: u32, y: u32, w: u32, h: u32, color: u32) -> Result<u64, String> {
+    let mut guard = BLT.lock();
+    let b = guard.as_mut().ok_or("no blitter")?;
+    if !b.up {
+        let mut lines = Vec::new();
+        if !b.bring_up(&mut lines) {
+            return Err(String::from("blitter did not come up"));
+        }
+    }
+    let cmd = [XY_COLOR_BLT, BPP32 | 0xF0 << 16 | pitch, y << 16 | x, (y + h) << 16 | (x + w), ggtt, 0, color];
+    b.submit(&cmd)
+}
+
 /// `framebuffer::Accel::flush`: make CPU writes visible to the GPU.
 fn flush_cpu(va: usize, len: usize) {
     let mut p = va & !63;
