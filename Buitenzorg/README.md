@@ -9,7 +9,7 @@
 > *Codename **Buitenzorg** — the old Dutch name for Bogor, "without worries"
 > (zonder zorg). Made by [Gravicode Studios](#credits), led by Kang Fadhil.*
 
-**`Status: v1.0-rc1` · `first boot on a physical PC pending` · `License: MIT`**
+**`Status: v1.0` · `boots on a physical PC (Dell Latitude 7290)` · `License: MIT`**
 
 New here? Start with the **[Tutorial](docs/tutorial.md)**. Full documentation
 index: **[docs/](docs/README.md)**. Release history: **[CHANGELOG](CHANGELOG.md)**.

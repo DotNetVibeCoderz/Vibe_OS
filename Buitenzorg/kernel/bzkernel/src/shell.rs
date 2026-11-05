@@ -319,7 +319,7 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
 
 /// The OS version: one place, shown by `ver`, `about`, `bz version` and the
 /// boot log. A release candidate until v1.0 has booted on a physical PC.
-pub const VERSION: &str = "v1.0-rc1 'Buitenzorg'";
+pub const VERSION: &str = "v1.0 'Buitenzorg'";
 
 /// The kernel log (the last 16 KiB), optionally only lines containing `filter`
 /// -- on a PC without a serial cable, the way to see what the boot did.

@@ -10,7 +10,7 @@
 > (zonder zorg). Dibuat oleh [Gravicode Studios](#kredit), dipimpin oleh Kang
 > Fadhil.*
 
-**`Status: v1.0-rc1` · `boot pertama di PC fisik belum` · `Lisensi: MIT`**
+**`Status: v1.0` · `sudah boot di PC fisik (Dell Latitude 7290)` · `Lisensi: MIT`**
 
 Baru mulai? Mulai dari **[Tutorial](docs/tutorial.id.md)**. Indeks dokumentasi
 lengkap: **[docs/](docs/README.id.md)**. Riwayat rilis: **[CHANGELOG](CHANGELOG.md)** *(EN)*.

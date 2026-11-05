@@ -11,9 +11,16 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ---
 
-## [Unreleased] — the v1.0 "Buitenzorg" track (stabilization)
+## [Unreleased]
 
-Hardening toward a stable x86-64 release.
+Nothing yet.
+
+## [1.0] — "Buitenzorg" — 2026-11-05
+
+The stable x86-64 release. It boots on a physical PC -- a Dell Latitude 7290
+(UEFI, from a USB stick): desktop, files on the stick, keyboard and touchpad,
+sound, wired network, and the Intel GPU drawing the desktop and 3D. Not yet
+verified on real Hyper-V, VirtualBox or VMware.
 
 ### Added
 - **On-board Intel Ethernet (I217/I218/I219)**, verified on the Latitude 7290's

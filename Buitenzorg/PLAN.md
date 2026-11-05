@@ -31,7 +31,7 @@
 | Polyglot | v0.14 | Babel | JS/TS + Python runtime (interpreter bersama) | ✅ Selesai |
 | Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Sebagian (GC reklamasi, async/await, EH belum) |
 | Rilis | v0.16 | Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | ✅ Selesai |
-| **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | 🟡 **v1.0-rc1: tinggal boot di PC fisik + Hyper-V** |
+| **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | ✅ **Rilis 2026-11-05** (PC fisik: Dell Latitude 7290; Hyper-V nyata belum diuji) |
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
 | Media | pasca-v1.0 | — | Multimedia, internet, game 2D/3D & hiburan | ⏳ Rencana |
 | Multi-arch | v1.x | Rimba | ARM64 + RISC-V (QEMU `virt`) + CI matrix | ✅ M0–M5 selesai (2026-11-02) |

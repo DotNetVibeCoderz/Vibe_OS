@@ -471,12 +471,11 @@ fn main() {
     // kernel started. Warnings only, and only on the serial port.
     let mut boot_config = bootloader::BootConfig::default();
     // The loader's own log on screen: if it stops before the kernel, that is
-    // all a PC shows. Warnings and errors only (info cost ~1 s under QEMU).
-    // TEMPORARY (first physical PC, black screen): every loader step on screen,
-    // to tell a loader that stops from a kernel that does. It costs ~9 s per
-    // BIOS boot under QEMU: set back to Warn once the PC boots.
+    // all a PC shows. Warnings and errors only (every INFO step cost ~9 s per
+    // BIOS boot under QEMU; it was on while the first physical PC, a Dell
+    // Latitude 7290, showed a black screen -- v1.0 boots there).
     boot_config.frame_buffer_logging = true;
-    boot_config.log_level = bootloader_boot_config::LevelFilter::Info;
+    boot_config.log_level = bootloader_boot_config::LevelFilter::Warn;
     // never the serial port: a laptop has no COM1, and the loader's UART driver
     // waits for it without a limit
     boot_config.serial_logging = false;
