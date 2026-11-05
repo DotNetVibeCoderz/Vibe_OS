@@ -121,16 +121,21 @@ pub fn init(devices: &[PciDevice]) {
     for l in &lines {
         crate::println!("[gpu] {}", l.trim_start());
     }
-    crate::println!("[gpu] drawing still goes through the CPU (GPU step 2 of 3: blitter self-test with 'gpu blit')");
     *INFO.lock() = lines;
+    if crate::framebuffer::virtual_base().is_some() && super::intel_blt::status().len() > 0 {
+        crate::println!("[gpu] {}", super::intel_blt::enable_present());
+    } else {
+        crate::println!("[gpu] drawing goes through the CPU");
+    }
 }
 
 /// The lines `init` found, for the shell's `gpu`.
 pub fn info() -> Vec<String> {
-    let v = INFO.lock().clone();
+    let mut v = INFO.lock().clone();
     if v.is_empty() {
         alloc::vec![String::from("gpu: no Intel graphics found")]
     } else {
+        v.extend(super::intel_blt::status());
         v
     }
 }

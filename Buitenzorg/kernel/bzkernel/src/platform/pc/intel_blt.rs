@@ -41,6 +41,10 @@ const BASE: u32 = 0x1000_0000;
 const RING_GGTT: u32 = BASE;
 const STATUS_GGTT: u32 = BASE + 0x1000;
 const PATTERN_GGTT: u32 = BASE + 0x10000;
+/// The present staging surface (screen-sized, screen stride).
+const STAGING_GGTT: u32 = BASE + 0x10_0000;
+/// Rectangles per submission (10 dwords each; the ring is 4 KiB).
+const RECTS_PER_SUBMIT: usize = 64;
 const RING_SIZE: u32 = 4096;
 /// Pattern: 64 x 64 pixels, pitch 256 bytes = 16 rows per page.
 const PAT: u32 = 64;
@@ -63,6 +67,12 @@ struct Blitter {
     pattern: Vec<(u64, *mut u8)>,
     tail: u32,
     seqno: u32,
+    /// Present staging surface (virtual address), once step 2b is on.
+    staging: Option<usize>,
+    presents: u64,
+    rects: u64,
+    present_us: u64,
+    failure: Option<String>,
 }
 
 // MMIO and DMA pages owned by this driver; used under BLT's lock only.
@@ -85,7 +95,170 @@ pub fn configure(regs: u64, gtt: u64, fb_ggtt: u32, pitch: u32, w: u32, h: u32) 
         pattern: Vec::new(),
         tail: 0,
         seqno: 0,
+        staging: None,
+        presents: 0,
+        rects: 0,
+        present_us: 0,
+        failure: None,
     });
+}
+
+/// (registers, GGTT, framebuffer GGTT offset, pitch, width, height) of the
+/// configured Gen9 GPU, for the render engine (`intel_render`).
+pub fn gt() -> Option<(u64, u64, u32, u32, u32, u32)> {
+    BLT.lock().as_ref().map(|b| (b.regs, b.gtt, b.fb_ggtt, b.pitch, b.w, b.h))
+}
+
+/// `framebuffer::Accel::flush`: make CPU writes visible to the GPU.
+fn flush_cpu(va: usize, len: usize) {
+    let mut p = va & !63;
+    let end = va + len;
+    while p < end {
+        unsafe { core::arch::asm!("clflush [{}]", in(reg) p, options(nostack, preserves_flags)) };
+        p += 64;
+    }
+}
+
+/// `framebuffer::Accel::blit`: copy rectangles staging -> screen and wait.
+/// Runs inside a present (console lock held, interrupts off): no printing.
+fn present_blit(rects: &[(u32, u32, u32, u32)]) -> bool {
+    unsafe { core::arch::asm!("mfence", options(nostack, preserves_flags)) };
+    let mut guard = BLT.lock();
+    let Some(b) = guard.as_mut() else { return false };
+    let t0 = now();
+    for chunk in rects.chunks(RECTS_PER_SUBMIT) {
+        let mut cmds = [0u32; RECTS_PER_SUBMIT * 10];
+        for (i, &(x, y, w, h)) in chunk.iter().enumerate() {
+            let x1 = (x + w).min(b.w);
+            let y1 = (y + h).min(b.h);
+            cmds[i * 10..i * 10 + 10].copy_from_slice(&[
+                XY_SRC_COPY_BLT,
+                BPP32 | 0xCC << 16 | b.pitch,
+                y << 16 | x,
+                y1 << 16 | x1,
+                b.fb_ggtt,
+                0,
+                y << 16 | x,
+                b.pitch,
+                STAGING_GGTT,
+                0,
+            ]);
+        }
+        if let Err(e) = b.submit(&cmds[..chunk.len() * 10]) {
+            b.failure = Some(e);
+            b.staging = None;
+            return false;
+        }
+    }
+    b.presents += 1;
+    b.rects += rects.len() as u64;
+    b.present_us += us_since(t0);
+    true
+}
+
+/// Step 2b: present the desktop through the blitter. Brings the engine up,
+/// maps a screen-sized staging surface into the GGTT and installs it as the
+/// framebuffer's copy engine. Returns a line for the log.
+pub fn enable_present() -> String {
+    let mut lines = Vec::new();
+    let accel = {
+        let mut guard = BLT.lock();
+        let Some(b) = guard.as_mut() else { return String::from("no Gen9 blitter") };
+        if !b.up && !b.bring_up(&mut lines) {
+            return format!("blitter did not come up ({})", lines.join(";"));
+        }
+        if b.staging.is_none() {
+            let bytes = b.pitch as usize * b.h as usize;
+            let pages = bytes.div_ceil(4096);
+            let Some((phys, va)) = crate::memory::alloc_dma_contiguous(pages) else {
+                return format!("no {} contiguous pages for the staging surface", pages);
+            };
+            for i in 0..pages as u32 {
+                b.map(STAGING_GGTT + i * 4096, phys + i as u64 * 4096);
+            }
+            b.flush_ggtt();
+            flush_cpu(va as usize, pages * 4096);
+            b.staging = Some(va as usize);
+        }
+        b.failure = None;
+        crate::framebuffer::Accel {
+            staging: b.staging.unwrap(),
+            stride: b.pitch as usize / 4,
+            flush: flush_cpu,
+            blit: present_blit,
+        }
+    };
+    crate::framebuffer::set_accel(Some(accel));
+    crate::wm::screen_overwritten();
+    String::from("the desktop is presented through the blitter (GPU step 2b)")
+}
+
+static SOFT: Mutex<Option<(usize, usize, usize)>> = Mutex::new(None); // staging, screen, stride (pixels)
+static SOFT_RECTS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn soft_blit(rects: &[(u32, u32, u32, u32)]) -> bool {
+    let Some((st, fb, stride)) = *SOFT.lock() else { return false };
+    for &(x, y, w, h) in rects {
+        for yy in y..y + h {
+            let o = yy as usize * stride + x as usize;
+            unsafe { core::ptr::copy_nonoverlapping((st as *const u32).add(o), (fb as *mut u32).add(o), w as usize) };
+        }
+    }
+    SOFT_RECTS.fetch_add(rects.len() as u64, core::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// Shell `gpu soft`: the step-2b present path with a CPU stand-in for the
+/// blitter (staging surface -> screen by memcpy), so the framebuffer side
+/// can be checked under QEMU, where there is no Intel GPU.
+pub fn soft_present() -> String {
+    let Some(fb) = crate::framebuffer::virtual_base() else { return String::from("no framebuffer") };
+    let Some((stride, height, bpp)) = crate::framebuffer::geometry() else { return String::from("no framebuffer") };
+    if bpp != 4 {
+        return format!("needs a 32-bit framebuffer ({} bytes per pixel)", bpp);
+    }
+    let staging = alloc::vec![0u32; stride * height].leak().as_mut_ptr() as usize;
+    *SOFT.lock() = Some((staging, fb as usize, stride));
+    crate::framebuffer::set_accel(Some(crate::framebuffer::Accel { staging, stride, flush: |_, _| {}, blit: soft_blit }));
+    crate::wm::screen_overwritten();
+    String::from("present path with a CPU stand-in for the blitter ('gpu cpu' to stop)")
+}
+
+/// Rectangles the CPU stand-in copied (`gpu soft`).
+pub fn soft_rects() -> u64 {
+    SOFT_RECTS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Shell `gpu cpu`: present by CPU stores again.
+pub fn disable_present() {
+    crate::framebuffer::set_accel(None);
+    crate::wm::screen_overwritten();
+}
+
+/// Lines for the shell's `gpu`.
+pub fn status() -> Vec<String> {
+    let active = crate::framebuffer::accel_active();
+    let guard = BLT.lock();
+    let Some(b) = guard.as_ref() else { return Vec::new() };
+    let mut out = Vec::new();
+    out.push(format!(
+        "  present: {}{}",
+        if active { "through the blitter" } else { "by CPU" },
+        if b.presents > 0 {
+            format!(
+                ", {} frames, {} rectangles, {} us per frame on the GPU",
+                b.presents,
+                b.rects,
+                b.present_us / b.presents.max(1)
+            )
+        } else {
+            String::new()
+        }
+    ));
+    if let Some(f) = &b.failure {
+        out.push(format!("  blitter failed: {}", f));
+    }
+    out
 }
 
 fn clflush(va: *const u8, len: usize) {
@@ -255,6 +428,9 @@ impl Blitter {
 
 /// Shell `gpu blit`.
 pub fn self_test() -> Vec<String> {
+    // the framebuffer address first: a present takes the console lock, then
+    // BLT, so BLT must never be held while taking the console lock
+    let Some(fb) = crate::framebuffer::virtual_base() else { return Vec::new() };
     let mut guard = BLT.lock();
     let Some(b) = guard.as_mut() else {
         return alloc::vec![String::from("gpu blit: needs a Gen9 Intel GPU showing a linear 32-bit plane (see 'gpu')")];
@@ -264,7 +440,6 @@ pub fn self_test() -> Vec<String> {
         out.push(String::from("  blitter did not come up; nothing drawn"));
         return out;
     }
-    let Some(fb) = crate::framebuffer::virtual_base() else { return out };
     let pitch = b.pitch;
     let px = |x: u32, y: u32| unsafe { read_volatile((fb + (y * pitch + x * 4) as u64) as *const u32) } & 0xFF_FFFF;
 

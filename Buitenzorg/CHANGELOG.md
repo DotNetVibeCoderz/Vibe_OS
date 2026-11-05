@@ -21,6 +21,15 @@ Hardening toward a stable x86-64 release.
   erratum the right way round and keeping the transmit register's reset bits.
 - **Intel blitter self-test** (`gpu blit`, GPU support step 2a): fills and copies
   rectangles on screen with the GPU's blitter engine and reports each step.
+  On the Latitude 7290 the GPU filled 1024x512 pixels 40x faster than the CPU.
+- **Terminal scrollback:** scroll back through earlier output with the mouse
+  wheel or PageUp/PageDown (End, typing or Enter go back to the bottom);
+  1000 lines are kept until `clear`.
+- **Intel render engine self-test** (`gpu render`, GPU support step 3a): the
+  first step toward drawing 3D on the GPU.
+- **The desktop reaches the screen through the Intel blitter** (step 2b): the
+  CPU writes changed pixels to ordinary memory and the GPU copies them to the
+  screen; `gpu cpu` / `gpu on` switch, and a failing GPU falls back to the CPU.
 - **Intel GPU step 1 confirmed on the Latitude 7290** (`gpu`): the display plane's
   GGTT entry leads to stolen memory, which is exactly what the firmware's
   framebuffer shows through the aperture.

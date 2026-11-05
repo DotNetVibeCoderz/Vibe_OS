@@ -1003,6 +1003,13 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
 - **GPU tahap 2a (dikerjakan, menunggu uji laptop):** mesin blitter Gen9 lewat ring buffer
   legacy, uji `gpu blit` (isi warna, salin dari memori sistem, baca balik, waktu GPU vs CPU).
   Tahap 2b: present desktop lewat blitter dengan cadangan CPU.
+  **Uji laptop: tahap 2a ✓** (isi 1024x512: GPU 1,6 ms vs CPU 64,8 ms; kotak terlihat, baca balik
+  4/4). **Tahap 2b dikerjakan** (menunggu uji): desktop dipresent lewat blitter sejak boot
+  (`gpu on`/`gpu cpu`), jalur framebuffer-nya terbukti di QEMU dengan `gpu soft`.
+- **GPU tahap 3 (3D, dikerjakan):** CPU tetap mengerjakan vertex, GPU meraster dengan pixel
+  shader kecil rakitan tangan. 3a: render engine (RCS) jalan, uji `gpu render` (menunggu uji
+  laptop); 3b segitiga solid; 3c Gouraud + depth + tekstur; 3d backend `gfx3d` ketiga.
+- **Terminal bisa digulir** (roda mouse, PageUp/PageDown, End), riwayat 1000 baris.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 

@@ -212,7 +212,7 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
         "mounts" => (vfs::mounts(), Effect::None),
         "dmesg" | "log" => (dmesg(args.first().copied()), Effect::None),
         "lspci" => (lspci(), Effect::None),
-        "gpu" => (if args.first() == Some(&"blit") { gpu_blit() } else { gpu_info() }, Effect::None),
+        "gpu" => (gpu_cmd(args.first().copied()), Effect::None),
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
@@ -340,14 +340,30 @@ fn gpu_info() -> Vec<String> {
 }
 
 /// `gpu blit`: the Intel blitter self-test (step 2 of GPU support).
-fn gpu_blit() -> Vec<String> {
+/// `gpu on` / `gpu cpu`: present through the blitter or by CPU (step 2b).
+fn gpu_cmd(arg: Option<&str>) -> Vec<String> {
     #[cfg(target_arch = "x86_64")]
     {
-        crate::platform::pc::intel_blt::self_test()
+        use crate::platform::pc::intel_blt;
+        match arg {
+            Some("blit") => intel_blt::self_test(),
+            Some("render") => crate::platform::pc::intel_render::self_test(),
+            Some("on") => vec![format!("gpu: {}", intel_blt::enable_present())],
+            Some("soft") => vec![format!("gpu: {}", intel_blt::soft_present())],
+            Some("soft-stats") => vec![format!("gpu soft: {} rectangles copied", intel_blt::soft_rects())],
+            Some("cpu") | Some("off") => {
+                intel_blt::disable_present();
+                vec![String::from("gpu: the desktop is presented by the CPU")]
+            }
+            _ => gpu_info(),
+        }
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        vec![String::from("gpu blit: PCs with Intel graphics only")]
+        match arg {
+            None => gpu_info(),
+            Some(_) => vec![String::from("gpu blit/on/cpu: PCs with Intel graphics only")],
+        }
     }
 }
 
@@ -397,7 +413,8 @@ fn help() -> Vec<String> {
      "  pwd               direktori sekarang",
      "  dmesg [kata]      log kernel (40 baris terakhir, opsional disaring)",
      "  lspci             perangkat PCI (kontroler disk/USB/jaringan)",
-     "  gpu [blit]        GPU dan konfigurasinya; blit = uji mesin blitter Intel",
+     "  gpu [blit|on|cpu] GPU; blit = uji blitter Intel, on/cpu = tampilkan lewat GPU/CPU",
+     "  gpu render        uji render engine Intel (3D, tahap 3a)",
      "  netup             coba lagi menyalakan jaringan (DHCP)",
      "  echo <teks>       cetak teks",
      "  mounts            daftar mount VFS",

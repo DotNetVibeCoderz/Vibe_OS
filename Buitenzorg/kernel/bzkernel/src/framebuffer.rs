@@ -50,7 +50,46 @@ pub struct Console {
     /// Tile pieces written / skipped (diagnostics: `fb_stats`).
     written: u64,
     skipped: u64,
+    /// A GPU copy engine that moves presented pixels to the screen (Intel
+    /// blitter, GPU support step 2b): changed pieces go into its staging
+    /// surface (ordinary cached memory, same stride as the screen) and the
+    /// engine copies them over, instead of slow CPU stores to the screen.
+    accel: Option<Accel>,
 }
+
+/// See `Console::accel`. `staging` is the virtual address of a surface laid
+/// out like the screen (`stride` pixels per row); `flush(va, len)` makes CPU
+/// writes there visible to the device; `blit(rects)` copies (x, y, w, h)
+/// rectangles staging -> screen and waits, false = it failed.
+#[derive(Clone, Copy)]
+pub struct Accel {
+    pub staging: usize,
+    pub stride: usize,
+    pub flush: fn(usize, usize),
+    pub blit: fn(&[(u32, u32, u32, u32)]) -> bool,
+}
+
+/// Install (or with None remove) the screen copy engine; the next present
+/// writes every tile through it.
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+pub fn set_accel(accel: Option<Accel>) {
+    if let Some(c) = CONSOLE.get() {
+        crate::arch::cpu::without_interrupts(|| {
+            let mut c = c.lock();
+            c.accel = accel;
+            c.tiles.clear();
+        });
+    }
+}
+
+/// Is a screen copy engine installed?
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+pub fn accel_active() -> bool {
+    CONSOLE.get().is_some_and(|c| c.lock().accel.is_some())
+}
+
+/// Row bands the accelerated present tracks (each gets one bounding box).
+const ACCEL_BANDS: usize = 48;
 
 /// Width in pixels of a present tile (one row high).
 const TILE: usize = 64;
@@ -91,6 +130,7 @@ impl Console {
             tiles: alloc::vec::Vec::new(),
             written: 0,
             skipped: 0,
+            accel: None,
         }
     }
 
@@ -311,6 +351,51 @@ impl Console {
         if bpp == 4 && buffer.len() >= info.stride * h * 4 {
             let dst = buffer.as_mut_ptr() as *mut u32;
             match format {
+                PixelFormat::Bgr if self.accel.is_some_and(|a| a.stride == info.stride) => {
+                    let a = self.accel.unwrap();
+                    let st = a.staging as *mut u32;
+                    // per row band: bounding box of the pieces written
+                    let band_h = h.div_ceil(ACCEL_BANDS).max(1);
+                    let mut bx = [(u32::MAX, 0u32, u32::MAX, 0u32); ACCEL_BANDS]; // x0, x1, y0, y1
+                    for y in y0..y1 {
+                        let row = &back[(y - y0) * w..(y - y0 + 1) * w];
+                        let b = &mut bx[(y / band_h).min(ACCEL_BANDS - 1)];
+                        for tx in 0..tiles_x {
+                            if dirty(y, tx, row) {
+                                let x0 = tx * TILE;
+                                let n = TILE.min(w - x0);
+                                unsafe {
+                                    let d = st.add(y * info.stride + x0);
+                                    core::ptr::copy_nonoverlapping(row.as_ptr().add(x0), d, n);
+                                    (a.flush)(d as usize, n * 4);
+                                }
+                                *b = (b.0.min(x0 as u32), b.1.max((x0 + n) as u32), b.2.min(y as u32), b.3.max(y as u32 + 1));
+                            }
+                        }
+                    }
+                    let mut rects = [(0u32, 0u32, 0u32, 0u32); ACCEL_BANDS];
+                    let mut n = 0;
+                    for b in bx.iter().filter(|b| b.0 < b.1) {
+                        rects[n] = (b.0, b.2, b.1 - b.0, b.3 - b.2);
+                        n += 1;
+                    }
+                    if n > 0 && !(a.blit)(&rects[..n]) {
+                        // the engine failed: copy these rectangles by CPU and stop using it
+                        for &(x, y, rw, rh) in &rects[..n] {
+                            for yy in y..y + rh {
+                                let o = yy as usize * info.stride + x as usize;
+                                unsafe { core::ptr::copy_nonoverlapping(st.add(o), dst.add(o), rw as usize) };
+                            }
+                        }
+                        // (no log line here: printing takes this console's lock;
+                        // the engine records why it failed, shell `gpu` shows it)
+                        self.accel = None;
+                    }
+                    self.tiles = tiles;
+                    self.written += written;
+                    self.skipped += skipped;
+                    return;
+                }
                 PixelFormat::Bgr => {
                     for y in y0..y1 {
                         let row = &back[(y - y0) * w..(y - y0 + 1) * w];
@@ -471,6 +556,13 @@ pub fn rebind(info: FbInfo) {
         *c.lock() = Console::with_clear(fb, false);
         crate::wm::screen_overwritten();
     }
+}
+
+/// (stride in pixels, height, bytes per pixel) of the screen.
+#[cfg(target_arch = "x86_64")]
+pub fn geometry() -> Option<(usize, usize, usize)> {
+    let i = CONSOLE.get()?.lock().info();
+    Some((i.stride, i.height, i.bytes_per_pixel))
 }
 
 /// The framebuffer's virtual address (Intel blitter self-test readback).

@@ -10,6 +10,7 @@ pub mod e1000e;
 pub mod hda;
 pub mod intel_blt;
 pub mod intel_gpu;
+pub mod intel_render;
 pub mod mouse;
 pub mod nvme;
 pub mod pci;
