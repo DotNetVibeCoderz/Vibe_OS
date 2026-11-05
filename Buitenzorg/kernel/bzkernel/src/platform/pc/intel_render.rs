@@ -347,7 +347,9 @@ const ST_SURF_TEX: u32 = 0x2440;
 const ST_SAMPLER: u32 = 0x2480;
 const ST_VB: u32 = 0x2800;
 /// Bytes per vertex: x, y, z, then a vec4 attribute.
-const VSTRIDE: u32 = 28;
+/// Bytes per vertex: x, y, z, then two vec4 attributes: the color
+/// (r, g, b, a) and the texture coordinates (u, v, 0, 1).
+const VSTRIDE: u32 = 44;
 const MAX_VERTS: usize = (STATE_PAGES_N * 4096 - ST_VB as usize) / VSTRIDE as usize;
 
 /// Header of a 3D command (IGT's GEN4_3D): pipeline, opcode, sub-opcode.
@@ -385,13 +387,28 @@ const PS_GOURAUD: [[u32; 4]; 5] = [
     [0x0580_0031, 0x2000_3a40, 0x0e8d_0e40, 0x9003_1000], // RT write from g114, EOT
 ];
 
-/// IGT's Gen9 blit kernel unchanged: u, v by PLN, sample binding table
-/// entry 1 with sampler 0 (8 GRFs back into g113..g120), write them.
-const PS_TEXTURE: [[u32; 4]; 4] = [
-    [0x0080_005a, 0x2f40_3ae8, 0x3a00_00c0, 0x008d_0040],
-    [0x0080_005a, 0x2f80_3ae8, 0x3a00_00d0, 0x008d_0040],
-    [0x0280_0031, 0x2e20_3a48, 0x0e8d_0f40, 0x0884_0001],
-    [0x0580_0031, 0x2000_3a40, 0x0e8d_0e20, 0x9003_1000],
+/// Textured and lit: the texel times the interpolated vertex color, as the
+/// software rasterizer does. From IGT's Gen9 blit kernel (u, v by PLN, then
+/// SAMPLE binding table entry 1 / sampler 0, here into g114..g121), plus
+/// four PLNs for the color (attribute 0: g6.0 .. g7.4 -> g102..g109) and
+/// four MULs. MUL is opcode 0x41 with PLN's operand layout (dw1 = dst
+/// register 0x2000 | reg*32 << 16 | float GRF types 0x3ae8; dw2 = src1
+/// GRF/float in bits 25..30 | src0 region <8,8,1> = 0x8d << 16 | src0
+/// reg*32; dw3 = region 0x8d << 16 | src1 reg*32). The coordinates are
+/// attribute 1 (setup data g8.0 / g8.4).
+const PS_TEXTURE: [[u32; 4]; 12] = [
+    [0x0080_005a, 0x2f40_3ae8, 0x3a00_0100, 0x008d_0040], // pln(16) g122 g8.0 g2  (u)
+    [0x0080_005a, 0x2f80_3ae8, 0x3a00_0110, 0x008d_0040], // pln(16) g124 g8.4 g2  (v)
+    [0x0280_0031, 0x2e40_3a48, 0x0e8d_0f40, 0x0884_0001], // sample -> g114..g121
+    [0x0080_005a, 0x2cc0_3ae8, 0x3a00_00c0, 0x008d_0040], // pln(16) g102 g6.0 g2  (r)
+    [0x0080_005a, 0x2d00_3ae8, 0x3a00_00d0, 0x008d_0040], // pln(16) g104 g6.4 g2  (g)
+    [0x0080_005a, 0x2d40_3ae8, 0x3a00_00e0, 0x008d_0040], // pln(16) g106 g7.0 g2  (b)
+    [0x0080_005a, 0x2d80_3ae8, 0x3a00_00f0, 0x008d_0040], // pln(16) g108 g7.4 g2  (a)
+    [0x0080_0041, 0x2e40_3ae8, 0x3a8d_0e40, 0x008d_0cc0], // mul(16) g114 g114 g102
+    [0x0080_0041, 0x2e80_3ae8, 0x3a8d_0e80, 0x008d_0d00], // mul(16) g116 g116 g104
+    [0x0080_0041, 0x2ec0_3ae8, 0x3a8d_0ec0, 0x008d_0d40], // mul(16) g118 g118 g106
+    [0x0080_0041, 0x2f00_3ae8, 0x3a8d_0f00, 0x008d_0d80], // mul(16) g120 g120 g108
+    [0x0580_0031, 0x2000_3a40, 0x0e8d_0e40, 0x9003_1000], // RT write from g114, EOT
 ];
 
 /// IEEE single bits of a small non-negative integer (the kernel is soft-float).
@@ -413,9 +430,18 @@ fn unit_bits(n: u32) -> u32 {
     b - (8 << 23) // divide by 256 = exponent - 8
 }
 
-/// A vertex: screen x, y, depth z/256, attribute components /256.
-fn vtx(x: u32, y: u32, z: u32, a: [u32; 4]) -> [u32; 7] {
-    [f32_bits(x), f32_bits(y), unit_bits(z), unit_bits(a[0]), unit_bits(a[1]), unit_bits(a[2]), unit_bits(a[3])]
+/// A vertex: screen x, y, depth z/256, color components /256 (no texture).
+fn vtx(x: u32, y: u32, z: u32, a: [u32; 4]) -> [u32; 11] {
+    let o = unit_bits(256);
+    [f32_bits(x), f32_bits(y), unit_bits(z), unit_bits(a[0]), unit_bits(a[1]), unit_bits(a[2]), unit_bits(a[3]), 0, 0, 0, o]
+}
+
+/// A textured vertex: color `a` (/256) and texture coordinates u, v (/256).
+fn vtx_uv(x: u32, y: u32, z: u32, a: [u32; 4], u: u32, v: u32) -> [u32; 11] {
+    let mut r = vtx(x, y, z, a);
+    r[7] = unit_bits(u);
+    r[8] = unit_bits(v);
+    r
 }
 
 #[derive(Clone, Copy)]
@@ -433,7 +459,7 @@ struct Pipe<'a> {
     depth: Option<(u32, u32)>, // (GGTT, pitch)
     texture: Option<Target>,
     kernel: &'a [[u32; 4]],
-    verts: &'a [[u32; 7]],
+    verts: &'a [[u32; 11]],
     /// GGTT address of vertices the caller already wrote (else they go
     /// into the state pages, at most `MAX_VERTS`).
     vb: Option<u32>,
@@ -591,7 +617,8 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     zeros(&mut b, c3d(3, 0, 0x1e), 5); // STREAMOUT
     zeros(&mut b, c3d(3, 0, 0x12), 4); // CLIP: pass-through
     // setup: one attribute read from the VUE, no viewport transform (screen coordinates)
-    b.extend_from_slice(&[c3d(3, 0, 0x1f) | 4, 1 << 22 | 1 << 29 | 1 << 28 | 1 << 11 | 1 << 5, 0, 0, 3, 0]);
+    // two attributes (color, texture coordinates), both read in one 256-bit unit
+    b.extend_from_slice(&[c3d(3, 0, 0x1f) | 4, 2 << 22 | 1 << 29 | 1 << 28 | 1 << 11 | 1 << 5, 0, 0, 3 | 3 << 2, 0]);
     zeros(&mut b, c3d(3, 0, 0x51), 11); // SBE_SWIZ
     let fill = if fl.wire { 1 << 5 | 1 << 3 } else { 0 }; // front/back fill mode WIREFRAME
     b.extend_from_slice(&[c3d(3, 0, 0x50) | 3, 1 << 21 | 1 << 16 | fill, 0, 0, 0]); // RASTER: CCW, no culling
@@ -646,12 +673,14 @@ fn draw(r: &mut Rcs, p: &Pipe) -> Result<u64, String> {
     let n = p.verts.len() as u32;
     b.extend_from_slice(&[c3d(3, 0, 0x08) | 3, 1 << 14 | VSTRIDE, p.vb.unwrap_or(STATE_GGTT + ST_VB), 0, n * VSTRIDE]);
     b.extend_from_slice(&[
-        c3d(3, 0, 0x09) | 5, // VERTEX_ELEMENTS: pad, position (x, y, z, 1), attribute vec4
+        c3d(3, 0, 0x09) | 7, // VERTEX_ELEMENTS: pad, position (x, y, z, 1), color, texture coordinates
         1 << 25 | 0x000 << 16,
         2 << 28 | 2 << 24 | 2 << 20 | 2 << 16,
         1 << 25 | 0x040 << 16,
         1 << 28 | 1 << 24 | 1 << 20 | 3 << 16,
         1 << 25 | 0x000 << 16 | 12,
+        1 << 28 | 1 << 24 | 1 << 20 | 1 << 16,
+        1 << 25 | 0x000 << 16 | 28,
         1 << 28 | 1 << 24 | 1 << 20 | 1 << 16,
     ]);
     b.extend_from_slice(&[c3d(3, 0, 0x4b), 0x04]); // VF_TOPOLOGY: triangle list
@@ -781,7 +810,7 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
 
     // 7. texture: the checker on a 128x128 square (two triangles)
     let (x0, y0) = (512 + 64, 64);
-    let t = |x: u32, y: u32, u: u32, v: u32| vtx(x, y, 0, [u, v, 0, 256]);
+    let t = |x: u32, y: u32, u: u32, v: u32| vtx_uv(x, y, 0, [256, 256, 256, 256], u, v);
     let quad = [
         t(x0, y0, 0, 0),
         t(x0 + 128, y0, 256, 0),
@@ -801,6 +830,26 @@ fn offscreen_tests(r: &mut Rcs, out: &mut Vec<String>) -> Result<usize, String> 
         if near_rgb(a, 0xf0d020) { "yellow: ok" } else { "NOT yellow" },
         b,
         if near_rgb(b, 0x2040e0) { "blue: ok" } else { "NOT blue" }
+    ));
+
+    // 7b. texture x lighting: the same checker with the vertex color at 50 %
+    let (x1, y1) = (512 + 8, 200);
+    let half = |x: u32, y: u32, u: u32, v: u32| vtx_uv(x, y, 0, [128, 128, 128, 256], u, v);
+    let quad = [
+        half(x1, y1, 0, 0),
+        half(x1 + 48, y1, 256, 0),
+        half(x1, y1 + 48, 0, 256),
+        half(x1 + 48, y1, 256, 0),
+        half(x1 + 48, y1 + 48, 256, 256),
+        half(x1, y1 + 48, 0, 256),
+    ];
+    let us = draw(r, &Pipe { rt, depth: None, texture, kernel: &PS_TEXTURE, verts: &quad, vb: None, flags: PLAIN })?;
+    let c = read(x1 + 2, y1 + 2);
+    out.push(format!(
+        "  7b texture x 50% light: {} us, {:#08x} ({})",
+        us,
+        c,
+        if near_rgb(c, 0x786810) { "half yellow: ok" } else { "NOT 0x786810" }
     ));
     Ok(rt_va)
 }
@@ -943,7 +992,7 @@ fn n_release_texture(h: usize) {
     }
 }
 
-fn n_draw(h: usize, verts: &[[u32; 7]], tex: Option<usize>, d: crate::gfx3d::NativeDraw) -> Result<(), &'static str> {
+fn n_draw(h: usize, verts: &[[u32; 11]], tex: Option<usize>, d: crate::gfx3d::NativeDraw) -> Result<(), &'static str> {
     with_gpu(|r, pool| {
         if pool.vb.is_none() {
             let (phys, va) = crate::memory::alloc_dma_contiguous(VB_PAGES).ok_or("no pages for vertices")?;
@@ -962,7 +1011,7 @@ fn n_draw(h: usize, verts: &[[u32; 7]], tex: Option<usize>, d: crate::gfx3d::Nat
         for chunk in verts.chunks(VB_MAX) {
             for (i, v) in chunk.iter().enumerate() {
                 for (k, w) in v.iter().enumerate() {
-                    unsafe { write_volatile(vb.add(i * 7 + k), *w) };
+                    unsafe { write_volatile(vb.add(i * 11 + k), *w) };
                 }
             }
             clflush(vb as *const u8, chunk.len() * VSTRIDE as usize);

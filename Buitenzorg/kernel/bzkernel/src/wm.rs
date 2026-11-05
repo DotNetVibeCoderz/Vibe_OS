@@ -1013,6 +1013,11 @@ static PRESENT_AGAIN: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 
 pub fn present_now() {
     use core::sync::atomic::Ordering;
+    // the screensaver owns the screen: programs keep drawing into their
+    // windows, and the desktop is redrawn in full when it is dismissed
+    if crate::screensaver::showing() {
+        return;
+    }
     if let Some((w, h)) = crate::framebuffer::dimensions() {
         // Presents coalesce: a full compose takes long, and queueing every
         // caller behind it (spinning) only repeats the same work. If another

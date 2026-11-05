@@ -261,6 +261,7 @@ pub fn run() -> ! {
             last_input = now;
             if saver_active {
                 saver_active = false; // dismiss screensaver on any input
+                screensaver::set_showing(false);
             }
         }
 
@@ -271,6 +272,7 @@ pub fn run() -> ! {
             framebuffer::present(&back);
         } else if screensaver::enabled() && now.saturating_sub(last_input) > screensaver::timeout() {
             saver_active = true;
+            screensaver::set_showing(true);
         } else {
             // Redraw on input or while a micro-interaction (ripple) animates.
             let animating = wm::tick_animation(now);

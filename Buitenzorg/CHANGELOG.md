@@ -22,6 +22,14 @@ Hardening toward a stable x86-64 release.
 - **Intel blitter self-test** (`gpu blit`, GPU support step 2a): fills and copies
   rectangles on screen with the GPU's blitter engine and reports each step.
   On the Latitude 7290 the GPU filled 1024x512 pixels 40x faster than the CPU.
+- **Textured 3D surfaces are lit on the Intel GPU** like in software (the
+  texture is multiplied by the lighting).
+
+### Fixed
+- **Screensaver blinking with a 3D app open:** the app's frames no longer
+  draw the desktop over the screensaver.
+
+### Added (continued)
 - **Terminal scrollback:** scroll back through earlier output with the mouse
   wheel or PageUp/PageDown (End, typing or Enter go back to the bottom);
   1000 lines are kept until `clear`.

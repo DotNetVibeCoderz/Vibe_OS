@@ -28,6 +28,19 @@ struct Config {
     timeout: u64,
 }
 
+/// The screensaver owns the screen right now: a program's WIN_PRESENT must
+/// not compose the desktop over it (a 3D app presenting every frame made
+/// the screen alternate between the two -- blinking).
+static SHOWING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+pub fn set_showing(on: bool) {
+    SHOWING.store(on, core::sync::atomic::Ordering::Release);
+}
+
+pub fn showing() -> bool {
+    SHOWING.load(core::sync::atomic::Ordering::Acquire)
+}
+
 static CONFIG: Mutex<Config> = Mutex::new(Config {
     saver: Saver::Starfield,
     enabled: true,
