@@ -1000,6 +1000,9 @@ profiler, instalasi ke hardware nyata, image resmi VMware/QEMU/Hyper-V/VirtualBo
   status link di `ipconfig`, setelan TX ala Linux untuk I219.
   **Uji keempat: jaringan I219 ✓** — DHCP 192.168.68.108, ping router berhasil (`NIC OK`).
   Penyebab: errata Tx-hang Kaby Lake (TARC0 2 permintaan) dan bit MULR `TCTL` yang terhapus.
+- **GPU tahap 2a (dikerjakan, menunggu uji laptop):** mesin blitter Gen9 lewat ring buffer
+  legacy, uji `gpu blit` (isi warna, salin dari memori sistem, baca balik, waktu GPU vs CPU).
+  Tahap 2b: present desktop lewat blitter dengan cadangan CPU.
 - *Sisa untuk v1.0 final:* **Hyper-V nyata** (butuh mesin + izin
   admin, langkah di `docs/install-hardware.md`), perbaiki temuannya, lalu versi `v1.0` + tag rilis.
 

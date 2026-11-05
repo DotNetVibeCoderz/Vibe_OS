@@ -473,6 +473,12 @@ pub fn rebind(info: FbInfo) {
     }
 }
 
+/// The framebuffer's virtual address (Intel blitter self-test readback).
+#[cfg(target_arch = "x86_64")]
+pub fn virtual_base() -> Option<u64> {
+    Some(CONSOLE.get()?.lock().info().addr)
+}
+
 /// The framebuffer's physical address (where the loader mapped it from).
 #[cfg(target_arch = "x86_64")]
 pub fn physical_hint() -> Option<u64> {

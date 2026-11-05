@@ -106,6 +106,11 @@ fn probe(dev: &PciDevice) -> Vec<String> {
     if let Some(p) = fb_phys {
         out.push(format!("  boot framebuffer at {:#x} (aperture {:#x} + {:#x})", p, aperture, p.wrapping_sub(aperture)));
     }
+    // linear (tiling bits 12:10 = 0) XRGB8888 (format 4 in bits 27:24): the blitter can draw on it
+    if plane_ctl & (1 << 31) != 0 && plane_ctl >> 24 & 0xF == 4 && plane_ctl >> 10 & 7 == 0 && pte & 1 != 0 {
+        super::intel_blt::configure(regs, gtt, surf, stride * 64, w, h);
+        out.push(String::from("  blitter: ready for 'gpu blit' (step 2 self-test)"));
+    }
     out
 }
 
@@ -116,7 +121,7 @@ pub fn init(devices: &[PciDevice]) {
     for l in &lines {
         crate::println!("[gpu] {}", l.trim_start());
     }
-    crate::println!("[gpu] drawing still goes through the CPU (GPU support step 1 of 3: identified, nothing programmed)");
+    crate::println!("[gpu] drawing still goes through the CPU (GPU step 2 of 3: blitter self-test with 'gpu blit')");
     *INFO.lock() = lines;
 }
 
