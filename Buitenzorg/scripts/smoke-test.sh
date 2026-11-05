@@ -246,9 +246,12 @@ done
 if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   log="$root/dist/boot-uefi.log"
   rm -f "$log"
+  # writable vars copy: with read-only vars OVMF writes NvVars into the image's
+  # FAT root, which can fill a FAT16 root and fail DISK WRITE (seen in CI)
+  cp "$ovmf_vars" "$root/dist/uefi-vars.fd"
   timeout --foreground 450 "$qemu" "${selftest[@]}" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
-    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
+    -drive "if=pflash,format=raw,file=$root/dist/uefi-vars.fd" \
     -drive "format=raw,file=$root/dist/buitenzorg-uefi.img" -smp 2 \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &
@@ -320,9 +323,12 @@ fi
 if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-limine-uefi.img" ]; then
   log="$root/dist/boot-limine.log"
   rm -f "$log"
+  # writable vars copy: with read-only vars OVMF writes NvVars into the image's
+  # FAT root, which can fill a FAT16 root and fail DISK WRITE (seen in CI)
+  cp "$ovmf_vars" "$root/dist/limine-vars.fd"
   timeout --foreground 450 "$qemu" "${selftest[@]}" \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
-    -drive "if=pflash,format=raw,readonly=on,file=$ovmf_vars" \
+    -drive "if=pflash,format=raw,file=$root/dist/limine-vars.fd" \
     -drive "format=raw,file=$root/dist/buitenzorg-limine-uefi.img" -smp 2 \
     -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -display none -serial "file:$log" -no-reboot &

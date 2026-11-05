@@ -253,8 +253,12 @@ $uefiImage = Join-Path $root "dist\buitenzorg-uefi.img"
 if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
     $log = Join-Path $root "dist\boot-uefi.log"
     if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    # writable vars copy: with read-only vars OVMF writes NvVars into the image's
+    # FAT root, which can fill a FAT16 root and fail DISK WRITE (seen in CI)
+    $uefiVars = Join-Path $root "dist\uefi-vars.fd"
+    Copy-Item (Join-Path $ovmf 'vars.fd') $uefiVars -Force
     $qargs = @('-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'code.fd')",
-               '-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'vars.fd')",
+               '-drive', "if=pflash,format=raw,file=$uefiVars",
                '-drive', "format=raw,file=$uefiImage", '-smp', '2',
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
@@ -322,8 +326,12 @@ $limineImage = Join-Path $root "dist\buitenzorg-limine-uefi.img"
 if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $limineImage)) {
     $log = Join-Path $root "dist\boot-limine.log"
     if (Test-Path $log) { Remove-Item $log -Force -Confirm:$false }
+    # writable vars copy: with read-only vars OVMF writes NvVars into the image's
+    # FAT root, which can fill a FAT16 root and fail DISK WRITE (seen in CI)
+    $limineVars = Join-Path $root "dist\limine-vars.fd"
+    Copy-Item (Join-Path $ovmf 'vars.fd') $limineVars -Force
     $qargs = @('-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'code.fd')",
-               '-drive', "if=pflash,format=raw,readonly=on,file=$(Join-Path $ovmf 'vars.fd')",
+               '-drive', "if=pflash,format=raw,file=$limineVars",
                '-drive', "format=raw,file=$limineImage", '-smp', '2',
                '-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
                '-display', 'none', '-serial', "file:$log", '-no-reboot')
