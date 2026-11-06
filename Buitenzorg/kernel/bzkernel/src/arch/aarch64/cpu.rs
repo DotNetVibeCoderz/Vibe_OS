@@ -130,3 +130,20 @@ pub fn sync_code(va: u64, len: usize) {
     }
     unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
 }
+
+/// Software step of EL0 code (the debugger): MDSCR_EL1.SS on / off. With it
+/// on, an eret whose SPSR.SS is set runs one instruction and traps (EC 0x32);
+/// it must be off again afterwards, or every return to EL0 traps at once.
+pub fn software_step(on: bool) {
+    unsafe {
+        let mut mdscr: u64;
+        asm!("mrs {}, mdscr_el1", out(reg) mdscr, options(nomem, nostack));
+        if on {
+            mdscr |= 1;
+            asm!("msr oslar_el1, xzr", options(nomem, nostack)); // OS lock off
+        } else {
+            mdscr &= !1;
+        }
+        asm!("msr mdscr_el1, {}", "isb", in(reg) mdscr, options(nomem, nostack));
+    }
+}

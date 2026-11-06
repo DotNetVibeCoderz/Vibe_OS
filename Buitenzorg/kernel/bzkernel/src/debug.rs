@@ -180,18 +180,11 @@ fn hw_step(r: &mut Regs, on: bool) -> bool {
 #[cfg(target_arch = "aarch64")]
 fn hw_step(r: &mut Regs, on: bool) -> bool {
     let f = r.flags.unwrap();
-    unsafe {
-        let mut mdscr: u64;
-        core::arch::asm!("mrs {}, mdscr_el1", out(reg) mdscr, options(nomem, nostack));
-        if on {
-            mdscr |= 1; // SS
-            core::arch::asm!("msr oslar_el1, xzr", options(nomem, nostack)); // OS lock off
-            r.r[f] |= 1 << 21; // SPSR.SS: step one instruction, then trap
-        } else {
-            mdscr &= !1;
-            r.r[f] &= !(1 << 21);
-        }
-        core::arch::asm!("msr mdscr_el1, {}", "isb", in(reg) mdscr, options(nomem, nostack));
+    crate::arch::aarch64::cpu::software_step(on);
+    if on {
+        r.r[f] |= 1 << 21; // SPSR.SS: step one instruction, then trap
+    } else {
+        r.r[f] &= !(1 << 21);
     }
     true
 }
