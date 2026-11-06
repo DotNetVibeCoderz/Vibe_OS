@@ -1,12 +1,18 @@
 // bz — the Buitenzorg OS CLI (requirements.md §14.2).
 // Implemented today: `bz new`, `bz manifest validate`, `bz pack`, `bz inspect`,
-// `bz version`.
+// `bz version`, and the device commands over BZDP (Device.cs): `bz device`,
+// `ls`, `push`, `pull`, `run`, `shell`, `logs`, `kill`, `deploy`.
 // Other subcommands are stubs that report which roadmap version delivers them.
 
 using Buitenzorg.Runtime.Apps;
 
+if (Device.Run(args) is int deviceResult)
+    return deviceResult;
+
 return args switch
 {
+    ["deploy", .. var rest] when rest.Length >= 1 => DeployCmd(rest),
+    ["deploy"] => Fail("usage: bz deploy <file|project-dir> [--as NAME.EXT] [--no-run] [--follow SECONDS]"),
     [] or ["help"] or ["--help"] or ["-h"] => Help(),
     ["version"] or ["--version"] => Version(),
     ["new", var template, var name] => NewProject(template, name),
@@ -33,6 +39,22 @@ static int Help()
           bz manifest validate <file>       validate an app.manifest
           bz pack <dir> [--entry F] [-o X]  build a .bzpkg from <dir>/app.manifest + <dir>/package/*
           bz inspect <file.bzpkg>           list and verify a package
+
+        a running device (BZDP over UDP 7070; on the device: 'deploy on [code]'):
+          bz device connect <host[:port]> <code>   remember the device (~/.bz/device.json)
+          bz device [info|forget]           say hello / forget it
+          bz deploy <file|dir> [--as N] [--no-run] [--follow S]
+                                            upload to /disk and start it: .bzpkg -> bz install,
+                                            .ELF/.DLL/.JS/.TS/.PY/.CSX -> run, .SH -> sh;
+                                            a project dir is packed (bz pack) first
+          bz push <local> <remote>          upload a file (/disk/X.EXT or /disk/)
+          bz pull <remote> [local]          download a file
+          bz ls [path]                      list a device folder
+          bz run <command line>             run a shell line on the device, print its output
+          bz shell                          an interactive device shell
+          bz logs [-f]                      the device's console log (follow with -f)
+          bz kill <pid>                     stop a process
+
           bz app|theme|model|vm ...         planned (see roadmap in requirements.md §16)
           bz version                        show version
         """);
@@ -176,11 +198,42 @@ static int Pack(string[] args)
     }
     var body = ms.ToArray();
     var bytes = body.Concat(System.Security.Cryptography.SHA256.HashData(body)).ToArray();
+    bool hint = outPath is null; // bz deploy passes -o and uploads it itself
     outPath ??= name + ".bzpkg";
     File.WriteAllBytes(outPath, bytes);
     Console.WriteLine($"wrote {outPath}: {name} {m.Version}, {files.Count} file(s), entry {entry ?? "-"}, {bytes.Length} bytes");
-    Console.WriteLine($"on the device: copy it to /disk as an 8.3 name (e.g. {name.ToUpperInvariant()[..Math.Min(8, name.Length)]}.BZP), then 'bz install /disk/<that name>'");
+    if (hint) Console.WriteLine($"on the device: copy it to /disk as an 8.3 name (e.g. {name.ToUpperInvariant()[..Math.Min(8, name.Length)]}.BZP), then 'bz install /disk/<that name>'");
     return 0;
+}
+
+static int DeployCmd(string[] args)
+{
+    string target = args[0];
+    string? asName = null;
+    bool run = true;
+    int follow = 5;
+    for (int i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--as" when i + 1 < args.Length: asName = args[++i]; break;
+            case "--no-run": run = false; break;
+            case "--follow" when i + 1 < args.Length && int.TryParse(args[i + 1], out var f): follow = f; i++; break;
+            default: return Fail($"unknown option '{args[i]}'");
+        }
+    }
+    if (Directory.Exists(target))
+    {
+        // a project: pack it first (app.manifest + package/*)
+        string stem = new(Path.GetFileName(Path.GetFullPath(target).TrimEnd('/', '\\')).Where(char.IsAsciiLetterOrDigit).Take(8).ToArray());
+        if (stem.Length == 0) stem = "APP";
+        string tmp = Path.Combine(Path.GetTempPath(), stem.ToUpperInvariant() + ".BZP");
+        int r = Pack(new[] { target, "-o", tmp });
+        if (r != 0) return r;
+        return Device.Deploy(tmp, asName, run, follow);
+    }
+    if (!File.Exists(target)) return Fail($"not found: {target}");
+    return Device.Deploy(target, asName, run, follow);
 }
 
 static int Inspect(string path)

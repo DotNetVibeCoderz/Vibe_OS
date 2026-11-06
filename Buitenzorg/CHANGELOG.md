@@ -14,6 +14,16 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **bz-link: `bz` drives a running device** -- `bz device connect HOST CODE`,
+  `bz deploy FILE|DIR` (upload to /disk and start it: programs and scripts
+  `run`, `.SH` `sh`, packages `bz install` + run, a project folder is packed
+  first; then the device log), `bz run LINE` (output + exit status),
+  `bz shell`, `bz push/pull/ls/logs [-f]/kill`. The device side
+  (`deploy.rs`, BZDP over UDP 7070) gained READ, EXEC and OUTPUT and starts
+  at boot when `deploy on` was left on (`/disk/DEPLOY.CFG`) or QEMU passes a
+  code (`-fw_cfg name=opt/buitenzorg/deploy,string=NNNN`). Replies were cut
+  to fit the 1024-byte UDP payload limit (a 1 KiB READ chunk was silently
+  dropped). Smoke step `[bzlink]`. Guide: `docs/bz-link.md`.
 - **GC statics for native C# apps:** the `bzstart.rs` shim now runs NativeAOT's
   static initialization (walks the `__ReadyToRunHeader` GC-static region,
   allocates each static base object and copies its pre-initialized data) before

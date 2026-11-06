@@ -30,6 +30,12 @@ pub fn present() -> bool {
 
 /// The first byte of fw_cfg file `name`, if QEMU provides one.
 pub fn file_first_byte(name: &str) -> Option<u8> {
+    let mut b = [0u8; 1];
+    (file_read(name, &mut b)? > 0).then_some(b[0])
+}
+
+/// Read fw_cfg file `name` into `out` (as much as fits); the bytes read.
+pub fn file_read(name: &str, out: &mut [u8]) -> Option<usize> {
     select(SIGNATURE);
     if [byte(), byte(), byte(), byte()] != *b"QEMU" {
         return None;
@@ -39,7 +45,7 @@ pub fn file_first_byte(name: &str) -> Option<u8> {
     let want = name.as_bytes();
     let mut found = None;
     for _ in 0..count {
-        let _size = be32();
+        let size = be32();
         let key = u16::from_be_bytes([byte(), byte()]);
         let _ = [byte(), byte()]; // reserved
         let mut n = [0u8; 56];
@@ -48,10 +54,14 @@ pub fn file_first_byte(name: &str) -> Option<u8> {
         }
         let len = n.iter().position(|&b| b == 0).unwrap_or(56);
         if found.is_none() && &n[..len] == want {
-            found = Some(key);
+            found = Some((key, size as usize));
         }
     }
-    let key = found?;
+    let (key, size) = found?;
     select(key);
-    Some(byte())
+    let n = size.min(out.len());
+    for b in out[..n].iter_mut() {
+        *b = byte();
+    }
+    Some(n)
 }

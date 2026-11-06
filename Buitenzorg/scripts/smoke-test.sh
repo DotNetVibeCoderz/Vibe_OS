@@ -162,6 +162,54 @@ if [ "$frame_ms" -gt 8000 ]; then
 fi
 echo "smoke [fastboot]: normal boot -- desktop on screen $frame_ms ms after kernel start, $wall ms after QEMU start (BIOS + loader included)"
 
+# bz-link: the host CLI (sdk/bz) talks to a running device over BZDP (UDP
+# 7070): the service starts at boot from a fw_cfg pairing code, `bz` runs a
+# shell line and reads its output, deploys a script that runs as its own
+# process (its print() reaches the serial log), and pulls a file back.
+bzdir="$root/dist/bz"
+bz_ok=0
+if command -v dotnet >/dev/null 2>&1 && dotnet build "$root/sdk/bz/bz.csproj" -c Release -nologo -v q -o "$bzdir" >/dev/null 2>&1 && [ -f "$bzdir/bz.dll" ]; then
+  bz_ok=1
+fi
+if [ "$bz_ok" = 0 ]; then
+  echo "smoke [bzlink]: skipped (no .NET 10 SDK to build sdk/bz)"
+else
+  linklog="$root/dist/boot-bzlink.log"
+  rm -f "$linklog"
+  cp "$img" "$root/dist/bzlink-test.img"
+  timeout --foreground 300 "$qemu" -smp 2 -drive "format=raw,file=$root/dist/bzlink-test.img" -m 512M \
+    -netdev user,id=n0,hostfwd=udp::7171-:7070 -device e1000,netdev=n0 \
+    -fw_cfg name=opt/buitenzorg/deploy,string=4321 \
+    -display none -serial "file:$linklog" -no-reboot &
+  lpid=$!
+  for _ in $(seq 480); do
+    sleep 0.25
+    grep -qF "background start-up done" "$linklog" 2>/dev/null && break
+  done
+  export BZ_DEVICE=127.0.0.1:7171 BZ_CODE=4321
+  printf 'print("BZLINK " + (6 * 7));\n' > "$root/dist/BZLINK.JS"
+  hello=$(dotnet "$bzdir/bz.dll" device 2>&1 || true)
+  echoed=$(dotnet "$bzdir/bz.dll" run "echo hello-bzlink" 2>&1 || true)
+  dep=$(dotnet "$bzdir/bz.dll" deploy "$root/dist/BZLINK.JS" --follow 4 2>&1 || true)
+  pull=$(MSYS_NO_PATHCONV=1 dotnet "$bzdir/bz.dll" pull /disk/BATANG.TXT "$root/dist/bzlink-pull.txt" 2>&1 || true)
+  unset BZ_DEVICE BZ_CODE
+  sleep 2
+  kill "$lpid" 2>/dev/null || true
+  wait "$lpid" 2>/dev/null || true
+  rm -f "$root/dist/bzlink-test.img" "$root/dist/BZLINK.JS"
+  fail=""
+  if ! printf '%s' "$hello" | grep -qF "Buitenzorg OS x86-64"; then fail="bz device: $hello"
+  elif ! printf '%s' "$echoed" | grep -qF "hello-bzlink"; then fail="bz run: $echoed"
+  elif ! printf '%s' "$dep" | grep -qF "/disk/BZLINK.JS"; then fail="bz deploy: $dep"
+  elif ! grep -qF "BZLINK 42" "$linklog"; then fail="the deployed script did not print 'BZLINK 42' (bz deploy said: $dep)"
+  elif ! grep -qF "Akar menembus tanah" "$root/dist/bzlink-pull.txt" 2>/dev/null; then fail="bz pull: $pull"
+  fi
+  rm -f "$root/dist/bzlink-pull.txt"
+  if [ -n "$fail" ]; then echo "SMOKE TEST FAILED (boot-bzlink.log): $fail" >&2; exit 1; fi
+  require "$linklog" "[deploy] service on at boot" "[deploy] exec: echo hello-bzlink" "[deploy] wrote /disk/BZLINK.JS"
+  echo "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran"
+fi
+
 # Full run on IDE: storage milestones must pass (file read via own driver).
 boot ide "$root/dist/boot-ide.log"
 require "$root/dist/boot-ide.log" "${basic[@]}" \

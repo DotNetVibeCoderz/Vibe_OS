@@ -100,7 +100,7 @@
 - [x] Dark/Light system theme (toggle)
 - [x] Terminal + shell (ls/dir, cat/type, cd, pwd, echo, mounts, clear/cls, ver, about, theme, ws, run, bz, settings/bg/saver/cursor/anim, ask, vm, script/js/ts/py, prof, shutdown/restart/sleep)
 - [ ] Notifikasi/action center · [x] Settings app (Pengaturan, `msetting`) · [ ] Global search
-- [ ] Pipes/redirection/history/tab-completion · [ ] kompatibilitas `.sh` — *dijadwalkan di §Developer Workstation*
+- [x] Pipes/redirection/history/tab-completion · [x] skrip `.SH` (if/for/while, alias, `source`) ✓ 2026-11-06 — *lihat §Developer Workstation*
 
 ### 🧰 App Framework & SDK
 - [x] App manifest & lifecycle
@@ -392,8 +392,8 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
 - **Terminal & Shell**
   - [x] Line editing (kursor, Home/End, Ctrl+A/E/U/K/W/L/C) + history (↑/↓, `history`, persist `/disk/HISTORY.TXT`) + tab-completion perintah/path ✓ (2026-11-06, diuji di QEMU)
   - [x] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`NAME=`, `export`/`env`/`unset`/`$?`), kutip, glob `*`/`?` ✓ · alias, skrip `.SH` (if/for/while, `$1..$9 $# $@`) + `source`, `$PATH`, `which`, `/disk/PROFILE.SH` ✓ (2026-11-06, `bzsh.rs`; ekstensi `.SH` karena FAT 8.3)
-  - [~] Coreutils: [x] `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch find hexdump seq basename dirname` (`coreutils.rs`, 2026-11-06) · [x] `which`, `test`/`[` · [x] `ps` + `kill <pid>` (2026-11-01, terverifikasi `multiproc_demo` + desktop live) · [ ] `top` · [ ] `dmesg free uptime df`
-  - [ ] App Terminal mandiri (multi-tab, scrollback, copy/paste, ANSI) · [ ] job control (`&`/`jobs`/`fg`/Ctrl+C) — butuh multi-proses
+  - [~] Coreutils: [x] `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch find hexdump seq basename dirname` (`coreutils.rs`, 2026-11-06) · [x] `which`, `test`/`[` · [x] `ps` + `kill <pid>` (2026-11-01, terverifikasi `multiproc_demo` + desktop live) · [ ] `top` · [x] `dmesg` + `df` · [ ] `free uptime`
+  - [~] Terminal: [x] scrollback 1000 baris + PageUp/PageDown + roda mouse (2026-11-05) · [ ] app mandiri multi-tab, copy/paste, ANSI · [ ] job control (`&`/`jobs`/`fg`/Ctrl+C) — butuh multi-proses
 - **Package Manager**
   - [x] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install /disk/X.BZP` / `bz remove` / `bz info` ✓ (2026-11-06, `bzpkg.rs`, `MILESTONE: BZPKG OK`, diuji di QEMU dengan paket buatan `bz pack`)
   - [~] [x] Host `bz pack` / `bz inspect` ✓ (2026-11-06) · [ ] `bz publish`
@@ -415,11 +415,11 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [ ] Debugger skrip JS/TS/Python di `script.rs`
   - [ ] Profiler app (`bz prof <app>`: zona via syscall + sampling RIP user) · [ ] `bz logs [-f] [app]`
 - **Deploy & Run (lokal + remote)**
-  - [ ] `run <path>` untuk ELF/skrip di path mana pun + Run dari Studio + hot-reload skrip
-  - [ ] Agen `bzd` (bz-link) di OS + host `bz device/deploy/run/logs/shell/push/pull/debug --remote`
-  - [ ] Transport serial COM2 (QEMU `-serial tcp`, hardware via USB-serial) · [ ] UDP · [ ] TCP
-  - [ ] Developer Mode (agen mati default) + pairing token + verifikasi hash + audit log
-  - [ ] Ekstensi VS Code + MagicAppGen deploy lewat bz-link (bukan build ulang image)
+  - [x] `run <path>` untuk ELF/`.DLL`/skrip `.js/.ts/.py/.csx`/`.SH` di path mana pun + Run (F5) dari Studio ✓ (2026-11-06) · [ ] hot-reload skrip
+  - [x] **bz-link** ✓ (2026-11-06): agen di OS (`deploy.rs`, BZDP v1 + op READ/EXEC/OUTPUT) + host `bz device/deploy/run/shell/push/pull/ls/logs/kill` (`sdk/bz/Device.cs`); `bz deploy` file/folder proyek → jalan di OS yang hidup tanpa build ulang image; autostart (`/disk/DEPLOY.CFG`, fw_cfg); smoke `[bzlink]` · [ ] `bz debug --remote`
+  - [ ] Transport serial COM2 (QEMU `-serial tcp`, hardware via USB-serial) · [x] UDP (BZDP v1, `deploy.rs`, port 7070, klien di MagicAppGen) · [ ] TCP (stack `tcp.rs` ada, BZDP belum memakainya)
+  - [~] [x] Agen mati secara default (`deploy on [kode]`) + kode pairing 4 digit + verifikasi CRC-32 per berkas · [ ] hash kriptografis · [ ] audit log
+  - [~] [x] MagicAppGen deploy lewat BZDP (Perangkat) · [ ] ekstensi VS Code
 - [ ] **Milestone:** `bz deploy --target serial` dari host → app jalan di OS yang sedang berjalan tanpa build ulang image, log mengalir balik, breakpoint kena; Studio menjalankan skrip Python di dalam OS; crash app menampilkan backtrace ter-simbolisasi
 
 ### 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)
@@ -428,7 +428,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [x] Multi-proses preemptif (musik di latar saat game/browsing) — ✓ increment 1 (2026-11-01), lihat §Developer Workstation
   - [ ] Surface shared-memory zero-copy (ganti salinan per-piksel `BLIT`) + vsync/frame pacing + fullscreen eksklusif
   - [ ] Timer resolusi tinggi (APIC timer/HPET)
-  - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [ ] driver Intel HDA · [ ] capture mic
+  - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [x] driver Intel HDA (`hda.rs`, terbukti di Dell Latitude 7290) · [ ] capture mic
   - [ ] Event keyboard tekan/lepas + status tombol (kini `KEY_READ` hanya karakter) · [ ] mouse relatif/capture
   - [~] Stack USB xHCI + HID keyboard/mouse + mass storage ✓ · [ ] gamepad · [ ] UVC webcam · [ ] audio USB
   - [x] Storage AHCI/NVMe/USB + FS tulis persisten untuk media & aset game
@@ -443,7 +443,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 - **Internet**
   - [~] Driver NIC: virtio-net ✓ → e1000 ✓ → [ ] Realtek · [ ] Wi-Fi (jangka panjang)
   - [~] TCP ✓ (`tcp.rs`, dipakai SSH) · DHCP ✓ · [ ] DNS resolver · [ ] socket `STREAM` + `poll` untuk app · [ ] IPv6
-  - [ ] Kripto + TLS 1.3/1.2: CSPRNG, SHA-2, AES-GCM, ChaCha20-Poly1305, X25519, RSA/ECDSA, store sertifikat root
+  - [~] Kripto: [x] CSPRNG (`rng.rs`), SHA-2/HMAC/PBKDF2, ChaCha20-Poly1305, X25519, Ed25519 (dipakai SSH, 2026-11-03) · [ ] AES-GCM, RSA/ECDSA, store sertifikat root · [ ] TLS 1.3/1.2
   - [ ] `BzHttp` jadi klien nyata (HTTP/1.1 + HTTPS) · WebSocket · download manager
   - [ ] Browser: parser HTML5 · CSS (box model/flexbox/font) · layout + gambar · JS (subset ES + DOM di `script.rs`) · tab/bookmark/riwayat
   - [ ] App: Web Browser · radio internet/podcast · klien chat · pengaturan jaringan · firewall + izin jaringan per-app

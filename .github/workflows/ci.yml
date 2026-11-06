@@ -105,6 +105,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
           if [ -n "${{ matrix.extra }}" ]; then sudo apt-get install -y ${{ matrix.extra }} || echo "no package ${{ matrix.extra }} (older Ubuntu: part of the packages above)"; fi
 
+      # sdk/bz drives a running OS in the [bzlink] step (x86 only)
+      - uses: actions/setup-dotnet@v4
+        if: matrix.arch == 'x86_64'
+        with:
+          dotnet-version: "10.0.x"
+
       - name: Download boot images
         uses: actions/download-artifact@v4
         with:

@@ -1,7 +1,10 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\..\runtime\Buitenzorg.Runtime\Buitenzorg.Runtime.csproj" />
+    <!-- the BZDP client, shared with the Magic App Generator -->
+    <Compile Include="..\..\tools\MagicAppGen\Services\BzdpClient.cs" Link="BzdpClient.cs" />
+    <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
   </ItemGroup>
 
   <PropertyGroup>

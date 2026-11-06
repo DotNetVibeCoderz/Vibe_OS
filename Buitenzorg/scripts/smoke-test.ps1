@@ -158,6 +158,59 @@ if ($frameMs -gt $budgetMs) {
 }
 Write-Host ("smoke [fastboot]: normal boot -- desktop on screen {0} ms after kernel start, {1:N1} s after QEMU start (BIOS + loader included)" -f $frameMs, $wall)
 
+# bz-link: the host CLI (sdk/bz) talks to a running device over BZDP (UDP
+# 7070): the service starts at boot from a fw_cfg pairing code, `bz` runs a
+# shell line and reads its output, deploys a script that runs as its own
+# process (its print() reaches the serial log), and pulls a file back.
+$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+$bzDir = Join-Path $root "dist\bz"
+$bzOk = $false
+if ($dotnet) {
+    & dotnet build (Join-Path $root "sdk\bz\bz.csproj") -c Release -nologo -v q -o $bzDir 2>&1 | Out-Null
+    $bzOk = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $bzDir "bz.dll"))
+}
+if (-not $bzOk) {
+    Write-Host "smoke [bzlink]: skipped (no .NET 10 SDK to build sdk/bz)"
+} else {
+    $linkLog = Join-Path $root "dist\boot-bzlink.log"
+    if (Test-Path $linkLog) { Remove-Item $linkLog -Force -Confirm:$false }
+    $linkImg = Join-Path $root "dist\bzlink-test.img"
+    Copy-Item $image $linkImg -Force
+    $largs = @('-smp', '2', '-drive', "format=raw,file=$linkImg", '-m', '512M',
+               '-netdev', 'user,id=n0,hostfwd=udp::7171-:7070', '-device', 'e1000,netdev=n0',
+               '-fw_cfg', 'name=opt/buitenzorg/deploy,string=4321',
+               '-display', 'none', '-serial', "file:$linkLog", '-no-reboot')
+    $p = Start-Process -FilePath $qemu -ArgumentList $largs -PassThru
+    foreach ($i in 1..480) {
+        Start-Sleep -Milliseconds 250
+        if ((Test-Path $linkLog) -and (Select-String -Path $linkLog -Pattern "background start-up done" -Quiet)) { break }
+    }
+    $env:BZ_DEVICE = "127.0.0.1:7171"; $env:BZ_CODE = "4321"
+    $bz = Join-Path $bzDir "bz.dll"
+    $script = Join-Path $root "dist\BZLINK.JS"
+    Set-Content -Path $script -Value 'print("BZLINK " + (6 * 7));' -Encoding ascii
+    $hello = (& dotnet $bz device 2>&1) -join "`n"
+    $echo = (& dotnet $bz run "echo hello-bzlink" 2>&1) -join "`n"
+    $dep = (& dotnet $bz deploy $script --follow 4 2>&1) -join "`n"
+    $pulled = Join-Path $root "dist\bzlink-pull.txt"
+    $pull = (& dotnet $bz pull /disk/BATANG.TXT $pulled 2>&1) -join "`n"
+    Remove-Item Env:BZ_DEVICE, Env:BZ_CODE -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    Remove-Item $linkImg, $script -Force -ErrorAction SilentlyContinue
+    $fail = $null
+    if ($hello -notmatch "Buitenzorg OS x86-64") { $fail = "bz device: $hello" }
+    elseif ($echo -notmatch "hello-bzlink") { $fail = "bz run: $echo" }
+    elseif ($dep -notmatch "/disk/BZLINK.JS") { $fail = "bz deploy: $dep" }
+    elseif (-not (Select-String -Path $linkLog -Pattern "BZLINK 42" -Quiet)) { $fail = "the deployed script did not print 'BZLINK 42' (bz deploy said: $dep)" }
+    elseif (-not ((Test-Path $pulled) -and ((Get-Content $pulled -Raw) -match "Akar menembus tanah"))) { $fail = "bz pull: $pull" }
+    Remove-Item $pulled -Force -ErrorAction SilentlyContinue
+    if ($fail) { Write-Error "SMOKE TEST FAILED (boot-bzlink.log): $fail"; exit 1 }
+    Assert-Markers -Log $linkLog -Markers @("[deploy] service on at boot", "[deploy] exec: echo hello-bzlink", "[deploy] wrote /disk/BZLINK.JS")
+    Write-Host "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran"
+}
+
 $ideLog = Join-Path $root "dist\boot-ide.log"
 Invoke-Boot -Media ide -Log $ideLog
 $ideMarkers = $basic + @(

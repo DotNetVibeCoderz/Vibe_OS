@@ -25,6 +25,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [C# Script (`.csx`)](csharp-script.md) | C# without a build step: a bytecode engine for top-level C#, console and UI (`Ui.Window`), 16x faster than the tree interpreter. |
 | [UI Apps in JS/TS/Python](script-ui.md) | Windowed apps without C#: `window`, `button`, `text`, ... in immediate mode, run as their own process. |
 | [The Shell & Scripts](shell.md) | Line editing, pipes/redirection, variables, coreutils, aliases, `.SH` scripts with if/for/while, the startup profile. |
+| [bz-link: a running device from your PC](bz-link.md) | `bz deploy` an app or script to a running OS (no image rebuild), `bz run`/`shell`/`push`/`pull`/`logs` over the network. |
 | [Packages (`.bzpkg`)](packages.md) | `bz pack` on the host, `bz install/remove` on the device, the format and its safety rules. |
 | [Debugging & Profiling](debugging.md) | Attach GDB to the running kernel, and the instrumented TSC zone profiler. |
 

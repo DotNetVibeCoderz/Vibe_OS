@@ -24,6 +24,7 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 | [C# Script (`.csx`)](csharp-script.id.md) | C# tanpa build: engine bytecode untuk C# tingkat atas, konsol dan UI (`Ui.Window`), 16x lebih cepat dari interpreter pohon. |
 | [Aplikasi UI JS/TS/Python](script-ui.id.md) | Aplikasi berjendela tanpa C#: `window`, `button`, `text`, ... gaya immediate mode, berjalan sebagai proses sendiri. |
 | [Shell & Skrip](shell.id.md) | Edit baris, pipe/redirect, variabel, coreutils, alias, skrip `.SH` dengan if/for/while, profil saat mulai. |
+| [bz-link: perangkat yang berjalan dari PC](bz-link.id.md) | `bz deploy` app atau skrip ke OS yang sedang berjalan (tanpa build ulang image), `bz run`/`shell`/`push`/`pull`/`logs` lewat jaringan. |
 | [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
 | [Debugging & Profiling](debugging.id.md) | Attach GDB ke kernel yang berjalan, dan profiler zona berbasis TSC. |
 

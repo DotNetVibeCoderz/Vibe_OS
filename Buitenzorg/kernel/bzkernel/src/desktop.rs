@@ -46,6 +46,7 @@ pub fn run() -> ! {
     // The boot is over: fill the splash's bar and hand the screen over.
     crate::splash::finish();
     crate::ssh::autostart();
+    crate::deploy::autostart();
     crate::boot::phase("ssh");
     ensure_session_windows();
     crate::boot::phase("windows");

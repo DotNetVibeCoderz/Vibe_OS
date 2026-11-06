@@ -714,6 +714,13 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > pairing, unggah dengan CRC-32, RUN/LOG/KILL/LIST) + klien di **Magic App
 > Generator** (panel Perangkat, mode `--deploy`). Akses shell jarak jauh lewat
 > **SSH** (`ssh on`, port 22). Berikutnya: BZDP lewat TCP, VS Code.
+> **Status 2026-11-06: bz-link tercapai** — CLI host `bz device connect`,
+> `bz deploy <berkas|folder proyek>` (unggah ke `/disk` lalu jalan / pasang
+> paket + jalankan, log perangkat mengalir balik), `bz run` (output + status),
+> `bz shell`, `bz push/pull/ls/logs -f/kill`; agen menambah op READ/EXEC/OUTPUT
+> dan bisa aktif saat boot (`/disk/DEPLOY.CFG`, fw_cfg); smoke `[bzlink]`;
+> panduan `docs/bz-link.md`. Belum: `bz debug --remote`, transport serial/TCP,
+> hash kriptografis + audit log.
 - **Lokal**: `run <path>` menjalankan ELF/skrip dari path mana pun (bukan hanya
   registry); "Run" dari Studio; hot-reload skrip.
 - **Agen `bzd` (bz-link) di OS + perintah host `bz remote`**: `bz device list/

@@ -55,6 +55,13 @@ public static class BzdpSelfTest
                 cursor = next;
             }
             Check(text.Contains("$ run demo --x") && text.Contains("pid " + pid), $"LOG paged {text.Length} chars up to cursor {cursor}");
+            var back = await c.ReadAsync("/disk/BLOB.BIN");
+            Check(back.SequenceEqual(blob), $"READ /disk/BLOB.BIN back ({back.Length} bytes, chunks of 992)");
+            var (failed, outText) = await c.ExecAsync("seq 1000");
+            Check(!failed && outText.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length == 1000 && outText.EndsWith("1000\n"),
+                  $"EXEC seq 1000 -> {outText.Length} chars through OUTPUT");
+            var (failed2, _) = await c.ExecAsync("false");
+            Check(failed2, "EXEC false -> failed");
             await c.KillAsync(pid);
             Check(!dev.Running.ContainsKey(pid), "KILL pid");
             try { await c.KillAsync(pid); Check(false, "KILL unknown pid -> not found"); }

@@ -689,8 +689,12 @@ fn deploy_cmd(args: &[&str]) -> Vec<String> {
             if !crate::deploy::enable(code) {
                 return vec![String::from("deploy: port UDP 7070 tidak bisa dibuka")];
             }
+            crate::deploy::remember(true, code); // stays on after a reboot until 'deploy off'
         }
-        Some("off") => crate::deploy::disable(),
+        Some("off") => {
+            crate::deploy::disable();
+            crate::deploy::remember(false, 0);
+        }
         None | Some("status") => {}
         Some(_) => return vec![String::from("pakai: deploy [on [kode] | off]")],
     }
@@ -699,7 +703,8 @@ fn deploy_cmd(args: &[&str]) -> Vec<String> {
     if on {
         vec![
             format!("deploy: AKTIF di {}:{} (UDP), kode pairing {:04}", ip, crate::deploy::PORT, code),
-            format!("         {} permintaan dilayani; Magic App Generator > Perangkat", served),
+            format!("         {} permintaan dilayani; dari PC: 'bz device connect {}:{} {:04}'", served, ip, crate::deploy::PORT, code),
+            String::from("         tetap aktif setelah restart sampai 'deploy off'"),
         ]
     } else {
         vec![String::from("deploy: mati ('deploy on' untuk menerima app dari Magic App Generator)")]

@@ -17,6 +17,12 @@
 //! * 6 LOG cursor u32                         -> next_cursor u32 | text
 //! * 7 KILL pid u32
 //! * 8 LIST path                              -> names, '\n'-separated
+//! * 9 READ offset u32 | path                 -> total u32 | up to 992 bytes
+//!   (a file from the device, chunk by chunk: `bz pull`)
+//! * 10 EXEC command line                     -> failed u8 | total u32 | output
+//!   (runs the line in the shell like RUN, but returns what it printed; the
+//!   first 992 bytes come with the reply, the rest through 11)
+//! * 11 OUTPUT offset u32                     -> total u32 | bytes (the last EXEC's output)
 //!
 //! A retransmitted request (same seq as the last one) gets the saved reply
 //! again instead of running twice -- a RUN must not start two copies because
@@ -29,6 +35,10 @@ use spin::Mutex;
 
 pub const PORT: u16 = 7070;
 const MAX_CHUNK: usize = 1024;
+/// Data bytes in one READ / EXEC / OUTPUT reply: a datagram carries at most
+/// `net::UDP_MAX_PAYLOAD` (1024) bytes, and the reply header, status, size
+/// and flags take 18 of them (a larger reply is refused by `udp_send`).
+const REPLY_CHUNK: usize = crate::net::UDP_MAX_PAYLOAD - 32;
 /// Largest file accepted (a managed app with its libraries fits easily).
 const MAX_FILE: usize = 8 * 1024 * 1024;
 
@@ -52,6 +62,11 @@ struct State {
     upload: Option<Upload>,
     last: Option<(u32, Vec<u8>)>,
     requests: u64,
+    /// The last EXEC's output (op 11 reads it in chunks).
+    output: Vec<u8>,
+    /// The file READ is sending (read from the VFS at offset 0, then served
+    /// from here: reading it again per 1 KiB chunk was too slow).
+    reading: Option<(String, Vec<u8>)>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -66,7 +81,7 @@ pub fn enable(code: u16) -> bool {
             let _ = crate::net::udp_close(socket);
             return false;
         }
-        *st = Some(State { socket, upload: None, last: None, requests: 0 });
+        *st = Some(State { socket, upload: None, last: None, requests: 0, output: Vec::new(), reading: None });
     }
     CODE.store(code as u32 % 10_000, Ordering::Relaxed);
     ENABLED.store(true, Ordering::Release);
@@ -78,6 +93,45 @@ pub fn disable() {
     if let Some(st) = STATE.lock().take() {
         let _ = crate::net::udp_close(st.socket);
     }
+}
+
+/// Remembers the service across reboots: "on NNNN" or "off" (`deploy on|off`).
+const CONFIG_FILE: &str = "/disk/DEPLOY.CFG";
+/// QEMU fw_cfg file whose text is a pairing code: starts the service at boot
+/// without a keyboard (the smoke test's `[bzlink]` step), x86 only.
+#[cfg(target_arch = "x86_64")]
+const FW_CFG_FILE: &str = "opt/buitenzorg/deploy";
+
+/// Start the service at boot when the user left it on (`DEPLOY.CFG`), or
+/// when QEMU passes a code through fw_cfg.
+pub fn autostart() {
+    let mut code: Option<u16> = None;
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut b = [0u8; 8];
+        if let Some(n) = crate::arch::x86::fwcfg::file_read(FW_CFG_FILE, &mut b) {
+            code = core::str::from_utf8(&b[..n]).ok().and_then(|t| t.trim().parse::<u16>().ok());
+        }
+    }
+    if code.is_none() {
+        if let Ok(b) = crate::vfs::read(CONFIG_FILE) {
+            let t = core::str::from_utf8(&b).unwrap_or("");
+            if let Some(rest) = t.trim().strip_prefix("on") {
+                code = Some(rest.trim().parse::<u16>().unwrap_or_else(|_| random_code()));
+            }
+        }
+    }
+    if let Some(c) = code.filter(|c| *c < 10_000) {
+        if enable(c) {
+            crate::println!("[deploy] service on at boot: udp/{}, pairing code {:04}", PORT, c);
+        }
+    }
+}
+
+/// Remember the switch for the next boot (best effort: no /disk, no memory).
+pub fn remember(on: bool, code: u16) {
+    let text = if on { alloc::format!("on {:04}\n", code) } else { String::from("off\n") };
+    let _ = crate::vfs::write(CONFIG_FILE, text.as_bytes());
 }
 
 /// (enabled, pairing code, requests served).
@@ -106,7 +160,9 @@ pub fn poll() {
     for _ in 0..32 {
         let Some((ip, port, pkt)) = crate::net::udp_recv(st.socket) else { break };
         if let Some(reply) = handle(st, &pkt) {
-            let _ = crate::net::udp_send(st.socket, ip, port, &reply);
+            if let Err(e) = crate::net::udp_send(st.socket, ip, port, &reply) {
+                crate::println!("[deploy] reply of {} bytes not sent: {}", reply.len(), e);
+            }
         }
     }
 }
@@ -176,6 +232,16 @@ fn handle(st: &mut State, pkt: &[u8]) -> Option<Vec<u8>> {
                 Err(_) => reply(op, seq, NOT_FOUND, &[]),
             }
         }
+        9 => read(st, op, seq, body),
+        10 => exec(st, op, seq, body),
+        11 => {
+            let from = (u32_at(body, 0).unwrap_or(0) as usize).min(st.output.len());
+            let to = (from + REPLY_CHUNK).min(st.output.len());
+            let mut d = Vec::with_capacity(4 + to - from);
+            d.extend_from_slice(&(st.output.len() as u32).to_le_bytes());
+            d.extend_from_slice(&st.output[from..to]);
+            reply(op, seq, OK, &d)
+        }
         _ => reply(op, seq, BAD_REQUEST, &[]),
     };
     st.last = Some((seq, r.clone()));
@@ -241,6 +307,55 @@ fn run(op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
         }
     }
     reply(op, seq, OK, &pid.to_le_bytes())
+}
+
+fn read(st: &mut State, op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
+    let (Some(offset), Ok(path)) = (u32_at(b, 0), core::str::from_utf8(b.get(4..).unwrap_or(&[]))) else {
+        return reply(op, seq, BAD_REQUEST, &[]);
+    };
+    let path = path.trim();
+    let cached = matches!(&st.reading, Some((p, _)) if p == path);
+    if offset == 0 || !cached {
+        st.reading = None;
+        match crate::vfs::read(path) {
+            Ok(data) if data.len() <= MAX_FILE => st.reading = Some((String::from(path), data)),
+            Ok(_) => return reply(op, seq, BAD_REQUEST, b"file too large"),
+            Err(_) => return reply(op, seq, NOT_FOUND, &[]),
+        }
+    }
+    let data = &st.reading.as_ref().unwrap().1;
+    let from = (offset as usize).min(data.len());
+    let to = (from + REPLY_CHUNK).min(data.len());
+    let mut d = Vec::with_capacity(4 + to - from);
+    d.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    d.extend_from_slice(&data[from..to]);
+    let done = to == data.len();
+    let r = reply(op, seq, OK, &d);
+    if done {
+        st.reading = None; // the last chunk: free the copy
+    }
+    r
+}
+
+fn exec(st: &mut State, op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
+    let Ok(line) = core::str::from_utf8(b) else { return reply(op, seq, BAD_REQUEST, &[]) };
+    if line.trim_start().starts_with("deploy") {
+        return reply(op, seq, BAD_REQUEST, b"'deploy' can only be changed on the device");
+    }
+    crate::println!("[deploy] exec: {}", line.trim());
+    let (out, _) = crate::shell::run(line);
+    let failed = !crate::shell::last_ok();
+    st.output.clear();
+    for l in &out {
+        st.output.extend_from_slice(l.as_bytes());
+        st.output.push(b'\n');
+    }
+    let n = st.output.len().min(REPLY_CHUNK);
+    let mut d = Vec::with_capacity(5 + n);
+    d.push(failed as u8);
+    d.extend_from_slice(&(st.output.len() as u32).to_le_bytes());
+    d.extend_from_slice(&st.output[..n]);
+    reply(op, seq, OK, &d)
 }
 
 fn log(op: u8, seq: u32, b: &[u8]) -> Vec<u8> {

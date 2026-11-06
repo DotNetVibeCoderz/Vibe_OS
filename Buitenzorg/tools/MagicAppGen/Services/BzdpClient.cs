@@ -14,6 +14,7 @@ namespace MagicAppGen.Services;
 public enum BzdpOp : byte
 {
     Hello = 1, Begin = 2, Data = 3, End = 4, Run = 5, Log = 6, Kill = 7, List = 8,
+    Read = 9, Exec = 10, Output = 11,
 }
 
 /// <summary>The status byte that starts every reply payload.</summary>
@@ -200,6 +201,49 @@ public sealed class BzdpClient : IDisposable
     {
         var reply = await RequestAsync(BzdpOp.List, Encoding.UTF8.GetBytes(path), ct);
         return Encoding.UTF8.GetString(reply.Span).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>Download a file from the device (READ, chunk by chunk).</summary>
+    public async Task<byte[]> ReadAsync(string remotePath, IProgress<BzdpProgress>? progress = null,
+                                        CancellationToken ct = default)
+    {
+        var path = Encoding.UTF8.GetBytes(remotePath);
+        var buf = new List<byte>();
+        long total = -1;
+        while (total < 0 || buf.Count < total)
+        {
+            var msg = new byte[4 + path.Length];
+            BinaryPrimitives.WriteUInt32LittleEndian(msg, (uint)buf.Count);
+            path.CopyTo(msg, 4);
+            var reply = await RequestAsync(BzdpOp.Read, msg, ct);
+            if (reply.Length < 4) throw new BzdpException(BzdpStatus.BadRequest, "READ reply without a size");
+            total = BinaryPrimitives.ReadUInt32LittleEndian(reply.Span);
+            var chunk = reply.Span[4..];
+            if (chunk.Length == 0 && buf.Count < total) throw new BzdpException(BzdpStatus.IoError, $"READ stopped at byte {buf.Count} of {total}");
+            buf.AddRange(chunk.ToArray());
+            progress?.Report(new BzdpProgress(remotePath, buf.Count, total));
+        }
+        return buf.ToArray();
+    }
+
+    /// <summary>Run a shell command line on the device and return what it printed
+    /// (EXEC, then OUTPUT for the rest) and whether the command failed.</summary>
+    public async Task<(bool Failed, string Output)> ExecAsync(string commandLine, CancellationToken ct = default)
+    {
+        var reply = await RequestAsync(BzdpOp.Exec, Encoding.UTF8.GetBytes(commandLine), ct);
+        if (reply.Length < 5) throw new BzdpException(BzdpStatus.BadRequest, "EXEC reply too short");
+        bool failed = reply.Span[0] != 0;
+        int total = (int)BinaryPrimitives.ReadUInt32LittleEndian(reply.Span[1..]);
+        var buf = new List<byte>(reply.Span[5..].ToArray());
+        while (buf.Count < total)
+        {
+            var msg = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(msg, (uint)buf.Count);
+            var more = await RequestAsync(BzdpOp.Output, msg, ct);
+            if (more.Length <= 4) break;
+            buf.AddRange(more.Span[4..].ToArray());
+        }
+        return (failed, Encoding.UTF8.GetString(buf.ToArray()));
     }
 
     // ---- transport ----------------------------------------------------------

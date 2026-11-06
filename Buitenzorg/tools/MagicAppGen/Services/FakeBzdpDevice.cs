@@ -38,6 +38,7 @@ public sealed class FakeBzdpDevice : IDisposable
 
     public ConcurrentDictionary<string, byte[]> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
     public ConcurrentDictionary<uint, string> Running { get; } = new();
+    byte[] _output = Array.Empty<byte>();
     public int Port { get; }
     public int MaxChunk { get; init; } = 1024;
     /// <summary>Fraction (0..1) of incoming requests silently ignored.</summary>
@@ -197,6 +198,41 @@ public sealed class FakeBzdpDevice : IDisposable
                     var names = Files.Keys.Where(k => k.StartsWith(dir, StringComparison.OrdinalIgnoreCase))
                                           .Select(k => k[dir.Length..]).OrderBy(k => k);
                     return Ok(Encoding.UTF8.GetBytes(string.Join('\n', names)));
+                }
+                case BzdpOp.Read:
+                {
+                    uint off = BinaryPrimitives.ReadUInt32LittleEndian(p);
+                    var path = Encoding.UTF8.GetString(p[4..]).Trim();
+                    if (!Files.TryGetValue(path, out var data)) return Status(BzdpStatus.NotFound);
+                    int from = (int)Math.Min(off, (uint)data.Length);
+                    int n = Math.Min(992, data.Length - from); // as the kernel: 1024-byte datagrams
+                    return OkU32((uint)data.Length, data.AsSpan(from, n));
+                }
+                case BzdpOp.Exec:
+                {
+                    var cmd = Encoding.UTF8.GetString(p).Trim();
+                    _console.Append($"$ {cmd}\n");
+                    bool failed = cmd.StartsWith("false", StringComparison.Ordinal);
+                    // `seq N` prints 1..N (a long output exercises OUTPUT paging)
+                    var sb = new StringBuilder();
+                    var w = cmd.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (w.Length == 2 && w[0] == "seq" && int.TryParse(w[1], out var count))
+                        for (int i = 1; i <= count; i++) sb.Append(i).Append('\n');
+                    else if (!failed) sb.Append(cmd).Append(": ok\n");
+                    _output = Encoding.UTF8.GetBytes(sb.ToString());
+                    int first = Math.Min(992, _output.Length);
+                    var r = new byte[1 + 1 + 4 + first];
+                    r[1] = (byte)(failed ? 1 : 0);
+                    BinaryPrimitives.WriteUInt32LittleEndian(r.AsSpan(2), (uint)_output.Length);
+                    _output.AsSpan(0, first).CopyTo(r.AsSpan(6));
+                    return r;
+                }
+                case BzdpOp.Output:
+                {
+                    uint off = BinaryPrimitives.ReadUInt32LittleEndian(p);
+                    int from = (int)Math.Min(off, (uint)_output.Length);
+                    int n = Math.Min(992, _output.Length - from);
+                    return OkU32((uint)_output.Length, _output.AsSpan(from, n));
                 }
                 default:
                     return Status(BzdpStatus.BadRequest);
