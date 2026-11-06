@@ -11,8 +11,12 @@ pub const HEAP_START: u64 = paging::KERNEL_HEAP_BASE;
 // 32 MiB kernel heap. 16 MiB was exhausted once the desktop is up: the RAM
 // disks, ~20 open app-window canvases from the boot demos, the desktop back
 // buffer and the persistent full-screen compose buffer (wm::PRESENT_BUF) all
-// live here and together crossed 16 MiB.
-const BASE_HEAP: u64 = 32 * 1024 * 1024;
+// live here and together crossed 16 MiB. 48 MiB since the self-test boot
+// starts ~70 managed/script processes: the cached CLRHOST.ELF image (2.4 MB,
+// clr::host_image) plus the fragmentation of that many launches left no
+// contiguous 3.6 MB block for a full-screen buffer on x86 (and, before the
+// cache, no 2.4 MB block for the host image on the Pi).
+const BASE_HEAP: u64 = 48 * 1024 * 1024;
 /// The base heap was sized on screens up to this (bytes of 1280x800x4).
 const BASE_SCREEN: u64 = 1280 * 800 * 4;
 /// Full-screen buffers the desktop keeps per screen: back buffer, compose

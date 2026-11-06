@@ -27,8 +27,24 @@ pub fn spawn(dll: &str, args: &str) -> Result<u64, &'static str> {
     // not the host, so `ps`, the task managers and PROC_LIST tell apps apart.
     let file = dll.rsplit('/').next().unwrap_or(dll);
     let name = file.split('.').next().unwrap_or(file).to_lowercase();
-    let image = crate::vfs::read(HOST).map_err(|_| "managed runtime (CLRHOST.ELF) not found")?;
+    let image = host_image()?;
     crate::app::spawn_image_args(&name, &image, &line)
+}
+
+/// CLRHOST.ELF, read once. Every managed app and UI script starts from it
+/// (~2.4 MB); reading it again per launch needed one contiguous 2.4 MB heap
+/// block each time, which a heap fragmented by a long boot (the self-test
+/// starts ~70 such processes) no longer had -- the Pi's 32 MiB heap ran out
+/// on CI. It is a system file (packages may not replace it), so the copy
+/// stays valid for the whole session.
+fn host_image() -> Result<alloc::sync::Arc<alloc::vec::Vec<u8>>, &'static str> {
+    static CACHE: spin::Mutex<Option<alloc::sync::Arc<alloc::vec::Vec<u8>>>> = spin::Mutex::new(None);
+    if let Some(img) = CACHE.lock().as_ref() {
+        return Ok(img.clone());
+    }
+    let img = alloc::sync::Arc::new(crate::vfs::read(HOST).map_err(|_| "managed runtime (CLRHOST.ELF) not found")?);
+    *CACHE.lock() = Some(img.clone());
+    Ok(img)
 }
 
 /// A JavaScript / TypeScript / Python file `target` names (an absolute VFS
