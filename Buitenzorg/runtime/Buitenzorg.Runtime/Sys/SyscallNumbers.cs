@@ -181,8 +181,11 @@ public static class SyscallNumbers
     /// <summary>Random bytes from the kernel's ChaCha20 DRBG: a0 = output buffer, a1 = length (at most 4096). Returns the length written.</summary>
     public const ulong Random = 57;
 
+    /// <summary>Run a shell command line: a0 = NUL-terminated line (at most 4096 bytes), a1 = output buffer, a2 = its size. Returns bytes written (low 32 bits) | failed &lt;&lt; 32.</summary>
+    public const ulong ShellRun = 58;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 58;
+    public const ulong Count = 59;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Gfx3d"/> (bz-abi <c>gfx3d_op</c>).</summary>

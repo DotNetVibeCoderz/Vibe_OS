@@ -154,11 +154,25 @@ enum Stmt {
 
 // --- JavaScript lexer --------------------------------------------------------
 
-fn lex_js(src: &str) -> Result<Vec<Tok>, String> {
+/// The JS lexer with source lines: every token's line (starting at `line`),
+/// and the line of a lexing error.
+fn lex_js_at(src: &str, line: u32) -> Result<(Vec<Tok>, Vec<u32>), (String, u32)> {
     let b = src.as_bytes();
     let mut i = 0;
     let mut out = Vec::new();
+    let mut lines = Vec::new();
+    let mut ln = line;
+    let mut seen = 0; // bytes already counted for newlines
     while i < b.len() {
+        while seen < i {
+            if b[seen] == b'\n' {
+                ln += 1;
+            }
+            seen += 1;
+        }
+        while lines.len() < out.len() {
+            lines.push(ln);
+        }
         let c = b[i];
         if c == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
             while i < b.len() && b[i] != b'\n' {
@@ -179,7 +193,7 @@ fn lex_js(src: &str) -> Result<Vec<Tok>, String> {
             continue;
         }
         if c == b'"' || c == b'\'' {
-            let (s, ni) = lex_string(b, i)?;
+            let (s, ni) = lex_string(b, i).map_err(|e| (e, ln))?;
             out.push(Tok::Str(s));
             i = ni;
             continue;
@@ -196,11 +210,14 @@ fn lex_js(src: &str) -> Result<Vec<Tok>, String> {
             i = ni;
             continue;
         }
-        let (t, ni) = lex_op(b, i)?;
+        let (t, ni) = lex_op(b, i).map_err(|e| (e, ln))?;
         out.push(t);
         i = ni;
     }
-    Ok(out)
+    while lines.len() < out.len() {
+        lines.push(ln);
+    }
+    Ok((out, lines))
 }
 
 fn lex_string(b: &[u8], start: usize) -> Result<(String, usize), String> {
@@ -307,10 +324,13 @@ fn lex_op(b: &[u8], i: usize) -> Result<(Tok, usize), String> {
 
 // --- Python lexer (indentation-based) ----------------------------------------
 
-fn lex_py(src: &str) -> Result<Vec<Tok>, String> {
+fn lex_py_at(src: &str) -> Result<(Vec<Tok>, Vec<u32>), (String, u32)> {
     let mut out = Vec::new();
+    let mut lines: Vec<u32> = Vec::new();
     let mut indents: Vec<usize> = alloc::vec![0];
+    let mut n: u32 = 0;
     for raw_line in src.lines() {
+        n += 1;
         // strip comments
         let line = match raw_line.find('#') {
             Some(p) => &raw_line[..p],
@@ -323,22 +343,27 @@ fn lex_py(src: &str) -> Result<Vec<Tok>, String> {
         if indent > *indents.last().unwrap() {
             indents.push(indent);
             out.push(Tok::Indent);
+            lines.push(n);
         } else {
             while indent < *indents.last().unwrap() {
                 indents.pop();
                 out.push(Tok::Dedent);
+                lines.push(n);
             }
         }
         // lex the line content with the JS lexer (same tokens, no braces/;)
-        let toks = lex_js(line.trim())?;
+        let (toks, tl) = lex_js_at(line.trim(), n)?;
         out.extend(toks);
+        lines.extend(tl);
         out.push(Tok::Newline);
+        lines.push(n);
     }
     while indents.len() > 1 {
         indents.pop();
         out.push(Tok::Dedent);
+        lines.push(n);
     }
-    Ok(out)
+    Ok((out, lines))
 }
 
 // --- TypeScript -> JavaScript (type stripping) -------------------------------
@@ -604,11 +629,10 @@ fn is_kw(t: Option<&Tok>, kw: &str) -> bool {
 
 // --- JavaScript statement parser (braces + ';') ------------------------------
 
-fn parse_js(toks: Vec<Tok>) -> Result<Vec<Stmt>, String> {
-    let mut p = Parser { t: toks, pos: 0 };
+fn parse_js_with(p: &mut Parser) -> Result<Vec<Stmt>, String> {
     let mut out = Vec::new();
     while p.peek().is_some() {
-        out.push(js_stmt(&mut p)?);
+        out.push(js_stmt(p)?);
     }
     Ok(out)
 }
@@ -724,12 +748,11 @@ fn ident_name(p: &mut Parser) -> Result<String, String> {
 
 // --- Python statement parser (indent + ':') ----------------------------------
 
-fn parse_py(toks: Vec<Tok>) -> Result<Vec<Stmt>, String> {
-    let mut p = Parser { t: toks, pos: 0 };
+fn parse_py_with(p: &mut Parser) -> Result<Vec<Stmt>, String> {
     let mut out = Vec::new();
     p.skip_newlines();
     while p.peek().is_some() {
-        out.push(py_stmt(&mut p)?);
+        out.push(py_stmt(p)?);
         p.skip_newlines();
     }
     Ok(out)
@@ -1103,18 +1126,28 @@ pub struct Output {
 /// Parse and run `src` in the given language. Never panics; parse/runtime
 /// errors are returned in `error` alongside any output produced so far.
 pub fn run(lang: Lang, src: &str) -> Output {
-    let parsed: Result<Vec<Stmt>, String> = match lang {
-        Lang::Js => lex_js(src).and_then(parse_js),
-        Lang::Ts => {
-            let js = ts_to_js(src);
-            lex_js(&js).and_then(parse_js)
+    // lex with source lines, parse, and report a failure as "parse: baris N: ..."
+    let lexed = match lang {
+        Lang::Js => lex_js_at(src, 1),
+        Lang::Ts => lex_js_at(&ts_to_js(src), 1),
+        Lang::Python => lex_py_at(src),
+    };
+    let (toks, lines) = match lexed {
+        Ok(t) => t,
+        Err((e, line)) => {
+            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0 }
         }
-        Lang::Python => lex_py(src).and_then(parse_py),
+    };
+    let mut p = Parser { t: toks, pos: 0 };
+    let parsed = match lang {
+        Lang::Python => parse_py_with(&mut p),
+        _ => parse_js_with(&mut p),
     };
     let program = match parsed {
         Ok(p) => p,
         Err(e) => {
-            return Output { lines: Vec::new(), error: Some(format!("parse: {}", e)), steps: 0 }
+            let line = lines.get(p.pos.min(lines.len().saturating_sub(1))).copied().unwrap_or(1);
+            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0 }
         }
     };
     let mut it = Interp::new();

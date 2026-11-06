@@ -227,8 +227,15 @@ pub mod sysno {
     /// output buffer, `a1` = its length (at most 4096). Returns the length
     /// written or `syserr::INVAL`.
     pub const RANDOM: u64 = 57;
+    /// Run one command line in the built-in shell (as typed at the Terminal,
+    /// with the user's rights): `a0` = the NUL-terminated line (at most 4096
+    /// bytes), `a1` = the output buffer, `a2` = its size. Returns the output
+    /// bytes written (UTF-8 lines joined by '\n', cut to the buffer) in the low
+    /// 32 bits, bit 32 set when the command failed; `syserr::INVAL` on a bad
+    /// pointer. Used by Buitenzorg Studio's Run and terminal panels.
+    pub const SHELL_RUN: u64 = 58;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 58;
+    pub const COUNT: u64 = 59;
 }
 
 /// Operations of the [`sysno::GFX3D`] syscall ([`Gfx3dCmd::op`]). Every
@@ -925,7 +932,8 @@ mod tests {
         assert_eq!(gfx3d_op::INFO, 10);
         assert_eq!(gfx3d_light::LIGHTS, 12);
         assert_eq!(sysno::RANDOM, 57);
-        assert_eq!(sysno::COUNT, 58);
+        assert_eq!(sysno::SHELL_RUN, 58);
+        assert_eq!(sysno::COUNT, 59);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -941,7 +949,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 58, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 59, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

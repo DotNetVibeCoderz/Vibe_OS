@@ -39,6 +39,7 @@ const HW_UART: u64 = 51;
 const HW_LED: u64 = 52;
 const SETTING: u64 = 53;
 const FS_OP: u64 = 54;
+const SHELL_RUN: u64 = 58;
 const USER_OP: u64 = 55;
 const AUDIO_STAT: u64 = 23;
 const AUDIO_SET_VOLUME: u64 = 24;
@@ -583,9 +584,27 @@ fn wait(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     Ok(Some(Value::I64(code as i64)))
 }
 
+/// `ShellRun(string line)` -> "0\n<output>" (succeeded) or "1\n<output>"
+/// (failed): the line run by the built-in shell (SHELL_RUN). Blocking, so
+/// other managed threads and a collection go on meanwhile.
+fn shell_run(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let line = cstr(&string(i, a, 0));
+    let mut buf = alloc::vec![0u8; 256 * 1024];
+    let (ptr, cap) = (buf.as_mut_ptr() as u64, buf.len() as u64);
+    let r = i.blocking(|_| sys::syscall(SHELL_RUN, line.as_ptr() as u64, ptr, cap));
+    if sys::is_err(r) {
+        return ret_string(i, "1\nshell: permintaan ditolak");
+    }
+    let n = ((r & 0xFFFF_FFFF) as usize).min(buf.len());
+    let failed = r >> 32 & 1 == 1;
+    let mut text = String::from(if failed { "1\n" } else { "0\n" });
+    text.push_str(&String::from_utf8_lossy(&buf[..n]));
+    ret_string(i, &text)
+}
+
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 39] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 40] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -625,6 +644,7 @@ pub fn install(interp: &mut Interpreter) {
         ("FsStat", fs_stat),
         ("UserOp", user_op),
         ("UserList", user_list),
+        ("ShellRun", shell_run),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);

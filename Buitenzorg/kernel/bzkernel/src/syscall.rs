@@ -349,6 +349,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::USER_OP => sys_user_op(a0, a1, a2),
         sysno::GFX3D => sys_gfx3d(a0),
         sysno::RANDOM => sys_random(a0, a1),
+        sysno::SHELL_RUN => sys_shell_run(a0, a1, a2),
         sysno::CLOCK_RTC => sys_clock_rtc(a0),
         sysno::NET_SOCKET => sys_net_socket(a0),
         sysno::NET_BIND => sys_net_bind(a0, a1),
@@ -609,6 +610,44 @@ fn sys_fs_read(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
         unsafe { core::ptr::write_volatile(dst.add(i), data[i]) };
     }
     n as u64
+}
+
+/// SHELL_RUN: one command line through the built-in shell; its output goes to
+/// the caller's buffer. Runs under the BKL like the Terminal's commands.
+fn sys_shell_run(line_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
+    if line_ptr == 0 || max == 0 || max > 16 * 1024 * 1024 || !user_write(buf_ptr, max) {
+        return syserr::INVAL;
+    }
+    let len = if from_user() {
+        match crate::memory::validate_user_cstr(line_ptr, 4096) {
+            Some(n) => n,
+            None => return syserr::INVAL,
+        }
+    } else {
+        let p = line_ptr as *const u8;
+        let mut n = 0u64;
+        while n < 4096 && unsafe { core::ptr::read_volatile(p.add(n as usize)) } != 0 {
+            n += 1;
+        }
+        n
+    };
+    let bytes = copy_user_bytes(line_ptr, len as usize);
+    let line = alloc::string::String::from_utf8_lossy(&bytes).into_owned();
+    let (lines, _effect) = crate::shell::run(&line);
+    let failed = !crate::shell::last_ok();
+    let mut out = alloc::string::String::new();
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(l);
+    }
+    let n = out.len().min(max as usize);
+    let dst = buf_ptr as *mut u8;
+    for (i, b) in out.as_bytes()[..n].iter().enumerate() {
+        unsafe { core::ptr::write_volatile(dst.add(i), *b) };
+    }
+    n as u64 | (failed as u64) << 32
 }
 
 /// RANDOM: fill the caller's buffer from the kernel DRBG.

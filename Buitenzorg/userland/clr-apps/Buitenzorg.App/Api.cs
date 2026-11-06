@@ -34,6 +34,7 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern string ProcList();
     [DllImport("buitenzorg")] internal static extern int ProcKill(long pid);
     [DllImport("buitenzorg")] internal static extern long SysStat(int field);
+    [DllImport("buitenzorg")] internal static extern string ShellRun(string line);
 }
 
 /// <summary>Colors as 0xRRGGBB.</summary>
@@ -139,6 +140,63 @@ public static class Programs
 
     /// <summary>Wait for a program to exit; its exit code.</summary>
     public static long WaitForExit(long pid) => Native.Wait(pid);
+}
+
+/// <summary>The result of <see cref="Shell.Run"/>.</summary>
+public sealed class ShellResult
+{
+    public bool Ok { get; }
+    public string Output { get; }
+    public ShellResult(bool ok, string output) { Ok = ok; Output = output; }
+    /// <summary>The output split into lines (none for empty output).</summary>
+    public string[] Lines => Output.Length == 0 ? new string[0] : Output.Split('\n');
+}
+
+/// <summary>The built-in shell (what the Terminal runs): pipes, redirection,
+/// scripts, `script js|ts|py FILE`, coreutils, `bz ...` -- with the user's rights.</summary>
+public static class Shell
+{
+    static bool? _onDevice;
+
+    /// <summary>Run one command line; its output and whether it succeeded.
+    /// Off the device a small simulation answers (echo, true/false; anything
+    /// else reports that it would run on Buitenzorg).</summary>
+    public static ShellResult Run(string line)
+    {
+        if (_onDevice != false)
+        {
+            try
+            {
+                string r = Native.ShellRun(line);
+                _onDevice = true;
+                bool ok = r.Length == 0 || r[0] == '0';
+                int nl = r.IndexOf('\n');
+                return new ShellResult(ok, nl < 0 ? "" : r.Substring(nl + 1));
+            }
+            catch (DllNotFoundException) { _onDevice = false; }
+            catch (EntryPointNotFoundException) { _onDevice = false; }
+        }
+        return Simulate(line);
+    }
+
+    /// <summary>True when commands really run (on Buitenzorg).</summary>
+    public static bool IsAvailable
+    {
+        get
+        {
+            if (_onDevice == null) Run("true");
+            return _onDevice == true;
+        }
+    }
+
+    static ShellResult Simulate(string line)
+    {
+        string t = line.Trim();
+        if (t == "true") return new ShellResult(true, "");
+        if (t == "false") return new ShellResult(false, "");
+        if (t.StartsWith("echo ")) return new ShellResult(true, t.Substring(5));
+        return new ShellResult(true, "(simulasi) " + t);
+    }
 }
 
 /// <summary>Size, kind and last change of a file or folder (<see cref="Files.GetInfo"/>).</summary>

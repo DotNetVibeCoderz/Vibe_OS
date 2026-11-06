@@ -78,6 +78,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 55 | `USER_OP` | `user_op` (0 list, 1 verify, 2 add, 3 remove, 4 passwd, 5 reset, 6 avatar) | request: NUL-terminated `\n`-separated fields (see `user_op`) | 0 or `INVAL`; list writes `name\tadmin\tavatar\n` lines into a2 (2048 bytes) and returns their length. Changing accounts needs an administrator's password (own password: the current one); passwords are PBKDF2-HMAC-SHA256 with salt in `/disk/USERS.CFG` |
 | 56 | `GFX3D` | pointer to a `Gfx3dCmd` | — | new resource id (CREATE / MESH / TEXTURE), `pixels << 32 \| triangles` (DRAW), a pixel (READ_PIXEL), 0, or `INVAL`. The 3D API (G3): see **3D (GFX3D)** below |
 | 57 | `RANDOM` | output buffer | length (1..=4096) | length written, or `INVAL`. Bytes from the kernel's ChaCha20 DRBG (`rng.rs`, seeded from RDRAND when present, cycle jitter, clocks and a seed file); used by `BzGuid.NewGuid` |
+| 58 | `SHELL_RUN` | NUL-terminated command line (≤ 4096 bytes) | output buffer (a2 = its size) | output bytes written (lines joined by `\n`, cut to the buffer) \| failed << 32, or `INVAL`. Runs the line in the built-in shell with the user's rights, exactly as typed at the Terminal (pipes, scripts, `script js FILE`, ...); used by Buitenzorg Studio |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
