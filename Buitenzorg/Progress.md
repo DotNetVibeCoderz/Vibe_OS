@@ -409,7 +409,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [ ] Integrasi debugger (breakpoint gutter, variabel, call stack)
 - **Debugging & Diagnostik**
   - [x] **Crash report app ring-3** ✓ (2026-11-06): fault + pc/sp/lr + backtrace ter-simbolisasi (symtab ELF disimpan saat load, pindaian stack untuk alamat kembali setelah instruksi call; demangle Rust v0/legacy) → log + `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64, ARM64, RISC-V; `MILESTONE: CRASH REPORT OK` (`crashme.cs` / `crashme.rs`)
-  - [ ] Debugger app ring-3 (`int3` + single-step, baca/tulis reg/memori, `bz debug <app>`)
+  - [x] **Debugger app ring-3** ✓ (2026-11-06): `dbg run/break/delete/cont/step/regs/set/mem/bt/kill/detach` (`debug.rs`) -- breakpoint `int3`/`brk`/`c.ebreak`, single-step (TF x86, software step ARM64, breakpoint sementara di RISC-V), baca/tulis register + memori, backtrace bersimbol, berhenti saat fault; juga dari PC lewat `bz run "dbg ..."`; x86-64/ARM64/RISC-V, `MILESTONE: DEBUGGER OK`
   - [ ] GDB remote stub di kernel (serial COM2 → TCP) — debug di hardware nyata
   - [ ] VS Code DAP adapter (breakpoint/step/variabel/stack)
   - [ ] Debugger skrip JS/TS/Python di `script.rs`

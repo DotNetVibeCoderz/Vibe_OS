@@ -74,6 +74,7 @@ mod wallpaper;
 mod splash;
 mod clock;
 mod crash;
+mod debug;
 mod deploy;
 mod logring;
 mod users;
@@ -645,6 +646,30 @@ pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
 
 /// A fatal exception in EL0 code: end that program (exit code 0xDEAD), like
 /// the x86 ring-3 #PF/#GP containment.
+const DBG_NAMES: [&str; 34] = [
+    "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18",
+    "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "pc", "pstate", "sp",
+];
+
+/// BRK / software step from EL0 (`frame`: x0..x30, ELR, SPSR, SP_EL0).
+pub(crate) fn el0_debug(frame: *mut u64, step: bool) {
+    let f = unsafe { core::slice::from_raw_parts_mut(frame, 34) };
+    task::kernel_enter();
+    arch::cpu::enable_interrupts();
+    let kind = if step { debug::Trap::Step } else { debug::Trap::Break };
+    let mut regs = debug::Regs { r: f, names: &DBG_NAMES, pc: 31, sp: 33, link: Some(30), flags: Some(32) };
+    if !debug::on_trap(kind, &mut regs) {
+        let (pc, sp, lr) = (regs.r[31], regs.r[33], regs.r[30]);
+        println!("[arm64] brk without a debugger at {:#x} -- program terminated", pc);
+        if let Some(pid) = Some(task::current_space().id).filter(|&id| id != 0) {
+            crash::record(pid, "breakpoint (brk) without a debugger", pc, sp, None, Some(lr));
+        }
+        usermode::exit_user(FAULT_EXIT_CODE)
+    }
+    arch::cpu::disable_interrupts();
+    task::kernel_exit();
+}
+
 pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64, sp: u64, lr: u64) -> ! {
     if !usermode::user_active() {
         panic!("EL0 fault outside a user program: ESR={:#x} FAR={:#x} ELR={:#x}", esr, far, elr);
@@ -668,6 +693,8 @@ pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64, sp: u64, lr: u64) -> ! {
             _ => "synchronous exception",
         };
         crash::record(pid, what, elr, sp, Some(far), Some(lr));
+        arch::cpu::enable_interrupts(); // the debugger may park this task
+        debug::on_fault(what, elr, sp, Some(lr));
     }
     usermode::exit_user(FAULT_EXIT_CODE)
 }
@@ -784,6 +811,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         // a deliberate fault three calls deep -> crash report with a backtrace
         let code = app::spawn_image("crashme", &image).ok().map(app::wait);
         crash::boot_check(code, &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
+        debug::self_test("crashme", "Crash__Level2", "Crash__Level1");
     }
 
     if let Some(image) = find("mproc") {

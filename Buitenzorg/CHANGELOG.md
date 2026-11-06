@@ -14,6 +14,16 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Debugger for ring-3 programs** (`debug.rs`, shell `dbg`, every
+  architecture): `dbg run APP` stops at the entry; `break` on a symbol or
+  address, `cont`, `step`, `regs`, `set`, `mem`, `bt` (symbolized), `kill`,
+  `detach`; a debugged program that faults stops there. Breakpoints are
+  `int3` / `brk #0` / `c.ebreak` patched into the code page; the stopped
+  program executes each request in its own task and address space. Step:
+  x86 trap flag, ARM64 software step, RISC-V temporary breakpoints on every
+  possible next instruction. Works from a PC through `bz run "dbg ..."`.
+  x86 #BP/#DB now go through stubs that save every GPR (#BP callable from
+  ring 3). `MILESTONE: DEBUGGER OK`.
 - **Crash reports for ring-3 programs** (`crash.rs`, every architecture): a
   faulting program is still ended, and now a report -- the fault, pc / sp
   (+ link register), and a backtrace symbolized from the program's own ELF

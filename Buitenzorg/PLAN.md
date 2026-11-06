@@ -711,7 +711,10 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > **Status 2026-11-06: crash report tercapai** — fault program ring-3 menulis
 > laporan dengan backtrace ter-simbolisasi (simbol ELF + pindaian stack) ke log
 > dan `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64/ARM64/RISC-V,
-> `MILESTONE: CRASH REPORT OK`. Berikutnya: debugger app ring-3.
+> `MILESTONE: CRASH REPORT OK`. **Debugger app ring-3 tercapai** (`dbg`:
+> breakpoint, step, register, memori, backtrace, berhenti saat fault; x86/ARM64/
+> RISC-V, dari PC lewat `bz run "dbg ..."`, `MILESTONE: DEBUGGER OK`).
+> Berikutnya: GDB stub kernel, VS Code DAP, debugger skrip, integrasi Studio.
 
 ### E. Deploy & Run — lokal maupun remote
 > **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`

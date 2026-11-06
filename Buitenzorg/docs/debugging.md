@@ -153,6 +153,55 @@ Limitation: it measures a scope's **inclusive** time (including its children);
 recursion of a same-named zone double-counts. For "self time", split the child
 work into its own zone (as with `wm::compose` vs `fb::present`).
 
+## 🪲 Debugger for apps (`dbg`)
+
+Ring-3 programs (native ELF: C# built with bflat, Rust, ...) can be run
+under a debugger in the Terminal -- or from a PC with `bz run "dbg ..."`
+([bz-link](bz-link.md)):
+
+```text
+> dbg run crashme
+pid 1000 stopped (entry) at 0x40008c  _start
+> dbg break Level3
+breakpoint 1 at 0x401480  crashme_Crash__Level3
+> dbg cont
+pid 1000 stopped (breakpoint) at 0x401480  crashme_Crash__Level3
+> dbg bt
+backtrace (return addresses found on the stack, innermost first):
+  #0  0x401480  crashme_Crash__Level3
+  #1  0x4014a6  crashme_Crash__Level2+0xa
+  #2  0x4014b4  crashme_Crash__Level1+0x8
+> dbg cont
+pid 1000 stopped (fault) at 0x401481  crashme_Crash__Level3+0x1
+> dbg cont
+pid 1000 exited with code 0xdead
+```
+
+| Command | Does |
+|---|---|
+| `dbg run APP [args]` | start a program under the debugger; it stops at its entry |
+| `dbg break SYM\|ADDR` | breakpoint on a function (its name or a unique part of it) or `0x` address |
+| `dbg delete SYM\|ADDR`, `dbg breaks` | remove / list breakpoints |
+| `dbg cont`, `dbg step` | continue to the next breakpoint / one instruction |
+| `dbg regs`, `dbg set REG VALUE` | all registers / change one |
+| `dbg mem ADDR [N]` | memory in hex + text (breakpoints show the original bytes) |
+| `dbg bt` | symbolized backtrace (as in a crash report) |
+| `dbg kill`, `dbg detach` | end the program / let it run on without breakpoints |
+| `dbg`, `dbg pid N` | the debugged programs / which one the commands act on |
+
+A program that **faults** while debugged stops there (`stopped (fault)`):
+look with `bt` / `mem`, then `cont` ends it.
+
+How it works: breakpoints are `int3` (x86), `brk #0` (ARM64) or `c.ebreak`
+(RISC-V) written into the code page. A stopped program waits *in its own
+task* inside the kernel, with its address space installed, and executes each
+`dbg` request itself. Single step: the x86 trap flag, ARM64 software step;
+RISC-V has none from S-mode, so a step puts temporary breakpoints on every
+possible next instruction (fall-through and branch / jump targets).
+Managed apps and scripts run inside `CLRHOST.ELF` and are not debugged at the
+source level. The self-test boot drives a whole session -> `MILESTONE:
+DEBUGGER OK`.
+
 ## 💥 Crash reports (ring-3 programs)
 
 When a program faults (a bad pointer, an unmapped address, an undefined
@@ -195,6 +244,9 @@ backtrace (return addresses found on the stack, innermost first):
 
 # Profiler (in the OS shell)
 prof self
+
+# App debugger (in the OS shell, or bz run "dbg ..." from a PC)
+dbg run crashme   # then: break Level3, cont, bt, regs, step, kill
 
 # Crash reports (in the OS shell)
 crash            # list

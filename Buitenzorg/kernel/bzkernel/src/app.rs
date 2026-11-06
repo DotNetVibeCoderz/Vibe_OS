@@ -37,6 +37,10 @@ fn load_program(pid: u64, image: &[u8]) -> Result<(aspace::Space, u64, u64), &'s
         let (stack_top, _) = memory::map_user_region(USER_STACK_BASE, USER_STACK_PAGES, ctx)?;
         Ok::<_, &'static str>((program.entry, stack_top))
     });
+    if let Ok((entry, _)) = loaded {
+        // `dbg run`: a breakpoint on the entry (the new space is installed here)
+        crate::debug::at_load(pid, entry);
+    }
     aspace::install(prev);
     match loaded {
         Ok((entry, stack_top)) => Ok((space, entry, stack_top)),
@@ -116,6 +120,7 @@ pub fn process_exited(pid: u64, code: u64) {
     destroy_when_home(space);
     crate::crash::on_exit(pid);
     process::app_exit(pid, code);
+    crate::debug::on_exit(pid);
     crate::println!("[app] process {} exited with code {:#x}", pid, code);
 }
 
@@ -141,6 +146,7 @@ pub fn kill(pid: u64) -> bool {
     destroy_when_home(space);
     crate::crash::on_exit(pid);
     process::app_exit(pid, KILLED_EXIT_CODE);
+    crate::debug::on_exit(pid);
     crate::println!("[app] process {} killed", pid);
     true
 }

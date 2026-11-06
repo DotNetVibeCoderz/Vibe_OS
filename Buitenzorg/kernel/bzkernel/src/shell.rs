@@ -99,7 +99,7 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "crash", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "crash", "dbg", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
@@ -791,6 +791,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
         "ps" => (ps_cmd(), Effect::None),
         "crash" | "crashes" => (crash_cmd(args.first().copied()), Effect::None),
+        "dbg" | "debug" => (crate::debug::command(&args), Effect::None),
         "tutup" | "closeall" => {
             let n = crate::wm::close_workspace_windows();
             (vec![format!("{} jendela ditutup", n)], Effect::Redraw)
@@ -1030,6 +1031,7 @@ fn help_lines() -> Vec<String> {
      "  df                ruang kosong tiap mount",
      "  kill <pid>        hentikan proses app",
      "  crash [PID|last]  laporan crash app (backtrace bersimbol)",
+     "  dbg run <app>     debugger: break/cont/step/regs/mem/bt ('dbg help')",
      "  deploy on|off     terima app dari Magic App Generator (UDP 7070)",
      "  ssh on|off        server SSH (port 22) untuk akses jarak jauh",
      "  ipconfig          alamat IP, MAC, gateway, statistik jaringan",

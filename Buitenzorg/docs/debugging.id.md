@@ -154,6 +154,55 @@ Batasan: mengukur waktu **inklusif** scope (termasuk anak-anaknya); rekursi zona
 bernama sama menghitung ganda. Untuk "self time", pisahkan kerja anak ke zona
 bernama sendiri (seperti `wm::compose` vs `fb::present`).
 
+## 🪲 Debugger untuk aplikasi (`dbg`)
+
+Program ring-3 (ELF native: C# dari bflat, Rust, ...) bisa dijalankan di
+bawah debugger dari Terminal -- atau dari PC dengan `bz run "dbg ..."`
+([bz-link](bz-link.id.md)):
+
+```text
+> dbg run crashme
+pid 1000 stopped (entry) at 0x40008c  _start
+> dbg break Level3
+breakpoint 1 at 0x401480  crashme_Crash__Level3
+> dbg cont
+pid 1000 stopped (breakpoint) at 0x401480  crashme_Crash__Level3
+> dbg bt
+backtrace (return addresses found on the stack, innermost first):
+  #0  0x401480  crashme_Crash__Level3
+  #1  0x4014a6  crashme_Crash__Level2+0xa
+  #2  0x4014b4  crashme_Crash__Level1+0x8
+> dbg cont
+pid 1000 stopped (fault) at 0x401481  crashme_Crash__Level3+0x1
+> dbg cont
+pid 1000 exited with code 0xdead
+```
+
+| Perintah | Fungsi |
+|---|---|
+| `dbg run APP [arg]` | jalankan program di bawah debugger; berhenti di entry-nya |
+| `dbg break SIM\|ALAMAT` | breakpoint pada fungsi (namanya atau bagian unik dari namanya) atau alamat `0x` |
+| `dbg delete SIM\|ALAMAT`, `dbg breaks` | hapus / daftar breakpoint |
+| `dbg cont`, `dbg step` | lanjut ke breakpoint berikutnya / satu instruksi |
+| `dbg regs`, `dbg set REG NILAI` | semua register / ubah satu |
+| `dbg mem ALAMAT [N]` | memori dalam hex + teks (breakpoint ditampilkan sebagai byte aslinya) |
+| `dbg bt` | backtrace bersimbol (seperti di laporan crash) |
+| `dbg kill`, `dbg detach` | akhiri program / biarkan jalan tanpa breakpoint |
+| `dbg`, `dbg pid N` | program yang di-debug / mana yang dituju perintah |
+
+Program yang **fault** saat di-debug berhenti di sana (`stopped (fault)`):
+periksa dengan `bt` / `mem`, lalu `cont` mengakhirinya.
+
+Cara kerjanya: breakpoint berupa `int3` (x86), `brk #0` (ARM64) atau
+`c.ebreak` (RISC-V) yang ditulis ke halaman kode. Program yang berhenti
+menunggu *di task-nya sendiri* di dalam kernel, dengan address space-nya
+terpasang, dan menjalankan sendiri setiap permintaan `dbg`. Single step: trap
+flag x86, software step ARM64; RISC-V tidak punya dari S-mode, jadi satu step
+memasang breakpoint sementara di setiap instruksi berikut yang mungkin
+(lanjutan dan target cabang / lompatan). App managed dan skrip berjalan di
+dalam `CLRHOST.ELF` dan tidak di-debug di tingkat kode sumbernya. Boot
+self-test menjalankan satu sesi utuh -> `MILESTONE: DEBUGGER OK`.
+
 ## 💥 Laporan crash (program ring-3)
 
 Saat sebuah program fault (pointer salah, alamat tak terpetakan, instruksi

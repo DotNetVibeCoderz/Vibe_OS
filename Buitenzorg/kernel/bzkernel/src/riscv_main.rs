@@ -73,6 +73,7 @@ mod wallpaper;
 mod splash;
 mod clock;
 mod crash;
+mod debug;
 mod deploy;
 mod logring;
 mod users;
@@ -528,6 +529,30 @@ pub(crate) fn user_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
 
 /// A fatal exception in U-mode code: end that program (exit code 0xDEAD),
 /// like the x86 ring-3 #PF/#GP containment.
+const DBG_NAMES: [&str; 33] = [
+    "", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4",
+    "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6", "pc",
+];
+
+/// `ebreak` from U-mode: the debugger, else the program ends like a fault.
+pub(crate) fn user_debug(f: &mut arch::riscv64::trap::TrapFrame) {
+    // x[0..32] and sepc are adjacent in the frame: one 33-slot view
+    let view = unsafe { core::slice::from_raw_parts_mut(f.x.as_mut_ptr(), 33) };
+    task::kernel_enter();
+    arch::cpu::enable_interrupts();
+    let mut regs = debug::Regs { r: view, names: &DBG_NAMES, pc: 32, sp: 2, link: Some(1), flags: None };
+    if !debug::on_trap(debug::Trap::Break, &mut regs) {
+        let (pc, sp, ra) = (regs.r[32], regs.r[2], regs.r[1]);
+        println!("[riscv] ebreak without a debugger at {:#x} -- program terminated", pc);
+        if let Some(pid) = Some(task::current_space().id).filter(|&id| id != 0) {
+            crash::record(pid, "breakpoint (ebreak) without a debugger", pc, sp, None, Some(ra));
+        }
+        usermode::exit_user(FAULT_EXIT_CODE)
+    }
+    arch::cpu::disable_interrupts();
+    task::kernel_exit();
+}
+
 pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64, sp: u64, ra: u64) -> ! {
     if !usermode::user_active() {
         panic!("U-mode fault outside a user program: scause={} stval={:#x} sepc={:#x}", cause, addr, pc);
@@ -543,6 +568,8 @@ pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64, sp: u64, ra: u64) -> ! 
     task::kernel_enter();
     if let Some(pid) = Some(task::current_space().id).filter(|&id| id != 0) {
         crash::record(pid, arch::riscv64::trap::exception_name(cause), pc, sp, Some(addr), Some(ra));
+        arch::cpu::enable_interrupts(); // the debugger may park this task
+        debug::on_fault(arch::riscv64::trap::exception_name(cause), pc, sp, Some(ra));
     }
     usermode::exit_user(FAULT_EXIT_CODE)
 }
@@ -716,6 +743,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         // report's backtrace must name all three functions from the ELF symbols
         let code = run_program("crashme", &image);
         crash::boot_check(code, &["crashme::level3", "crashme::level2", "crashme::level1"]);
+        debug::self_test("crashme", "crashme::level2", "crashme::level1");
     }
     let leaked = memory::frames_in_use() as i64 - frames0 as i64;
     println!("[riscv] programs done; frames leaked: {}", leaked);

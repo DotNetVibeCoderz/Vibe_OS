@@ -63,7 +63,14 @@ pub fn init() {
     program_pit();
     let idt = IDT.call_once(|| {
         let mut idt = InterruptDescriptorTable::new();
-        idt.breakpoint.set_handler_fn(breakpoint_handler);
+        // #BP (int3, callable from ring 3) and #DB (single step) go through
+        // stubs that save every GPR: the debugger reads and changes them
+        unsafe {
+            idt.breakpoint
+                .set_handler_addr(x86_64::VirtAddr::new(bz_bp_entry as *const () as u64))
+                .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
+            idt.debug.set_handler_addr(x86_64::VirtAddr::new(bz_db_entry as *const () as u64));
+        }
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt.general_protection_fault
             .set_handler_fn(general_protection_handler);
@@ -144,8 +151,72 @@ pub fn load_on_ap() {
     IDT.get().expect("idt not initialized").load();
 }
 
-extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
-    println!("[kernel] EXCEPTION: breakpoint\n{:#?}", frame);
+extern "C" {
+    fn bz_bp_entry();
+    fn bz_db_entry();
+}
+
+// Frame built by the stubs (u64 slots, lowest address first): r15 r14 r13
+// r12 r11 r10 r9 r8 rbp rdi rsi rdx rcx rbx rax vector | rip cs rflags rsp ss
+core::arch::global_asm!(
+    ".global bz_bp_entry",
+    "bz_bp_entry:",
+    "    push 3",
+    "    jmp 2f",
+    ".global bz_db_entry",
+    "bz_db_entry:",
+    "    push 1",
+    "2:",
+    "    push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
+    "    push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+    "    mov rdi, rsp",
+    "    mov rbp, rsp",
+    "    and rsp, -16",
+    "    call bz_debug_trap",
+    "    mov rsp, rbp",
+    "    pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+    "    pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+    "    add rsp, 8",
+    "    iretq",
+);
+
+const DBG_NAMES: [&str; 21] = [
+    "r15", "r14", "r13", "r12", "r11", "r10", "r9", "r8", "rbp", "rdi", "rsi", "rdx", "rcx", "rbx", "rax", "", "rip", "",
+    "rflags", "rsp", "",
+];
+
+/// #BP / #DB. From ring 3: the debugger (or, for a program nobody debugs,
+/// a fault that ends it); from the kernel: a log line.
+#[no_mangle]
+extern "C" fn bz_debug_trap(f: *mut u64) {
+    let frame = unsafe { core::slice::from_raw_parts_mut(f, 21) };
+    let vector = frame[15];
+    if frame[17] & 3 != 3 {
+        if vector == 3 {
+            println!("[kernel] EXCEPTION: breakpoint at {:#x}", frame[16]);
+        }
+        return;
+    }
+    crate::task::kernel_enter();
+    x86_64::instructions::interrupts::enable();
+    let kind = if vector == 3 {
+        frame[16] -= 1; // int3 is a trap: rip is past it
+        crate::debug::Trap::Break
+    } else {
+        crate::debug::Trap::Step
+    };
+    let mut regs = crate::debug::Regs { r: frame, names: &DBG_NAMES, pc: 16, sp: 19, link: None, flags: Some(18) };
+    if !crate::debug::on_trap(kind, &mut regs) {
+        let (rip, rsp) = (regs.r[16], regs.r[19]);
+        let what = if vector == 3 { "breakpoint (int3) without a debugger" } else { "debug trap" };
+        println!("[kernel] ring-3 {} at rip={:#x} -- program terminated", what, rip);
+        if let Some(pid) = Some(crate::task::current_space().id).filter(|&id| id != 0) {
+            crate::crash::record(pid, what, rip, rsp, None, None);
+        }
+        crate::usermode::exit_user(FAULT_EXIT_CODE)
+    }
+    x86_64::instructions::interrupts::disable();
+    crate::task::kernel_exit();
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _code: u64) -> ! {
@@ -170,6 +241,8 @@ fn kill_faulting_program(what: &str, frame: &InterruptStackFrame, addr: Option<u
     if let Some(pid) = Some(crate::task::current_space().id).filter(|&id| id != 0) {
         crate::crash::record(pid, what, rip, rsp, addr, None);
     }
+    x86_64::instructions::interrupts::enable(); // the debugger may park this task
+    crate::debug::on_fault(what, rip, rsp, None);
     crate::usermode::exit_user(FAULT_EXIT_CODE)
 }
 

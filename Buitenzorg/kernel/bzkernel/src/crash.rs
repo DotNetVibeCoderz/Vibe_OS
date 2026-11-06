@@ -246,6 +246,67 @@ fn after_call(ra: u64) -> bool {
     }
 }
 
+/// `name+0xoff` for `addr` in process `pid`'s program.
+pub fn symbol_of(pid: u64, addr: u64) -> Option<String> {
+    let syms = SYMS.lock().get(&pid).cloned()?;
+    symbolize(&syms, addr)
+}
+
+/// The address of function `name` in `pid`'s program: an exact name, else
+/// the one symbol whose name contains it (`Level2` -> `crashme_Crash__Level2`).
+pub fn find_symbol(pid: u64, name: &str) -> Result<u64, String> {
+    let Some(syms) = SYMS.lock().get(&pid).cloned() else {
+        return Err(alloc::format!("dbg: no symbols for pid {}", pid));
+    };
+    if let Some(f) = syms.funcs.iter().find(|f| f.2 == name) {
+        return Ok(f.0);
+    }
+    let hits: Vec<&(u64, u64, String)> = syms.funcs.iter().filter(|f| f.2.contains(name)).collect();
+    match hits.as_slice() {
+        [one] => Ok(one.0),
+        [] => Err(alloc::format!("dbg: no symbol '{}'", name)),
+        many => Err(alloc::format!(
+            "dbg: '{}' matches {} symbols: {}",
+            name,
+            many.len(),
+            many.iter().take(4).map(|f| f.2.as_str()).collect::<Vec<_>>().join(", ")
+        )),
+    }
+}
+
+/// The backtrace lines of a program stopped at `pc` / `sp` (the current,
+/// i.e. its own, address space must be installed).
+pub fn backtrace(pid: u64, pc: u64, sp: u64, link: Option<u64>) -> Vec<String> {
+    let syms = SYMS.lock().get(&pid).cloned();
+    let at = |a: u64| syms.as_ref().and_then(|s| symbolize(s, a)).unwrap_or_else(|| String::from("?"));
+    let Some(s) = &syms else {
+        return alloc::vec![String::from("(no symbols: the program's ELF has no symbol table)")];
+    };
+    let in_code = |a: u64| s.exec.iter().any(|&(lo, hi)| a >= lo && a < hi);
+    let mut frames: Vec<u64> = alloc::vec![pc];
+    if let Some(l) = link.filter(|&l| in_code(l) && l != pc && after_call(l)) {
+        frames.push(l);
+    }
+    // scan up to 4 KiB of stack for return addresses
+    let mut p = sp & !7;
+    for _ in 0..512 {
+        if frames.len() >= 16 {
+            break;
+        }
+        let Some(b) = user_bytes::<8>(p) else { break };
+        let w = u64::from_le_bytes(b);
+        if in_code(w) && frames.last() != Some(&w) && after_call(w) {
+            frames.push(w);
+        }
+        p += 8;
+    }
+    let mut out = alloc::vec![String::from("backtrace (return addresses found on the stack, innermost first):")];
+    for (i, f) in frames.iter().enumerate() {
+        out.push(alloc::format!("  #{:<2} {:#x}  {}", i, f, at(*f)));
+    }
+    out
+}
+
 /// A ring-3 fault in process `pid`: build the report (log + pending file).
 /// `what` names the fault, `addr` is the faulting data address where the
 /// architecture reports one, `link` the link register (ARM64 x30 / RISC-V ra).
@@ -265,34 +326,8 @@ pub fn record(pid: u64, what: &str, pc: u64, sp: u64, addr: Option<u64>, link: O
     if let Some(l) = link {
         let _ = writeln!(r, "lr {:#x}  {}", l, at(l));
     }
-    match &syms {
-        None => {
-            let _ = writeln!(r, "(no symbols: the program's ELF has no symbol table)");
-        }
-        Some(s) => {
-            let in_code = |a: u64| s.exec.iter().any(|&(lo, hi)| a >= lo && a < hi);
-            let mut frames: Vec<u64> = alloc::vec![pc];
-            if let Some(l) = link.filter(|&l| in_code(l) && l != pc && after_call(l)) {
-                frames.push(l);
-            }
-            // scan up to 4 KiB of stack for return addresses
-            let mut p = sp & !7;
-            for _ in 0..512 {
-                if frames.len() >= 16 {
-                    break;
-                }
-                let Some(b) = user_bytes::<8>(p) else { break };
-                let w = u64::from_le_bytes(b);
-                if in_code(w) && frames.last() != Some(&w) && after_call(w) {
-                    frames.push(w);
-                }
-                p += 8;
-            }
-            let _ = writeln!(r, "backtrace (return addresses found on the stack, innermost first):");
-            for (i, f) in frames.iter().enumerate() {
-                let _ = writeln!(r, "  #{:<2} {:#x}  {}", i, f, at(*f));
-            }
-        }
+    for line in backtrace(pid, pc, sp, link) {
+        let _ = writeln!(r, "{}", line);
     }
     for line in r.lines() {
         crate::println!("[crash] {}", line);

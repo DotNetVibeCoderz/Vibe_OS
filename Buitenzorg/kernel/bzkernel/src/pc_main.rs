@@ -71,6 +71,7 @@ mod wallpaper;
 mod splash;
 mod clock;
 mod crash;
+mod debug;
 mod deploy;
 mod logring;
 mod users;
@@ -560,6 +561,7 @@ fn matang_demo() {
     // report with a symbolized backtrace is written (crash.rs).
     if let Ok(code) = app::run_named("crashme") {
         crash::boot_check(Some(code), &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
+        debug::self_test("crashme", "Crash__Level2", "Crash__Level1");
     }
     match app::run_named("statics") {
         Ok(code) => println!("[kernel] statics app exited (code {})", code),

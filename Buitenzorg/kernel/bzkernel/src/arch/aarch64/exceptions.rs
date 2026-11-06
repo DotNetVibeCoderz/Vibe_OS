@@ -221,6 +221,11 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
             unsafe { frame.write(r) };
             return;
         }
+        // BRK / a finished software step: the debugger
+        if esr >> 26 == 0x3C || esr >> 26 == 0x32 {
+            crate::el0_debug(frame, esr >> 26 == 0x32);
+            return;
+        }
         // Any other synchronous exception from user code (bad access,
         // undefined instruction, ...) ends that program, not the kernel.
         let (lr, sp) = unsafe { (frame.add(30).read(), frame.add(33).read()) };
