@@ -9,6 +9,9 @@
 // fails to compile ("Expected method 'ThrowOverflowException' not found on type
 // '[zerolib]Internal.Runtime.CompilerHelpers.ThrowHelpers'").
 //
+// It also renames zerolib's RhpStelemRef export (see below) on every
+// architecture: the startup shim implements the real covariant array store.
+//
 // This tool reads a zerolib.dll, adds each missing helper to that class with
 // the IL body of an existing one (zerolib has no exception machinery: every
 // throw helper ends the program), and writes a patched copy. The original is
@@ -84,6 +87,30 @@ foreach (var name in wanted)
     added++;
 }
 
+// zerolib's RhpStelemRef (`array[i] = obj` on a reference-type array)
+// fail-fasts unless obj's type is exactly the element type, so `object[]`,
+// base-class and interface arrays could not hold anything else. The startup
+// shim (bzstart.rs) provides a real one (base chain + interface map); rename
+// zerolib's export so the shim's is the only `RhpStelemRef`.
+int renamed = 0;
+foreach (var type in module.Types)
+{
+    foreach (var method in type.Methods)
+    {
+        foreach (var attr in method.CustomAttributes)
+        {
+            if (attr.AttributeType.Name != "RuntimeExportAttribute" || attr.ConstructorArguments.Count != 1)
+                continue;
+            var arg = attr.ConstructorArguments[0];
+            if (arg.Value as string != "RhpStelemRef")
+                continue;
+            attr.ConstructorArguments[0] = new CustomAttributeArgument(arg.Type, "RhpStelemRef_zerolib");
+            renamed++;
+        }
+    }
+}
+Console.WriteLine($"RhpStelemRef: {(renamed > 0 ? "export renamed to RhpStelemRef_zerolib" : "not found")}");
+
 module.Write(args[1]);
-Console.WriteLine($"wrote {args[1]} ({added} helper(s) added)");
+Console.WriteLine($"wrote {args[1]} ({added} helper(s) added, {renamed} export(s) renamed)");
 return 0;

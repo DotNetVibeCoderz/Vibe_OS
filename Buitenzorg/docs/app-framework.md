@@ -44,8 +44,8 @@ test exists on both sides (`cargo test -p bz-abi`, `AbiContractTests.cs`).
 
 Freestanding apps (zerolib, no GC). **As of v0.15 the heap works** (`new`,
 arrays, generics, `static` reference fields, delegates, lambdas), but the
-zerolib rules still apply — no `object[]` element stores, no
-`ToString()`/concat. See [Your First App](first-app.md) for the full rules.
+zerolib rules still apply — no exceptions, no
+`ToString()`/concat (casts, interfaces and `object[]` work since 2026-11-06). See [Your First App](first-app.md) for the full rules.
 
 ## v0.9 "Serbuk": Drawing, Task Manager, 4 app variants
 

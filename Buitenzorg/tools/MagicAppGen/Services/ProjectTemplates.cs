@@ -96,7 +96,7 @@ public static class ProjectTemplates
 
     Native C# is compiled with bflat `--stdlib:zero` plus the `bzstart.rs` shim,
     so it runs in ring 3 with no reclaiming GC. Keep the zerolib rules in mind:
-    no exceptions, no storing references into `object[]` elements, and no `new string()`/`ToString()`/
+    no exceptions (casts, interfaces and `object[]` do work), and no `new string()`/`ToString()`/
     string concatenation. Need any of that? Use a **managed** template instead.
     """;
 

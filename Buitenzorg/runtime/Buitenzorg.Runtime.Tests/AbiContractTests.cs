@@ -74,7 +74,8 @@ public class AbiContractTests
         Assert.Equal(9u, Gfx3dOp.Read);
         Assert.Equal(10u, Gfx3dOp.Info);
         Assert.Equal(12, Gfx3dLight.Lights);
-        Assert.Equal(57ul, SyscallNumbers.Count);
+        Assert.Equal(57ul, SyscallNumbers.Random);
+        Assert.Equal(58ul, SyscallNumbers.Count);
     }
 
     /// <summary>
@@ -87,7 +88,7 @@ public class AbiContractTests
     public void AbiV1IsFrozen()
     {
         Assert.Equal(1ul, Abi.Version);
-        Assert.Equal(57ul, SyscallNumbers.Count);
+        Assert.Equal(58ul, SyscallNumbers.Count);
 
         Assert.Equal(56, Marshal.SizeOf<FramebufferInfo>());
         Assert.Equal(56, Marshal.SizeOf<Gfx3dCmd>());

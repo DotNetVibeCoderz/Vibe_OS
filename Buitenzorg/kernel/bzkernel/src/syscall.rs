@@ -133,6 +133,7 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FS_OP
             | sysno::USER_OP
             | sysno::GFX3D
+            | sysno::RANDOM
             | sysno::PROC_SPAWN
             | sysno::PROC_WAIT
             | sysno::NET_SOCKET
@@ -347,6 +348,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_OP => sys_fs_op(a0, a1, a2),
         sysno::USER_OP => sys_user_op(a0, a1, a2),
         sysno::GFX3D => sys_gfx3d(a0),
+        sysno::RANDOM => sys_random(a0, a1),
         sysno::CLOCK_RTC => sys_clock_rtc(a0),
         sysno::NET_SOCKET => sys_net_socket(a0),
         sysno::NET_BIND => sys_net_bind(a0, a1),
@@ -607,6 +609,20 @@ fn sys_fs_read(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
         unsafe { core::ptr::write_volatile(dst.add(i), data[i]) };
     }
     n as u64
+}
+
+/// RANDOM: fill the caller's buffer from the kernel DRBG.
+fn sys_random(buf_ptr: u64, len: u64) -> u64 {
+    if len == 0 || len > 4096 || !user_write(buf_ptr, len) {
+        return syserr::INVAL;
+    }
+    let mut tmp = alloc::vec![0u8; len as usize];
+    crate::rng::fill(&mut tmp);
+    let dst = buf_ptr as *mut u8;
+    for (i, b) in tmp.iter().enumerate() {
+        unsafe { core::ptr::write_volatile(dst.add(i), *b) };
+    }
+    len
 }
 
 /// FS_WRITE: create/truncate a VFS file with the caller's bytes.

@@ -7,22 +7,12 @@
 #
 # arm64 code needs ThrowHelpers.ThrowOverflowException (division checks),
 # which bflat's zerolib lacks: tools/ZerolibPatch adds it to a copy of
-# zerolib, used by a private bflat copy in kernel/target/bflat-arm64 (the
-# installed bflat is not modified).
+# zerolib, used by a private bflat copy in kernel/target/bflat-patched
+# (scripts/prepare-bflat.sh; the installed bflat is not modified).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 dir="$root/userland/hello-csharp"
-bflat_home="$root/tools/bflat"
-patched="$root/kernel/target/bflat-arm64"
-bflat="$patched/bflat"
-if [ ! -x "$bflat" ]; then
-    echo "==> preparing a bflat copy with the patched arm64 zerolib"
-    mkdir -p "$(dirname "$patched")"
-    cp -r "$bflat_home" "$patched"
-    dotnet run --project "$root/tools/ZerolibPatch" -c Release -- \
-        "$bflat_home/lib/linux/arm64/zerolib.dll" "$patched/lib/linux/arm64/zerolib.dll" \
-        || { rm -rf "$patched"; echo "ZerolibPatch failed"; exit 1; }
-fi
+bflat="$("$root/scripts/prepare-bflat.sh" | tail -1)"
 
 lld="$(ls "$HOME"/.rustup/toolchains/nightly-*/lib/rustlib/*/bin/rust-lld 2>/dev/null | head -1)"
 [ -n "$lld" ] || { echo "rust-lld not found (install rust nightly)"; exit 1; }
@@ -47,6 +37,7 @@ build_prog hello hello.cs
 build_prog matang matang.cs
 build_prog heap heap.cs
 build_prog statics statics.cs
+build_prog bcl3 bcl3.cs bzbcl.cs bzbcl2.cs bzbcl3.cs
 build_prog gcmem gcmem.cs
 build_prog mproc mproc.cs
 build_prog thread thread.cs

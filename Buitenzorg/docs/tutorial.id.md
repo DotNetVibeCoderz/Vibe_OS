@@ -127,8 +127,7 @@ class Program {
 
 > ⚠️ **Aturan zerolib (wajib dibaca).** App freestanding: heap **berfungsi**
 > (`new`, array, generic), begitu juga field `static` referensi, delegate dan
-> lambda; tapi **tanpa** menyimpan
-> referensi ke elemen `object[]` (pakai linked list), dan **tanpa**
+> lambda, cast, interface dan `object[]`; tapi **tanpa** exception dan **tanpa**
 > `new string()` / `ToString()` / concat (pakai `char[]` + `Graphics.DrawChars`).
 > Detail: [first-app.id.md](first-app.id.md).
 

@@ -127,8 +127,8 @@ class Program {
 
 > ⚠️ **The zerolib rules (must read).** Freestanding apps: the heap **works**
 > (`new`, arrays, generics), and so do `static` reference fields, delegates and
-> lambdas; but there is **no** storing a
-> reference into an `object[]` element (use a linked list), and **no**
+> lambdas, casts, interfaces and `object[]`; but there are **no** exceptions and
+> **no**
 > `new string()` / `ToString()` / concatenation (use `char[]` +
 > `Graphics.DrawChars`). Details: [first-app.md](first-app.md).
 

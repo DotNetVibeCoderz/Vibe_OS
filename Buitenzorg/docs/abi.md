@@ -77,6 +77,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` â†
 | 54 | `FS_OP` | `fs_op` (0 mkdir, 1 remove, 2 rename/move, 3 stat) | path (NUL-terminated, absolute, folders allowed) | 0 or `INVAL`; a2 = second path (rename) or, for stat, a pointer to 4 u64: size, is-folder, FAT date << 16 \| time, 0 |
 | 55 | `USER_OP` | `user_op` (0 list, 1 verify, 2 add, 3 remove, 4 passwd, 5 reset, 6 avatar) | request: NUL-terminated `\n`-separated fields (see `user_op`) | 0 or `INVAL`; list writes `name\tadmin\tavatar\n` lines into a2 (2048 bytes) and returns their length. Changing accounts needs an administrator's password (own password: the current one); passwords are PBKDF2-HMAC-SHA256 with salt in `/disk/USERS.CFG` |
 | 56 | `GFX3D` | pointer to a `Gfx3dCmd` | â€” | new resource id (CREATE / MESH / TEXTURE), `pixels << 32 \| triangles` (DRAW), a pixel (READ_PIXEL), 0, or `INVAL`. The 3D API (G3): see **3D (GFX3D)** below |
+| 57 | `RANDOM` | output buffer | length (1..=4096) | length written, or `INVAL`. Bytes from the kernel's ChaCha20 DRBG (`rng.rs`, seeded from RDRAND when present, cycle jitter, clocks and a seed file); used by `BzGuid.NewGuid` |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.

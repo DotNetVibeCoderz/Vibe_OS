@@ -43,8 +43,8 @@ kedua sisi (`cargo test -p bz-abi`, `AbiContractTests.cs`).
 
 App freestanding (zerolib, tanpa GC). **Sejak v0.15 heap berfungsi** (`new`,
 array, generic, field `static` referensi, delegate, lambda), tapi aturan zerolib
-tetap berlaku — tanpa store elemen `object[]`, tanpa `ToString()` /
-concat. Lihat [App Pertama](first-app.id.md) untuk aturan lengkapnya.
+tetap berlaku — tanpa exception, tanpa `ToString()` / concat (cast, interface
+dan `object[]` berfungsi sejak 2026-11-06). Lihat [App Pertama](first-app.id.md) untuk aturan lengkapnya.
 
 ## v0.9 "Serbuk": Drawing, Task Manager, 4 varian app
 

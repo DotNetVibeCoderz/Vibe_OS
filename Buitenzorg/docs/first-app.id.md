@@ -198,15 +198,25 @@ App freestanding memakai zerolib (belum ada GC penuh). Yang **tidak** berfungsi:
   `char[]` / `stackalloc` lalu `Graphics.DrawChars`.
 - **`string == string`** butuh `op_Equality` (tak ada) → banding by-reference
   atau char demi char.
-- **Menyimpan referensi ke elemen `object[]`** (`stelem.ref`) fault → pakai
-  **linked list** (store ke field objek), bukan array-of-object.
 - **Belum ada GC yang mereklamasi memori dan belum ada exception** (`throw`
-  menghentikan program).
+  menghentikan program; cast gagal atau store array yang salah menghentikannya
+  dengan baris `Unhandled exception: ...`).
+- **Tidak ada `System.Func`/`List<T>`/LINQ dari CoreLib** — pakai `bzbcl3.cs`.
+- **Variance** interface generik (`IEnumerable<Derived>` sebagai
+  `IEnumerable<Base>`) dan default interface method belum didukung.
 
 Yang **berfungsi**: `new`, array nilai (`int[]`, `short[]`), objek heap, generic,
 virtual dispatch, `stackalloc`, dan — sejak shim menginisialisasi GC statics
 (2026-11-06) — **field `static` referensi, konversi method-group → delegate, dan
-lambda** (dengan atau tanpa variabel yang ditangkap). Detail lengkap di `CLAUDE.md`.
+lambda** (dengan atau tanpa variabel yang ditangkap); dan — sejak shim
+mengimplementasikan pemeriksaan tipe runtime (2026-11-06) — **cast, `is`/`as`,
+pattern matching, `switch` tipe, pemanggilan method lewat interface, dan array
+berisi referensi** (`object[]`, `Base[]` berisi `Derived`, `IFoo[]`, `string[]`
+sebagai `object[]`). `bzbcl3.cs` menambahkan `System.Func/Action/Predicate/
+Comparison`, `BzInterlocked`, `BzTimeSpan`, `BzGuid` (v4 acak dari kernel) dan
+LINQ atas `BzList<T>` sebagai extension method (`Where`, `Select`, `OrderBy`
+stabil + `ThenBy`, `GroupBy`, `Distinct`, `Sum`/`MinBy`/`MaxBy`, `Zip`,
+`Aggregate`, ...). Detail lengkap di `CLAUDE.md`.
 
 ---
 

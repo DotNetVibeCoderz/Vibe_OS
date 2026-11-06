@@ -6,23 +6,13 @@
 #
 # arm64 code needs ThrowHelpers.ThrowOverflowException (division checks),
 # which bflat's zerolib lacks: tools/ZerolibPatch adds it to a copy of
-# zerolib, used by a private bflat copy in kernel/target/bflat-arm64 (the
-# installed bflat is not modified).
+# zerolib, used by a private bflat copy in kernel/target/bflat-patched
+# (scripts/prepare-bflat.ps1; the installed bflat is not modified).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "userland\hello-csharp"
 $out = Join-Path $dir "arm64"
-$bflatHome = Join-Path $root "tools\bflat"
-$patched = Join-Path $root "kernel\target\bflat-arm64"
-$bflat = Join-Path $patched "bflat.exe"
-if (-not (Test-Path $bflat)) {
-    Write-Host "==> preparing a bflat copy with the patched arm64 zerolib"
-    New-Item -ItemType Directory -Force (Split-Path -Parent $patched) | Out-Null
-    Copy-Item -Recurse -Force $bflatHome $patched
-    & dotnet run --project (Join-Path $root "tools\ZerolibPatch") -c Release -- `
-        (Join-Path $bflatHome "lib\linux\arm64\zerolib.dll") (Join-Path $patched "lib\linux\arm64\zerolib.dll")
-    if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $patched; throw "ZerolibPatch failed" }
-}
+$bflat = & (Join-Path $PSScriptRoot "prepare-bflat.ps1") | Select-Object -Last 1
 $lld = Get-ChildItem "$env:USERPROFILE\.rustup\toolchains\nightly-*\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe" |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $lld) { throw "rust-lld not found (install rust nightly)" }
@@ -41,6 +31,7 @@ try {
         @{src=@("matang.cs");          elf="matang.elf"},
         @{src=@("heap.cs");            elf="heap.elf"},
         @{src=@("statics.cs");         elf="statics.elf"},
+        @{src=@("bcl3.cs", "bzbcl.cs", "bzbcl2.cs", "bzbcl3.cs"); elf="bcl3.elf"},
         @{src=@("gcmem.cs");           elf="gcmem.elf"},
         @{src=@("mproc.cs");           elf="mproc.elf"},
         @{src=@("thread.cs");          elf="thread.elf"},

@@ -201,14 +201,24 @@ Freestanding apps use zerolib (no full GC yet). What does **not** work:
   a `char[]` / `stackalloc` and use `Graphics.DrawChars`.
 - **`string == string`** needs `op_Equality` (absent) → compare by reference or
   char by char.
-- **Storing a reference into an `object[]` element** (`stelem.ref`) faults → use
-  a **linked list** (store into an object field), not an array of objects.
-- **No reclaiming GC and no exceptions** (`throw` ends the program).
+- **No reclaiming GC and no exceptions** (`throw` ends the program; a failed
+  cast or a wrong array store ends it with an `Unhandled exception: ...` line).
+- **No `System.Func`/`List<T>`/LINQ from CoreLib** — use `bzbcl3.cs` (below).
+- Generic interface **variance** (`IEnumerable<Derived>` as
+  `IEnumerable<Base>`) and default interface methods are not resolved.
 
 What **does** work: `new`, value arrays (`int[]`, `short[]`), heap objects,
 generics, virtual dispatch, `stackalloc`, and — since the shim initializes the
 GC statics (2026-11-06) — **`static` reference fields, method-group → delegate
-conversions and lambdas** (with or without captured variables). Full details in `CLAUDE.md`.
+conversions and lambdas** (with or without captured variables); and — since the
+shim implements the runtime's type checks (2026-11-06) — **casts, `is`/`as`,
+pattern matching, `switch` on types, interface method calls, and arrays of
+references** (`object[]`, `Base[]` holding a `Derived`, `IFoo[]`, `string[]` as
+`object[]`). `bzbcl3.cs` adds `System.Func/Action/Predicate/Comparison`,
+`BzInterlocked`, `BzTimeSpan`, `BzGuid` (random v4 from the kernel) and LINQ
+over `BzList<T>` as extension methods (`Where`, `Select`, stable `OrderBy` +
+`ThenBy`, `GroupBy`, `Distinct`, `Sum`/`MinBy`/`MaxBy`, `Zip`, `Aggregate`, ...).
+Full details in `CLAUDE.md`.
 
 ---
 

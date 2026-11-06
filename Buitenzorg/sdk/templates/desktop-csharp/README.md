@@ -79,8 +79,11 @@ growing bump heap over `mmap`). Still unsupported:
   2026-11-06 the startup shim initializes the GC statics), but a
   `static readonly string` set from a literal crashes the compiler — use a
   `const string`.
-- **No storing a reference into an `object[]` element** (`stelem.ref` faults).
-  Use a **linked list** or object fields (Buitenzorg.UI children are a list).
+- **Casts, `is`/`as`, interfaces and arrays of references (`object[]`) work**
+  (since 2026-11-06 the shim implements the runtime's type checks), but there
+  are **no exceptions**: a failed cast ends the app with a message.
+- **Delegates/LINQ:** add `bzbcl3.cs` for `Func`/`Action`, `BzInterlocked`,
+  `BzTimeSpan`, `BzGuid` and LINQ over `BzList<T>`.
 - **No `new string()` / `ToString()` / concat / `string ==`.** Build text in a
   `char[]` and draw with `Graphics.DrawChars` — see `CounterView` and
   `Buitenzorg.UI.UiText.Int`.

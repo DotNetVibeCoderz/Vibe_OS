@@ -6,7 +6,8 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "userland\hello-csharp"
-$bflat = Join-Path $root "tools\bflat\bflat.exe"
+# a private bflat copy whose zerolib is patched (scripts/prepare-bflat.ps1)
+$bflat = & (Join-Path $PSScriptRoot "prepare-bflat.ps1") | Select-Object -Last 1
 
 $lld = Get-ChildItem "$env:USERPROFILE\.rustup\toolchains\nightly-*\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe" |
     Select-Object -First 1 -ExpandProperty FullName
@@ -35,6 +36,7 @@ try {
         @{src=@("sync.cs");              elf="sync.elf"},
         @{src=@("heap.cs");              elf="heap.elf"},
         @{src=@("statics.cs");           elf="statics.elf"},
+        @{src=@("bcl3.cs", "bzbcl.cs", "bzbcl2.cs", "bzbcl3.cs"); elf="bcl3.elf"},
         @{src=@("gcmem.cs");             elf="gcmem.elf"},
         @{src=@("bcl.cs", "bzbcl.cs");   elf="bcl.elf"},
         @{src=@("bcl2.cs", "bzbcl.cs", "bzbcl2.cs"); elf="bcl2.elf"},

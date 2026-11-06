@@ -178,8 +178,11 @@ public static class SyscallNumbers
     /// <summary>3D rendering (G3): a0 = pointer to a <see cref="Gfx3dCmd"/> whose Op is a <see cref="Gfx3dOp"/>.</summary>
     public const ulong Gfx3d = 56;
 
+    /// <summary>Random bytes from the kernel's ChaCha20 DRBG: a0 = output buffer, a1 = length (at most 4096). Returns the length written.</summary>
+    public const ulong Random = 57;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 57;
+    public const ulong Count = 58;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Gfx3d"/> (bz-abi <c>gfx3d_op</c>).</summary>

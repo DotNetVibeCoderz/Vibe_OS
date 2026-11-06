@@ -5,7 +5,8 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 dir="$root/userland/hello-csharp"
-bflat="$root/tools/bflat/bflat"
+# a private bflat copy whose zerolib is patched (scripts/prepare-bflat.sh)
+bflat="$("$root/scripts/prepare-bflat.sh" | tail -1)"
 
 lld="$(ls "$HOME"/.rustup/toolchains/nightly-*/lib/rustlib/*/bin/rust-lld 2>/dev/null | head -1)"
 [ -n "$lld" ] || { echo "rust-lld not found (install rust nightly)"; exit 1; }
@@ -39,6 +40,7 @@ build_prog thread thread.cs
 build_prog sync sync.cs
 build_prog heap heap.cs
 build_prog statics statics.cs
+build_prog bcl3 bcl3.cs bzbcl.cs bzbcl2.cs bzbcl3.cs
 build_prog gcmem gcmem.cs
 build_prog bcl bcl.cs bzbcl.cs
 build_prog bcl2 bcl2.cs bzbcl.cs bzbcl2.cs

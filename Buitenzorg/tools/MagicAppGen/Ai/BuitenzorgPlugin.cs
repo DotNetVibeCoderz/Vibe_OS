@@ -153,8 +153,10 @@ public sealed class BuitenzorgPlugin
             _ =>
                 "zerolib gotchas: (1) `static` reference fields, delegates and lambdas WORK (the shim initializes " +
                 "the GC statics), but `static readonly string X = \"...\"` crashes the compiler - use const string. " +
-                "(2) NO reclaiming GC and NO exceptions (throw ends the program). (3) NO storing a reference into an object[] element " +
-                "(stelem.ref faults) - use linked lists / object fields. (4) NO new string()/ToString()/concat/" +
+                "(2) NO reclaiming GC and NO exceptions (throw / a failed cast ends the program). (3) casts, is/as, " +
+                "pattern matching, interface calls and object[] / Base[] / IFoo[] arrays WORK; System.Func/Action and " +
+                "LINQ come from bzbcl3.cs (BzList<T>.Where/Select/OrderBy/GroupBy/Distinct..., BzInterlocked, " +
+                "BzTimeSpan, BzGuid). (4) NO new string()/ToString()/concat/" +
                 "string == - build char[] and use Graphics.DrawChars, compare by reference or char loop. " +
                 "(5) Entry: class with static void Main(). App ELF name must be <=8.3, uppercase.",
         };

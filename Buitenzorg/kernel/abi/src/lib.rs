@@ -223,8 +223,12 @@ pub mod sysno {
     /// resource id (CREATE / MESH / TEXTURE), DRAW statistics
     /// (pixels << 32 | triangles), a pixel (READ_PIXEL), 0, or `syserr::INVAL`.
     pub const GFX3D: u64 = 56;
+    /// Random bytes from the kernel's ChaCha20 DRBG (`rng.rs`): `a0` = the
+    /// output buffer, `a1` = its length (at most 4096). Returns the length
+    /// written or `syserr::INVAL`.
+    pub const RANDOM: u64 = 57;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 57;
+    pub const COUNT: u64 = 58;
 }
 
 /// Operations of the [`sysno::GFX3D`] syscall ([`Gfx3dCmd::op`]). Every
@@ -920,7 +924,8 @@ mod tests {
         assert_eq!(gfx3d_op::READ, 9);
         assert_eq!(gfx3d_op::INFO, 10);
         assert_eq!(gfx3d_light::LIGHTS, 12);
-        assert_eq!(sysno::COUNT, 57);
+        assert_eq!(sysno::RANDOM, 57);
+        assert_eq!(sysno::COUNT, 58);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -936,7 +941,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 57, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 58, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

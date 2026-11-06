@@ -62,6 +62,7 @@ const SYS_NET_INFO: u64 = 39;
 const SYS_PROC_SPAWN: u64 = 40;
 const SYS_PROC_WAIT: u64 = 41;
 const SYS_PROC_ARGS: u64 = 42;
+const SYS_RANDOM: u64 = 57;
 
 /// ARM64 (multi-arch M3): `SVC #0` with the number in x8 and the arguments in
 /// x0..x2, result in x0 (the Linux arm64 convention; the same bz-abi numbers
@@ -959,6 +960,380 @@ core::arch::global_asm!(
     "    str x15, [x14], #8",
     "    ret",
 );
+
+// --- Type casts and covariant array stores (zerolib has neither) -----------
+//
+// ILC compiles `(T)o`, `o is T`, `o as T` into calls to the runtime's
+// RhTypeCast_* helpers and `array[i] = obj` on a reference-type array into
+// RhpStelemRef. zerolib ships no casting helpers at all (a program with a
+// cast did not link) and an RhpStelemRef that fail-fasts unless the object's
+// type is *exactly* the element type (so `object[]`, base-class and interface
+// arrays faulted). These implement the real rules on the NativeAOT
+// MethodTable: u16 component size, u16 flags (bits 10..14 = element type:
+// 0x14 class, 0x15 interface, 0x17/0x18 arrays; bits 0..1 = kind), u32 base
+// size, +8 related type (the base class; for an array the element type),
+// +16 u16 vtable slot count, +18 u16 interface count, then the vtable and the
+// interface map (`24 + 8 * slots`). zerolib's own RhpStelemRef export is
+// renamed by tools/ZerolibPatch so this one is used.
+
+#[repr(C)]
+pub struct MethodTable {
+    component_size: u16,
+    flags: u16,
+    base_size: u32,
+    related: *const MethodTable,
+    vtable_slots: u16,
+    interfaces: u16,
+    hash: u32,
+}
+
+
+const ET_CLASS: u16 = 0x14;
+const ET_INTERFACE: u16 = 0x15;
+const ET_ARRAY: u16 = 0x17;
+const ET_SZARRAY: u16 = 0x18;
+
+unsafe fn element_type(mt: *const MethodTable) -> u16 {
+    ((*mt).flags >> 10) & 0x1f
+}
+
+unsafe fn implements(mt: *const MethodTable, iface: *const MethodTable) -> bool {
+    // A type's interface map is flattened (inherited interfaces included);
+    // walk the base chain anyway in case a base lists one the type does not.
+    let mut m = mt;
+    let mut guard = 0;
+    while !m.is_null() && guard < 64 {
+        let map = (m as *const u8).add(24 + 8 * (*m).vtable_slots as usize) as *const *const MethodTable;
+        for i in 0..(*m).interfaces as usize {
+            if core::ptr::read_unaligned(map.add(i)) == iface {
+                return true;
+            }
+        }
+        if matches!(element_type(m), ET_ARRAY | ET_SZARRAY) {
+            break; // an array's related type is its element, not a base
+        }
+        m = (*m).related;
+        guard += 1;
+    }
+    false
+}
+
+/// Can an object whose type is `mt` be used as a `target`?
+unsafe fn assignable(target: *const MethodTable, mt: *const MethodTable) -> bool {
+    // System.Object is the one class with no base type (an interface has
+    // none either, but its element type says so)
+    if target == mt || ((*target).related.is_null() && element_type(target) == ET_CLASS) {
+        return true;
+    }
+    let te = element_type(target);
+    if te == ET_INTERFACE {
+        return implements(mt, target);
+    }
+    let me = element_type(mt);
+    if me == ET_ARRAY || me == ET_SZARRAY {
+        // array covariance: Derived[] is a Base[] when the elements are
+        // reference types
+        if te != me {
+            return false;
+        }
+        let (a, b) = ((*target).related, (*mt).related);
+        if a == b {
+            return true;
+        }
+        let refs = |e: u16| matches!(e, ET_CLASS | ET_INTERFACE | ET_ARRAY | ET_SZARRAY);
+        return refs(element_type(a)) && refs(element_type(b)) && assignable(a, b);
+    }
+    let mut p = (*mt).related;
+    let mut guard = 0;
+    while !p.is_null() && guard < 64 {
+        if p == target {
+            return true;
+        }
+        p = (*p).related;
+        guard += 1;
+    }
+    false
+}
+
+unsafe fn type_of(obj: *const u8) -> *const MethodTable {
+    *(obj as *const *const MethodTable)
+}
+
+unsafe fn fatal(msg: &[u8]) -> ! {
+    bz_write(msg.as_ptr(), msg.len() as u64);
+    SystemNative_Abort()
+}
+
+unsafe fn is_instance(target: *const MethodTable, obj: *const u8) -> *const u8 {
+    if obj.is_null() || assignable(target, type_of(obj)) { obj } else { core::ptr::null() }
+}
+
+unsafe fn check_cast(target: *const MethodTable, obj: *const u8) -> *const u8 {
+    if obj.is_null() || assignable(target, type_of(obj)) {
+        obj
+    } else {
+        bz_throw_invalid_cast()
+    }
+}
+
+/// An invalid cast. Until exceptions exist this ends the program with a
+/// message instead of an unexplained exit.
+#[no_mangle]
+pub unsafe extern "C" fn bz_throw_invalid_cast() -> ! {
+    fatal(b"Unhandled exception: System.InvalidCastException (cast to an incompatible type)\n")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_IsInstanceOfClass(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_IsInstanceOfInterface(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_IsInstanceOfAny(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_IsInstanceOfArray(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_CheckCastClass(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_CheckCastClassSpecial(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_CheckCastInterface(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_CheckCastAny(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
+#[no_mangle]
+pub unsafe extern "C" fn RhTypeCast_CheckCastArray(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
+
+/// `array[index] = obj` for a reference-type array: bounds check, then the
+/// covariance check (`object[]` takes anything, `Base[]` takes a Derived,
+/// `IFoo[]` takes any implementer).
+#[no_mangle]
+pub unsafe extern "C" fn RhpStelemRef(array: *mut u8, index: isize, obj: *const u8) {
+    let len = *(array.add(8) as *const u32) as usize;
+    if index < 0 || index as usize >= len {
+        fatal(b"Unhandled exception: System.IndexOutOfRangeException\n");
+    }
+    let slot = array.add(16 + 8 * index as usize) as *mut *const u8;
+    if !obj.is_null() {
+        let elem = (*type_of(array)).related;
+        if !assignable(elem, type_of(obj)) {
+            fatal(b"Unhandled exception: System.ArrayTypeMismatchException\n");
+        }
+    }
+    *slot = obj;
+}
+
+// --- Interface dispatch (zerolib has none) -----------------------------------
+//
+// A call through an interface (`IShape s; s.Area()`) goes through a dispatch
+// cell: `{ stub, cache }` pairs, the first stub = RhpInitialDynamicInterface-
+// Dispatch, the cache a 32-bit relative pointer to the interface MethodTable
+// tagged 3, and a terminating pair `{ 0, slot }`. The cell's address arrives
+// in r10 (x86-64) / x11 (arm64), `this` in rdi / x0. The target comes from
+// the type's DispatchMap (u16 standard / default / static counts, then u16
+// triples: interface index in that type's interface list, interface slot,
+// implementation slot), walked from the object's type up its base chain: an
+// implementation slot below the type's vtable size is a virtual slot (taken
+// from the *object's* vtable, so overrides win), above it an index into the
+// type's sealed-virtual table (32-bit relative pointers). The MethodTable
+// tail after the interface map: TypeManager and WritableData (rel32 each),
+// then the DispatchMap if flag 0x0004, the finalizer if 0x0010, optional
+// fields if 0x0020, the sealed-virtual table if 0x0040.
+
+const MT_HAS_DISPATCH_MAP: u16 = 0x0004;
+const MT_HAS_FINALIZER: u16 = 0x0010;
+const MT_HAS_OPTIONAL_FIELDS: u16 = 0x0020;
+const MT_HAS_SEALED_VTABLE: u16 = 0x0040;
+
+unsafe fn rel32_at(p: *const u8) -> *const u8 {
+    p.offset(core::ptr::read_unaligned(p as *const i32) as isize)
+}
+
+/// (dispatch map, sealed-virtual table) of a MethodTable.
+unsafe fn mt_tail(mt: *const MethodTable) -> (*const u8, *const u8) {
+    let f = (*mt).flags;
+    let mut p = (mt as *const u8).add(24 + 8 * (*mt).vtable_slots as usize + 8 * (*mt).interfaces as usize + 8);
+    let mut map = core::ptr::null();
+    let mut sealed = core::ptr::null();
+    if f & MT_HAS_DISPATCH_MAP != 0 {
+        map = rel32_at(p);
+        p = p.add(4);
+    }
+    if f & MT_HAS_FINALIZER != 0 {
+        p = p.add(4);
+    }
+    if f & MT_HAS_OPTIONAL_FIELDS != 0 {
+        p = p.add(4);
+    }
+    if f & MT_HAS_SEALED_VTABLE != 0 {
+        sealed = rel32_at(p);
+    }
+    (map, sealed)
+}
+
+unsafe fn interface_index(mt: *const MethodTable, iface: *const MethodTable) -> Option<u16> {
+    let list = (mt as *const u8).add(24 + 8 * (*mt).vtable_slots as usize) as *const *const MethodTable;
+    (0..(*mt).interfaces).find(|&i| core::ptr::read_unaligned(list.add(i as usize)) == iface)
+}
+
+/// The code address an interface call on `obj` through `cell` must reach.
+#[no_mangle]
+pub unsafe extern "C" fn bz_resolve_interface(obj: *const u8, cell: *const u8) -> usize {
+    if obj.is_null() {
+        fatal(b"Unhandled exception: System.NullReferenceException (interface call on null)\n");
+    }
+    // the terminating pair holds the slot
+    let mut c = cell;
+    let mut guard = 0;
+    while core::ptr::read_unaligned(c as *const usize) != 0 && guard < 64 {
+        c = c.add(16);
+        guard += 1;
+    }
+    let slot = (core::ptr::read_unaligned(c.add(8) as *const u64) & 0xffff) as u16;
+    let cache = core::ptr::read_unaligned(cell.add(8) as *const u64);
+    let rel = ((cache as u32) & !3) as i32 as isize;
+    let iface: *const MethodTable = match cache & 3 {
+        1 => (cache & !3) as *const MethodTable,
+        3 => cell.add(8).offset(rel) as *const MethodTable,
+        2 => *(cell.add(8).offset(rel) as *const *const MethodTable),
+        _ => fatal(b"bzstart: unsupported interface dispatch cell\n"),
+    };
+    let objmt = type_of(obj);
+    let vtable = (objmt as *const u8).add(24) as *const usize;
+    let mut cur = objmt;
+    let mut depth = 0;
+    while !cur.is_null() && depth < 64 {
+        if let Some(idx) = interface_index(cur, iface) {
+            let (map, sealed) = mt_tail(cur);
+            if !map.is_null() {
+                let n = core::ptr::read_unaligned(map as *const u16) as usize;
+                let entries = map.add(8) as *const u16;
+                for e in 0..n {
+                    let ii = core::ptr::read_unaligned(entries.add(3 * e));
+                    let is = core::ptr::read_unaligned(entries.add(3 * e + 1));
+                    if ii == idx && is == slot {
+                        let impl_slot = core::ptr::read_unaligned(entries.add(3 * e + 2)) as usize;
+                        let vt = (*cur).vtable_slots as usize;
+                        if impl_slot < vt {
+                            return *vtable.add(impl_slot);
+                        }
+                        if sealed.is_null() {
+                            break;
+                        }
+                        return rel32_at(sealed.add(4 * (impl_slot - vt))) as usize;
+                    }
+                }
+            }
+        }
+        if matches!(element_type(cur), ET_ARRAY | ET_SZARRAY) {
+            break;
+        }
+        cur = (*cur).related;
+        depth += 1;
+    }
+    fatal(b"Unhandled exception: System.EntryPointNotFoundException (interface method not implemented)\n")
+}
+
+// The dispatch stub: keep every argument register, resolve, tail-jump.
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".global RhpInitialDynamicInterfaceDispatch",
+    "RhpInitialDynamicInterfaceDispatch:",
+    "    push rdi",
+    "    push rsi",
+    "    push rdx",
+    "    push rcx",
+    "    push r8",
+    "    push r9",
+    "    sub rsp, 136",
+    "    movdqu [rsp], xmm0",
+    "    movdqu [rsp + 16], xmm1",
+    "    movdqu [rsp + 32], xmm2",
+    "    movdqu [rsp + 48], xmm3",
+    "    movdqu [rsp + 64], xmm4",
+    "    movdqu [rsp + 80], xmm5",
+    "    movdqu [rsp + 96], xmm6",
+    "    movdqu [rsp + 112], xmm7",
+    "    mov rsi, r10",
+    "    call {resolve}",
+    "    mov r11, rax",
+    "    movdqu xmm0, [rsp]",
+    "    movdqu xmm1, [rsp + 16]",
+    "    movdqu xmm2, [rsp + 32]",
+    "    movdqu xmm3, [rsp + 48]",
+    "    movdqu xmm4, [rsp + 64]",
+    "    movdqu xmm5, [rsp + 80]",
+    "    movdqu xmm6, [rsp + 96]",
+    "    movdqu xmm7, [rsp + 112]",
+    "    add rsp, 136",
+    "    pop r9",
+    "    pop r8",
+    "    pop rcx",
+    "    pop rdx",
+    "    pop rsi",
+    "    pop rdi",
+    "    jmp r11",
+    resolve = sym bz_resolve_interface,
+);
+
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".arch armv8-a+fp+simd",
+    ".global RhpInitialDynamicInterfaceDispatch",
+    "RhpInitialDynamicInterfaceDispatch:",
+    "    stp x29, x30, [sp, #-224]!",
+    "    mov x29, sp",
+    "    stp x0, x1, [sp, #16]",
+    "    stp x2, x3, [sp, #32]",
+    "    stp x4, x5, [sp, #48]",
+    "    stp x6, x7, [sp, #64]",
+    "    str x8, [sp, #80]",
+    "    stp q0, q1, [sp, #96]",
+    "    stp q2, q3, [sp, #128]",
+    "    stp q4, q5, [sp, #160]",
+    "    stp q6, q7, [sp, #192]",
+    "    mov x1, x11",
+    "    bl {resolve}",
+    "    mov x16, x0",
+    "    ldp q6, q7, [sp, #192]",
+    "    ldp q4, q5, [sp, #160]",
+    "    ldp q2, q3, [sp, #128]",
+    "    ldp q0, q1, [sp, #96]",
+    "    ldr x8, [sp, #80]",
+    "    ldp x6, x7, [sp, #64]",
+    "    ldp x4, x5, [sp, #48]",
+    "    ldp x2, x3, [sp, #32]",
+    "    ldp x0, x1, [sp, #16]",
+    "    ldp x29, x30, [sp], #224",
+    "    br x16",
+    resolve = sym bz_resolve_interface,
+);
+
+/// Random bytes from the kernel DRBG (syscall RANDOM, at most 4096 per call);
+/// returns the length written, or 0 on a bad request.
+#[no_mangle]
+pub unsafe extern "C" fn bz_random(buf: *mut u8, len: u64) -> u64 {
+    let r = syscall3(SYS_RANDOM, buf as u64, len, 0);
+    if r > len { 0 } else { r }
+}
+
+/// Atomic compare-and-swap on the i64 at `p`; returns the value that was there.
+#[no_mangle]
+pub unsafe extern "C" fn bz_atomic_cas64(p: *mut i64, expected: i64, new: i64) -> i64 {
+    match (*(p as *const AtomicI64)).compare_exchange(expected, new, HeapOrd::SeqCst, HeapOrd::SeqCst) {
+        Ok(v) | Err(v) => v,
+    }
+}
+
+/// Atomically store `v` in the i32 at `p`; returns the previous value.
+#[no_mangle]
+pub unsafe extern "C" fn bz_atomic_xchg32(p: *mut i32, v: i32) -> i32 {
+    (*(p as *const AtomicI32)).swap(v, HeapOrd::SeqCst)
+}
+
+/// Atomically store `v` in the i64 at `p`; returns the previous value.
+#[no_mangle]
+pub unsafe extern "C" fn bz_atomic_xchg64(p: *mut i64, v: i64) -> i64 {
+    (*(p as *const AtomicI64)).swap(v, HeapOrd::SeqCst)
+}
 
 #[no_mangle]
 static PROG_NAME: [u8; 6] = *b"hello\0";
