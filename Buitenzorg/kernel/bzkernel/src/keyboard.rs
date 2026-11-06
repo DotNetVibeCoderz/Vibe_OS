@@ -29,6 +29,15 @@ pub fn feed_scancode(byte: u8) {
         let kb = guard.get_or_insert_with(|| {
             Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::MapLettersToUnicode)
         });
+        // pc-keyboard 0.7 decodes the backslash key (set 1: 0x2B) as Oem7,
+        // which its Us104Key layout has no character for ('\' and '|' sit on
+        // Oem5 = 0x56 there), so the key produced nothing -- no pipes in the
+        // shell. Feed it as 0x56 (make and break).
+        let byte = match byte {
+            0x2B => 0x56,
+            0xAB => 0xD6,
+            b => b,
+        };
         if let Ok(Some(event)) = kb.add_byte(byte) {
             match kb.process_keyevent(event) {
                 Some(DecodedKey::Unicode(c)) => {

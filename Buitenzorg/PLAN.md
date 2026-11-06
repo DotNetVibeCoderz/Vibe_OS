@@ -235,8 +235,11 @@ sama (fib) di JS/TS/Python jalan berdampingan app C# — semua cetak fib(10)=55.
 
 ## 🧩 v0.15 — "Matang" · Managed Runtime C# Lengkap (GC + .NET BCL) — *sebagian besar tercapai*
 > **Status 2026-11-01:** inc 1–7 + `bzbcl2.cs` (IO/Encoding/Regex/Globalization/
-> Diagnostics/Net-UDP/Tasks/Timers) selesai & terverifikasi. **Sisa:** GC yang
-> mereklamasi memori + GC statics, exception unwinding (try/catch), `async`/
+> Diagnostics/Net-UDP/Tasks/Timers) selesai & terverifikasi. **GC statics ✓
+> (2026-11-06):** shim menjalankan inisialisasi static NativeAOT (region GC-static
+> di `__ReadyToRunHeader`) sebelum `Main` → field `static` referensi, delegate
+> dan lambda jalan (`statics.cs`, `MILESTONE: STATICS OK`). **Sisa:** GC yang
+> mereklamasi memori, exception unwinding (try/catch), `async`/
 > `await`, thread pool, TimeSpan/Guid/Interlocked, LINQ OrderBy/GroupBy/Distinct.
 > **Increment 1 ✓:** fondasi **PAL memori** — syscall user `MMAP/MPROTECT/MUNMAP`
 > (ABI 13–15, arena `memory.rs`), diverifikasi dari C# ring-3 (`matang.cs`).
@@ -632,6 +635,10 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 - **Kernel log ring buffer** (`dmesg`) + saluran log per-app.
 
 ### A. Terminal & Shell
+> **Fase 1 ✓ (2026-11-06):** line editing + history persisten + tab-completion,
+> pipes/redirection/`; && ||`, variabel + `$?`, kutip, glob, dan coreutils
+> (`coreutils.rs`) — diuji di QEMU. Belum: alias, skrip `.bzsh`, `$PATH`/`which`,
+> job control, app Terminal multi-tab.
 - **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
   (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
 - **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment

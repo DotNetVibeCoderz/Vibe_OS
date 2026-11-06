@@ -55,6 +55,7 @@ mod screensaver;
 mod script;
 mod service;
 mod shell;
+mod coreutils;
 mod syscall;
 mod task;
 mod terminal;

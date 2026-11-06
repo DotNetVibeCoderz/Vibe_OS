@@ -12,9 +12,430 @@ use crate::{ai, app, model, pkg, power, screensaver, script, theme, vfs, vmm, vm
 
 pub struct ShellState {
     pub cwd: String,
+    /// Shell variables (`NAME=value`, `set`, `export`; `$NAME` expands them).
+    pub vars: alloc::collections::BTreeMap<String, String>,
+    /// Whether the last command succeeded (`$?`, `&&`, `||`).
+    pub ok: bool,
 }
 
-static STATE: Mutex<ShellState> = Mutex::new(ShellState { cwd: String::new() });
+static STATE: Mutex<ShellState> = Mutex::new(ShellState { cwd: String::new(), vars: alloc::collections::BTreeMap::new(), ok: true });
+
+/// The shell variables (set ones, then the built-in PWD/HOME/USER/SHELL).
+pub fn vars() -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = STATE.lock().vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for k in ["PWD", "HOME", "USER", "SHELL"] {
+        if !v.iter().any(|(n, _)| n == k) {
+            v.push((String::from(k), var(k).unwrap_or_default()));
+        }
+    }
+    v.sort();
+    v
+}
+
+fn var(name: &str) -> Option<String> {
+    if let Some(v) = STATE.lock().vars.get(name) {
+        return Some(v.clone());
+    }
+    match name {
+        "PWD" => Some(cwd()),
+        "HOME" => Some(String::from("/disk")),
+        "USER" => Some(String::from("administrator")),
+        "SHELL" => Some(String::from("bzsh")),
+        _ => None,
+    }
+}
+
+/// Set a variable; false when `name` is not a valid name.
+pub fn set_var(name: &str, value: &str) -> bool {
+    let valid = !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if valid {
+        STATE.lock().vars.insert(String::from(name), String::from(value));
+    }
+    valid
+}
+
+pub fn unset_var(name: &str) {
+    STATE.lock().vars.remove(name);
+}
+
+/// Every command name (the shell's own and the core utilities), for Tab.
+pub fn command_names() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = LEGACY_COMMANDS.to_vec();
+    v.extend_from_slice(crate::coreutils::NAMES);
+    v.sort();
+    v.dedup();
+    v
+}
+
+const LEGACY_COMMANDS: &[&str] = &[
+    "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
+    "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
+    "settings", "ask", "vm", "script", "js", "ts", "py", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
+];
+
+// ---- command lines: quoting, variables, globs, pipes, redirection ----------
+//
+// A line is commands joined by `;`, `&&` (run if the previous one succeeded)
+// and `||` (run if it failed); a command is a pipeline `a | b | c` whose
+// stages pass their output lines on as the next one's input; any stage may
+// redirect: `> FILE` (write), `>> FILE` (append), `< FILE` (input). Words may
+// be quoted ('...' literal, "..." with $ expansion) or escaped with \;
+// `$NAME`, `${NAME}` and `$?` expand; an unquoted word with * or ? expands to
+// the matching file names. A command that is only `NAME=value` sets a
+// variable. The core utilities (coreutils.rs) read their input from the
+// pipe; the shell's other commands ignore it.
+
+#[derive(Clone, PartialEq)]
+enum Tok {
+    Word(String),
+    Op(&'static str),
+}
+
+/// Expand `$...` at `chars[i]` (a '$') into `out`; returns the index after it.
+fn expand_var(chars: &[char], i: usize, out: &mut String) -> usize {
+    let mut j = i + 1;
+    if j < chars.len() && chars[j] == '?' {
+        out.push(if STATE.lock().ok { '0' } else { '1' });
+        return j + 1;
+    }
+    let braced = j < chars.len() && chars[j] == '{';
+    if braced {
+        j += 1;
+    }
+    let start = j;
+    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+        j += 1;
+    }
+    if j == start {
+        out.push('$');
+        return i + 1;
+    }
+    let name: String = chars[start..j].iter().collect();
+    if braced && j < chars.len() && chars[j] == '}' {
+        j += 1;
+    }
+    out.push_str(&var(&name).unwrap_or_default());
+    j
+}
+
+/// Expand a glob word against its folder; the word itself when nothing matches.
+fn expand_glob(word: &str) -> Vec<String> {
+    let (dir, pattern) = match word.rfind('/') {
+        Some(i) => (&word[..=i], &word[i + 1..]),
+        None => ("", word),
+    };
+    let folder = resolve(if dir.is_empty() { None } else { Some(dir) });
+    let mut hits: Vec<String> = vfs::list_entries(&folder)
+        .map(|es| {
+            es.into_iter()
+                .filter(|e| e.name != "." && e.name != ".." && crate::coreutils::wildcard(pattern, &e.name))
+                .map(|e| format!("{}{}", dir, e.name))
+                .collect()
+        })
+        .unwrap_or_default();
+    hits.sort();
+    if hits.is_empty() { vec![String::from(word)] } else { hits }
+}
+
+fn tokenize(line: &str) -> Result<Vec<Tok>, String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut toks = Vec::new();
+    let mut cur = String::new();
+    let (mut has, mut glob) = (false, false);
+    fn flush(toks: &mut Vec<Tok>, cur: &mut String, has: &mut bool, glob: &mut bool) {
+        if *has {
+            if *glob {
+                toks.extend(expand_glob(cur).into_iter().map(Tok::Word));
+            } else {
+                toks.push(Tok::Word(core::mem::take(cur)));
+            }
+        }
+        cur.clear();
+        *has = false;
+        *glob = false;
+    }
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        match c {
+            ' ' | '\t' => flush(&mut toks, &mut cur, &mut has, &mut glob),
+            '\'' => {
+                has = true;
+                i += 1;
+                while i < chars.len() && chars[i] != '\'' {
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    return Err(String::from("tanda kutip ' tidak ditutup"));
+                }
+            }
+            '"' => {
+                has = true;
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '$' {
+                        i = expand_var(&chars, i, &mut cur);
+                        continue;
+                    }
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 1;
+                    }
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    return Err(String::from("tanda kutip \" tidak ditutup"));
+                }
+            }
+            '\\' => {
+                if let Some(n) = next {
+                    cur.push(n);
+                    has = true;
+                    i += 1;
+                }
+            }
+            '$' => {
+                has = true;
+                i = expand_var(&chars, i, &mut cur);
+                continue;
+            }
+            ';' => {
+                flush(&mut toks, &mut cur, &mut has, &mut glob);
+                toks.push(Tok::Op(";"));
+            }
+            '&' if next == Some('&') => {
+                flush(&mut toks, &mut cur, &mut has, &mut glob);
+                toks.push(Tok::Op("&&"));
+                i += 1;
+            }
+            '|' => {
+                flush(&mut toks, &mut cur, &mut has, &mut glob);
+                if next == Some('|') {
+                    toks.push(Tok::Op("||"));
+                    i += 1;
+                } else {
+                    toks.push(Tok::Op("|"));
+                }
+            }
+            '>' => {
+                flush(&mut toks, &mut cur, &mut has, &mut glob);
+                if next == Some('>') {
+                    toks.push(Tok::Op(">>"));
+                    i += 1;
+                } else {
+                    toks.push(Tok::Op(">"));
+                }
+            }
+            '<' => {
+                flush(&mut toks, &mut cur, &mut has, &mut glob);
+                toks.push(Tok::Op("<"));
+            }
+            '*' | '?' => {
+                glob = true;
+                has = true;
+                cur.push(c);
+            }
+            _ => {
+                has = true;
+                cur.push(c);
+            }
+        }
+        i += 1;
+    }
+    flush(&mut toks, &mut cur, &mut has, &mut glob);
+    Ok(toks)
+}
+
+/// Split a line at `;`, `&&` and `||` outside quotes: (command, the
+/// connector before it). Each command is tokenized only when its turn comes,
+/// so `X=1; echo $X` and `false || echo $?` see the values of the moment.
+fn split_commands(line: &str) -> Result<Vec<(String, &'static str)>, String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut connector = ";";
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        match quote {
+            Some(q) => {
+                if c == '\\' && q == '"' && next.is_some() {
+                    cur.push(c);
+                    cur.push(next.unwrap());
+                    i += 2;
+                    continue;
+                }
+                if c == q {
+                    quote = None;
+                }
+                cur.push(c);
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    cur.push(c);
+                }
+                '\\' => {
+                    cur.push(c);
+                    if let Some(n) = next {
+                        cur.push(n);
+                        i += 1;
+                    }
+                }
+                ';' => {
+                    out.push((core::mem::take(&mut cur), connector));
+                    connector = ";";
+                }
+                '&' if next == Some('&') => {
+                    out.push((core::mem::take(&mut cur), connector));
+                    connector = "&&";
+                    i += 1;
+                }
+                '|' if next == Some('|') => {
+                    out.push((core::mem::take(&mut cur), connector));
+                    connector = "||";
+                    i += 1;
+                }
+                _ => cur.push(c),
+            },
+        }
+        i += 1;
+    }
+    if let Some(q) = quote {
+        return Err(format!("tanda kutip {} tidak ditutup", q));
+    }
+    out.push((cur, connector));
+    Ok(out)
+}
+
+/// Run one command line; returns (output lines, effect).
+pub fn run(line: &str) -> (Vec<String>, Effect) {
+    let commands = match split_commands(line) {
+        Ok(c) => c,
+        Err(e) => {
+            STATE.lock().ok = false;
+            return (vec![format!("sh: {}", e)], Effect::None);
+        }
+    };
+    let mut out = Vec::new();
+    let mut effect = Effect::None;
+    let mut ok = true;
+    for (text, connector) in commands {
+        if text.trim().is_empty() {
+            continue;
+        }
+        let run_it = match connector {
+            "&&" => ok,
+            "||" => !ok,
+            _ => true,
+        };
+        if !run_it {
+            continue;
+        }
+        let toks = match tokenize(&text) {
+            Ok(t) => t,
+            Err(e) => {
+                out.push(format!("sh: {}", e));
+                ok = false;
+                STATE.lock().ok = false;
+                continue;
+            }
+        };
+        if toks.is_empty() {
+            continue;
+        }
+        let (o, e, good) = run_pipeline(&toks);
+        out.extend(o);
+        if e == Effect::Clear || effect == Effect::None {
+            effect = e;
+        }
+        ok = good;
+        STATE.lock().ok = ok;
+    }
+    (out, effect)
+}
+
+/// One pipeline: `a | b | c`, each stage with its redirections.
+fn run_pipeline(toks: &[Tok]) -> (Vec<String>, Effect, bool) {
+    let mut stdin: Option<Vec<String>> = None;
+    let mut effect = Effect::None;
+    let mut ok = true;
+    let stages: Vec<&[Tok]> = toks.split(|t| *t == Tok::Op("|")).collect();
+    let last = stages.len() - 1;
+    for (k, stage) in stages.iter().enumerate() {
+        let mut argv: Vec<String> = Vec::new();
+        let mut out_file: Option<(String, bool)> = None;
+        let mut j = 0;
+        while j < stage.len() {
+            match &stage[j] {
+                Tok::Word(w) => argv.push(w.clone()),
+                Tok::Op(op) => {
+                    let Some(Tok::Word(target)) = stage.get(j + 1) else {
+                        return (vec![format!("sh: butuh nama file setelah {}", op)], effect, false);
+                    };
+                    match *op {
+                        ">" | ">>" => out_file = Some((target.clone(), *op == ">>")),
+                        "<" => match crate::coreutils::run(&[String::from("cat"), target.clone()], None) {
+                            (lines, true) => stdin = Some(lines),
+                            (msg, false) => return (msg, effect, false),
+                        },
+                        _ => {}
+                    }
+                    j += 1;
+                }
+            }
+            j += 1;
+        }
+        if argv.is_empty() && stage.is_empty() {
+            return (vec![String::from("sh: perintah kosong di pipe")], effect, false);
+        }
+        // only NAME=value words: set variables
+        if !argv.is_empty() && argv.iter().all(|a| a.split_once('=').is_some_and(|(k, _)| !k.is_empty() && !k.contains('/'))) {
+            for a in &argv {
+                let (k, v) = a.split_once('=').unwrap();
+                if !set_var(k, v) {
+                    return (vec![format!("sh: nama variabel tidak sah: {}", k)], effect, false);
+                }
+            }
+            stdin = Some(Vec::new());
+            continue;
+        }
+        let (mut lines, e, good) = exec(&argv, stdin.as_deref());
+        if e != Effect::None {
+            effect = e;
+        }
+        ok = good;
+        if let Some((file, append)) = out_file {
+            if let Err(err) = crate::coreutils::write_lines(&file, &lines, append) {
+                return (vec![format!("sh: {}", err)], effect, false);
+            }
+            lines = Vec::new();
+        }
+        if k == last {
+            return (lines, effect, ok);
+        }
+        stdin = Some(lines);
+    }
+    (Vec::new(), effect, ok)
+}
+
+/// Run one command with its arguments (and the pipe's input, if any).
+fn exec(argv: &[String], stdin: Option<&[String]>) -> (Vec<String>, Effect, bool) {
+    let Some(name) = argv.first() else { return (Vec::new(), Effect::None, true) };
+    if crate::coreutils::handles(name) {
+        let (lines, ok) = crate::coreutils::run(argv, stdin);
+        return (lines, Effect::None, ok);
+    }
+    let (lines, effect) = run_legacy(&argv.join(" "));
+    // the shell's own commands report errors as "<command>: ..."
+    let failed = lines.first().is_some_and(|l| l.contains("command not found") || l.starts_with(&format!("{}: ", name)) && !l.contains(": ok"));
+    (lines, effect, !failed)
+}
 
 /// Side effect a command asks the terminal/desktop to perform.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,8 +608,8 @@ pub fn prompt() -> String {
     format!("buitenzorg:{}$ ", cwd())
 }
 
-/// Run one command line; returns (output lines, effect).
-pub fn run(line: &str) -> (Vec<String>, Effect) {
+/// Run one of the shell's own commands (a plain, already expanded line).
+fn run_legacy(line: &str) -> (Vec<String>, Effect) {
     let line = line.trim();
     if line.is_empty() {
         return (Vec::new(), Effect::None);
@@ -199,6 +620,17 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
 
     match cmd {
         "help" => (help(), Effect::None),
+        "ls" | "dir" if args.len() > 1 => {
+            let mut out = Vec::new();
+            for a in &args {
+                let lines = list_dir(Some(a));
+                if !(lines.len() == 1 && lines[0] == *a) {
+                    out.push(format!("{}:", a));
+                }
+                out.extend(lines);
+            }
+            (out, Effect::None)
+        }
         "ls" | "dir" => (list_dir(args.first().copied()), Effect::None),
         "cat" | "type" => (cat(args.first().copied()), Effect::None),
         "echo" => (echo(&args), Effect::None),
@@ -467,16 +899,27 @@ fn help() -> Vec<String> {
         .collect()
 }
 
-/// Resolve `arg` (optional) against the cwd into an absolute VFS path.
-fn resolve(arg: Option<&str>) -> String {
-    match arg {
+/// Resolve `arg` (optional) against the cwd into an absolute VFS path, with
+/// `.` and `..` folded (never above the mount: `/disk/..` stays `/disk`).
+pub fn resolve(arg: Option<&str>) -> String {
+    let raw = match arg {
         Some(p) if p.starts_with('/') => p.to_string(),
-        Some(p) => {
-            let base = cwd();
-            format!("{}/{}", base.trim_end_matches('/'), p)
-        }
+        Some(p) => format!("{}/{}", cwd().trim_end_matches('/'), p),
         None => cwd(),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for c in raw.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                if parts.len() > 1 {
+                    parts.pop();
+                }
+            }
+            x => parts.push(x),
+        }
     }
+    format!("/{}", parts.join("/"))
 }
 
 /// `echo text`, `echo text > FILE` (create/overwrite) and `echo text >> FILE`
@@ -525,6 +968,14 @@ fn df() -> Vec<String> {
 
 fn list_dir(arg: Option<&str>) -> Vec<String> {
     let path = resolve(arg);
+    // a file operand (e.g. from a glob: `ls /disk/H*.ELF`) lists itself
+    if let Some(a) = arg {
+        if let Ok(e) = vfs::stat(&path) {
+            if !e.is_dir {
+                return vec![String::from(a)];
+            }
+        }
+    }
     match vfs::list(&path) {
         Ok(names) if names.is_empty() => vec![format!("{}: (kosong)", path)],
         Ok(names) => names,

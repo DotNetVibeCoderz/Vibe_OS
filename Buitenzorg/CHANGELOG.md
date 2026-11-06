@@ -13,7 +13,30 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **GC statics for native C# apps:** the `bzstart.rs` shim now runs NativeAOT's
+  static initialization (walks the `__ReadyToRunHeader` GC-static region,
+  allocates each static base object and copies its pre-initialized data) before
+  `Main`. `static` reference fields, method-group → delegate conversions and
+  lambdas (with captures) now work under zerolib — verified by `statics.cs`
+  (`MILESTONE: STATICS OK`, x86-64 and ARM64). A `static readonly string` set
+  from a literal still crashes the bflat compiler; use `const`.
+- **Shell (Developer Workstation phase 1):** pipes `|`, redirection `>` `>>`
+  `<`, `;` `&&` `||`, variables (`NAME=value`, `$NAME`, `${NAME}`, `$?`,
+  `export`/`env`/`unset`), single/double quotes and `\` escapes, `*`/`?` globs,
+  `.`/`..` in paths, and `ls` with several operands.
+- **Coreutils** (`coreutils.rs`): `cat grep head tail wc sort uniq tee cp mv
+  mkdir rmdir touch find hexdump/xxd seq basename dirname true false env set
+  export unset history`.
+- **Terminal line editing:** caret, Left/Right, Home/End, Delete, Ctrl+A/E/U/K/W/
+  L/C, history on Up/Down saved to `/disk/HISTORY.TXT`, Tab completion of
+  commands and file names. Scrolling the terminal is PageUp/PageDown and the
+  mouse wheel (Home/End now edit the line).
+
+### Fixed
+- The backslash key (`\` and `|`) produced no character on any keyboard:
+  pc-keyboard 0.7 decodes set-1 0x2B as `Oem7`, which its `Us104Key` layout
+  does not map; the kernel now feeds it as `Oem5`.
 
 ## [1.0] — "Buitenzorg" — 2026-11-05
 

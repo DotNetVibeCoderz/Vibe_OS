@@ -329,6 +329,9 @@ pub struct Window {
     /// Pointer events for the owning program (WIN_EVENT), packed as
     /// `bz_abi::pointer_event` describes; consecutive moves are coalesced.
     pub events: alloc::collections::VecDeque<u64>,
+    /// A text caret in a text window (row, column of `lines`): the terminal's
+    /// editing position.
+    pub caret: Option<(u16, u16)>,
 }
 
 /// Pack a pointer event (see `bz_abi::pointer_event`).
@@ -774,6 +777,7 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
         saved: (x, y, w, h),
         owner: crate::aspace::current_id(),
         events: alloc::collections::VecDeque::new(),
+        caret: None,
     });
     id
 }
@@ -835,6 +839,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             saved: (board_x, y, ww, h),
             owner: crate::aspace::current_id(),
             events: alloc::collections::VecDeque::new(),
+            caret: None,
         });
         return id;
     }
@@ -866,6 +871,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         saved: (x, y, w, h),
         owner: crate::aspace::current_id(),
         events: alloc::collections::VecDeque::new(),
+        caret: None,
     });
     id
 }
@@ -1038,6 +1044,15 @@ pub fn present_now() {
             if !PRESENT_AGAIN.load(Ordering::Acquire) {
                 break;
             }
+        }
+    }
+}
+
+/// Place (or with None hide) a text window's caret.
+pub fn set_window_caret(id: u32, caret: Option<(u16, u16)>) {
+    if let Some(wm) = WM.lock().as_mut() {
+        if let Some(w) = wm.windows.iter_mut().find(|w| w.id == id) {
+            w.caret = caret;
         }
     }
 }
@@ -1635,6 +1650,14 @@ impl Wm {
                     canvas.draw_text(win.x + 8, ty, line, th.text, win.x + win.w - 6);
                     ty += gfx::glyph_height() as i32 + 3;
                 }
+                if let Some((row, col)) = win.caret {
+                    let gh = gfx::glyph_height() as i32;
+                    let cx = win.x + 8 + col as i32 * gfx::glyph_width() as i32;
+                    let cy = win.y + TITLE_H + 8 + row as i32 * (gh + 3);
+                    if cy + gh <= body_bottom && cx + 2 < win.x + win.w - 6 {
+                        canvas.fill_rect(cx, cy, 2, gh, th.text);
+                    }
+                }
             }
             for i in 0..3 {
                 let gx = win.x + win.w - 4 - i * 4;
@@ -1689,6 +1712,7 @@ impl Wm {
                 for line in &w.lines {
                     k = gfx::mix_bytes(k, line.as_bytes());
                 }
+                k = gfx::mix(k, w.caret.map_or(u64::MAX, |(r, c)| (r as u64) << 16 | c as u64));
                 if let Some((id, b)) = self.hover {
                     if id == w.id {
                         k = gfx::mix(k, 1 + b as u64);
@@ -1737,6 +1761,7 @@ impl Wm {
             for line in &w.lines {
                 k = gfx::mix_bytes(k, line.as_bytes());
             }
+            k = gfx::mix(k, w.caret.map_or(u64::MAX, |(r, c)| (r as u64) << 16 | c as u64));
         }
         Some(gfx::mix(k, self.capture.map_or(u64::MAX, |c| c as u64)))
     }

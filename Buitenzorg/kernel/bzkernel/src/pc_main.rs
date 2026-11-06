@@ -53,6 +53,7 @@ mod screensaver;
 mod script;
 mod service;
 mod shell;
+mod coreutils;
 mod syscall;
 mod task;
 mod terminal;
@@ -546,6 +547,13 @@ fn matang_demo() {
         Err(e) => println!("[kernel] heap app not run: {}", e),
     }
     println!("[kernel] MILESTONE: HEAP PAL OK (growable mmap-backed heap; new/array/generics)");
+
+    // Static reference fields in native C#: bzstart.rs initializes the GC
+    // statics (the runtime's InitializeStatics, missing from zerolib).
+    match app::run_named("statics") {
+        Ok(code) => println!("[kernel] statics app exited (code {})", code),
+        Err(e) => println!("[kernel] statics app not run: {}", e),
+    }
 
     // Increment 5: the GC memory model — lazy reserve (mmap PROT_NONE) + commit
     // on demand (mprotect), so the .NET GC's up-front heap reservation works.

@@ -605,7 +605,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [ ] Global search
 - [x] **Default terminal emulator** (tab, split, truecolor, GPU-accel) — *terminal window + scrollback + line editing jalan; tab/split/GPU-accel belum*
 - [x] Shell + command populer (Unix + alias Windows) — *ls/dir, cat/type, cd, pwd, echo, clear/cls, ver/uname, mounts, theme, ws, bz*
-- [ ] Pipes/redirection/env/history/tab-completion/alias
+- [~] Pipes/redirection/env/history/tab-completion/alias — *pipes, `> >> <`, `; && ||`, variabel + `$?`, glob, history persisten, tab-completion ✓ (2026-11-06); alias + skrip belum*
 - [ ] `bz` CLI (app/paket/tema/model/VM) — *`bz version/theme/ws` di shell kernel; CLI penuh (host `sdk/bz`) terpisah*
 - [ ] Kompatibilitas script `.sh` (POSIX-leaning)
 

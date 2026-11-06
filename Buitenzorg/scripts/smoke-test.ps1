@@ -177,7 +177,7 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: PERSONALIZE OK",
                      "MILESTONE: MMAP OK", "MILESTONE: MATANG OK",
                      "MILESTONE: THREAD OK", "MILESTONE: SYNC OK",
-                     "MILESTONE: HEAP OK", "MILESTONE: GCMEM OK",
+                     "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: GCMEM OK",
                      "MILESTONE: BCL OK", "MILESTONE: BCL2 OK",
                      "MILESTONE: DRAW OK",
                      "MILESTONE: UI OK", "MILESTONE: CALC OK",
@@ -412,7 +412,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
         "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: FOLDERS OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
     if (Select-String -Path $log -Pattern "program 'hello'" -Quiet) {
         Assert-Markers -Log $log -Markers @("Hello from C#!", "MILESTONE: ARM64 CSHARP OK", "MILESTONE: MATANG OK",
-            "MILESTONE: HEAP OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
+            "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
             "MILESTONE: BCL OK", "MILESTONE: PROCCTL OK", "MILESTONE: CALC OK", "MILESTONE: GAME OK", "MILESTONE: UI OK",
             "MILESTONE: DRAW OK", "MILESTONE: ARM64 DESKTOP FRAME OK", "MILESTONE: ARM64 SMP SCHED OK")
     }
