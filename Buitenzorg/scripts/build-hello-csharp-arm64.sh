@@ -46,6 +46,7 @@ build_prog() {
 build_prog hello hello.cs
 build_prog matang matang.cs
 build_prog heap heap.cs
+build_prog statics statics.cs
 build_prog gcmem gcmem.cs
 build_prog mproc mproc.cs
 build_prog thread thread.cs

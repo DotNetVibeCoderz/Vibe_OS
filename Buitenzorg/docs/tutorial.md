@@ -126,8 +126,8 @@ class Program {
 ➡️ The full guide for both paths + an example catalog: **[Your First App](first-app.md)**.
 
 > ⚠️ **The zerolib rules (must read).** Freestanding apps: the heap **works**
-> (`new`, arrays, generics), but there are **no** static reference fields, **no**
-> method-group→delegate conversions (use function pointers), **no** storing a
+> (`new`, arrays, generics), and so do `static` reference fields, delegates and
+> lambdas; but there is **no** storing a
 > reference into an `object[]` element (use a linked list), and **no**
 > `new string()` / `ToString()` / concatenation (use `char[]` +
 > `Graphics.DrawChars`). Details: [first-app.md](first-app.md).

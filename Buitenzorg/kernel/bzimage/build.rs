@@ -514,6 +514,7 @@ fn main() {
         ("thread.elf", "thread.elf"),
         ("sync.elf", "sync.elf"),
         ("heap.elf", "heap.elf"),
+        ("statics.elf", "statics.elf"),
         ("gcmem.elf", "gcmem.elf"),
         ("bcl.elf", "bcl.elf"),
         ("bcl2.elf", "bcl2.elf"),

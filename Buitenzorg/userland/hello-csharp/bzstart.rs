@@ -124,6 +124,10 @@ unsafe fn syscall2(nr: u64, a0: u64, a1: u64) -> u64 {
 // NativeAOT managed entry emitted by bflat: `int __managed__Main(int, char**)`.
 extern "C" {
     fn __managed__Main(argc: i32, argv: *const *const u8) -> i32;
+    /// The module's ReadyToRun header (ILC emits one per compilation).
+    static __ReadyToRunHeader: u8;
+    /// zerolib's object allocator (MethodTable -> zeroed object).
+    fn RhpNewFast(mt: *const u8) -> *mut u8;
 }
 
 // Freestanding C runtime intrinsics the compiler emits for struct/buffer
@@ -832,14 +836,66 @@ pub unsafe extern "C" fn bz_thread_exit(code: u64) -> ! {
     loop {}
 }
 
-/// ELF entry point. zerolib's Main needs no OS-level init, so we call the
-/// managed entry directly with a minimal argv, then exit with its return code.
+/// A 32-bit relative pointer (what ILC emits on x64 and arm64).
+unsafe fn rel32(p: *const u8) -> *const u8 {
+    p.offset(core::ptr::read_unaligned(p as *const i32) as isize)
+}
+
+/// GC statics: the part of the .NET runtime's startup zerolib leaves out
+/// (`StartupCodeHelpers.InitializeStatics`). Every type with static reference
+/// fields has a block in the module's GC static region (ReadyToRun section
+/// 201): a relative pointer to the MethodTable describing those fields,
+/// tagged Uninitialized (1) and HasPreInitializedData (2), followed by a
+/// relative pointer to that data. The runtime allocates one object per block,
+/// copies the pre-initialized field values into it, and overwrites the block
+/// with the object's address -- which is where compiled code reads the
+/// fields from. Without this, every `static` reference field (and the cached
+/// delegate of a method-group conversion) read garbage.
+#[no_mangle]
+pub unsafe extern "C" fn bz_init_statics() {
+    let h = core::ptr::addr_of!(__ReadyToRunHeader);
+    if core::ptr::read_unaligned(h as *const u32) != 0x0052_5452 {
+        return; // not "RTR"
+    }
+    let count = core::ptr::read_unaligned(h.add(12) as *const u16) as usize;
+    let entry = *h.add(14) as usize;
+    for i in 0..count {
+        let s = h.add(16 + i * entry);
+        if core::ptr::read_unaligned(s as *const u32) != 201 {
+            continue; // not the GC static region
+        }
+        let mut b = core::ptr::read_unaligned(s.add(8) as *const usize) as *const u8;
+        let end = core::ptr::read_unaligned(s.add(16) as *const usize) as *const u8;
+        while b < end {
+            let block = rel32(b) as *mut u8;
+            let tagged = rel32(block) as usize;
+            if tagged & 1 != 0 {
+                let mt = (tagged & !3) as *const u8;
+                let obj = RhpNewFast(mt);
+                if !obj.is_null() {
+                    if tagged & 2 != 0 {
+                        // field data = BaseSize minus the object header and MethodTable pointer
+                        let base = core::ptr::read_unaligned(mt.add(4) as *const u32) as usize;
+                        let data = rel32(block.add(4));
+                        core::ptr::copy_nonoverlapping(data, obj.add(8), base.saturating_sub(16));
+                    }
+                    core::ptr::write_unaligned(block as *mut usize, obj as usize);
+                }
+            }
+            b = b.add(4);
+        }
+    }
+}
+
+/// ELF entry point: initialize the GC statics (above), then call the managed
+/// entry with a minimal argv and exit with its return code.
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
         "mov x29, #0",
+        "bl {init}",
         "adrp x1, PROG_NAME",
         "add x1, x1, :lo12:PROG_NAME", // argv[0]
         "sub sp, sp, #16",
@@ -852,6 +908,7 @@ pub unsafe extern "C" fn _start() -> ! {
         "svc #0",
         "2: b 2b",
         main = sym __managed__Main,
+        init = sym bz_init_statics,
         exit = const SYS_EXIT,
     )
 }
@@ -862,6 +919,8 @@ pub unsafe extern "C" fn _start() -> ! {
 pub unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
         "xor ebp, ebp",
+        "and rsp, -16",
+        "call {init}",                  // GC statics before any managed code
         "lea rdi, [rip + PROG_NAME]",  // argv[0]
         "push 0",                       // argv[1] = null
         "push rdi",                     // argv[0]
@@ -876,6 +935,7 @@ pub unsafe extern "C" fn _start() -> ! {
         "2: hlt",
         "jmp 2b",
         main = sym __managed__Main,
+        init = sym bz_init_statics,
         exit = const SYS_EXIT,
     )
 }

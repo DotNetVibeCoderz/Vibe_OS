@@ -209,6 +209,7 @@ fn app_file(name: &str) -> Option<&'static str> {
         "thread" => Some("THREAD.ELF"),
         "sync" => Some("SYNC.ELF"),
         "heap" => Some("HEAP.ELF"),
+        "statics" => Some("STATICS.ELF"),
         "gcmem" => Some("GCMEM.ELF"),
         "bcl" => Some("BCL.ELF"),
         "bcl2" => Some("BCL2.ELF"),

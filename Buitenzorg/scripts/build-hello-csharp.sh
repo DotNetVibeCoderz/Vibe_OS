@@ -38,6 +38,7 @@ build_prog matang matang.cs
 build_prog thread thread.cs
 build_prog sync sync.cs
 build_prog heap heap.cs
+build_prog statics statics.cs
 build_prog gcmem gcmem.cs
 build_prog bcl bcl.cs bzbcl.cs
 build_prog bcl2 bcl2.cs bzbcl.cs bzbcl2.cs

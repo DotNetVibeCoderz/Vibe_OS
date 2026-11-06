@@ -126,8 +126,8 @@ class Program {
 ➡️ Panduan lengkap kedua jalur + katalog contoh: **[App Pertama](first-app.id.md)**.
 
 > ⚠️ **Aturan zerolib (wajib dibaca).** App freestanding: heap **berfungsi**
-> (`new`, array, generic), tapi **tanpa** static reference field, **tanpa**
-> konversi method-group→delegate (pakai function pointer), **tanpa** menyimpan
+> (`new`, array, generic), begitu juga field `static` referensi, delegate dan
+> lambda; tapi **tanpa** menyimpan
 > referensi ke elemen `object[]` (pakai linked list), dan **tanpa**
 > `new string()` / `ToString()` / concat (pakai `char[]` + `Graphics.DrawChars`).
 > Detail: [first-app.id.md](first-app.id.md).

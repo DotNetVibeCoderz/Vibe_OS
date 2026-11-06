@@ -43,8 +43,8 @@ test exists on both sides (`cargo test -p bz-abi`, `AbiContractTests.cs`).
 ## Constraint: no GC (see CLAUDE.md)
 
 Freestanding apps (zerolib, no GC). **As of v0.15 the heap works** (`new`,
-arrays, generics), but the zerolib rules still apply — no static reference
-fields, no method-group→delegate, no `object[]` element stores, no
+arrays, generics, `static` reference fields, delegates, lambdas), but the
+zerolib rules still apply — no `object[]` element stores, no
 `ToString()`/concat. See [Your First App](first-app.md) for the full rules.
 
 ## v0.9 "Serbuk": Drawing, Task Manager, 4 app variants

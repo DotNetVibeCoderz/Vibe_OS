@@ -192,19 +192,21 @@ Lihat kode nyata di `userland/hello-csharp/` (`calc.cs`, `game2048.cs`,
 
 App freestanding memakai zerolib (belum ada GC penuh). Yang **tidak** berfungsi:
 
-- **Static field bertipe referensi** membaca sampah (GC statics belum di-init) →
-  simpan state di **field instance / lokal**, bukan `static` ref.
+- **`static readonly string` yang diisi literal** membuat compiler crash (ILC
+  tak bisa menyusun string versi zerolib) → pakai `const string` atau lokal.
 - **`new string(...)` / `ToString()` / concat string dinamis** → bangun teks ke
   `char[]` / `stackalloc` lalu `Graphics.DrawChars`.
 - **`string == string`** butuh `op_Equality` (tak ada) → banding by-reference
   atau char demi char.
 - **Menyimpan referensi ke elemen `object[]`** (`stelem.ref`) fault → pakai
   **linked list** (store ke field objek), bukan array-of-object.
-- **Konversi method-group → delegate** (di-cache di GC static) fault → pakai
-  **function pointer** `delegate*<...>` + `&Method`.
+- **Belum ada GC yang mereklamasi memori dan belum ada exception** (`throw`
+  menghentikan program).
 
 Yang **berfungsi**: `new`, array nilai (`int[]`, `short[]`), objek heap, generic,
-virtual dispatch, `stackalloc`. Detail lengkap di `CLAUDE.md`.
+virtual dispatch, `stackalloc`, dan — sejak shim menginisialisasi GC statics
+(2026-11-06) — **field `static` referensi, konversi method-group → delegate, dan
+lambda** (dengan atau tanpa variabel yang ditangkap). Detail lengkap di `CLAUDE.md`.
 
 ---
 

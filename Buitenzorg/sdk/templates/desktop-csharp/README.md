@@ -75,11 +75,10 @@ it. To iterate on this exact app, run `build.ps1` from the project folder.
 Since v0.15 "Matang", **`new`, arrays, heap objects, and generics work** (a
 growing bump heap over `mmap`). Still unsupported:
 
-- **No static reference fields** — GC statics are uninitialized, so
-  `static readonly char[] X = ...` reads garbage. Keep state in **locals** or
-  **instance fields** (this app keeps the count on `CounterView.Value`).
-- **No method-group → delegate** conversions (the delegate caches in a GC
-  static). Use **function pointers**: `delegate*<int,bool>` + `&Method`.
+- **`static` reference fields, delegates and lambdas work** (since
+  2026-11-06 the startup shim initializes the GC statics), but a
+  `static readonly string` set from a literal crashes the compiler — use a
+  `const string`.
 - **No storing a reference into an `object[]` element** (`stelem.ref` faults).
   Use a **linked list** or object fields (Buitenzorg.UI children are a list).
 - **No `new string()` / `ToString()` / concat / `string ==`.** Build text in a

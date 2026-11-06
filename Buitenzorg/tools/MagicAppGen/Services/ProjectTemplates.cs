@@ -95,9 +95,8 @@ public static class ProjectTemplates
     on the device first) and **Run** starts it with `run __NAME83__`.
 
     Native C# is compiled with bflat `--stdlib:zero` plus the `bzstart.rs` shim,
-    so it runs in ring 3 with no GC. Keep the zerolib rules in mind: no static
-    reference fields, no method-group→delegate conversions, no storing
-    references into `object[]` elements, and no `new string()`/`ToString()`/
+    so it runs in ring 3 with no reclaiming GC. Keep the zerolib rules in mind:
+    no exceptions, no storing references into `object[]` elements, and no `new string()`/`ToString()`/
     string concatenation. Need any of that? Use a **managed** template instead.
     """;
 

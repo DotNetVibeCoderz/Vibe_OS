@@ -88,8 +88,8 @@ public sealed class BuitenzorgPlugin
                 "    UiText.Int(int, char[])->len and UiText.Int2(int, char[])->len format numbers into a char[] (no strings)\n" +
                 "  new UIHost(string title, int w, int h); host.Root = e; host.Layout(); host.Render(Color clear);\n" +
                 "  host.Present(); host.Mouse(int x, int y, bool down) routes hover/click/drag.\n" +
-                "  BUTTON CLICKS: Button has NO event/callback (no OnClick, no delegate - a delegate would be a\n" +
-                "    GC static and fault). It exposes `int Clicks` (bumped on each click) and `int Tag`. To react:\n" +
+                "  BUTTON CLICKS: Button has NO event/callback (no OnClick property). It exposes `int Clicks`\n" +
+                "    (bumped on each click) and `int Tag`. To react:\n" +
                 "      int before = btn.Clicks;\n" +
                 "      host.Mouse(btn.X + btn.W/2, btn.Y + btn.H/2, true); host.Mouse(..., false);\n" +
                 "      if (btn.Clicks > before) { /* do the action; dispatch by btn.Tag if you have many */ }\n" +
@@ -99,8 +99,8 @@ public sealed class BuitenzorgPlugin
                 "    g.DrawChars(font, buf, len, color, x, y) with a char[] you fill by hand - see CalcDisplay in\n" +
                 "    calc.cs / Board2048 in game2048.cs. Do NOT try to change a TextBlock to show live numbers.\n" +
                 "  NOT AVAILABLE under zerolib: Array.Reverse, Span/AsSpan/ToArray, LINQ on arrays, string concat.\n" +
-                "    Reverse a char[] with a manual loop. Keep counters/state in LOCALS or instance fields, never\n" +
-                "    a `static` reference field (static char[]/string/array = GC static = fault).",
+                "    Reverse a char[] with a manual loop. `static` reference fields (static char[]/array/object)\n" +
+                "    work, but a `static readonly string` set from a literal crashes the compiler - use const.",
             "audio" =>
                 "namespace Buitenzorg.Audio (bzaudio.cs): AudioInfo Mixer.GetInfo() (.Present .SampleRate .Channels " +
                 ".Bits .Volume); Mixer.SetVolume(int pct 0..100); Mixer.GetVolume(); Mixer.Mute(); " +
@@ -151,9 +151,9 @@ public sealed class BuitenzorgPlugin
                 "bz_fs_list/bz_fs_read, bz_is_interactive, bz_mmap/mprotect, bz_thread_*, bz_audio_*, " +
                 "bz_pkg_list/set. Call via [DllImport(\"*\")] static extern.",
             _ =>
-                "zerolib gotchas: (1) NO static reference fields (GC statics read garbage) - keep state in " +
-                "locals/instance fields. (2) NO method-group->delegate (caches in a GC static) - use function " +
-                "pointers delegate*<...> + &Method. (3) NO storing a reference into an object[] element " +
+                "zerolib gotchas: (1) `static` reference fields, delegates and lambdas WORK (the shim initializes " +
+                "the GC statics), but `static readonly string X = \"...\"` crashes the compiler - use const string. " +
+                "(2) NO reclaiming GC and NO exceptions (throw ends the program). (3) NO storing a reference into an object[] element " +
                 "(stelem.ref faults) - use linked lists / object fields. (4) NO new string()/ToString()/concat/" +
                 "string == - build char[] and use Graphics.DrawChars, compare by reference or char loop. " +
                 "(5) Entry: class with static void Main(). App ELF name must be <=8.3, uppercase.",

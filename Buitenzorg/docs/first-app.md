@@ -195,19 +195,20 @@ See the real code in `userland/hello-csharp/` (`calc.cs`, `game2048.cs`,
 
 Freestanding apps use zerolib (no full GC yet). What does **not** work:
 
-- **Static reference-typed fields** read garbage (GC statics are uninitialized) →
-  keep state in **instance fields / locals**, not `static` refs.
+- **`static readonly string` initialized from a literal** crashes the compiler
+  (ILC cannot pre-build zerolib's string) → use a `const string` or a local.
 - **`new string(...)` / `ToString()` / dynamic string concat** → build text into
   a `char[]` / `stackalloc` and use `Graphics.DrawChars`.
 - **`string == string`** needs `op_Equality` (absent) → compare by reference or
   char by char.
 - **Storing a reference into an `object[]` element** (`stelem.ref`) faults → use
   a **linked list** (store into an object field), not an array of objects.
-- **method-group → delegate** conversions (cached in a GC static) fault → use a
-  **function pointer** `delegate*<...>` + `&Method`.
+- **No reclaiming GC and no exceptions** (`throw` ends the program).
 
 What **does** work: `new`, value arrays (`int[]`, `short[]`), heap objects,
-generics, virtual dispatch, `stackalloc`. Full details in `CLAUDE.md`.
+generics, virtual dispatch, `stackalloc`, and — since the shim initializes the
+GC statics (2026-11-06) — **`static` reference fields, method-group → delegate
+conversions and lambdas** (with or without captured variables). Full details in `CLAUDE.md`.
 
 ---
 
