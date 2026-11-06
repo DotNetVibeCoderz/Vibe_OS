@@ -605,7 +605,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [ ] Global search
 - [x] **Default terminal emulator** (tab, split, truecolor, GPU-accel) — *terminal window + scrollback + line editing jalan; tab/split/GPU-accel belum*
 - [x] Shell + command populer (Unix + alias Windows) — *ls/dir, cat/type, cd, pwd, echo, clear/cls, ver/uname, mounts, theme, ws, bz*
-- [~] Pipes/redirection/env/history/tab-completion/alias — *pipes, `> >> <`, `; && ||`, variabel + `$?`, glob, history persisten, tab-completion ✓ (2026-11-06); alias + skrip belum*
+- [x] Pipes/redirection/env/history/tab-completion/alias — *pipes, `> >> <`, `; && ||`, variabel + `$?`, glob, history persisten, tab-completion, alias, skrip `.SH` (if/for/while) ✓ (2026-11-06); `$(...)`/fungsi/job control belum*
 - [ ] `bz` CLI (app/paket/tema/model/VM) — *`bz version/theme/ws` di shell kernel; CLI penuh (host `sdk/bz`) terpisah*
 - [ ] Kompatibilitas script `.sh` (POSIX-leaning)
 
@@ -657,7 +657,7 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] Theme engine (design token warna + style: border/title/shadow/gradient, live switch)
 - [ ] Tema kustom pihak ketiga (`.theme`) + theme SDK · [ ] hot-reload dari file
 - [ ] Icon pack system
-- [x] App registry + package manager (`bz install/remove/list`; `run` di-gate) — *sandbox/dependency/update belum*
+- [x] App registry + package manager (`bz install/remove/list`; `run` di-gate) — *paket berkas `.bzpkg` + `bz pack` + state persisten ✓ (2026-11-06); sandbox/dependency/update/tanda tangan belum*
 - [x] Tema: **Neo Brutalism**
 - [x] Tema: **Clean Design**
 - [x] Tema: **Material Design**

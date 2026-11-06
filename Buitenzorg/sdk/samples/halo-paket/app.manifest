@@ -1,0 +1,9 @@
+{
+ "id": "local.halo-paket",
+ "name": "Halo Paket",
+ "type": "console",
+ "language": "csharp",
+ "version": "1.2.0",
+ "permissions": [],
+ "theme": "system"
+}

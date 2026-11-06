@@ -23,7 +23,7 @@ static STATE: Mutex<ShellState> = Mutex::new(ShellState { cwd: String::new(), va
 /// The shell variables (set ones, then the built-in PWD/HOME/USER/SHELL).
 pub fn vars() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = STATE.lock().vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    for k in ["PWD", "HOME", "USER", "SHELL"] {
+    for k in ["PWD", "HOME", "USER", "SHELL", "PATH"] {
         if !v.iter().any(|(n, _)| n == k) {
             v.push((String::from(k), var(k).unwrap_or_default()));
         }
@@ -41,8 +41,37 @@ fn var(name: &str) -> Option<String> {
         "HOME" => Some(String::from("/disk")),
         "USER" => Some(String::from("administrator")),
         "SHELL" => Some(String::from("bzsh")),
+        "PATH" => Some(String::from("/disk:/ram")),
         _ => None,
     }
+}
+
+/// A variable's value (set, else built-in), for other modules.
+pub fn var_value(name: &str) -> Option<String> {
+    var(name)
+}
+
+/// Whether the last command succeeded (`$?` = 0).
+pub fn last_ok() -> bool {
+    STATE.lock().ok
+}
+
+/// Whether `name` is one of the shell's own (one-line) commands.
+pub fn is_legacy_command(name: &str) -> bool {
+    LEGACY_COMMANDS.contains(&name)
+}
+
+/// Expand a word list (variables, quotes, globs) the way a command line's
+/// arguments are expanded; operators are an error. Used by `for X in ...`.
+pub fn expand_words(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for t in tokenize(text)? {
+        match t {
+            Tok::Word(w) => out.push(w),
+            Tok::Op(op) => return Err(format!("{} tidak boleh di sini", op)),
+        }
+    }
+    Ok(out)
 }
 
 /// Set a variable; false when `name` is not a valid name.
@@ -62,6 +91,7 @@ pub fn unset_var(name: &str) {
 pub fn command_names() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = LEGACY_COMMANDS.to_vec();
     v.extend_from_slice(crate::coreutils::NAMES);
+    v.extend(crate::bzsh::NAMES.iter().filter(|n| **n != "."));
     v.sort();
     v.dedup();
     v
@@ -97,6 +127,20 @@ fn expand_var(chars: &[char], i: usize, out: &mut String) -> usize {
     let mut j = i + 1;
     if j < chars.len() && chars[j] == '?' {
         out.push(if STATE.lock().ok { '0' } else { '1' });
+        return j + 1;
+    }
+    // script parameters: $0..$9, $#, $@
+    if j < chars.len() && chars[j].is_ascii_digit() {
+        let n = chars[j] as usize - '0' as usize;
+        out.push_str(&crate::bzsh::positional(n).unwrap_or_default());
+        return j + 1;
+    }
+    if j < chars.len() && chars[j] == '#' {
+        out.push_str(&crate::bzsh::arg_count().to_string());
+        return j + 1;
+    }
+    if j < chars.len() && chars[j] == '@' {
+        out.push_str(&crate::bzsh::all_args());
         return j + 1;
     }
     let braced = j < chars.len() && chars[j] == '{';
@@ -176,6 +220,18 @@ fn tokenize(line: &str) -> Result<Vec<Tok>, String> {
                 has = true;
                 i += 1;
                 while i < chars.len() && chars[i] != '"' {
+                    // "$@": one word per script argument
+                    if chars[i] == '$' && chars.get(i + 1) == Some(&'@') {
+                        for (k, a) in crate::bzsh::arg_list().iter().enumerate() {
+                            if k > 0 {
+                                flush(&mut toks, &mut cur, &mut has, &mut glob);
+                                has = true;
+                            }
+                            cur.push_str(a);
+                        }
+                        i += 2;
+                        continue;
+                    }
                     if chars[i] == '$' {
                         i = expand_var(&chars, i, &mut cur);
                         continue;
@@ -196,6 +252,18 @@ fn tokenize(line: &str) -> Result<Vec<Tok>, String> {
                     has = true;
                     i += 1;
                 }
+            }
+            '$' if next == Some('@') => {
+                // $@ unquoted: the script's arguments as separate words
+                for (k, a) in crate::bzsh::arg_list().iter().enumerate() {
+                    if k > 0 {
+                        flush(&mut toks, &mut cur, &mut has, &mut glob);
+                    }
+                    cur.push_str(a);
+                    has = true;
+                }
+                i += 2;
+                continue;
             }
             '$' => {
                 has = true;
@@ -391,6 +459,22 @@ fn run_pipeline(toks: &[Tok]) -> (Vec<String>, Effect, bool) {
             }
             j += 1;
         }
+        // aliases: the first word of a stage (repeatedly, a few times)
+        for _ in 0..8 {
+            let Some(expansion) = argv.first().and_then(|w| crate::bzsh::alias_of(w)) else { break };
+            match expand_words(&expansion) {
+                Ok(mut words) if !words.is_empty() && words[0] != argv[0] => {
+                    words.extend(argv.drain(1..));
+                    argv = words;
+                }
+                Ok(mut words) if !words.is_empty() => {
+                    words.extend(argv.drain(1..));
+                    argv = words;
+                    break;
+                }
+                _ => break,
+            }
+        }
         if argv.is_empty() && stage.is_empty() {
             return (vec![String::from("sh: perintah kosong di pipe")], effect, false);
         }
@@ -430,6 +514,29 @@ fn exec(argv: &[String], stdin: Option<&[String]>) -> (Vec<String>, Effect, bool
     if crate::coreutils::handles(name) {
         let (lines, ok) = crate::coreutils::run(argv, stdin);
         return (lines, Effect::None, ok);
+    }
+    if crate::bzsh::is_builtin(name) {
+        return crate::bzsh::builtin(argv);
+    }
+    if !LEGACY_COMMANDS.contains(&name.as_str()) {
+        // a package whose entry is a script, a script (path to a .SH, or
+        // NAME.SH in $PATH), else a program
+        if let Some(entry) = crate::bzpkg::entry_for(name).filter(|e| e.ends_with(".SH")) {
+            return crate::bzsh::run_file(&format!("/disk/{}", entry), &argv[1..]);
+        }
+        if let Some(script) = crate::bzsh::find_script(name) {
+            return crate::bzsh::run_file(&script, &argv[1..]);
+        }
+        if app::is_app(name) {
+            let mut line = String::from("run");
+            for a in argv {
+                line.push(' ');
+                line.push_str(a);
+            }
+            let (lines, effect) = run_legacy(&line);
+            let failed = lines.first().is_some_and(|l| l.starts_with("run: "));
+            return (lines, effect, !failed);
+        }
     }
     let (lines, effect) = run_legacy(&argv.join(" "));
     // the shell's own commands report errors as "<command>: ..."
@@ -851,6 +958,12 @@ fn about() -> Vec<String> {
 }
 
 fn help() -> Vec<String> {
+    let mut v = help_lines();
+    v.extend(crate::bzsh::describe());
+    v
+}
+
+fn help_lines() -> Vec<String> {
     ["Perintah:",
      "  ls|dir [path]     daftar isi direktori (VFS)",
      "  cat|type <file>   tampilkan isi file",
@@ -1538,6 +1651,7 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
         Some("list") | Some("search") => (pkg_list(args.get(1).copied()), Effect::None),
         Some("install") | Some("add") => (pkg_install(args.get(1).copied()), Effect::None),
         Some("remove") | Some("uninstall") => (pkg_remove(args.get(1).copied()), Effect::None),
+        Some("info") => (pkg_info(args.get(1).copied()), Effect::None),
         Some("run") => run_cmd(args.get(1).copied(), &args[args.len().min(2)..]),
         Some("model") => model_cmd(&args[1..]),
         Some("power") => power_cmd(&args[1..]),
@@ -1562,13 +1676,56 @@ fn pkg_list(filter: Option<&str>) -> Vec<String> {
         let mark = if pkg::is_installed(p.name) { "[x]" } else { "[ ]" };
         out.push(format!("{} {:<10} {:<7} {} ({})", mark, p.name, p.version, p.description, p.kind));
     }
+    let files = crate::bzpkg::installed();
+    if !files.is_empty() {
+        out.push(String::from("terpasang dari berkas .bzpkg:"));
+        for p in files {
+            if filter.is_some_and(|f| !p.name.contains(f) && !p.title.contains(f)) {
+                continue;
+            }
+            out.push(format!("[x] {:<10} {:<7} {} ({} berkas, entry {})", p.name, p.version, p.title, p.files.len(), p.entry));
+        }
+    }
     out
+}
+
+/// A package-file argument: a path, or a name with a .BZP/.BZPKG extension.
+fn is_package_file(arg: &str) -> bool {
+    let u = arg.to_ascii_uppercase();
+    arg.contains('/') || u.ends_with(".BZP") || u.ends_with(".BZPKG")
+}
+
+fn pkg_info(arg: Option<&str>) -> Vec<String> {
+    match arg {
+        Some(a) if is_package_file(a) => match crate::bzpkg::info_file(&resolve(Some(a))) {
+            Ok(lines) => lines,
+            Err(e) => vec![format!("bz info: {}", e)],
+        },
+        Some(a) => match crate::bzpkg::find(a) {
+            Some(p) => vec![
+                format!("{} {} - {}", p.name, p.version, p.title),
+                format!("  entry {}, berkas: {}", p.entry, p.files.join(" ")),
+            ],
+            None => match pkg::find(a) {
+                Some(p) => vec![format!("{} {} - {} (paket bawaan, {})", p.name, p.version, p.description, if pkg::is_installed(a) { "terpasang" } else { "belum terpasang" })],
+                None => vec![format!("bz info: {}: tidak ada", a)],
+            },
+        },
+        None => vec![String::from("pakai: bz info NAMA | bz info ./PAKET.BZP")],
+    }
 }
 
 fn pkg_install(name: Option<&str>) -> Vec<String> {
     let Some(name) = name else {
-        return vec![String::from("bz install: butuh nama paket (lihat 'bz list')")];
+        return vec![String::from("bz install: butuh nama paket (lihat 'bz list') atau berkas ./PAKET.BZP")];
     };
+    if is_package_file(name) {
+        return match crate::bzpkg::install_file(&resolve(Some(name))) {
+            Ok((n, v, Some(old))) => vec![format!("diperbarui: {} {} -> {}", n, old, v)],
+            Ok((n, v, None)) => vec![format!("terpasang: {} v{} (dari berkas; jalankan '{}')", n, v, n)],
+            Err(e) => vec![format!("bz install: {}", e)],
+        };
+    }
     match pkg::install(name) {
         Ok(ver) => vec![format!("terpasang: {} v{}", name, ver)],
         Err(e) => vec![format!("bz install: {}: {}", name, e)],
@@ -1579,6 +1736,12 @@ fn pkg_remove(name: Option<&str>) -> Vec<String> {
     let Some(name) = name else {
         return vec![String::from("bz remove: butuh nama paket")];
     };
+    if crate::bzpkg::find(name).is_some() {
+        return match crate::bzpkg::remove(name) {
+            Ok(n) => vec![format!("dihapus: {} ({} berkas)", name, n)],
+            Err(e) => vec![format!("bz remove: {}", e)],
+        };
+    }
     match pkg::remove(name) {
         Ok(()) => vec![format!("dihapus: {}", name)],
         Err(e) => vec![format!("bz remove: {}: {}", name, e)],

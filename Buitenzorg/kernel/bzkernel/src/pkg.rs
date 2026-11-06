@@ -54,6 +54,17 @@ pub fn list(out: &mut [bz_abi::PkgInfo]) -> usize {
         out[n] = e;
         n += 1;
     }
+    // packages installed from .bzpkg files
+    for p in crate::bzpkg::installed() {
+        if n >= out.len() {
+            break;
+        }
+        let mut e = bz_abi::PkgInfo { name: [0; 24], category: [0; 16], installed: 1 };
+        put(&mut e.name, &p.name);
+        put(&mut e.category, &p.category);
+        out[n] = e;
+        n += 1;
+    }
     n
 }
 
@@ -88,6 +99,7 @@ pub fn install(name: &str) -> Result<&'static str, &'static str> {
         return Err("already installed");
     }
     INSTALLED.lock().push(String::from(pkg.name));
+    crate::bzpkg::note_registry(pkg.name, true);
     Ok(pkg.version)
 }
 
@@ -96,6 +108,8 @@ pub fn remove(name: &str) -> Result<(), &'static str> {
     let mut inst = INSTALLED.lock();
     if let Some(pos) = inst.iter().position(|x| x == name) {
         inst.remove(pos);
+        drop(inst);
+        crate::bzpkg::note_registry(name, false);
         Ok(())
     } else {
         Err("not installed")

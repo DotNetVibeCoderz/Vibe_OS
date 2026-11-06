@@ -515,6 +515,7 @@ fn main() {
         ("sync.elf", "sync.elf"),
         ("heap.elf", "heap.elf"),
         ("statics.elf", "statics.elf"),
+        ("bcl3.elf", "bcl3.elf"),
         ("gcmem.elf", "gcmem.elf"),
         ("bcl.elf", "bcl.elf"),
         ("bcl2.elf", "bcl2.elf"),
@@ -599,6 +600,17 @@ fn main() {
         println!("cargo:rerun-if-changed={}", jpg.display());
         if let Ok(bytes) = std::fs::read(&jpg) {
             add_file(&mut builder, &mut files, "grad.jpg".into(), bytes);
+        }
+    }
+
+    // Developer Workstation: a sample package made on the host with
+    // `bz pack` (sdk/samples/halo-paket), so `bz install /disk/HALOPKT.BZP`
+    // can be tried on every image.
+    {
+        let p = manifest_dir().join("..").join("..").join("sdk").join("samples").join("halo-paket").join("HALOPKT.BZP");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "halopkt.bzp".into(), bytes);
         }
     }
 

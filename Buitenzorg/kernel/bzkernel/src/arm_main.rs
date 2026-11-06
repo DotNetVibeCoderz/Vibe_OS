@@ -55,6 +55,8 @@ mod script;
 mod service;
 mod shell;
 mod coreutils;
+mod bzpkg;
+mod bzsh;
 mod syscall;
 mod task;
 mod terminal;
@@ -189,10 +191,15 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
     storage_self_test();
     clock::load();
+    bzpkg::load();
     if st {
         match vfs::folder_self_test("/disk") {
             Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
             Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+        }
+        match bzpkg::self_test("/disk") {
+            Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
+            Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();
@@ -745,7 +752,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     };
     let frames0 = memory::frames_in_use();
-    for name in ["hello", "matang", "heap", "statics", "gcmem", "bcl", "proctest"] {
+    for name in ["hello", "matang", "heap", "statics", "bcl3", "gcmem", "bcl", "proctest"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ({} bytes, from {}) ---", name, image.len(), if from_disk.get() { "/disk" } else { "a Limine module" });
         match app::spawn_image(name, &image) {

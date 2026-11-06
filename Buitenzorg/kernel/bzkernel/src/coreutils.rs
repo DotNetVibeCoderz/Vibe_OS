@@ -23,6 +23,7 @@ pub type Outcome = (Vec<String>, bool);
 pub const NAMES: &[&str] = &[
     "cat", "grep", "head", "tail", "wc", "sort", "uniq", "tee", "cp", "mv", "mkdir", "rmdir", "touch", "find",
     "hexdump", "xxd", "seq", "basename", "dirname", "true", "false", "env", "set", "export", "unset", "history",
+    "test", "[",
 ];
 
 pub fn handles(name: &str) -> bool {
@@ -377,6 +378,19 @@ pub fn run(argv: &[String], stdin: Option<&[String]>) -> Outcome {
             };
             (vec![String::from(if name == "basename" { base } else { dir })], true)
         }
+        "test" | "[" => {
+            let mut a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            if name == "[" {
+                if a.last() != Some(&"]") {
+                    return fail(String::from("[: ']' hilang"));
+                }
+                a.pop();
+            }
+            match test_expr(&a) {
+                Ok(v) => (Vec::new(), v),
+                Err(e) => fail(format!("{}: {}", name, e)),
+            }
+        }
         "true" => (Vec::new(), true),
         "false" => (Vec::new(), false),
         "env" | "set" | "export" => {
@@ -404,6 +418,51 @@ pub fn run(argv: &[String], stdin: Option<&[String]>) -> Outcome {
             (h.iter().enumerate().map(|(i, l)| format!("{:>4}  {}", i + 1, l)).collect(), true)
         }
         _ => fail(format!("{}: bukan utilitas", name)),
+    }
+}
+
+/// `test` / `[ ]`: `! EXPR`, `-e/-f/-d PATH`, `-z/-n STR`, `A = B`, `A != B`,
+/// `N -eq/-ne/-lt/-le/-gt/-ge M`, `EXPR -a EXPR`, `EXPR -o EXPR`, `STR`.
+fn test_expr(a: &[&str]) -> Result<bool, String> {
+    if let Some(i) = a.iter().position(|w| *w == "-o") {
+        return Ok(test_expr(&a[..i])? || test_expr(&a[i + 1..])?);
+    }
+    if let Some(i) = a.iter().position(|w| *w == "-a") {
+        return Ok(test_expr(&a[..i])? && test_expr(&a[i + 1..])?);
+    }
+    match a {
+        [] => Ok(false),
+        ["!", rest @ ..] => Ok(!test_expr(rest)?),
+        [s] => Ok(!s.is_empty()),
+        [op, x] => {
+            let path = || shell::resolve(Some(x));
+            match *op {
+                "-e" => Ok(vfs::stat(&path()).is_ok()),
+                "-f" => Ok(vfs::stat(&path()).is_ok_and(|e| !e.is_dir)),
+                "-d" => {
+                    let p = path();
+                    Ok(vfs::stat(&p).is_ok_and(|e| e.is_dir) || vfs::list(&p).is_ok())
+                }
+                "-z" => Ok(x.is_empty()),
+                "-n" => Ok(!x.is_empty()),
+                _ => Err(format!("operator tak dikenal: {}", op)),
+            }
+        }
+        [l, op, r] => {
+            let num = |s: &str| s.trim().parse::<i64>().map_err(|_| format!("bukan bilangan: {}", s));
+            match *op {
+                "=" | "==" => Ok(l == r),
+                "!=" => Ok(l != r),
+                "-eq" => Ok(num(l)? == num(r)?),
+                "-ne" => Ok(num(l)? != num(r)?),
+                "-lt" => Ok(num(l)? < num(r)?),
+                "-le" => Ok(num(l)? <= num(r)?),
+                "-gt" => Ok(num(l)? > num(r)?),
+                "-ge" => Ok(num(l)? >= num(r)?),
+                _ => Err(format!("operator tak dikenal: {}", op)),
+            }
+        }
+        _ => Err(String::from("ekspresi terlalu panjang")),
     }
 }
 

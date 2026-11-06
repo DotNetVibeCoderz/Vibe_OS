@@ -153,6 +153,15 @@ pub fn reap_closed_windows() {
     }
 }
 
+/// The 8.3 ELF a name starts: a built-in app, or the entry of a package
+/// installed from a `.bzpkg` file.
+fn app_file(name: &str) -> Option<alloc::string::String> {
+    if let Some(f) = builtin_app_file(name) {
+        return Some(alloc::string::String::from(f));
+    }
+    crate::bzpkg::entry_for(name).filter(|e| e.ends_with(".ELF"))
+}
+
 /// Read a named app's ELF from `/disk`.
 fn read_app(name: &str) -> Result<Vec<u8>, &'static str> {
     let file = app_file(name).ok_or("unknown app")?;
@@ -178,6 +187,10 @@ pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
     // A managed (.NET) app: `x.dll`, or a name with no native ELF whose
     // /disk/<NAME>.DLL exists. It runs in the RustCLR host, CLRHOST.ELF.
     if app_file(target).is_none() {
+        // a package whose entry is a managed app
+        if let Some(entry) = crate::bzpkg::entry_for(target).filter(|e| e.ends_with(".DLL")) {
+            return crate::clr::spawn(&alloc::format!("/disk/{}", entry), args);
+        }
         if let Some(dll) = crate::clr::dll_for(target) {
             return crate::clr::spawn(&dll, args);
         }
@@ -196,7 +209,7 @@ pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
 }
 
 /// Map a short app name to its 8.3 ELF filename.
-fn app_file(name: &str) -> Option<&'static str> {
+fn builtin_app_file(name: &str) -> Option<&'static str> {
     match name {
         "xox" | "tictactoe" => Some("XOX.ELF"),
         "hello" => Some("HELLO.ELF"),
@@ -210,6 +223,7 @@ fn app_file(name: &str) -> Option<&'static str> {
         "sync" => Some("SYNC.ELF"),
         "heap" => Some("HEAP.ELF"),
         "statics" => Some("STATICS.ELF"),
+        "bcl3" => Some("BCL3.ELF"),
         "gcmem" => Some("GCMEM.ELF"),
         "bcl" => Some("BCL.ELF"),
         "bcl2" => Some("BCL2.ELF"),
@@ -243,5 +257,7 @@ fn app_file(name: &str) -> Option<&'static str> {
 
 /// True if `name` is a launchable app.
 pub fn is_app(name: &str) -> bool {
-    app_file(name).is_some() || crate::clr::dll_for(name).is_some()
+    app_file(name).is_some()
+        || crate::clr::dll_for(name).is_some()
+        || crate::bzpkg::entry_for(name).is_some_and(|e| e.ends_with(".DLL"))
 }

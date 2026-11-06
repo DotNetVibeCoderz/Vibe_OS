@@ -5,7 +5,7 @@
 > Roadmap ke depan: [PLAN.md](PLAN.md) · Desain teknis: [requirements.md](requirements.md).
 
 **Legend:** `[x]` selesai · `[~]` sebagian (lihat catatan) · `[ ]` belum.
-**Status keseluruhan (dirapikan 2026-11-01):** v0.1 – v0.14 milestone **tercapai**. **v0.15 "Matang" sebagian besar tercapai** — PAL (memori/thread/futex/TLS-dasar/clock), managed heap (`new`/array/generics), model memori GC (reserve/commit), dan **Buitenzorg.Bcl** (`bzbcl.cs` + `bzbcl2.cs`: collections, LINQ, StringBuilder, IO, Encoding UTF-8, Regex, Globalization/DateTime, Diagnostics, Net/UDP, Tasks, Timers) semua terverifikasi di ring-3; GC statics ✓ (2026-11-06: static ref/delegate/lambda jalan, `statics.cs`); yang **belum**: GC yang mereklamasi memori, exception unwinding, async/await, thread pool. **v0.16 "Panen" tercapai** (Drawing + UI + audio + suite 8 app + optimization pass). **v1.0 sedang berjalan** (sisa: validasi hardware nyata & Hyper-V, DAP). Rencana baru: **Developer Workstation** dan **Multimedia, Internet, Game & Hiburan** (lihat bawah).
+**Status keseluruhan (dirapikan 2026-11-01):** v0.1 – v0.14 milestone **tercapai**. **v0.15 "Matang" sebagian besar tercapai** — PAL (memori/thread/futex/TLS-dasar/clock), managed heap (`new`/array/generics), model memori GC (reserve/commit), dan **Buitenzorg.Bcl** (`bzbcl.cs` + `bzbcl2.cs`: collections, LINQ, StringBuilder, IO, Encoding UTF-8, Regex, Globalization/DateTime, Diagnostics, Net/UDP, Tasks, Timers) semua terverifikasi di ring-3; GC statics + cast/interface/`object[]` + `bzbcl3` (Func/Action, Interlocked, TimeSpan, Guid, LINQ generik) ✓ (2026-11-06, `statics.cs`, `bcl3.cs`); yang **belum**: GC yang mereklamasi memori, exception unwinding, async/await, thread pool. **v0.16 "Panen" tercapai** (Drawing + UI + audio + suite 8 app + optimization pass). **v1.0 sedang berjalan** (sisa: validasi hardware nyata & Hyper-V, DAP). Rencana baru: **Developer Workstation** dan **Multimedia, Internet, Game & Hiburan** (lihat bawah).
 **Dibuat oleh:** Gravicode Studios — dipimpin oleh Kang Fadhil.
 
 ---
@@ -391,14 +391,14 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [~] Kernel log ring buffer (`logring.rs`, log deploy, `/disk/BOOTLOG.TXT`) · [ ] `dmesg` + log per-app
 - **Terminal & Shell**
   - [x] Line editing (kursor, Home/End, Ctrl+A/E/U/K/W/L/C) + history (↑/↓, `history`, persist `/disk/HISTORY.TXT`) + tab-completion perintah/path ✓ (2026-11-06, diuji di QEMU)
-  - [~] [x] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`NAME=`, `export`/`env`/`unset`/`$?`), kutip, glob `*`/`?` ✓ (2026-11-06) · [ ] alias, skrip `.bzsh` + `source`, `$PATH`
-  - [~] Coreutils: [x] `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch find hexdump seq basename dirname` (`coreutils.rs`, 2026-11-06) · [ ] `which` · [x] `ps` + `kill <pid>` (2026-11-01, terverifikasi `multiproc_demo` + desktop live) · [ ] `top` · [ ] `dmesg free uptime df`
+  - [x] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`NAME=`, `export`/`env`/`unset`/`$?`), kutip, glob `*`/`?` ✓ · alias, skrip `.SH` (if/for/while, `$1..$9 $# $@`) + `source`, `$PATH`, `which`, `/disk/PROFILE.SH` ✓ (2026-11-06, `bzsh.rs`; ekstensi `.SH` karena FAT 8.3)
+  - [~] Coreutils: [x] `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch find hexdump seq basename dirname` (`coreutils.rs`, 2026-11-06) · [x] `which`, `test`/`[` · [x] `ps` + `kill <pid>` (2026-11-01, terverifikasi `multiproc_demo` + desktop live) · [ ] `top` · [ ] `dmesg free uptime df`
   - [ ] App Terminal mandiri (multi-tab, scrollback, copy/paste, ANSI) · [ ] job control (`&`/`jobs`/`fg`/Ctrl+C) — butuh multi-proses
 - **Package Manager**
-  - [ ] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install ./x.bzpkg`
-  - [ ] Host `bz pack` / `bz publish`
+  - [x] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install /disk/X.BZP` / `bz remove` / `bz info` ✓ (2026-11-06, `bzpkg.rs`, `MILESTONE: BZPKG OK`, diuji di QEMU dengan paket buatan `bz pack`)
+  - [~] [x] Host `bz pack` / `bz inspect` ✓ (2026-11-06) · [ ] `bz publish`
   - [ ] Repo index remote + `bz update/upgrade` + versi + dependency resolution + rollback — butuh TCP
-  - [ ] State terpasang persisten · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
+  - [x] State terpasang persisten (`/disk/PKGS.CFG`) ✓ · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
 - **IDE "Buitenzorg Studio"**
   - [ ] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/manifest) + find/replace + undo/redo
   - [ ] Explorer proyek + New Project dari template + panel Terminal/Problems/Output

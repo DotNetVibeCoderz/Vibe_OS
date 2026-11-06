@@ -25,6 +25,32 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   `<`, `;` `&&` `||`, variables (`NAME=value`, `$NAME`, `${NAME}`, `$?`,
   `export`/`env`/`unset`), single/double quotes and `\` escapes, `*`/`?` globs,
   `.`/`..` in paths, and `ls` with several operands.
+- **Native C#: casts, interfaces, arrays of references.** The shim implements
+  the runtime's `RhTypeCast_*` helpers (casts, `is`/`as`, pattern matching,
+  `switch` on types — before, a program with a cast did not even link),
+  interface dispatch (`RhpInitialDynamicInterfaceDispatch`: dispatch cell ->
+  DispatchMap -> vtable or sealed-virtual slot, x86-64 and ARM64) and a real
+  covariant `RhpStelemRef`, so `object[]`, `Base[]` and `IFoo[]` arrays hold
+  what C# allows (zerolib's own export is renamed by `tools/ZerolibPatch`; the
+  C# build scripts now use a private patched bflat, `scripts/prepare-bflat.*`).
+- **Buitenzorg.Bcl part 3** (`bzbcl3.cs`): `System.Func/Action/Predicate/
+  Comparison`, `BzInterlocked`, `BzTimeSpan` ("c" format + parse), `BzGuid`
+  (random v4, "D" format + parse) and LINQ over `BzList<T>` as extension
+  methods (Where, Select, stable OrderBy + ThenBy, GroupBy, Distinct, DistinctBy,
+  Sum/MinBy/MaxBy, Zip, Aggregate, ...). `bcl3.cs` -> `MILESTONE: BCL3 OK`.
+- **Syscall `RANDOM` (57, ABI `COUNT` 58):** bytes from the kernel's ChaCha20
+  DRBG (`bz_random` in the shim).
+- **Shell scripts and aliases** (`bzsh.rs`): `alias`/`unalias`, `.SH` scripts
+  (`sh`, `source`, `.`, or by name through `$PATH`) with `$0..$9 $# $@`,
+  `if/elif/else/fi`, `for/do/done`, `while`, `exit`; `test`/`[ ]`; `which`/
+  `type`; `/disk/PROFILE.SH` at terminal start; programs start by name.
+  Guide: `docs/shell.md`.
+- **Packages (`.bzpkg`, `bzpkg.rs`):** `bz install /disk/X.BZP` (SHA-256 of
+  the archive and of every file, 8.3 names, no overwriting of system files or
+  other packages' files, upgrades), `bz remove`, `bz info`, installed state in
+  `/disk/PKGS.CFG` (registry installs too) restored at boot, packages in the
+  App Store list; host `bz pack` / `bz inspect`; a sample `HALOPKT.BZP` on every
+  image. `MILESTONE: BZPKG OK`. Guide: `docs/packages.md`.
 - **Coreutils** (`coreutils.rs`): `cat grep head tail wc sort uniq tee cp mv
   mkdir rmdir touch find hexdump/xxd seq basename dirname true false env set
   export unset history`.
@@ -34,6 +60,9 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   mouse wheel (Home/End now edit the line).
 
 ### Fixed
+- CI: Ubuntu 26.04 runners split `qemu-system-riscv64` out of
+  `qemu-system-misc`, so the strict RISC-V smoke leg failed as "skipped"; the
+  workflow installs it.
 - The backslash key (`\` and `|`) produced no character on any keyboard:
   pc-keyboard 0.7 decodes set-1 0x2B as `Oem7`, which its `Us104Key` layout
   does not map; the kernel now feeds it as `Oem5`.

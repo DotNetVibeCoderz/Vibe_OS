@@ -78,6 +78,13 @@ pub fn start_session(visible_rows: usize) {
         term.scrollback.push("Panah atas/bawah = riwayat, Tab = lengkapi, | > >> && ; = pipe & redirect.".to_string());
         term.scrollback.push(String::new());
     }
+    // the startup profile (aliases, variables); runs without the terminal lock
+    let profile = crate::bzsh::run_profile();
+    if !profile.is_empty() {
+        if let Some(term) = TERMINAL.lock().as_mut() {
+            term.scrollback.extend(profile);
+        }
+    }
     render();
 }
 

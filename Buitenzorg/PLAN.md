@@ -238,7 +238,14 @@ sama (fib) di JS/TS/Python jalan berdampingan app C# — semua cetak fib(10)=55.
 > Diagnostics/Net-UDP/Tasks/Timers) selesai & terverifikasi. **GC statics ✓
 > (2026-11-06):** shim menjalankan inisialisasi static NativeAOT (region GC-static
 > di `__ReadyToRunHeader`) sebelum `Main` → field `static` referensi, delegate
-> dan lambda jalan (`statics.cs`, `MILESTONE: STATICS OK`). **Sisa:** GC yang
+> dan lambda jalan (`statics.cs`, `MILESTONE: STATICS OK`). **Cast + interface +
+> array referensi ✓ (2026-11-06):** shim mengimplementasikan `RhTypeCast_*`,
+> dispatch interface dan `RhpStelemRef` kovarian; `bzbcl3.cs` (Func/Action,
+> Interlocked, TimeSpan, Guid lewat syscall `RANDOM`, LINQ generik OrderBy/
+> GroupBy/Distinct) → `MILESTONE: BCL3 OK`. **Exception:** format tabel EH
+> NativeAOT sudah dipetakan (klausa, funclet, `.eh_frame`), tetapi bflat mematikan
+> `EmitEHInfo` untuk zerolib — perlu bflat yang dibangun dari source (butuh
+> token GitHub `read:packages` untuk paket BFlat.Compiler). **Sisa:** GC yang
 > mereklamasi memori, exception unwinding (try/catch), `async`/
 > `await`, thread pool, TimeSpan/Guid/Interlocked, LINQ OrderBy/GroupBy/Distinct.
 > **Increment 1 ✓:** fondasi **PAL memori** — syscall user `MMAP/MPROTECT/MUNMAP`
@@ -636,9 +643,10 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 
 ### A. Terminal & Shell
 > **Fase 1 ✓ (2026-11-06):** line editing + history persisten + tab-completion,
-> pipes/redirection/`; && ||`, variabel + `$?`, kutip, glob, dan coreutils
-> (`coreutils.rs`) — diuji di QEMU. Belum: alias, skrip `.bzsh`, `$PATH`/`which`,
-> job control, app Terminal multi-tab.
+> pipes/redirection/`; && ||`, variabel + `$?`, kutip, glob, coreutils
+> (`coreutils.rs`), lalu alias, skrip `.SH` (if/for/while, argumen), `source`,
+> `$PATH`/`which`, `test`/`[ ]`, `/disk/PROFILE.SH` (`bzsh.rs`) — diuji di QEMU.
+> Belum: `$(...)`/aritmetika, fungsi, job control, app Terminal multi-tab.
 - **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
   (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
 - **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment
@@ -650,6 +658,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
   setelah multi-proses.
 
 ### B. Package Manager (`bz`) untuk developer
+> **Tahap 1 ✓ (2026-11-06):** format `.bzpkg` v1 (SHA-256 arsip + per berkas),
+> `bz install/remove/info` di perangkat, state persisten `/disk/PKGS.CFG`,
+> paket di daftar App Store, host `bz pack`/`bz inspect`, contoh
+> `sdk/samples/halo-paket` (`MILESTONE: BZPKG OK`). Belum: tanda tangan,
+> dependensi, repo jarak jauh, sub-folder, izin dari manifest.
 - **Format paket `.bzpkg`**: arsip berisi `app.manifest` + ELF/skrip + aset +
   hash SHA-256 (tanda tangan menyusul). `bz install ./app.bzpkg` dari berkas.
 - **Host CLI**: `bz pack` (buat `.bzpkg` dari proyek), `bz publish` (ke repo).

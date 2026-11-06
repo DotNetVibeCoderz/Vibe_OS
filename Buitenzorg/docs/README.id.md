@@ -20,6 +20,8 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 |---|---|
 | [Jalankan di VM](run-in-vm.id.md) | Konversi image lalu jalankan di VMware Player, VirtualBox, atau Hyper-V. |
 | [Pasang di Hardware](install-hardware.id.md) | Tulis image ke stik USB dan boot mesin fisik (BIOS/UEFI), dengan tabel kompatibilitas yang jujur. |
+| [Shell & Skrip](shell.id.md) | Edit baris, pipe/redirect, variabel, coreutils, alias, skrip `.SH` dengan if/for/while, profil saat mulai. |
+| [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
 | [Debugging & Profiling](debugging.id.md) | Attach GDB ke kernel yang berjalan, dan profiler zona berbasis TSC. |
 
 ## Referensi teknis

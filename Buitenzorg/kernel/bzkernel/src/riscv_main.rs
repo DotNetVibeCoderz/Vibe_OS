@@ -56,6 +56,8 @@ mod script;
 mod service;
 mod shell;
 mod coreutils;
+mod bzpkg;
+mod bzsh;
 mod syscall;
 mod task;
 mod terminal;
@@ -207,10 +209,15 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     }
     storage_self_test();
     clock::load();
+    bzpkg::load();
     if st {
         match vfs::folder_self_test("/disk") {
             Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
             Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+        }
+        match bzpkg::self_test("/disk") {
+            Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
+            Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();

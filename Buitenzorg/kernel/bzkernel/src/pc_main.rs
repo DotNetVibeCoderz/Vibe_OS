@@ -54,6 +54,8 @@ mod script;
 mod service;
 mod shell;
 mod coreutils;
+mod bzpkg;
+mod bzsh;
 mod syscall;
 mod task;
 mod terminal;
@@ -201,6 +203,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
 
     // Pre-install the base app set so `run`/`bz` work out of the box.
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
+    bzpkg::load();
 
     daun_demo();
     kanopi_demo();
@@ -304,6 +307,7 @@ fn fast_boot() -> ! {
     boot::phase("smp");
     let _ = ioapic::init();
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
+    bzpkg::load();
     if let Some((w, h)) = framebuffer::dimensions() {
         wm::init(w, h);
         mouse::set_bounds(w, h);
@@ -553,6 +557,12 @@ fn matang_demo() {
     match app::run_named("statics") {
         Ok(code) => println!("[kernel] statics app exited (code {})", code),
         Err(e) => println!("[kernel] statics app not run: {}", e),
+    }
+    // Buitenzorg.Bcl part 3: casts + covariant arrays (shim), delegates,
+    // Interlocked, TimeSpan, Guid (RANDOM syscall), generic LINQ.
+    match app::run_named("bcl3") {
+        Ok(code) => println!("[kernel] bcl3 app exited (code {})", code),
+        Err(e) => println!("[kernel] bcl3 app not run: {}", e),
     }
 
     // Increment 5: the GC memory model — lazy reserve (mmap PROT_NONE) + commit
@@ -1784,6 +1794,12 @@ fn dahan_demo() {
     match vfs::folder_self_test("/ram") {
         Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
         Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+    }
+    if vfs::mounts().iter().any(|m| m == "/disk") {
+        match bzpkg::self_test("/disk") {
+            Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
+            Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
+        }
     }
     disk_persist_demo();
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).
