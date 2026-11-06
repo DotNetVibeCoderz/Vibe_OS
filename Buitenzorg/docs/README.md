@@ -21,10 +21,21 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [Run in a VM](run-in-vm.md) | Convert the image and run it in VMware Player, VirtualBox, or Hyper-V. |
 | [Raspberry Pi 4](install-raspberry-pi.md) | The desktop on a Pi 4's HDMI screen, on all four cores: verified on a real 8 GB board and on QEMU. |
 | [Install on Hardware](install-hardware.md) | Flash the image to a USB stick and boot a physical machine (BIOS/UEFI), with an honest capability matrix. |
-| [Buitenzorg Studio](studio.md) | The IDE inside the OS: projects from 25 templates, a code editor, Run (F5), Output, Problems, Terminal. |
+| [Buitenzorg Studio](studio.md) | The IDE inside the OS: projects from 52 templates, a code editor, Run (F5), Output, Problems, Terminal. |
+| [C# Script (`.csx`)](csharp-script.md) | C# without a build step: a bytecode engine for top-level C#, console and UI (`Ui.Window`), 16x faster than the tree interpreter. |
+| [UI Apps in JS/TS/Python](script-ui.md) | Windowed apps without C#: `window`, `button`, `text`, ... in immediate mode, run as their own process. |
 | [The Shell & Scripts](shell.md) | Line editing, pipes/redirection, variables, coreutils, aliases, `.SH` scripts with if/for/while, the startup profile. |
 | [Packages (`.bzpkg`)](packages.md) | `bz pack` on the host, `bz install/remove` on the device, the format and its safety rules. |
 | [Debugging & Profiling](debugging.md) | Attach GDB to the running kernel, and the instrumented TSC zone profiler. |
+
+## Screenshots: script apps
+
+| | |
+|---|---|
+| [![JS / TS / Python forms](img/script-ui-templates.png)](script-ui.md) | [![C# script](img/csharp-script-forms.png)](csharp-script.md) |
+| Sign-up form, Pong, BMI calculator ([UI apps in JS/TS/Python](script-ui.md)) | Address book, to-do list, plotter ([C# script](csharp-script.md)) |
+| [![Drawing and utilities](img/studio-ui-templates.png)](studio.md) | [![Studio](img/studio.png)](studio.md) |
+| Spirograph, mandala, Pomodoro ([Studio templates](studio.md)) | [Buitenzorg Studio](studio.md) |
 
 ## Technical reference
 

@@ -54,6 +54,7 @@ mod script;
 mod service;
 mod shell;
 mod coreutils;
+mod csx;
 mod bzpkg;
 mod bzsh;
 mod syscall;

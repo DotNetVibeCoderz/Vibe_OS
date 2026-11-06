@@ -25,6 +25,36 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   `<`, `;` `&&` `||`, variables (`NAME=value`, `$NAME`, `${NAME}`, `$?`,
   `export`/`env`/`unset`), single/double quotes and `\` escapes, `*`/`?` globs,
   `.`/`..` in paths, and `ls` with several operands.
+- **C# script (`.csx`)** -- `kernel/bzkernel/src/csx.rs`, a C# subset compiled
+  to bytecode (locals in frame slots, names resolved at compile time) and run by
+  a stack VM: methods and recursion, `List<T>`, `Dictionary<K,V>`, arrays,
+  `foreach`, `switch`, `try/catch/finally`/`throw`, interpolated strings with
+  formats, `Math`, string methods, `StringBuilder`, `Random`. `Fib(25)` 16x
+  faster than the tree-walking JS interpreter. Console scripts run in the
+  kernel (`csx FILE`, `script cs FILE`, 50M-instruction budget); UI scripts
+  (`Ui.Window/Button/Text/...`) run in `CLRHOST.ELF` (`run FILE.CSX`). Studio:
+  `.CSX` highlighting, F5, nine templates (42 in all). Guide:
+  `docs/csharp-script.md`.
+- **Forms in script UI apps:** `input(x, y, w, id [, placeholder])` (C#
+  script: `Ui.Input`) is a text field -- click to focus, type, Backspace,
+  Enter/Tab/Esc leave it -- plus `setinput`/`focus`, and text helpers in the
+  interpreter (`int`/`parseInt`/`Number`, `indexOf`, `trim`, `upper`,
+  `lower`). Ten new UI templates so every language has a form, a utility, a
+  game and a drawing: sign-up form and Pomodoro timer (JS), currency converter,
+  Pong and spirograph (TS), BMI calculator, number guessing and mandala
+  (Python), address book and to-do list (C# script) -- 52 templates in all.
+  `run mstudio --list` / `--export DIR` lists the catalog / writes every
+  template's main file for trying it from the Terminal.
+- **UI apps in JavaScript, TypeScript and Python:** a script that calls
+  `window(...)` runs as its own process in `CLRHOST.ELF` (the kernel's
+  interpreter compiled into the host, `scriptui.rs`) with an immediate-mode
+  API -- `window`, `clear`, `rect`, `frame`, `gradient`, `line`, `circle`,
+  `text`, `button`, `present`, `running`, mouse, `key`, `ticks`, `wait`,
+  `random`, `rgb`. `run FILE.JS|TS|PY`, Studio F5, or a package entry. Eight UI
+  templates in Studio (33 in all); Studio's self-test runs every template.
+  Interpreter: a `Host` hook, hex literals, `chr`/`ord`/`substr`/`min`/`max`,
+  and **`let`/`var`/`const` now declare a local** (they used to overwrite a
+  variable of the caller with the same name). Guide: `docs/script-ui.md`.
 - **Buitenzorg Studio** (`userland/clr-apps/MStudio`, `run mstudio`, desktop
   icon, Start menu → Kantor): an IDE inside the OS — project explorer, tabs, a
   code editor (line numbers, syntax colors for C#/JS/TS/Python/shell/JSON,

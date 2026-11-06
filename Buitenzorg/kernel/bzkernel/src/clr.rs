@@ -31,6 +31,15 @@ pub fn spawn(dll: &str, args: &str) -> Result<u64, &'static str> {
     crate::app::spawn_image_args(&name, &image, &line)
 }
 
+/// A JavaScript / TypeScript / Python file `target` names (an absolute VFS
+/// path ending in .js/.ts/.py): it runs as a UI program in the same host
+/// (`CLRHOST.ELF <file>`, see userland/clrhost/src/scriptui.rs).
+pub fn script_for(target: &str) -> Option<alloc::string::String> {
+    let lower = target.to_ascii_lowercase();
+    let script = lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".py") || lower.ends_with(".csx");
+    (script && target.starts_with('/')).then(|| alloc::string::String::from(target))
+}
+
 /// Run the assembly at `dll` (a VFS path) with `args` as a managed process
 /// and wait for it. Its exit code, or an error if it could not start.
 pub fn run(dll: &str, args: &str) -> Result<u64, &'static str> {

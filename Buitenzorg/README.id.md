@@ -119,6 +119,20 @@ NVMe / USB)** lewat marker `MILESTONE: … OK` yang dicek smoke test.
 | **Subsistem AI** — LLM lokal + galeri model (v0.12 "Nalar") | **Screensaver** — Mystify, gaya Win 3.1/98 |
 | [![Subsistem AI](docs/img/desktop-nalar.png)](docs/img/desktop-nalar.png) | [![Screensaver](docs/img/screensaver-mystify.png)](docs/img/screensaver-mystify.png) |
 
+### Studio & aplikasi skrip
+
+**[Buitenzorg Studio](docs/studio.id.md)** adalah IDE di dalam OS, dengan 52
+template proyek. Aplikasi berjendela bisa ditulis dalam JavaScript,
+TypeScript, Python ([panduan](docs/script-ui.id.md)) atau C# script
+([panduan](docs/csharp-script.id.md)) dan langsung dijalankan tanpa build.
+
+| | |
+|---|---|
+| **Buitenzorg Studio** — editor, template, Jalankan (F5) | **Form dalam JS / TS / Python** — form pendaftaran, Pong, kalkulator BMI |
+| [![Studio](docs/img/studio.png)](docs/img/studio.png) | [![Template UI skrip](docs/img/script-ui-templates.png)](docs/img/script-ui-templates.png) |
+| **C# script (`.csx`)** — buku kontak, daftar tugas, grafik fungsi | **Gambar & utilitas** — spirograf (TS), mandala (Python), Pomodoro (JS) |
+| [![Form C# script](docs/img/csharp-script-forms.png)](docs/img/csharp-script-forms.png) | [![Template gambar](docs/img/studio-ui-templates.png)](docs/img/studio-ui-templates.png) |
+
 ### Wallpaper resmi
 
 Delapan wallpaper bawaan ikut terpasang di OS — karya seni hasil AI dengan

@@ -401,7 +401,9 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] State terpasang persisten (`/disk/PKGS.CFG`) ✓ · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
 - **IDE "Buitenzorg Studio"**
   - [x] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/shell/JSON) + find/replace + undo/redo + auto-indent ✓ (2026-11-06, `MStudio`)
-  - [x] Explorer proyek + New Project dari **25 template** (JS/TS/Python/shell/C#/paket/JSON) + panel Terminal/Masalah/Keluaran ✓
+  - [x] Explorer proyek + New Project dari **52 template** (C# script/JS/TS/Python/shell/C#/paket/JSON, 21 di antaranya aplikasi ber-UI: form, utilitas, game, gambar untuk setiap bahasa) + panel Terminal/Masalah/Keluaran ✓
+  - [x] **C# script `.csx`** ✓ (2026-11-06): engine bytecode + VM (`csx.rs`, 16x lebih cepat dari interpreter pohon), konsol di kernel (`csx FILE`) + UI `Ui.*` di `CLRHOST.ELF`, 11 template Studio
+  - [x] **Aplikasi ber-UI dalam JS/TS/Python** ✓ (2026-11-06): `window/button/text/rect/...` immediate mode, proses ring-3 di `CLRHOST.ELF` (`scriptui.rs`), `run FILE.JS`, diuji live (keyboard + klik mouse); kolom teks `input()`/`Ui.Input` untuk form + `int/indexOf/trim/upper/lower`
   - [x] Run instan JS/TS/Python/shell via `script.rs` + syscall `SHELL_RUN` (58); galat parse bernomor baris ✓ — `Studio: 23 checks, 0 failed` saat boot
   - [ ] C# lewat remote build server (`bz build-server` di host) · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
   - [ ] Integrasi debugger (breakpoint gutter, variabel, call stack)

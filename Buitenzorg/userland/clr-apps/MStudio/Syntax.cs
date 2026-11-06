@@ -24,6 +24,7 @@ public static class Syntax
         switch (ext)
         {
             case "CS": return "cs";
+            case "CSX": return "csx";
             case "JS": return "js";
             case "TS": return "ts";
             case "PY": return "py";
@@ -38,6 +39,7 @@ public static class Syntax
         switch (lang)
         {
             case "cs": return "C#";
+            case "csx": return "C# script";
             case "js": return "JavaScript";
             case "ts": return "TypeScript";
             case "py": return "Python";
@@ -90,7 +92,7 @@ public static class Syntax
     {
         switch (lang)
         {
-            case "cs": return CsKeywords.Contains(w);
+            case "cs": case "csx": return CsKeywords.Contains(w);
             case "js": return JsKeywords.Contains(w);
             case "ts": return JsKeywords.Contains(w) || TsExtra.Contains(w);
             case "py": return PyKeywords.Contains(w);
@@ -104,7 +106,7 @@ public static class Syntax
     {
         switch (lang)
         {
-            case "cs": return CsTypes.Contains(w) || (w.Length > 1 && char.IsUpper(w[0]) && w != w.ToUpperInvariant());
+            case "cs": case "csx": return CsTypes.Contains(w) || (w.Length > 1 && char.IsUpper(w[0]) && w != w.ToUpperInvariant());
             case "ts": return TsTypes.Contains(w);
             case "js": return w == "console" || w == "Math";
             case "py": return PyTypes.Contains(w);
@@ -112,7 +114,7 @@ public static class Syntax
         }
     }
 
-    static bool CStyle(string lang) => lang == "cs" || lang == "js" || lang == "ts";
+    static bool CStyle(string lang) => lang == "cs" || lang == "csx" || lang == "js" || lang == "ts";
 
     /// <summary>The spans of one line. <paramref name="inBlock"/> says whether the
     /// line starts inside a block comment, and is updated for the next line.</summary>

@@ -20,10 +20,21 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 |---|---|
 | [Jalankan di VM](run-in-vm.id.md) | Konversi image lalu jalankan di VMware Player, VirtualBox, atau Hyper-V. |
 | [Pasang di Hardware](install-hardware.id.md) | Tulis image ke stik USB dan boot mesin fisik (BIOS/UEFI), dengan tabel kompatibilitas yang jujur. |
-| [Buitenzorg Studio](studio.id.md) | IDE di dalam OS: proyek dari 25 template, editor kode, Jalankan (F5), Keluaran, Masalah, Terminal. |
+| [Buitenzorg Studio](studio.id.md) | IDE di dalam OS: proyek dari 52 template, editor kode, Jalankan (F5), Keluaran, Masalah, Terminal. |
+| [C# Script (`.csx`)](csharp-script.id.md) | C# tanpa build: engine bytecode untuk C# tingkat atas, konsol dan UI (`Ui.Window`), 16x lebih cepat dari interpreter pohon. |
+| [Aplikasi UI JS/TS/Python](script-ui.id.md) | Aplikasi berjendela tanpa C#: `window`, `button`, `text`, ... gaya immediate mode, berjalan sebagai proses sendiri. |
 | [Shell & Skrip](shell.id.md) | Edit baris, pipe/redirect, variabel, coreutils, alias, skrip `.SH` dengan if/for/while, profil saat mulai. |
 | [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
 | [Debugging & Profiling](debugging.id.md) | Attach GDB ke kernel yang berjalan, dan profiler zona berbasis TSC. |
+
+## Tangkapan layar: aplikasi skrip
+
+| | |
+|---|---|
+| [![Form JS / TS / Python](img/script-ui-templates.png)](script-ui.id.md) | [![C# script](img/csharp-script-forms.png)](csharp-script.id.md) |
+| Form pendaftaran, Pong, kalkulator BMI ([Aplikasi UI JS/TS/Python](script-ui.id.md)) | Buku kontak, daftar tugas, grafik ([C# script](csharp-script.id.md)) |
+| [![Gambar dan utilitas](img/studio-ui-templates.png)](studio.id.md) | [![Studio](img/studio.png)](studio.id.md) |
+| Spirograf, mandala, Pomodoro ([template Studio](studio.id.md)) | [Buitenzorg Studio](studio.id.md) |
 
 ## Referensi teknis
 

@@ -676,7 +676,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > editor kode (nomor baris, pewarnaan C#/JS/TS/Python/shell/JSON, undo/redo,
 > auto-indent, cari/ganti, ke baris), Jalankan (F5) JS/TS/Python/shell lewat
 > syscall `SHELL_RUN`, panel Keluaran/Masalah (galat parse + baris)/Terminal,
-> **25 template** lintas bahasa dan kasus penggunaan. Belum: build C# di OS
+> **C# script `.csx`** (engine bytecode `csx.rs`, konsol di kernel + UI di
+> `CLRHOST.ELF`, `docs/csharp-script.md`) dengan 11 template; total **52 template**
+> lintas bahasa dan kasus penggunaan, termasuk **21 aplikasi ber-UI** (form
+> dengan kolom teks `input()`, utilitas, game, gambar -- di setiap bahasa) (API immediate-mode `window/button/text/...` di host
+> `CLRHOST.ELF`, `docs/script-ui.md`). Belum: build C# di OS
 > (remote build server), debugger/breakpoint, seleksi mouse + clipboard.
 - **Editor kode**: multi-tab, nomor baris, **syntax highlighting** (C#/JS/TS/
   Python/manifest), find/replace, go-to-line, auto-indent, undo/redo.

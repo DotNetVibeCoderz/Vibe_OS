@@ -1,6 +1,7 @@
 //! `CLRHOST.ELF` -- Buitenzorg's managed C# runtime: **RustCLR** (the runtime
 //! of RustNetRuntime) as an ordinary ring-3 program. Arguments:
-//! `<path to .dll> [program arguments...]`, e.g. `/disk/HELLOCLR.DLL`.
+//! `<path to .dll> [program arguments...]`, e.g. `/disk/HELLOCLR.DLL`, or
+//! `<path to .js/.ts/.py> [arguments...]` for a UI script (`scriptui.rs`).
 //!
 //! It loads a Roslyn-compiled assembly (`dotnet build`, unmodified), lets the
 //! RustCLR loader resolve it against the framework contract implemented by
@@ -25,6 +26,15 @@ extern crate alloc;
 mod bzapi;
 mod g3d;
 mod heap;
+/// The kernel's JS/TS/Python interpreter (same source), for UI scripts.
+#[path = "../../../kernel/bzkernel/src/script.rs"]
+#[allow(dead_code)]
+mod script;
+/// The kernel's C# script engine (same source), for `.csx` UI scripts.
+#[path = "../../../kernel/bzkernel/src/csx.rs"]
+#[allow(dead_code)]
+mod csx;
+mod scriptui;
 mod sys;
 mod threads;
 
@@ -102,6 +112,10 @@ extern "C" fn clr_main() -> ! {
         sys::exit(2);
     };
     let prog_args: Vec<String> = words.map(String::from).collect();
+    // A JavaScript / TypeScript / Python file: a UI script (scriptui.rs).
+    if scriptui::is_script(&path) {
+        scriptui::run(&path, prog_args);
+    }
 
     let Some(bytes) = sys::read_file(&path) else {
         sys::print(&format!("[clr] {}: file not found\n", path));

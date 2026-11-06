@@ -17,6 +17,29 @@ public static class Program
     public static int Main(string[] args)
     {
         var app = new Application();
+        // --list: the catalog; --export DIR: every template's entry file as DIR/Tnn.EXT
+        // (screenshots and quick trials from the Terminal: run DIR/T05.JS)
+        if (args.Length >= 1 && args[0] == "--list")
+        {
+            for (int i = 0; i < Templates.Catalog.Length; i++)
+                Console.WriteLine((i + 1).ToString("00") + "  " + Templates.Catalog[i].Id + "  " + Templates.Catalog[i]);
+            return 0;
+        }
+        if (args.Length >= 2 && args[0] == "--export")
+        {
+            string dir = args[1].TrimEnd('/');
+            if (Files.GetInfo(dir) == null) Files.CreateDirectory(dir);
+            int n = 0;
+            for (int i = 0; i < Templates.Catalog.Length; i++)
+            {
+                var t = Templates.Catalog[i];
+                string ext = t.Entry.Substring(t.Entry.LastIndexOf('.'));
+                foreach (var (file, text) in t.Files)
+                    if (file == t.Entry && Files.WriteAllText(dir + "/T" + (i + 1).ToString("00") + ext, text.TrimStart('\n'))) n++;
+            }
+            Console.WriteLine("Studio: " + n + " templates written to " + dir);
+            return 0;
+        }
         if (Array.IndexOf(args, "--selftest") >= 0)
         {
             var c = Studio.SelfTest();

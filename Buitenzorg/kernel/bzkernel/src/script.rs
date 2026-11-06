@@ -37,16 +37,30 @@ impl Lang {
 
 // --- Values ------------------------------------------------------------------
 
+/// A script value: what host functions receive and return.
 #[derive(Clone)]
-enum Value {
+pub enum Value {
     Int(i64),
     Str(String),
     Bool(bool),
     Nil,
 }
 
+/// The embedder's functions (the UI host of `CLRHOST.ELF` gives scripts a
+/// window: `window`, `rect`, `button`, ...). Called for a name that is neither
+/// a built-in nor a function of the script.
+pub trait Host {
+    /// `Some(result)` when the host knows `name`.
+    fn call(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>>;
+    /// A `print` / `console.log` line; true when the host showed it (it is
+    /// then not collected in [`Output::lines`]).
+    fn print(&mut self, _line: &str) -> bool {
+        false
+    }
+}
+
 impl Value {
-    fn display(&self) -> String {
+    pub fn display(&self) -> String {
         match self {
             Value::Int(n) => n.to_string(),
             Value::Str(s) => s.clone(),
@@ -54,7 +68,7 @@ impl Value {
             Value::Nil => "nil".to_string(),
         }
     }
-    fn truthy(&self) -> bool {
+    pub fn truthy(&self) -> bool {
         match self {
             Value::Int(n) => *n != 0,
             Value::Str(s) => !s.is_empty(),
@@ -62,7 +76,7 @@ impl Value {
             Value::Nil => false,
         }
     }
-    fn as_int(&self) -> i64 {
+    pub fn as_int(&self) -> i64 {
         match self {
             Value::Int(n) => *n,
             Value::Bool(b) => *b as i64,
@@ -143,6 +157,8 @@ enum Expr {
 #[derive(Clone)]
 enum Stmt {
     Assign(String, Expr),
+    /// `let` / `var` / `const`: a variable of the current function (never an outer one).
+    Decl(String, Expr),
     ExprStmt(Expr),
     If(Expr, Vec<Stmt>, Vec<Stmt>),
     While(Expr, Vec<Stmt>),
@@ -250,6 +266,15 @@ fn lex_string(b: &[u8], start: usize) -> Result<(String, usize), String> {
 fn lex_number(b: &[u8], start: usize) -> (i64, usize) {
     let mut i = start;
     let mut n: i64 = 0;
+    // 0x... hexadecimal (colors: 0x7CC4A4)
+    if b[i] == b'0' && i + 2 < b.len() + 1 && i + 1 < b.len() && (b[i + 1] == b'x' || b[i + 1] == b'X') {
+        i += 2;
+        while i < b.len() && b[i].is_ascii_hexdigit() {
+            n = n.wrapping_mul(16) + (b[i] as char).to_digit(16).unwrap_or(0) as i64;
+            i += 1;
+        }
+        return (n, i);
+    }
     while i < b.len() && b[i].is_ascii_digit() {
         n = n * 10 + (b[i] - b'0') as i64;
         i += 1;
@@ -714,7 +739,7 @@ fn js_simple(p: &mut Parser) -> Result<Stmt, String> {
         let name = ident_name(p)?;
         p.expect(&Tok::Assign, "'='")?;
         let e = p.expr(0)?;
-        return Ok(Stmt::Assign(name, e));
+        return Ok(Stmt::Decl(name, e));
     }
     if let (Some(Tok::Ident(name)), Some(Tok::Assign)) = (p.peek().cloned(), p.peek2()) {
         p.pos += 2;
@@ -864,23 +889,27 @@ enum Flow {
     Return(Value),
 }
 
-struct Interp {
+struct Interp<'h> {
     funcs: BTreeMap<String, (Vec<String>, Vec<Stmt>)>,
     scopes: Vec<BTreeMap<String, Value>>,
     out: String,
     steps: u64,
+    step_limit: u64,
+    host: Option<&'h mut dyn Host>,
 }
 
 const STEP_LIMIT: u64 = 5_000_000;
 const OUT_LIMIT: usize = 16 * 1024;
 
-impl Interp {
-    fn new() -> Self {
+impl<'h> Interp<'h> {
+    fn new(host: Option<&'h mut dyn Host>, step_limit: u64) -> Self {
         Interp {
             funcs: BTreeMap::new(),
             scopes: alloc::vec![BTreeMap::new()],
             out: String::new(),
             steps: 0,
+            step_limit,
+            host,
         }
     }
 
@@ -904,7 +933,7 @@ impl Interp {
 
     fn tick(&mut self) -> Result<(), String> {
         self.steps += 1;
-        if self.steps > STEP_LIMIT {
+        if self.steps > self.step_limit {
             Err(String::from("batas langkah tercapai (kemungkinan loop tak berujung)"))
         } else {
             Ok(())
@@ -930,6 +959,11 @@ impl Interp {
             Stmt::Assign(name, e) => {
                 let v = self.eval(e)?;
                 self.set(name, v);
+                Ok(Flow::Normal)
+            }
+            Stmt::Decl(name, e) => {
+                let v = self.eval(e)?;
+                self.scopes.last_mut().unwrap().insert(name.clone(), v);
                 Ok(Flow::Normal)
             }
             Stmt::ExprStmt(e) => {
@@ -1062,6 +1096,11 @@ impl Interp {
                     }
                     line.push_str(&v.display());
                 }
+                if let Some(h) = self.host.as_mut() {
+                    if h.print(&line) {
+                        return Ok(Value::Nil);
+                    }
+                }
                 if self.out.len() < OUT_LIMIT {
                     self.out.push_str(&line);
                     self.out.push('\n');
@@ -1077,7 +1116,71 @@ impl Interp {
                 return Ok(Value::Int(n));
             }
             "abs" => return Ok(Value::Int(vals.first().map(|v| v.as_int().abs()).unwrap_or(0))),
+            "min" | "max" if vals.len() == 2 => {
+                let (a, b) = (vals[0].as_int(), vals[1].as_int());
+                return Ok(Value::Int(if (name == "min") == (a < b) { a } else { b }));
+            }
+            // characters: chr(65) == "A", ord("A") == 65, substr(s, start, len)
+            "chr" => {
+                let c = char::from_u32(vals.first().map(|v| v.as_int()).unwrap_or(0) as u32).unwrap_or('?');
+                return Ok(Value::Str(c.to_string()));
+            }
+            "ord" => {
+                let n = match vals.first() {
+                    Some(Value::Str(s)) => s.chars().next().map(|c| c as i64).unwrap_or(0),
+                    _ => 0,
+                };
+                return Ok(Value::Int(n));
+            }
+            // text helpers for forms: int("42") / parseInt / Number, indexOf, trim, upper, lower
+            "int" | "parseInt" | "Number" => {
+                let n = match vals.first() {
+                    Some(Value::Str(s)) => {
+                        let t = s.trim();
+                        let (neg, digits) = match t.strip_prefix('-') {
+                            Some(r) => (true, r),
+                            None => (false, t.strip_prefix('+').unwrap_or(t)),
+                        };
+                        let mut v: i64 = 0;
+                        for c in digits.chars() {
+                            match c.to_digit(10) {
+                                Some(d) => v = v.saturating_mul(10).saturating_add(d as i64),
+                                None => break,
+                            }
+                        }
+                        if neg { -v } else { v }
+                    }
+                    Some(v) => v.as_int(),
+                    None => 0,
+                };
+                return Ok(Value::Int(n));
+            }
+            "indexOf" | "indexof" | "find" => {
+                let (hay, needle) = (vals.first().map(|v| v.display()).unwrap_or_default(), vals.get(1).map(|v| v.display()).unwrap_or_default());
+                return Ok(Value::Int(hay.find(needle.as_str()).map(|b| hay[..b].chars().count() as i64).unwrap_or(-1)));
+            }
+            "trim" | "strip" => return Ok(Value::Str(vals.first().map(|v| String::from(v.display().trim())).unwrap_or_default())),
+            "upper" | "toUpper" => return Ok(Value::Str(vals.first().map(|v| v.display().to_uppercase()).unwrap_or_default())),
+            "lower" | "toLower" => return Ok(Value::Str(vals.first().map(|v| v.display().to_lowercase()).unwrap_or_default())),
+            "substr" => {
+                let s = match vals.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    Some(v) => v.display(),
+                    None => String::new(),
+                };
+                let start = vals.get(1).map(|v| v.as_int().max(0) as usize).unwrap_or(0);
+                let len = vals.get(2).map(|v| v.as_int().max(0) as usize).unwrap_or(usize::MAX);
+                return Ok(Value::Str(s.chars().skip(start).take(len).collect()));
+            }
             _ => {}
+        }
+        // a function of the embedder (unless the script defines one)
+        if !self.funcs.contains_key(name) {
+            if let Some(h) = self.host.as_mut() {
+                if let Some(r) = h.call(name, &vals) {
+                    return r;
+                }
+            }
         }
         // user-defined function
         let (params, body) = self
@@ -1126,6 +1229,12 @@ pub struct Output {
 /// Parse and run `src` in the given language. Never panics; parse/runtime
 /// errors are returned in `error` alongside any output produced so far.
 pub fn run(lang: Lang, src: &str) -> Output {
+    run_with(lang, src, None, STEP_LIMIT)
+}
+
+/// [`run`] with an embedder's functions and a step budget (a UI program
+/// loops until its window closes: its host passes `u64::MAX`).
+pub fn run_with(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: u64) -> Output {
     // lex with source lines, parse, and report a failure as "parse: baris N: ..."
     let lexed = match lang {
         Lang::Js => lex_js_at(src, 1),
@@ -1150,7 +1259,7 @@ pub fn run(lang: Lang, src: &str) -> Output {
             return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0 }
         }
     };
-    let mut it = Interp::new();
+    let mut it = Interp::new(host, step_limit);
     // hoist function definitions first (so calls before defs work)
     for s in &program {
         if let Stmt::Func(..) = s {

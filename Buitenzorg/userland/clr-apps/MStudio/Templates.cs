@@ -393,10 +393,13 @@ fi
             ("README.TXT", Readme("Argumen & Kondisi", "Skrip .SH memakai shell bawaan (lihat docs/shell.md).", "F5, atau 'sh MAIN.SH a b c'."))),
 
         new Template("sh-backup", "Skrip shell", "Otomasi", "Cadangan Berkas Teks",
-            "Menyalin semua berkas .TXT dari /disk ke folder cadangan di /ram.", "MAIN.SH",
+            "Menyalin semua berkas .TXT dari /disk ke folder cadangan (/ram, atau /disk bila tidak ada /ram).", "MAIN.SH",
             ("MAIN.SH", """
-# Cadangkan berkas teks /disk ke /ram/CADANGAN
-tujuan=/ram/CADANGAN
+# Cadangkan berkas teks /disk ke folder CADANGAN
+# (di /ram bila ada -- PC -- selain itu di /disk: ARM64, RISC-V, Raspberry Pi)
+dasar=/ram
+test -d /ram || dasar=/disk
+tujuan=$dasar/CADANGAN
 test -d $tujuan || mkdir $tujuan
 n=0
 for f in /disk/*.TXT; do
@@ -424,19 +427,22 @@ ls /disk | grep -c DLL
             ("README.TXT", Readme("Laporan Sistem", "Menggabungkan perintah bawaan dengan pipe.", "F5."))),
 
         new Template("sh-bersih", "Skrip shell", "Otomasi", "Pembersih Berkas Sementara",
-            "Membuat lalu menghapus berkas uji di /ram dengan aman.", "MAIN.SH",
+            "Membuat lalu menghapus berkas uji (di /ram, atau /disk) dengan aman.", "MAIN.SH",
             ("MAIN.SH", """
 # Buat beberapa berkas sementara lalu bersihkan lagi
+# (di /ram bila ada, selain itu di /disk)
+d=/ram
+test -d /ram || d=/disk
 for i in 1 2 3; do
-    echo "sementara $i" > /ram/TMP$i.TXT
+    echo "sementara $i" > $d/TMP$i.TXT
 done
 echo "sebelum:"
-ls /ram | grep TMP
-for f in /ram/TMP*.TXT; do
+ls $d | grep TMP
+for f in $d/TMP*.TXT; do
     rm $f
 done
 echo "sesudah:"
-ls /ram | grep -c TMP
+ls $d | grep -c TMP
 """),
             ("README.TXT", Readme("Pembersih", "Redirect, glob dan rm di dalam for.", "F5."))),
 
@@ -613,9 +619,16 @@ Lihat docs/packages.md.
             ("README.TXT", Readme("Data JSON", "Contoh berkas data. Studio mewarnai kunci, angka dan literal.", "Tidak dijalankan; buka dan edit."))),
     };
 
+    static readonly string[] Order = { "C# script", "C# script UI", "JavaScript", "JavaScript UI", "TypeScript", "TypeScript UI", "Python", "Python UI", "Skrip shell", "C#", "Paket", "JSON" };
+
+    /// <summary>Every template (console and UI), grouped by language.</summary>
+    public static readonly Template[] Catalog = All.Concat(UiTemplates.All).Concat(UiTemplates2.All).Concat(CsxTemplates.All)
+        .OrderBy(t => Array.IndexOf(Order, t.Language) < 0 ? 99 : Array.IndexOf(Order, t.Language))
+        .ToArray();
+
     public static Template? Find(string id)
     {
-        foreach (var t in All) if (t.Id == id) return t;
+        foreach (var t in Catalog) if (t.Id == id) return t;
         return null;
     }
 }

@@ -101,7 +101,7 @@ const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
-    "settings", "ask", "vm", "script", "js", "ts", "py", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
+    "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
 
 // ---- command lines: quoting, variables, globs, pipes, redirection ----------
@@ -801,6 +801,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "ask" | "ai" => (ai_ask(&args), Effect::Redraw),
         "vm" => vm_cmd(&args),
         "script" | "js" | "ts" | "py" => script_cmd(cmd, &args),
+        "csx" | "csharp" => csx_cmd(&args),
         "prof" | "profile" => prof_cmd(args.first().copied()),
         "gfx3d" | "3d" => {
             // gfx3d [test]: the 3D API's resources, or its self-test
@@ -1001,6 +1002,7 @@ fn help_lines() -> Vec<String> {
      "  ask <prompt>      AI: lengkapi teks (LLM lokal)",
      "  vm <sub>          virtualisasi (list/create/start/snapshot/restore)",
      "  script <lang> [f] polyglot: js|ts|py (jalankan demo/file)",
+     "  csx [FILE] [arg]  C# script (.csx) lewat engine bytecode; UI: run FILE.CSX",
      "  prof [self|on|off|reset|report]  profiler zona (TSC)",
      "  shutdown|restart|sleep      power management",
      "  bz <sub>          CLI (install/remove/list, model, power, vm, virt, script)",
@@ -1166,6 +1168,15 @@ fn ws_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
 fn run_cmd(arg: Option<&str>, app_args: &[&str]) -> (Vec<String>, Effect) {
     let Some(name) = arg else {
         return (vec![String::from("run: butuh nama app (mis. 'run xox')")], Effect::None);
+    };
+    // a UI script by any path: `run MAIN.JS`, `run /disk/PROYEK/X/MAIN.PY`
+    let lower = name.to_ascii_lowercase();
+    let resolved;
+    let name = if lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".py") || lower.ends_with(".csx") {
+        resolved = resolve(Some(name));
+        resolved.as_str()
+    } else {
+        name
     };
     if !app::is_app(name) {
         return (vec![format!("run: '{}' tidak dikenal (lihat 'bz list')", name)], Effect::None);
@@ -1501,7 +1512,14 @@ fn run_script(lang: script::Lang, src: &str) -> Vec<String> {
         lines.push(format!("  {}", l));
     }
     if let Some(e) = out.error {
+        // a UI script (window/button/...) needs its own process and window
+        let ui = ["window", "button", "present", "running", "clear", "rect", "text"]
+            .iter()
+            .any(|f| e.contains(&format!("fungsi '{}' tak dikenal", f)));
         lines.push(format!("  error: {}", e));
+        if ui {
+            lines.push(String::from("  (skrip UI: jalankan sebagai aplikasi dengan 'run FILE', mis. 'run MAIN.JS')"));
+        }
     }
     lines
 }
@@ -1584,7 +1602,38 @@ fn prof_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     }
 }
 
+/// `csx [FILE] [args]`: a C# script through the bytecode engine (`csx.rs`).
+fn csx_cmd(args: &[&str]) -> (Vec<String>, Effect) {
+    let (src, label) = match args.first() {
+        None => (String::from(crate::csx::DEMO), String::from("demo")),
+        Some(path) => match vfs::read(&resolve(Some(path))) {
+            Ok(bytes) => (String::from_utf8_lossy(&bytes).into_owned(), String::from(*path)),
+            Err(e) => return (vec![format!("csx: {}: {}", path, e)], Effect::None),
+        },
+    };
+    let script_args: Vec<String> = args.iter().skip(1).map(|a| String::from(*a)).collect();
+    let t0 = crate::arch::cpu::nanos();
+    let out = crate::csx::run(&src, &script_args);
+    let ms = (crate::arch::cpu::nanos().saturating_sub(t0)) / 1_000_000;
+    let mut lines = vec![format!("[C#] {} ({} instruksi, {} ms)", label, out.steps, ms)];
+    for l in &out.lines {
+        lines.push(format!("  {}", l));
+    }
+    if let Some(e) = out.error {
+        let ui = e.contains("'Ui.");
+        lines.push(format!("  error: {}", e));
+        if ui {
+            lines.push(String::from("  (skrip UI: jalankan sebagai aplikasi dengan 'run FILE', mis. 'run MAIN.CSX')"));
+        }
+    }
+    (lines, Effect::None)
+}
+
 fn script_cmd(cmd: &str, args: &[&str]) -> (Vec<String>, Effect) {
+    // `script cs FILE` / `script csx FILE`: C# script
+    if cmd == "script" && matches!(args.first().copied(), Some("cs") | Some("csx") | Some("csharp")) {
+        return csx_cmd(&args[1..]);
+    }
     // Direct form: `js|ts|py [path]`
     if let Some(lang) = lang_of(cmd) {
         return match args.first().copied() {

@@ -134,6 +134,20 @@ Avalonia-style toolkit. Double-click **Managed Apps** on the desktop, or see
 | **Berkas** — tree, sortable grid, preview | **Pemantau** — live stats, processes, end task |
 | [![Files](docs/img/managed-files.png)](docs/img/managed-files.png) | [![Task monitor](docs/img/managed-tasks.png)](docs/img/managed-tasks.png) |
 
+### Studio & script apps
+
+**[Buitenzorg Studio](docs/studio.md)** is the IDE inside the OS, with 52
+project templates. Apps with a window can be written in JavaScript,
+TypeScript, Python ([guide](docs/script-ui.md)) or C# script
+([guide](docs/csharp-script.md)) and run straight away, with no build step.
+
+| | |
+|---|---|
+| **Buitenzorg Studio** — editor, templates, Run (F5) | **Forms in JS / TS / Python** — sign-up form, Pong, BMI calculator |
+| [![Studio](docs/img/studio.png)](docs/img/studio.png) | [![Script UI templates](docs/img/script-ui-templates.png)](docs/img/script-ui-templates.png) |
+| **C# script (`.csx`)** — address book, to-do list, function plotter | **Drawing & utilities** — spirograph (TS), mandala (Python), Pomodoro (JS) |
+| [![C# script forms](docs/img/csharp-script-forms.png)](docs/img/csharp-script-forms.png) | [![Drawing templates](docs/img/studio-ui-templates.png)](docs/img/studio-ui-templates.png) |
+
 ### Official wallpapers
 
 Eight built-in wallpapers ship with the OS — AI-generated artwork in different

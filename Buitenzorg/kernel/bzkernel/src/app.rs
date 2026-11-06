@@ -186,9 +186,13 @@ pub fn spawn_named(name: &str) -> Result<u64, &'static str> {
 pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
     // A managed (.NET) app: `x.dll`, or a name with no native ELF whose
     // /disk/<NAME>.DLL exists. It runs in the RustCLR host, CLRHOST.ELF.
+    // a UI script (/path/APP.JS|TS|PY): the script host in CLRHOST.ELF
+    if let Some(script) = crate::clr::script_for(target) {
+        return crate::clr::spawn(&script, args);
+    }
     if app_file(target).is_none() {
-        // a package whose entry is a managed app
-        if let Some(entry) = crate::bzpkg::entry_for(target).filter(|e| e.ends_with(".DLL")) {
+        // a package whose entry is a managed app or a UI script
+        if let Some(entry) = crate::bzpkg::entry_for(target).filter(|e| e.ends_with(".DLL") || crate::clr::script_for(&alloc::format!("/{}", e)).is_some()) {
             return crate::clr::spawn(&alloc::format!("/disk/{}", entry), args);
         }
         if let Some(dll) = crate::clr::dll_for(target) {
@@ -259,5 +263,6 @@ fn builtin_app_file(name: &str) -> Option<&'static str> {
 pub fn is_app(name: &str) -> bool {
     app_file(name).is_some()
         || crate::clr::dll_for(name).is_some()
-        || crate::bzpkg::entry_for(name).is_some_and(|e| e.ends_with(".DLL"))
+        || crate::clr::script_for(name).is_some()
+        || crate::bzpkg::entry_for(name).is_some_and(|e| e.ends_with(".DLL") || crate::clr::script_for(&alloc::format!("/{}", e)).is_some())
 }

@@ -347,11 +347,11 @@ public sealed class Studio
     void NewProjectDialog()
     {
         var name = new TextBox { Watermark = "nama (maks 8 huruf, mis. HALO)", Text = "" };
-        var combo = new ComboBox(Templates.All, 0) { DisplayText = o => ((Template)o).ToString(), MinWidth = 340 };
-        var about = new TextBlock(Templates.All[0].UseCase + ": " + Templates.All[0].Description) { TextWrapping = TextWrapping.Wrap, MaxWidth = 360 }.WithClass("faint");
-        combo.SelectionChanged += c => { if (c.SelectedIndex >= 0) { var t = Templates.All[c.SelectedIndex]; about.Text = t.UseCase + ": " + t.Description; } };
+        var combo = new ComboBox(Templates.Catalog, 0) { DisplayText = o => ((Template)o).ToString(), MinWidth = 340 };
+        var about = new TextBlock(Templates.Catalog[0].UseCase + ": " + Templates.Catalog[0].Description) { TextWrapping = TextWrapping.Wrap, MaxWidth = 360 }.WithClass("faint");
+        combo.SelectionChanged += c => { if (c.SelectedIndex >= 0) { var t = Templates.Catalog[c.SelectedIndex]; about.Text = t.UseCase + ": " + t.Description; } };
         var body = new StackPanel { Spacing = 8 };
-        body.Children.Add(new TextBlock("Template (" + Templates.All.Length + " pilihan)"));
+        body.Children.Add(new TextBlock("Template (" + Templates.Catalog.Length + " pilihan, termasuk aplikasi ber-UI)"));
         body.Children.Add(combo);
         body.Children.Add(about);
         body.Children.Add(new TextBlock("Nama proyek"));
@@ -359,7 +359,7 @@ public sealed class Studio
         Dialog.Show(W, "Proyek baru", body, "Buat", "Batal", ok =>
         {
             if (!ok || combo.SelectedIndex < 0) return;
-            var t = Templates.All[combo.SelectedIndex];
+            var t = Templates.Catalog[combo.SelectedIndex];
             CreateProject(t, name.Text.Trim().Length > 0 ? name.Text : t.Id);
             Editor.Focus();
         });
@@ -425,6 +425,9 @@ public sealed class Studio
         _output.CaretIndex = _output.Text.Length;
     }
 
+    /// <summary>A script that opens a window (the UI API of the script host).</summary>
+    public static bool IsUiScript(string text) => text.Contains("window(") || text.Contains("Ui.Window(");
+
     /// <summary>The shell command that runs a file, or null.</summary>
     public static string? RunCommand(string path)
     {
@@ -434,6 +437,7 @@ public sealed class Studio
             case "ts": return "script ts " + path;
             case "py": return "script py " + path;
             case "sh": return "sh " + path;
+            case "csx": return "csx " + path;
             default: return null;
         }
     }
@@ -451,6 +455,18 @@ public sealed class Studio
                 ? Current.Name + ": C# dikompilasi di PC (bflat / dotnet) - lihat BUILD.TXT di proyek ini."
                 : Current.Name + ": bukan program yang bisa dijalankan (" + Syntax.DisplayName(Current.Lang) + ").");
             return null;
+        }
+        // a UI script (it opens a window): its own process through the script host
+        if (IsUiScript(Current.Text))
+        {
+            Log("$ run " + Current.Path);
+            var started = Shell.Run("run " + Current.Path);
+            foreach (var l in started.Lines) Log(l);
+            Log(started.Ok ? "aplikasi berjalan di jendelanya sendiri (print() masuk ke log sistem; tutup jendelanya untuk berhenti)" : "gagal memulai aplikasi");
+            Problems.Clear();
+            MarkProblems();
+            UpdateStatus();
+            return started;
         }
         Log("$ " + cmd);
         long t0 = Clock.Now;
@@ -511,10 +527,12 @@ public sealed class Studio
     {
         var c = new Checks("Studio");
         // templates: plenty, every file 8.3, the entry among the files
-        int langs = Templates.All.Select(t => t.Language).Distinct().Count();
-        c.That(Templates.All.Length >= 20 && langs >= 6, Templates.All.Length + " templates in " + langs + " languages");
+        int langs = Templates.Catalog.Select(t => t.Language).Distinct().Count();
+        int ui = Templates.Catalog.Count(t => t.Language.EndsWith(" UI"));
+        int csx = Templates.Catalog.Count(t => t.Language.StartsWith("C# script"));
+        c.That(Templates.Catalog.Length >= 40 && langs >= 11 && ui >= 11 && csx >= 9, Templates.Catalog.Length + " templates in " + langs + " groups, " + ui + " with a UI, " + csx + " C# script");
         bool names = true;
-        foreach (var t in Templates.All)
+        foreach (var t in Templates.Catalog)
         {
             bool entry = false;
             foreach (var (f, _) in t.Files) { if (!Files.IsValidName(f)) names = false; if (f == t.Entry) entry = true; }
@@ -525,6 +543,9 @@ public sealed class Studio
         bool blk = false;
         var spans = Syntax.Line("function fib(n) { // akar", "js", ref blk);
         c.That(spans.Count > 3 && spans[0].Kind == Tk.Keyword && spans[2].Kind == Tk.Func && spans[spans.Count - 1].Kind == Tk.Comment, "JS line: keyword, function, comment");
+        blk = false;
+        var cs = Syntax.Line("foreach (var x in list) Console.WriteLine($\"{x}\");", Syntax.LangOf("A.CSX"), ref blk);
+        c.That(cs[0].Kind == Tk.Keyword && cs.Exists(s => s.Kind == Tk.Type) && cs.Exists(s => s.Kind == Tk.Str), "C# script line: keyword, type, string");
         blk = false;
         var py = Syntax.Line("def f(x): return \"ok\" # c", "py", ref blk);
         c.That(py[0].Kind == Tk.Keyword && py.Exists(s => s.Kind == Tk.Str) && py[py.Count - 1].Kind == Tk.Comment, "Python line: def, string, comment");
@@ -582,6 +603,33 @@ public sealed class Studio
             c.That(string.Join("\n", st.Output).Contains("py 9"), "F5 runs Python too");
             var tr = st.TerminalRun("echo halo studio | wc -w");
             c.That(tr.Ok && tr.Output.Trim() == "2", "terminal panel runs a pipeline");
+            // every runnable template really runs: console ones in the kernel
+            // interpreter / the shell, UI ones as headless processes (3 frames)
+            string tdir = Files.ScratchDirectory + "/TPLTEST";
+            if (Files.GetInfo(tdir) == null) Files.CreateDirectory(tdir);
+            int ran = 0, uiRan = 0;
+            var bad = new List<string>();
+            foreach (var t in Templates.Catalog)
+            {
+                string path = tdir + "/" + t.Entry;
+                string? cmd = RunCommand(path);
+                if (cmd == null) continue;
+                string text = t.Files.First(f => f.Name == t.Entry).Text;
+                Files.WriteAllText(path, text.TrimStart('\n'));
+                if (IsUiScript(text))
+                {
+                    long pid = Programs.Start(path);
+                    long code = Programs.WaitForExit(pid);
+                    if (code != 0) bad.Add(t.Id + " (exit " + code + ")"); else uiRan++;
+                }
+                else
+                {
+                    var r = Shell.Run(cmd);
+                    if (r.Output.Contains("error:") || r.Output.StartsWith("sh: ")) bad.Add(t.Id + ": " + r.Output.Substring(Math.Max(0, r.Output.IndexOf("error:"))));
+                    else ran++;
+                }
+            }
+            c.That(bad.Count == 0, ran + " console + " + uiRan + " UI templates ran without errors" + (bad.Count > 0 ? "; failed: " + string.Join(" | ", bad) : ""));
         }
         else
         {
