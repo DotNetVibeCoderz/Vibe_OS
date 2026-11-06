@@ -92,6 +92,8 @@ jobs:
             packages: qemu-system-arm qemu-efi-aarch64
           - arch: riscv64
             packages: qemu-system-misc qemu-efi-riscv64
+            # Ubuntu 26.04 split qemu-system-riscv64 out of qemu-system-misc
+            extra: qemu-system-riscv64
     defaults:
       run:
         working-directory: Buitenzorg
@@ -99,7 +101,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install QEMU + firmware (${{ matrix.arch }})
-        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+          if [ -n "${{ matrix.extra }}" ]; then sudo apt-get install -y ${{ matrix.extra }} || echo "no package ${{ matrix.extra }} (older Ubuntu: part of the packages above)"; fi
 
       - name: Download boot images
         uses: actions/download-artifact@v4
