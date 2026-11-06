@@ -129,6 +129,7 @@ pub fn run() -> ! {
         #[cfg(target_arch = "x86_64")]
         crate::audio::poll();
         crate::deploy::poll();
+        crate::crash::flush();
         crate::ssh::poll();
         let now = interrupts::ticks();
         let mut input = false;

@@ -515,6 +515,7 @@ fn main() {
         ("sync.elf", "sync.elf"),
         ("heap.elf", "heap.elf"),
         ("statics.elf", "statics.elf"),
+        ("crashme.elf", "crashme.elf"),
         ("bcl3.elf", "bcl3.elf"),
         ("gcmem.elf", "gcmem.elf"),
         ("bcl.elf", "bcl.elf"),
@@ -742,7 +743,7 @@ fn build_riscv_programs(out_dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
         let elf = out_dir.join(format!("riscv-{stem}.elf"));
         let status = std::process::Command::new(&rustc)
             .args(["--edition", "2021", "--target", "riscv64imac-unknown-none-elf", "-C", "opt-level=2", "-C", "panic=abort"])
-            .args(["-C", "relocation-model=static", "-C", "strip=symbols", "-C", "link-arg=--no-relax"])
+            .args(["-C", "relocation-model=static", "-C", "strip=debuginfo", "-C", "link-arg=--no-relax"])
             .arg("-C")
             .arg(format!("link-arg=-T{}", ld.display()))
             .arg("-o")

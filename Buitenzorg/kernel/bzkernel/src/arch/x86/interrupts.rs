@@ -163,20 +163,20 @@ pub const FAULT_EXIT_CODE: u64 = 0xDEAD;
 /// A fault in ring-3 code is the program's bug, not the kernel's: report it
 /// and end just that program (unwinding back into its launcher, exactly like
 /// an EXIT syscall) instead of panicking the whole OS.
-fn kill_faulting_program(what: &str, frame: &InterruptStackFrame) -> ! {
-    println!(
-        "[kernel] ring-3 {} at rip={:#x} rsp={:#x} -- program terminated",
-        what,
-        frame.instruction_pointer.as_u64(),
-        frame.stack_pointer.as_u64()
-    );
+fn kill_faulting_program(what: &str, frame: &InterruptStackFrame, addr: Option<u64>) -> ! {
+    let (rip, rsp) = (frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64());
+    println!("[kernel] ring-3 {} at rip={:#x} rsp={:#x} -- program terminated", what, rip, rsp);
+    // the report reads the user stack: the faulting space is still installed
+    if let Some(pid) = Some(crate::task::current_space().id).filter(|&id| id != 0) {
+        crate::crash::record(pid, what, rip, rsp, addr, None);
+    }
     crate::usermode::exit_user(FAULT_EXIT_CODE)
 }
 
 extern "x86-interrupt" fn general_protection_handler(frame: InterruptStackFrame, code: u64) {
     if from_user(&frame) {
         crate::task::kernel_enter(); // ending a program is kernel work
-        kill_faulting_program("general protection fault", &frame);
+        kill_faulting_program("general protection fault", &frame, None);
     }
     panic!(
         "EXCEPTION: general protection fault (code {:#x})\n{:#?}",
@@ -190,7 +190,14 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         let addr = Cr2::read().ok(); // read on the faulting CPU, before moving
         crate::task::kernel_enter(); // ending a program is kernel work
         println!("[kernel] page fault address {:?} ({:?})", addr, code);
-        kill_faulting_program("page fault", &frame);
+        let what = if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
+            "page fault (instruction fetch)"
+        } else if code.contains(PageFaultErrorCode::CAUSED_BY_WRITE) {
+            "page fault (write)"
+        } else {
+            "page fault (read)"
+        };
+        kill_faulting_program(what, &frame, addr.map(|a| a.as_u64()));
     }
     panic!(
         "EXCEPTION: page fault\naccessed address: {:?}\nerror code: {:?}\n{:#?}",

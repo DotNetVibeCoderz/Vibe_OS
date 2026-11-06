@@ -31,6 +31,7 @@ try {
         @{src=@("matang.cs");          elf="matang.elf"},
         @{src=@("heap.cs");            elf="heap.elf"},
         @{src=@("statics.cs");         elf="statics.elf"},
+        @{src=@("crashme.cs");         elf="crashme.elf"},
         @{src=@("bcl3.cs", "bzbcl.cs", "bzbcl2.cs", "bzbcl3.cs"); elf="bcl3.elf"},
         @{src=@("gcmem.cs");           elf="gcmem.elf"},
         @{src=@("mproc.cs");           elf="mproc.elf"},

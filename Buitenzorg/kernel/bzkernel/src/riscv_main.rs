@@ -72,6 +72,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod crash;
 mod deploy;
 mod logring;
 mod users;
@@ -527,7 +528,7 @@ pub(crate) fn user_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
 
 /// A fatal exception in U-mode code: end that program (exit code 0xDEAD),
 /// like the x86 ring-3 #PF/#GP containment.
-pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64) -> ! {
+pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64, sp: u64, ra: u64) -> ! {
     if !usermode::user_active() {
         panic!("U-mode fault outside a user program: scause={} stval={:#x} sepc={:#x}", cause, addr, pc);
     }
@@ -540,6 +541,9 @@ pub(crate) fn user_fault(cause: u64, addr: u64, pc: u64) -> ! {
     );
     USER_FAULT_ADDR.store(addr, core::sync::atomic::Ordering::SeqCst);
     task::kernel_enter();
+    if let Some(pid) = Some(task::current_space().id).filter(|&id| id != 0) {
+        crash::record(pid, arch::riscv64::trap::exception_name(cause), pc, sp, Some(addr), Some(ra));
+    }
     usermode::exit_user(FAULT_EXIT_CODE)
 }
 
@@ -706,6 +710,12 @@ fn run_boot_programs(info: &boot::BootInfo) {
         if ok {
             println!("[kernel] MILESTONE: {}", milestone);
         }
+    }
+    if let Some(image) = find("crashme") {
+        // a deliberate fault three calls deep: ended with 0xDEAD, and the crash
+        // report's backtrace must name all three functions from the ELF symbols
+        let code = run_program("crashme", &image);
+        crash::boot_check(code, &["crashme::level3", "crashme::level2", "crashme::level1"]);
     }
     let leaked = memory::frames_in_use() as i64 - frames0 as i64;
     println!("[riscv] programs done; frames leaked: {}", leaked);

@@ -73,6 +73,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod crash;
 mod deploy;
 mod logring;
 mod users;
@@ -644,7 +645,7 @@ pub(crate) fn el0_syscall(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
 
 /// A fatal exception in EL0 code: end that program (exit code 0xDEAD), like
 /// the x86 ring-3 #PF/#GP containment.
-pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64) -> ! {
+pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64, sp: u64, lr: u64) -> ! {
     if !usermode::user_active() {
         panic!("EL0 fault outside a user program: ESR={:#x} FAR={:#x} ELR={:#x}", esr, far, elr);
     }
@@ -657,6 +658,17 @@ pub(crate) fn el0_fault(esr: u64, far: u64, elr: u64) -> ! {
     );
     USER_FAULT_FAR.store(far, core::sync::atomic::Ordering::SeqCst);
     task::kernel_enter();
+    if let Some(pid) = Some(task::current_space().id).filter(|&id| id != 0) {
+        let what = match esr >> 26 {
+            0x20 | 0x21 => "instruction abort",
+            0x24 | 0x25 => "data abort",
+            0x00 => "undefined instruction",
+            0x22 => "pc alignment fault",
+            0x26 => "sp alignment fault",
+            _ => "synchronous exception",
+        };
+        crash::record(pid, what, elr, sp, Some(far), Some(lr));
+    }
     usermode::exit_user(FAULT_EXIT_CODE)
 }
 
@@ -766,6 +778,12 @@ fn run_boot_programs(info: &boot::BootInfo) {
             }
             Err(e) => println!("[arm64] '{}': {}", name, e),
         }
+    }
+
+    if let Some(image) = find("crashme") {
+        // a deliberate fault three calls deep -> crash report with a backtrace
+        let code = app::spawn_image("crashme", &image).ok().map(app::wait);
+        crash::boot_check(code, &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
     }
 
     if let Some(image) = find("mproc") {

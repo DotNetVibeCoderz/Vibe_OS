@@ -51,6 +51,14 @@ pub fn wait_key(pid: u64) -> u64 {
     0xB2_0000_0000_0000 | pid
 }
 
+/// The name a live program was started under.
+pub fn name_of(pid: u64) -> Option<String> {
+    let apps = APPS.lock();
+    let a = apps.iter().find(|a| a.pid == pid)?;
+    let n = a.name.iter().position(|&b| b == 0).unwrap_or(a.name.len());
+    Some(String::from_utf8_lossy(&a.name[..n]).into_owned())
+}
+
 /// Set the argument string of a just-started program.
 pub fn set_args(pid: u64, args: &str) {
     if let Some(a) = APPS.lock().iter_mut().find(|a| a.pid == pid) {

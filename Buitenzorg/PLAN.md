@@ -708,6 +708,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 - **Profiler app**: zona `profile.rs` lewat syscall + sampling RIP user dari IRQ
   timer; `bz prof <app>`. **Log**: `bz logs [-f] [app]`.
 
+> **Status 2026-11-06: crash report tercapai** — fault program ring-3 menulis
+> laporan dengan backtrace ter-simbolisasi (simbol ELF + pindaian stack) ke log
+> dan `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64/ARM64/RISC-V,
+> `MILESTONE: CRASH REPORT OK`. Berikutnya: debugger app ring-3.
+
 ### E. Deploy & Run — lokal maupun remote
 > **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`
 > (protokol **BZDP v1**, UDP 7070, mati bawaan, `deploy on [kode]` dengan kode

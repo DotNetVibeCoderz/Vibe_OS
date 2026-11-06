@@ -208,7 +208,7 @@ extern "C" fn bz_trap(f: &mut TrapFrame) {
             f.x[10] = crate::user_syscall(f.x[17], f.x[10], f.x[11], f.x[12]);
             return;
         }
-        crate::user_fault(cause, f.stval, f.sepc);
+        crate::user_fault(cause, f.stval, f.sepc, f.x[2], f.x[1]);
     }
     panic!(
         "{} trap: scause={} ({}) sepc={:#x} stval={:#x} sp={:#x} ra={:#x}",

@@ -99,7 +99,7 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "crash", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
@@ -680,6 +680,35 @@ fn ssh_cmd(arg: Option<&str>) -> Vec<String> {
     }
 }
 
+/// `crash [PID|last]`: list the crash reports of ring-3 programs, or show one.
+fn crash_cmd(arg: Option<&str>) -> Vec<String> {
+    let dir = crate::crash::dir();
+    match arg {
+        None => {
+            let mut out = Vec::new();
+            match crate::vfs::list(dir) {
+                Ok(names) if !names.is_empty() => {
+                    out.push(format!("laporan crash di {}:", dir));
+                    for n in names {
+                        out.push(format!("  {}", n));
+                    }
+                    out.push(String::from("'crash PID' atau 'crash last' untuk melihat isinya"));
+                }
+                _ => out.push(String::from("belum ada laporan crash")),
+            }
+            out
+        }
+        Some("last") => match crate::crash::last() {
+            Some((_, t)) => t.lines().map(String::from).collect(),
+            None => vec![String::from("belum ada laporan crash")],
+        },
+        Some(pid) => match crate::vfs::read(&format!("{}/P{}.TXT", dir, pid.trim_start_matches('P').trim_end_matches(".TXT"))) {
+            Ok(b) => String::from_utf8_lossy(&b).lines().map(String::from).collect(),
+            Err(_) => vec![format!("crash: tidak ada laporan untuk {}", pid)],
+        },
+    }
+}
+
 /// `deploy [on [code] | off]`: the remote deploy service for the Magic App
 /// Generator (BZDP over UDP 7070, `deploy.rs`).
 fn deploy_cmd(args: &[&str]) -> Vec<String> {
@@ -761,6 +790,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
         "ps" => (ps_cmd(), Effect::None),
+        "crash" | "crashes" => (crash_cmd(args.first().copied()), Effect::None),
         "tutup" | "closeall" => {
             let n = crate::wm::close_workspace_windows();
             (vec![format!("{} jendela ditutup", n)], Effect::Redraw)
@@ -999,6 +1029,7 @@ fn help_lines() -> Vec<String> {
      "  rm <file>         hapus file",
      "  df                ruang kosong tiap mount",
      "  kill <pid>        hentikan proses app",
+     "  crash [PID|last]  laporan crash app (backtrace bersimbol)",
      "  deploy on|off     terima app dari Magic App Generator (UDP 7070)",
      "  ssh on|off        server SSH (port 22) untuk akses jarak jauh",
      "  ipconfig          alamat IP, MAC, gateway, statistik jaringan",

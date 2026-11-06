@@ -96,6 +96,7 @@ fn spawn_image_full(
     process::set_args(pid, args);
     match load_program(pid, image) {
         Ok((space, entry, stack_top)) => {
+            crate::crash::on_load(pid, image); // symbols for a crash report
             task::spawn_process(entry_override.unwrap_or(entry), stack_top, space);
             Ok(pid)
         }
@@ -113,6 +114,7 @@ pub fn process_exited(pid: u64, code: u64) {
     let space = task::current_space();
     task::detach_current_from_space(pid);
     destroy_when_home(space);
+    crate::crash::on_exit(pid);
     process::app_exit(pid, code);
     crate::println!("[app] process {} exited with code {:#x}", pid, code);
 }
@@ -137,6 +139,7 @@ pub fn kill(pid: u64) -> bool {
         return false;
     };
     destroy_when_home(space);
+    crate::crash::on_exit(pid);
     process::app_exit(pid, KILLED_EXIT_CODE);
     crate::println!("[app] process {} killed", pid);
     true
@@ -227,6 +230,7 @@ fn builtin_app_file(name: &str) -> Option<&'static str> {
         "sync" => Some("SYNC.ELF"),
         "heap" => Some("HEAP.ELF"),
         "statics" => Some("STATICS.ELF"),
+        "crashme" => Some("CRASHME.ELF"),
         "bcl3" => Some("BCL3.ELF"),
         "gcmem" => Some("GCMEM.ELF"),
         "bcl" => Some("BCL.ELF"),

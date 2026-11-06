@@ -223,7 +223,8 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
         }
         // Any other synchronous exception from user code (bad access,
         // undefined instruction, ...) ends that program, not the kernel.
-        crate::el0_fault(esr, far, elr);
+        let (lr, sp) = unsafe { (frame.add(30).read(), frame.add(33).read()) };
+        crate::el0_fault(esr, far, elr, sp, lr);
     }
     // A data abort inside `probe_read32`: skip the load (ELR is saved at
     // frame[31] and restored before eret) and report it.

@@ -408,7 +408,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [ ] C# lewat remote build server (`bz build-server` di host) · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
   - [ ] Integrasi debugger (breakpoint gutter, variabel, call stack)
 - **Debugging & Diagnostik**
-  - [ ] Crash report app ring-3: register + backtrace ter-simbolisasi (symtab ELF) → `/ram/crash/`
+  - [x] **Crash report app ring-3** ✓ (2026-11-06): fault + pc/sp/lr + backtrace ter-simbolisasi (symtab ELF disimpan saat load, pindaian stack untuk alamat kembali setelah instruksi call; demangle Rust v0/legacy) → log + `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64, ARM64, RISC-V; `MILESTONE: CRASH REPORT OK` (`crashme.cs` / `crashme.rs`)
   - [ ] Debugger app ring-3 (`int3` + single-step, baca/tulis reg/memori, `bz debug <app>`)
   - [ ] GDB remote stub di kernel (serial COM2 → TCP) — debug di hardware nyata
   - [ ] VS Code DAP adapter (breakpoint/step/variabel/stack)

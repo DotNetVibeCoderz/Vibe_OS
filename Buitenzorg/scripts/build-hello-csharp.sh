@@ -40,6 +40,7 @@ build_prog thread thread.cs
 build_prog sync sync.cs
 build_prog heap heap.cs
 build_prog statics statics.cs
+build_prog crashme crashme.cs
 build_prog bcl3 bcl3.cs bzbcl.cs bzbcl2.cs bzbcl3.cs
 build_prog gcmem gcmem.cs
 build_prog bcl bcl.cs bzbcl.cs

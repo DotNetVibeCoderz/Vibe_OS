@@ -70,6 +70,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod crash;
 mod deploy;
 mod logring;
 mod users;
@@ -555,6 +556,11 @@ fn matang_demo() {
 
     // Static reference fields in native C#: bzstart.rs initializes the GC
     // statics (the runtime's InitializeStatics, missing from zerolib).
+    // A deliberate fault three calls deep: the program ends and a crash
+    // report with a symbolized backtrace is written (crash.rs).
+    if let Ok(code) = app::run_named("crashme") {
+        crash::boot_check(Some(code), &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
+    }
     match app::run_named("statics") {
         Ok(code) => println!("[kernel] statics app exited (code {})", code),
         Err(e) => println!("[kernel] statics app not run: {}", e),

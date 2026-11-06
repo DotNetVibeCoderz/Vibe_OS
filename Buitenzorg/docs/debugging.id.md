@@ -154,6 +154,41 @@ Batasan: mengukur waktu **inklusif** scope (termasuk anak-anaknya); rekursi zona
 bernama sama menghitung ganda. Untuk "self time", pisahkan kerja anak ke zona
 bernama sendiri (seperti `wm::compose` vs `fb::present`).
 
+## 💥 Laporan crash (program ring-3)
+
+Saat sebuah program fault (pointer salah, alamat tak terpetakan, instruksi
+tak dikenal), kernel hanya mengakhiri program itu -- dan menulis laporan:
+jenis fault, pc / sp (plus link register di ARM64 / RISC-V), dan **backtrace
+bersimbol**, ke log dan ke `/ram/CRASH/P<pid>.TXT` (`/disk/CRASH/` bila tidak
+ada `/ram`).
+
+```text
+=== crash report: pid 1009 'crashme' ===
+page fault (read), address 0x8
+pc 0x401481  crashme_Crash__Level3+0x1
+sp 0x7001ff90
+backtrace (return addresses found on the stack, innermost first):
+  #0  0x401481  crashme_Crash__Level3+0x1
+  #1  0x4014a6  crashme_Crash__Level2+0xa
+  #2  0x4014b4  crashme_Crash__Level1+0x8
+  #3  0x4016a7  crashme__Module___StartupCodeMain+0x47
+  #4  0x4000b2  _start+0x26
+```
+
+- Di Terminal: `crash` mendaftar laporan, `crash PID` / `crash last`
+  menampilkan satu; dari PC, `bz pull /ram/CRASH/P1009.TXT` atau `bz logs`.
+- **Simbol** diambil dari tabel simbol ELF program itu sendiri, disimpan saat
+  program dimuat: C# native (bflat) menamai metode `assembly_Class__Method`,
+  simbol Rust di-demangle (`crashme::level3`). Program yang di-strip hanya
+  mendapat alamat.
+- **Backtrace-nya hasil pindaian stack:** kode C# dan Rust hasil kompilasi
+  tidak wajib menyimpan frame pointer, jadi kernel mencari kata di stack yang
+  menunjuk ke kode program *tepat setelah instruksi call*. Itu menemukan
+  pemanggilan yang aktif; alamat kembali basi di slot stack yang sudah mati
+  bisa ikut muncul.
+- Boot self-test sengaja membuat `CRASHME.ELF` crash dan mewajibkan ketiga
+  tingkatnya ada di laporan: `MILESTONE: CRASH REPORT OK`.
+
 ## Ringkasan perintah
 
 ```powershell

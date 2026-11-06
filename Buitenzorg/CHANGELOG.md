@@ -14,6 +14,16 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Crash reports for ring-3 programs** (`crash.rs`, every architecture): a
+  faulting program is still ended, and now a report -- the fault, pc / sp
+  (+ link register), and a backtrace symbolized from the program's own ELF
+  symbol table (kept at load; Rust v0 and legacy names demangled) -- goes to
+  the log and to `/ram/CRASH/P<pid>.TXT` (`/disk/CRASH` without `/ram`).
+  The backtrace scans the user stack for return addresses that follow a
+  call instruction (no frame pointers needed). Shell `crash [PID|last]`.
+  `CRASHME.ELF` (C#, x86 + ARM64) and `crashme` (Rust, RISC-V) fault three
+  calls deep on purpose -> `MILESTONE: CRASH REPORT OK`. RISC-V user
+  programs now keep their symbol table (`strip=debuginfo`).
 - **bz-link: `bz` drives a running device** -- `bz device connect HOST CODE`,
   `bz deploy FILE|DIR` (upload to /disk and start it: programs and scripts
   `run`, `.SH` `sh`, packages `bz install` + run, a project folder is packed

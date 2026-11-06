@@ -153,6 +153,40 @@ Limitation: it measures a scope's **inclusive** time (including its children);
 recursion of a same-named zone double-counts. For "self time", split the child
 work into its own zone (as with `wm::compose` vs `fb::present`).
 
+## 💥 Crash reports (ring-3 programs)
+
+When a program faults (a bad pointer, an unmapped address, an undefined
+instruction), the kernel ends just that program -- and writes a report: the
+fault, pc / sp (and the link register on ARM64 / RISC-V), and a
+**symbolized backtrace**, to the log and to `/ram/CRASH/P<pid>.TXT`
+(`/disk/CRASH/` where there is no `/ram`).
+
+```text
+=== crash report: pid 1009 'crashme' ===
+page fault (read), address 0x8
+pc 0x401481  crashme_Crash__Level3+0x1
+sp 0x7001ff90
+backtrace (return addresses found on the stack, innermost first):
+  #0  0x401481  crashme_Crash__Level3+0x1
+  #1  0x4014a6  crashme_Crash__Level2+0xa
+  #2  0x4014b4  crashme_Crash__Level1+0x8
+  #3  0x4016a7  crashme__Module___StartupCodeMain+0x47
+  #4  0x4000b2  _start+0x26
+```
+
+- In the Terminal: `crash` lists the reports, `crash PID` / `crash last`
+  shows one; from a PC, `bz pull /ram/CRASH/P1009.TXT` or `bz logs`.
+- **Symbols** come from the program's own ELF symbol table, kept when the
+  program is loaded: native C# (bflat) names methods `assembly_Class__Method`,
+  Rust symbols are demangled (`crashme::level3`). A stripped program gets
+  addresses only.
+- **The backtrace is a stack scan:** compiled C# and Rust code need not keep
+  frame pointers, so the kernel looks for stack words that point into the
+  program's code *right after a call instruction*. That finds the active
+  calls; a stale return address in a dead stack slot can appear too.
+- The self-test boot crashes `CRASHME.ELF` on purpose and requires the three
+  levels in the report: `MILESTONE: CRASH REPORT OK`.
+
 ## Command summary
 
 ```powershell
@@ -161,6 +195,10 @@ work into its own zone (as with `wm::compose` vs `fb::present`).
 
 # Profiler (in the OS shell)
 prof self
+
+# Crash reports (in the OS shell)
+crash            # list
+crash last       # the newest report
 ```
 
 ---
