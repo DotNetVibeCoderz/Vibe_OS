@@ -53,7 +53,7 @@ const CATEGORIES: [Category; 5] = [
         leaf: gfx::rgb(0x7F, 0xB3, 0xE0),
         // Interactive managed apps (RustCLR + Buitenzorg.UI, every architecture);
         // the native boot-demo programs stay reachable from the terminal (`run calc`).
-        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas")],
+        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas"), ("mstudio", "Studio")],
     },
     Category {
         name: "Multimedia",
@@ -102,9 +102,10 @@ fn ctx_height() -> i32 {
 }
 
 /// Desktop launcher icons (top-left), as (launch-name, label).
-const DESKTOP: [(&str, &str); 5] = [
+const DESKTOP: [(&str, &str); 6] = [
     ("mfiles", "Berkas"),
     ("mnotes", "Catatan"),
+    ("mstudio", "Studio"),
     ("mcalc", "Kalkulator"),
     ("mtasks", "Task Manager"),
     // the folder of managed (RustCLR + Buitenzorg.UI) apps: /disk/MANAGED.DLL

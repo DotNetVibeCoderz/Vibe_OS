@@ -27,6 +27,7 @@ public static class Folder
         new AppInfo("mcalc", "Kalkulator", "Hitung cepat, dengan riwayat", IconKind.Grid, 0xE9B44C),
         new AppInfo("m2048", "2048", "Gabungkan ubin sampai berbunga", IconKind.Grid, 0xF0844B),
         new AppInfo("mnotes", "Catatan", "Tulis dan simpan ke /disk", IconKind.File, 0x7CC4A4),
+        new AppInfo("mstudio", "Studio", "IDE: proyek, editor kode, jalankan (F5)", IconKind.File, 0x9CC9D9),
         new AppInfo("mfiles", "Berkas", "Jelajahi media dan program", IconKind.Folder, 0x7FB2D9),
         new AppInfo("mtasks", "Pemantau", "Proses, memori, akhiri tugas", IconKind.Cpu, 0x8FA8E8),
         new AppInfo("mxox", "XOX", "Lawan komputer yang tak terkalahkan", IconKind.Close, 0x62AD7C),
@@ -162,6 +163,7 @@ public static class Folder
         Report(MFiles.FilesApp.SelfTest());
         Report(MTasks.TasksApp.SelfTest());
         Report(MNotes.NotesApp.SelfTest());
+        Report(MStudio.Studio.SelfTest()); // the IDE: templates, editor, Run through SHELL_RUN, Problems
         Report(MHwLab.LabApp.SelfTest()); // board I/O: a quick "no board" check off a Raspberry Pi
         Report(MSettings.SettingsApp.SelfTest()); // the SETTING syscall, end to end (restores every value)
         Report(MWaktu.WaktuApp.SelfTest()); // time zone / language / 12-24 h / setting the clock (restores them)

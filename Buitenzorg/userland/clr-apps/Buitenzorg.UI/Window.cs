@@ -357,7 +357,7 @@ public sealed class Window : Control
         if (key == '\r') key = Keys.Enter;
         HideTip();
         var e = new KeyEventArgs { Key = key, Source = _focused };
-        if (_focused != null && key != Keys.Tab)
+        if (_focused != null && (key != Keys.Tab || _focused.AcceptsTab))
         {
             if (!_focused.PseudoClasses.Contains(":focus-visible") && !Keys.IsPrintable(key)) _focused.SetPseudo(":focus-visible", true);
             for (var c = _focused; c != null && !e.Handled; c = c.Parent) c.OnKeyDown(e);

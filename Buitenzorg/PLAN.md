@@ -672,6 +672,12 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 - **Izin dari manifest** (fs/net/audio/ai) ditegakkan permission broker.
 
 ### C. IDE di dalam OS — "Buitenzorg Studio"
+> **Fase 1 ✓ (2026-11-06):** app managed `MStudio` — explorer proyek, tab,
+> editor kode (nomor baris, pewarnaan C#/JS/TS/Python/shell/JSON, undo/redo,
+> auto-indent, cari/ganti, ke baris), Jalankan (F5) JS/TS/Python/shell lewat
+> syscall `SHELL_RUN`, panel Keluaran/Masalah (galat parse + baris)/Terminal,
+> **25 template** lintas bahasa dan kasus penggunaan. Belum: build C# di OS
+> (remote build server), debugger/breakpoint, seleksi mouse + clipboard.
 - **Editor kode**: multi-tab, nomor baris, **syntax highlighting** (C#/JS/TS/
   Python/manifest), find/replace, go-to-line, auto-indent, undo/redo.
 - **Explorer proyek** (pohon berkas + template "New Project"), **panel terminal

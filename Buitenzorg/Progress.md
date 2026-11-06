@@ -400,9 +400,9 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [ ] Repo index remote + `bz update/upgrade` + versi + dependency resolution + rollback — butuh TCP
   - [x] State terpasang persisten (`/disk/PKGS.CFG`) ✓ · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
 - **IDE "Buitenzorg Studio"**
-  - [ ] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/manifest) + find/replace + undo/redo
-  - [ ] Explorer proyek + New Project dari template + panel Terminal/Problems/Output
-  - [ ] Run instan JS/TS/Python via `script.rs`
+  - [x] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/shell/JSON) + find/replace + undo/redo + auto-indent ✓ (2026-11-06, `MStudio`)
+  - [x] Explorer proyek + New Project dari **25 template** (JS/TS/Python/shell/C#/paket/JSON) + panel Terminal/Masalah/Keluaran ✓
+  - [x] Run instan JS/TS/Python/shell via `script.rs` + syscall `SHELL_RUN` (58); galat parse bernomor baris ✓ — `Studio: 23 checks, 0 failed` saat boot
   - [ ] C# lewat remote build server (`bz build-server` di host) · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
   - [ ] Integrasi debugger (breakpoint gutter, variabel, call stack)
 - **Debugging & Diagnostik**

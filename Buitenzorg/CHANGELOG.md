@@ -25,6 +25,20 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   `<`, `;` `&&` `||`, variables (`NAME=value`, `$NAME`, `${NAME}`, `$?`,
   `export`/`env`/`unset`), single/double quotes and `\` escapes, `*`/`?` globs,
   `.`/`..` in paths, and `ls` with several operands.
+- **Buitenzorg Studio** (`userland/clr-apps/MStudio`, `run mstudio`, desktop
+  icon, Start menu → Kantor): an IDE inside the OS — project explorer, tabs, a
+  code editor (line numbers, syntax colors for C#/JS/TS/Python/shell/JSON,
+  undo/redo, auto-indent, find/replace, go to line), **Run (F5)** for
+  JavaScript/TypeScript/Python/shell, Output, Problems (parse errors with their
+  line, click to jump) and a Terminal panel; **25 project templates** across
+  JavaScript, TypeScript, Python, shell, C#, packages and JSON. Self-test 23
+  checks (`Studio: 23 checks, 0 failed`). Guide: `docs/studio.md`.
+- **Syscall `SHELL_RUN` (58, ABI `COUNT` 59):** run a command line in the
+  built-in shell and get its output (`Buitenzorg.App.Shell.Run`).
+- **Script errors carry a line:** the interpreter reports parse/lex errors as
+  `parse: baris N: ...`.
+- Buitenzorg.UI: `Control.AcceptsTab` lets a control take Tab instead of moving
+  the focus.
 - **Native C#: casts, interfaces, arrays of references.** The shim implements
   the runtime's `RhTypeCast_*` helpers (casts, `is`/`as`, pattern matching,
   `switch` on types — before, a program with a cast did not even link),

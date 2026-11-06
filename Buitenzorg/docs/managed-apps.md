@@ -19,6 +19,7 @@ toolkit, **Buitenzorg.UI**, and the **Managed Apps** folder built with it.
 | `mcalc` | Kalkulator | MVVM bindings, a keypad `Grid`, a history flyout, keyboard input |
 | `m2048` | 2048 | A custom-drawn control, swipe + arrow input, pop animation, a modal dialog |
 | `mnotes` | Catatan | `Menu` with shortcuts (Ctrl+S/N/B/T), `SplitView`, multi-line `TextBox`, toasts |
+| `mstudio` | Studio | The IDE ([studio.md](studio.md)): a custom `CodeEditor` control, `TabControl` panels, a `Dialog` with a `ComboBox` of 25 templates, `Shell.Run` |
 | `mfiles` | Berkas | `TreeView`, `GridSplitter`, sortable `DataGrid`, `Expander` preview, context menu |
 | `mtasks` | Pemantau | Live stat cards, `ProgressBar`, `DataGrid` of processes, `ToggleSwitch`, end-task dialog |
 | `mxox` | XOX | `RadioButton` groups, a toggle, an alpha-beta opponent |

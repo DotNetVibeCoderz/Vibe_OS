@@ -65,6 +65,8 @@ public class Control : UIObject
     public string? Name { get; set; }
     public object? Tag { get; set; }
     public bool Focusable { get; set; }
+    /// <summary>Tab reaches this control's OnKeyDown (a code editor indents) instead of moving the focus.</summary>
+    public bool AcceptsTab { get; set; }
     public bool IsHitTestVisible { get; set; } = true;
     public bool ClipToBounds { get; set; }
     public Styles? Styles { get; set; }
