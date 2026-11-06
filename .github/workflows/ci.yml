@@ -92,8 +92,8 @@ jobs:
             packages: qemu-system-arm qemu-efi-aarch64
           - arch: riscv64
             packages: qemu-system-misc qemu-efi-riscv64
-            # Ubuntu 26.04 split qemu-system-riscv64 out of qemu-system-misc
-            extra: qemu-system-riscv64
+            # Ubuntu 26.04 moved qemu-system-riscv64 out of qemu-system-misc into qemu-system-riscv
+            extra: qemu-system-riscv
     defaults:
       run:
         working-directory: Buitenzorg
