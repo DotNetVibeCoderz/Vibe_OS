@@ -426,6 +426,7 @@ sealed class ScriptSession : Session
     bool _errorShown;
     readonly bool _stopOnEntry;
     public const int MaxStops = 400;
+    public static TimeSpan MaxUiWait = TimeSpan.FromMinutes(30);
 
     public ScriptSession(DapServer dap, IDebugDevice dev, JsonObject a, string program) : base(dap, dev)
     {
@@ -436,12 +437,26 @@ sealed class ScriptSession : Session
         string text = File.ReadAllText(LocalPath);
         string ext = Path.GetExtension(LocalPath).ToLowerInvariant();
         string lang = ext switch { ".js" => "js", ".ts" => "ts", ".py" => "py", _ => "csx" };
-        if (text.Contains("window(") || text.Contains("Ui.Window("))
-            throw new InvalidOperationException("skrip UI (yang membuka jendela) belum bisa di-debug; jalankan dengan 'bz deploy'");
         string remote = a["remotePath"]?.GetValue<string>() ?? RemoteName(LocalPath);
         Dap.Output($"bz dap: {Name} -> {remote}", "console");
         Dev.Upload(remote, Encoding.UTF8.GetBytes(text));
         var (_, output) = Dev.Exec($"script debug {lang} {remote} all");
+        // a UI script runs as an app in its window while it records: wait for
+        // it to end (the user closes the window), then replay its stops
+        var ui = output.Split('\n').FirstOrDefault(l => l.StartsWith("@dbgui "))?.Trim().Split(' ');
+        if (ui is { Length: >= 3 })
+        {
+            Dap.Output($"bz dap: {Name} berjalan di jendelanya di perangkat (pid {ui[1]}); henti direkam -- tutup jendelanya untuk mulai memutar ulang", "console");
+            string status = $"script debug status {ui[1]} {ui[2]}";
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (true)
+            {
+                output = Dev.Exec(status).Output;
+                if (!output.StartsWith("@dbgui running")) break;
+                if (waited.Elapsed > MaxUiWait) throw new InvalidOperationException($"aplikasi UI pid {ui[1]} masih berjalan setelah {MaxUiWait.TotalMinutes:0} menit");
+                Thread.Sleep(500);
+            }
+        }
         Parse(output);
         Dap.Output($"bz dap: {_stops.Count} henti direkam" + (_stops.Count >= MaxStops ? $" (batas {MaxStops}: sisa program berjalan tanpa rekaman)" : ""), "console");
     }

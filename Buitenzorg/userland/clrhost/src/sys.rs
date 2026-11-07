@@ -12,6 +12,15 @@ pub const EXIT: u64 = 2;
 pub const MMAP: u64 = 13;
 pub const MPROTECT: u64 = 14;
 pub const FS_READ: u64 = 30;
+pub const FS_WRITE: u64 = 32;
+
+/// Write a whole VFS file (FS_WRITE); false when it failed.
+pub fn write_file(path: &str, data: &[u8]) -> bool {
+    let mut cpath = Vec::with_capacity(path.len() + 1);
+    cpath.extend_from_slice(path.as_bytes());
+    cpath.push(0);
+    !is_err(syscall(FS_WRITE, cpath.as_ptr() as u64, data.as_ptr() as u64, data.len() as u64))
+}
 pub const CLOCK_RTC: u64 = 33;
 pub const PROC_ARGS: u64 = 42;
 

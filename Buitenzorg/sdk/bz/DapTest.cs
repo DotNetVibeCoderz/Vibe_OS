@@ -26,6 +26,17 @@ static class DapCli
         "}\n" +                          // 9
         "print(\"total=\" + total);\n";  // 10
 
+    // A UI script that ends itself after 4 frames (on the live desktop
+    // `running()` stays true until the window is closed).
+    public const string UiTestScript =
+        "window(\"DAP\", 160, 100);\n" +   // 1
+        "let n = 0;\n" +                   // 2
+        "while (running() && n < 4) {\n" + // 3
+        "  n = n + 1;\n" +                 // 4
+        "  present();\n" +                 // 5
+        "}\n" +                            // 6
+        "print(\"frames \" + n);\n";       // 7
+
     public static int Run(string[] rest, Func<IDebugDevice?> connect)
     {
         switch (rest)
@@ -218,6 +229,37 @@ static class DapCli
                 c.Request("disconnect");
             }
 
+            Console.WriteLine($"bz dap: UI script session ({label})");
+            string uiFile = Path.Combine(dir, "DAPUI.JS");
+            File.WriteAllText(uiFile, UiTestScript);
+            using (var c = new Client(_ => device()))
+            {
+                c.Request("initialize", new JsonObject { ["adapterID"] = "buitenzorg" });
+                c.Event("initialized");
+                c.Request("launch", new JsonObject { ["program"] = uiFile });
+                c.Request("setBreakpoints", new JsonObject
+                {
+                    ["source"] = new JsonObject { ["path"] = uiFile },
+                    ["breakpoints"] = new JsonArray { new JsonObject { ["line"] = 5 } },
+                });
+                c.Request("configurationDone");
+                c.Event("stopped");
+                c.Request("continue", new JsonObject { ["threadId"] = 1 });
+                c.Event("stopped");
+                var st = (c.Request("stackTrace", new JsonObject { ["threadId"] = 1 })["stackFrames"] as JsonArray)!;
+                var g = (c.Request("variables", new JsonObject { ["variablesReference"] = 2 })["variables"] as JsonArray)!;
+                string n = g.FirstOrDefault(v => v!["name"]!.GetValue<string>() == "n")?["value"]?.GetValue<string>() ?? "?";
+                Expect(st[0]!["line"]!.GetValue<int>() == 5 && n == "2", $"UI app recorded while it ran in its window: second stop on line 5 with n={n}");
+                c.Request("continue", new JsonObject { ["threadId"] = 1 });
+                c.Event("stopped");
+                c.Request("continue", new JsonObject { ["threadId"] = 1 });
+                c.Event("stopped");
+                c.Request("continue", new JsonObject { ["threadId"] = 1 });
+                var ex = c.Event("exited");
+                Expect(ex["exitCode"]?.GetValue<int>() == 0 && c.Output.Contains("frames 4"), "UI app: 4 stops, then it ends (printed frames 4)");
+                c.Request("disconnect");
+            }
+
             if (native is var (app, func, caller))
             {
                 Console.WriteLine($"bz dap: native session, {app} ({label})");
@@ -275,8 +317,18 @@ static class DapCli
 
         public void Upload(string remotePath, byte[] data) => _files[remotePath] = data;
 
+        int _uiPolls;
+
         public (bool, string) Exec(string line)
         {
+            if (line.StartsWith("script debug js ") && line.Contains("DAPUI.JS"))
+                return (false, "@dbgui 9 /ram/UIDBG0.TXT\naplikasi UI pid 9 berjalan di jendelanya\n");
+            if (line == "script debug status 9 /ram/UIDBG0.TXT")
+            {
+                if (_uiPolls++ < 2) return (false, "@dbgui running 9\n");
+                string recs = string.Concat(Enumerable.Range(1, 4).Select(k => $"@dbg 5\t0\t<main>:5\t\tn={k}\n"));
+                return (false, "[js] (40 langkah, 4 henti)\n  frames 4\n" + recs);
+            }
             if (line.StartsWith("script debug js "))
             {
                 string path = line.Split(' ')[3];

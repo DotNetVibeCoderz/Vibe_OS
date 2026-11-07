@@ -94,24 +94,34 @@ Scripts in **JavaScript, TypeScript, Python and C# script** can be debugged:
 ![The debugger in Studio: a breakpoint on line 3, the stop, the globals](img/studio-debugger.png)
 
 It is a *record, then replay* debugger: you can move backwards in time, but
-not change a value and continue. Up to 400 stops are recorded per run. UI
-scripts (the ones that open a window) are not debugged yet; native programs
-are debugged with `dbg` in the Terminal ([Debugging](debugging.md)). The
-same records come from the shell: `script debug js MAIN.JS 4,9` (or `all`).
+not change a value and continue. Up to 400 stops are recorded per run.
+Native programs are debugged with `dbg` in the Terminal
+([Debugging](debugging.md)). The same records come from the shell:
+`script debug js MAIN.JS 4,9` (or `all`).
+
+**UI scripts** (the ones that open a window) are debugged too: F6 starts the
+app in its own window *while it records* -- click its buttons, type into it --
+and when you close the window its stops arrive in the Debug tab. Put the
+breakpoints where your event handling is (the line that reacts to a click),
+not only on every line: with no breakpoint the 400 stops are used up in the
+first frames. Under the hood: `script debug` answers `@dbgui PID FILE` and
+starts `CLRHOST.ELF FILE --bzdebug LINES REPORT`; Studio polls
+`script debug status PID FILE` every half second until the report is there.
 
 ## Limits (honest)
 
 - C# is not compiled inside the OS: the C# templates explain the build on a PC
   (bflat / `dotnet build`, `bz pack`, deploy).
-- The debugger replays a recorded run (no changing values mid-run); UI
-  scripts are not debugged yet. No mouse selection or clipboard in the editor.
+- The debugger replays a recorded run (no changing values mid-run); a UI
+  script's stops are shown after its window closes. No mouse selection or
+  clipboard in the editor.
 - Large files: the editor keeps lines in memory and draws only the visible
   ones, but it runs in the RustCLR interpreter — files of a few thousand lines
   stay usable.
 
 Implementation: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
 `Syntax.cs`, `Templates.cs`, `Debugger.cs`); runs through syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 30 checks (it runs every runnable template, the UI ones as headless processes), part of
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 31 checks on the device (it runs every runnable template, the UI ones as headless processes, and debugs a UI script), part of
 `Managed --selftest` at boot.
 
 ---

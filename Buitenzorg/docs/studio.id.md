@@ -96,23 +96,33 @@ Skrip **JavaScript, TypeScript, Python dan C# script** bisa di-debug:
 
 Ini debugger *rekam, lalu putar ulang*: bisa mundur dalam waktu, tetapi tidak
 bisa mengubah nilai lalu melanjutkan. Paling banyak 400 henti direkam per
-eksekusi. Skrip UI (yang membuka jendela) belum bisa di-debug; program native
-di-debug dengan `dbg` di Terminal ([Debugging](debugging.id.md)). Rekaman yang
-sama tersedia dari shell: `script debug js MAIN.JS 4,9` (atau `all`).
+eksekusi. Program native di-debug dengan `dbg` di Terminal
+([Debugging](debugging.id.md)). Rekaman yang sama tersedia dari shell:
+`script debug js MAIN.JS 4,9` (atau `all`).
+
+**Skrip UI** (yang membuka jendela) juga bisa di-debug: F6 menjalankan
+aplikasinya di jendelanya sendiri *sambil merekam* -- klik tombolnya, ketik
+di dalamnya -- dan saat jendelanya ditutup, henti-hentinya muncul di tab
+Debug. Pasang breakpoint di tempat penanganan event (baris yang bereaksi pada
+klik), jangan hanya mengandalkan "setiap baris": tanpa breakpoint, 400 henti
+habis di beberapa frame pertama. Di baliknya: `script debug` menjawab
+`@dbgui PID FILE` dan menjalankan `CLRHOST.ELF FILE --bzdebug BARIS LAPORAN`;
+Studio menanyakan `script debug status PID FILE` tiap setengah detik sampai
+laporannya ada.
 
 ## Batasan (jujur)
 
 - C# belum dikompilasi di dalam OS: template C# menjelaskan build di PC
   (bflat / `dotnet build`, `bz pack`, deploy).
 - Debugger memutar ulang eksekusi yang direkam (tidak bisa mengubah nilai di
-  tengah jalan); skrip UI belum bisa di-debug. Belum ada seleksi mouse atau
-  clipboard di editor.
+  tengah jalan); henti skrip UI baru tampil setelah jendelanya ditutup. Belum
+  ada seleksi mouse atau clipboard di editor.
 - Berkas besar: editor hanya menggambar baris yang terlihat, tetapi berjalan di
   interpreter RustCLR — berkas beberapa ribu baris masih nyaman.
 
 Implementasi: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
 `Syntax.cs`, `Templates.cs`, `Debugger.cs`); menjalankan lewat syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 30 pemeriksaan (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless), bagian dari
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 31 pemeriksaan di perangkat (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless, dan men-debug satu skrip UI), bagian dari
 `Managed --selftest` saat boot.
 
 ---

@@ -14,6 +14,14 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Debugger for UI scripts:** a script that opens a window (JS/TS/Python/
+  C# script) runs as an app in its window while the debugger records its
+  stops (`CLRHOST.ELF FILE --bzdebug LINES REPORT`); `script debug` answers
+  `@dbgui PID FILE` and `script debug status PID FILE` returns the report
+  once the app has ended. Studio (F6) and `bz dap` (VS Code F5) wait for the
+  window to close, then replay the stops. The report format moved to
+  `script::debug_report`, shared by the shell and the host. Studio self-test:
+  31 checks on the device.
 - **VS Code debugging on a running device (`bz dap`):** a Debug Adapter
   Protocol server in the `bz` CLI (`sdk/bz/Dap.cs`) over bz-link. Scripts
   (.js/.ts/.py/.csx) are uploaded and replayed from the kernel's recording

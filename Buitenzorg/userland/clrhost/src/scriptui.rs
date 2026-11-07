@@ -107,6 +107,8 @@ struct Ui {
     /// Text fields: their text by id, and the one that has the keyboard.
     fields: BTreeMap<String, String>,
     focus: Option<String>,
+    /// run under the debugger (`--bzdebug`): printed lines are also recorded
+    debug: bool,
 }
 
 fn nanos() -> u64 {
@@ -304,7 +306,9 @@ impl Host for Ui {
     fn print(&mut self, line: &str) -> bool {
         sys::print(line);
         sys::print("\n");
-        true
+        // under the debugger the interpreter also keeps the line: a stop
+        // records how many lines were printed before it
+        !self.debug
     }
 
     fn call(&mut self, name: &str, a: &[Value]) -> Option<Result<Value, String>> {
@@ -479,12 +483,22 @@ impl crate::csx::Host for CsUi<'_> {
     }
     fn print(&mut self, text: &str) -> bool {
         sys::print(text);
-        true
+        !self.0.debug
     }
 }
 
 /// Run a script file as a UI program; exits the process.
-pub fn run(path: &str, args: Vec<String>) -> ! {
+pub fn run(path: &str, mut args: Vec<String>) -> ! {
+    // `--bzdebug LINES|all REPORT` (from the shell's `script debug`): record
+    // the debugger's stops while the program runs, write the report at the end
+    let mut debug: Option<(Vec<u32>, bool, String)> = None;
+    if args.first().map(String::as_str) == Some("--bzdebug") && args.len() >= 3 {
+        let spec = args[1].clone();
+        let report = args[2].clone();
+        args.drain(..3);
+        let breaks = spec.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        debug = Some((breaks, spec == "all", report));
+    }
     let Some(bytes) = sys::read_file(path) else {
         sys::print(&format!("[script] {}: file not found\n", path));
         sys::exit(3);
@@ -512,7 +526,23 @@ pub fn run(path: &str, args: Vec<String>) -> ! {
         args,
         fields: BTreeMap::new(),
         focus: None,
+        debug: debug.is_some(),
     };
+    if let Some((breaks, every, report)) = debug {
+        const MAX_STOPS: usize = 400;
+        let text = if p.ends_with(".csx") {
+            let out = crate::csx::run_debug_with(&src, &ui.args.clone(), Some(&mut CsUi(&mut ui)), u64::MAX, breaks, every, MAX_STOPS);
+            let snaps = out.snaps.iter().map(|s| (s.line, s.out_lines, &s.stack, &s.locals, &s.globals));
+            script::debug_report("cs", &out.lines, &out.error, out.steps, out.snaps.len(), snaps)
+        } else {
+            let out = script::run_debug_with(lang, &src, Some(&mut ui), u64::MAX, breaks, every, MAX_STOPS);
+            let snaps = out.snaps.iter().map(|s| (s.line, s.out_lines, &s.stack, &s.locals, &s.globals));
+            script::debug_report(lang.name(), &out.lines, &out.error, out.steps, out.snaps.len(), snaps)
+        };
+        let ok = sys::write_file(&report, text.join("\n").as_bytes());
+        sys::print(&format!("[script] {}: debugger: {} -> {} ({})\n", path, ui.frames, report, if ok { "ok" } else { "GAGAL" }));
+        sys::exit(if ok { 0 } else { 1 });
+    }
     let (lines, error, steps) = if p.ends_with(".csx") {
         let out = crate::csx::run_with(&src, &ui.args.clone(), Some(&mut CsUi(&mut ui)), u64::MAX);
         (out.lines, out.error, out.steps)

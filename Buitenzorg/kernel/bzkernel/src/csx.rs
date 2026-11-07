@@ -3708,6 +3708,20 @@ pub fn run_debug(src: &str, breaks: Vec<u32>, every: bool, max: usize) -> Output
     run_inner(src, &[], None, 50_000_000, Some(Dbg { breaks, every, max, snaps: Vec::new(), last: Vec::new() }))
 }
 
+/// [`run_debug`] for an embedder (a UI program under the debugger).
+#[allow(dead_code)]
+pub fn run_debug_with(
+    src: &str,
+    args: &[String],
+    host: Option<&mut dyn Host>,
+    step_limit: u64,
+    breaks: Vec<u32>,
+    every: bool,
+    max: usize,
+) -> Output {
+    run_inner(src, args, host, step_limit, Some(Dbg { breaks, every, max, snaps: Vec::new(), last: Vec::new() }))
+}
+
 fn run_inner(src: &str, args: &[String], host: Option<&mut dyn Host>, step_limit: u64, dbg: Option<Dbg>) -> Output {
     let prog = match compile(src) {
         Ok(p) => p,

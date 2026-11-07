@@ -720,7 +720,9 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > lewat bz-link) -- skrip: breakpoint, step over/in/out, step back, variabel;
 > ELF native: breakpoint fungsi, step instruksi, register; F5 di ekstensi VS
 > Code; diuji `bz dap --selftest` (CI) + `--check` di smoke `[bzlink]`.
-> Berikutnya: GDB stub kernel, debugger untuk skrip UI.
+> **Debugger skrip UI tercapai (2026-11-08):** aplikasi berjalan di jendelanya
+> sambil merekam, hentinya diputar ulang di Studio / VS Code setelah ditutup.
+> Berikutnya: GDB stub kernel.
 
 ### E. Deploy & Run — lokal maupun remote
 > **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`

@@ -1554,8 +1554,6 @@ fn debug_script(lang: script::Lang, src: &str, breaks: Vec<u32>, every: bool) ->
     debug_lines(lang.name(), &out.lines, &out.error, out.steps, out.snaps.len(), snaps)
 }
 
-type VarList = Vec<(String, String)>;
-
 /// The output of a debugged run, then the `@dbg` records (see debug_script).
 fn debug_lines<'a>(
     lang: &str,
@@ -1563,22 +1561,47 @@ fn debug_lines<'a>(
     error: &Option<String>,
     steps: u64,
     count: usize,
-    snaps: impl Iterator<Item = (u32, usize, &'a Vec<(String, u32)>, &'a VarList, &'a VarList)>,
+    snaps: impl Iterator<Item = (u32, usize, &'a Vec<(String, u32)>, &'a script::VarList, &'a script::VarList)>,
 ) -> Vec<String> {
-    let mut lines = vec![format!("[{}] ({} langkah, {} henti)", lang, steps, count)];
-    for l in out {
-        lines.push(format!("  {}", l));
+    script::debug_report(lang, out, error, steps, count, snaps)
+}
+
+/// UI scripts debugged so far (names their report files).
+static UI_DEBUGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// `script debug` on a UI script: start it as an app under the debugger
+/// (CLRHOST.ELF `--bzdebug`); it records stops while it runs in its window
+/// and writes the report to a file when it ends. The caller polls
+/// `script debug status PID FILE` -- never wait here: the shell may run on
+/// the desktop loop, which the app needs for its input.
+fn debug_ui_script(path: &str, spec: &str) -> Vec<String> {
+    let n = UI_DEBUGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 1000;
+    let dir = if vfs::list("/ram").is_ok() { "/ram" } else { "/disk" };
+    let out = format!("{}/UIDBG{}.TXT", dir, n);
+    let _ = vfs::remove(&out);
+    match crate::app::spawn_with_args(path, &format!("--bzdebug {} {}", spec, out)) {
+        Ok(pid) => vec![
+            format!("@dbgui {} {}", pid, out),
+            format!("aplikasi UI pid {} berjalan di jendelanya; henti direkam sampai ia berakhir ('script debug status {} {}')", pid, pid, out),
+        ],
+        Err(e) => vec![format!("script: {}: {}", path, e)],
     }
-    if let Some(e) = error {
-        lines.push(format!("  error: {}", e));
+}
+
+/// `script debug status PID FILE`: `@dbgui running`, or the finished report.
+fn debug_ui_status(pid: &str, file: &str) -> Vec<String> {
+    let Ok(pid) = pid.parse::<u64>() else { return vec![String::from("script debug status PID FILE")] };
+    if crate::process::is_alive(pid) {
+        return vec![format!("@dbgui running {}", pid)];
     }
-    let clean = |t: &str| t.replace(['\t', '\u{1f}', '\n', '\r'], " ");
-    let vars = |v: &VarList| v.iter().map(|(k, x)| format!("{}={}", k, clean(x))).collect::<Vec<_>>().join("\u{1f}");
-    for (line, out_lines, stack, locals, globals) in snaps {
-        let stack = stack.iter().map(|(f, l)| format!("{}:{}", f, l)).collect::<Vec<_>>().join(",");
-        lines.push(format!("@dbg {}\t{}\t{}\t{}\t{}", line, out_lines, stack, vars(locals), vars(globals)));
+    match vfs::read(file) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).lines().map(String::from).collect(),
+        Err(_) => vec![format!(
+            "script: pid {} berakhir tanpa rekaman (kode keluar {:#x})",
+            pid,
+            crate::process::exit_code(pid).unwrap_or(0)
+        )],
     }
-    lines
 }
 
 fn run_script(lang: script::Lang, src: &str) -> Vec<String> {
@@ -1766,7 +1789,12 @@ fn script_cmd(cmd: &str, args: &[&str]) -> (Vec<String>, Effect) {
         }
         Some("debug") => {
             // script debug <js|ts|py|csx> <file> <line,line,...|all>: run under
-            // the script debugger; after the output, one `@dbg` record per stop
+            // the script debugger; after the output, one `@dbg` record per stop.
+            // A UI script runs as an app instead (`@dbgui PID FILE`, then
+            // `script debug status PID FILE` until the report is there).
+            if let (Some("status"), Some(pid), Some(file)) = (args.get(1).copied(), args.get(2).copied(), args.get(3).copied()) {
+                return (debug_ui_status(pid, &resolve(Some(file))), Effect::None);
+            }
             let csx = matches!(args.get(1).copied(), Some("cs") | Some("csx"));
             let lang = args.get(1).copied().and_then(lang_of);
             let (true, Some(path)) = (csx || lang.is_some(), args.get(2).copied()) else {
@@ -1777,6 +1805,9 @@ fn script_cmd(cmd: &str, args: &[&str]) -> (Vec<String>, Effect) {
             let breaks: Vec<u32> = spec.split(',').filter_map(|n| n.trim().parse().ok()).collect();
             match vfs::read(&resolve(Some(path))) {
                 Ok(bytes) => match core::str::from_utf8(&bytes) {
+                    Ok(text) if text.contains("window(") || text.contains("Ui.Window(") => {
+                        (debug_ui_script(&resolve(Some(path)), spec), Effect::None)
+                    }
                     Ok(text) if csx => {
                         let out = crate::csx::run_debug(text, breaks, every, 400);
                         let snaps = out.snaps.iter().map(|s| (s.line, s.out_lines, &s.stack, &s.locals, &s.globals));

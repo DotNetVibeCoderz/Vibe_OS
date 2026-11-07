@@ -643,6 +643,18 @@ public sealed partial class Studio
             c.That(st.Stops.Count == 2 && st.Stops[1].Locals.Any(v => v.Name == "x" && v.Value == "5") && st.Stops[1].Globals.Any(v => v.Name == "xs" && v.Value.StartsWith("List[4, 5]")),
                    "F6 debugged T.CSX: " + st.Stops.Count + " stops, x = 5 on the second, xs = List[4, 5]");
             st.EndDebug();
+            // a UI script: it runs as an app (headless here: 3 frames) while it
+            // records, and its stops arrive when it ends
+            Files.WriteAllText(dir + "/UI.JS", "window(\"Uji\", 200, 120);\nlet n = 0;\nwhile (running()) {\n  n = n + 1;\n  present();\n}\nprint(\"frames \" + n);\n");
+            st.OpenFile(dir + "/UI.JS");
+            st.Current!.Breakpoints.Add(4);
+            st.Debug();
+            long uiPid = st.UiDebugPid;
+            if (uiPid > 0) Programs.WaitForExit(uiPid);
+            st.PollUiDebug();
+            c.That(uiPid > 0 && st.Stops.Count >= 2 && st.Stops[1].Line == 4 && st.Stops[1].Globals.Any(v => v.Name == "n" && v.Value == "1") && string.Join("\n", st.Output).Contains("frames"),
+                   "F6 debugged a UI script as an app (pid " + uiPid + "): " + st.Stops.Count + " stops on line 4, n = 1 on the second");
+            st.EndDebug();
             var tr = st.TerminalRun("echo halo studio | wc -w");
             c.That(tr.Ok && tr.Output.Trim() == "2", "terminal panel runs a pipeline");
             // every runnable template really runs: console ones in the kernel

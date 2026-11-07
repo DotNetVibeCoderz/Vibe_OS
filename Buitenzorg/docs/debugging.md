@@ -235,14 +235,15 @@ Under QEMU forward the port: `-netdev user,id=n0,hostfwd=udp::7070-:7070
 
 **Honest limits.** A script is *replayed*: it runs once, then you move through
 the recording -- you cannot change a value and continue, and only the first
-400 statement stops are recorded. UI scripts (that open a window) are not
-debugged. Native programs have no line information (there is no DWARF on the
+400 statement stops are recorded. A UI script (one that opens a window)
+runs in its window on the device while it records; the launch waits until
+you close it (or the script ends), then the replay starts. Native programs have no line information (there is no DWARF on the
 device), so their breakpoints are function names and their frames show
 addresses, not source lines; pause is not supported (a program stops at a
 breakpoint, a fault, or when it ends). Managed C# apps (RustCLR) are not
 debugged at the source level yet. Tests: `bz dap --selftest` (a simulated
 device, CI) and `bz dap --check` (the connected device; the smoke test's
-`[bzlink]` step runs it on x86 with both a script and `crashme`). The
+`[bzlink]` step runs it on x86 with a script, a UI script and `crashme`). The
 extension itself is not tested by a VS Code instance in CI -- the adapter is.
 
 ## 💥 Crash reports (ring-3 programs)

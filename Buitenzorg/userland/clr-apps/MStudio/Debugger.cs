@@ -112,7 +112,7 @@ public sealed partial class Studio
         return panel;
     }
 
-    /// <summary>The shell command that debugs a file, or null (JS / TS / Python only).</summary>
+    /// <summary>The shell command that debugs a file, or null (JS / TS / Python / C# script only).</summary>
     public static string? DebugCommand(string path, IEnumerable<int> breakpoints)
     {
         string lang = Syntax.LangOf(path);
@@ -134,16 +134,49 @@ public sealed partial class Studio
             Log("Debugger skrip: JavaScript, TypeScript, Python dan C# script (" + Current.Name + " adalah " + Syntax.DisplayName(Current.Lang) + "; program native: 'dbg run' di Terminal).");
             return null;
         }
-        if (IsUiScript(Current.Text))
-        {
-            Log("Debugger skrip: aplikasi ber-UI belum bisa di-debug (jalankan dengan F5).");
-            return null;
-        }
         SaveAll();
         Log("$ " + cmd);
         var r = Shell.Run(cmd);
-        LoadDebug(Current.Path, r.Lines);
+        // a UI script runs as an app in its own window while it records; the
+        // report comes when it ends (`@dbgui PID FILE`, then status polls)
+        string? ui = r.Lines.FirstOrDefault(l => l.StartsWith("@dbgui "));
+        if (ui != null) WatchUiDebug(Current.Path, ui);
+        else LoadDebug(Current.Path, r.Lines);
         return r;
+    }
+
+    DispatcherTimer? _uiDebugTimer;
+    /// <summary>The running UI app being recorded (pid), or 0.</summary>
+    public long UiDebugPid { get; private set; }
+    string _uiDebugStatus = "";
+    string _uiDebugPath = "";
+
+    void WatchUiDebug(string path, string record)
+    {
+        var f = record.Split(' ');
+        if (f.Length < 3 || !long.TryParse(f[1], out long pid)) { Log(record); return; }
+        EndDebug();
+        UiDebugPid = pid;
+        _uiDebugPath = path;
+        _uiDebugStatus = "script debug status " + f[1] + " " + f[2];
+        Log("aplikasi UI (pid " + pid + ") berjalan sambil merekam: pakai jendelanya, lalu tutup -> hentinya diputar ulang di sini");
+        _debugSummary.Text = "Merekam aplikasi UI pid " + pid + " - tutup jendelanya untuk memutar ulang";
+        Bottom.SelectedIndex = 3;
+        _uiDebugTimer?.Stop();
+        _uiDebugTimer = new DispatcherTimer(500);
+        _uiDebugTimer.Tick += () => { if (PollUiDebug()) _uiDebugTimer?.Stop(); };
+        _uiDebugTimer.Start();
+    }
+
+    /// <summary>Ask whether the recorded UI app has ended; true once its stops are loaded.</summary>
+    public bool PollUiDebug()
+    {
+        if (UiDebugPid == 0) return true;
+        var s = Shell.Run(_uiDebugStatus);
+        if (s.Lines.FirstOrDefault()?.StartsWith("@dbgui running") == true) return false;
+        UiDebugPid = 0;
+        LoadDebug(_uiDebugPath, s.Lines);
+        return true;
     }
 
     /// <summary>Take a debugged run's output: program lines to Output, stops to the Debug panel.</summary>

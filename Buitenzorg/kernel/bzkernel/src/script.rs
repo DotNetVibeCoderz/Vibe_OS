@@ -1352,6 +1352,53 @@ pub fn run_debug(lang: Lang, src: &str, breaks: Vec<u32>, every_line: bool, max:
     run_inner(lang, src, None, STEP_LIMIT, Some(Debug { breaks, every_line, max, snaps: Vec::new() }))
 }
 
+/// [`run_debug`] for an embedder: a UI program (CLRHOST.ELF `--bzdebug`)
+/// records its stops while it runs in its window.
+#[allow(dead_code)]
+pub fn run_debug_with(
+    lang: Lang,
+    src: &str,
+    host: Option<&mut dyn Host>,
+    step_limit: u64,
+    breaks: Vec<u32>,
+    every_line: bool,
+    max: usize,
+) -> Output {
+    run_inner(lang, src, host, step_limit, Some(Debug { breaks, every_line, max, snaps: Vec::new() }))
+}
+
+/// A variable list of a stop: (name, shown value).
+pub type VarList = Vec<(String, String)>;
+
+/// The text of a debugged run, shared by the shell (`script debug`) and the
+/// UI host: a header, the program's output indented by two spaces, the error
+/// (`  error: ...`), then one record per stop:
+/// `@dbg LINE<TAB>OUT<TAB>fn:line,...<TAB>locals<TAB>globals`, variables as
+/// `name=value` joined by U+001F (Studio's Debugger.cs and `bz dap` parse it).
+pub fn debug_report<'a>(
+    lang: &str,
+    out: &[String],
+    error: &Option<String>,
+    steps: u64,
+    count: usize,
+    snaps: impl Iterator<Item = (u32, usize, &'a Vec<(String, u32)>, &'a VarList, &'a VarList)>,
+) -> Vec<String> {
+    let mut lines = alloc::vec![format!("[{}] ({} langkah, {} henti)", lang, steps, count)];
+    for l in out {
+        lines.push(format!("  {}", l));
+    }
+    if let Some(e) = error {
+        lines.push(format!("  error: {}", e));
+    }
+    let clean = |t: &str| t.replace(['\t', '\u{1f}', '\n', '\r'], " ");
+    let vars = |v: &VarList| v.iter().map(|(k, x)| format!("{}={}", k, clean(x))).collect::<Vec<_>>().join("\u{1f}");
+    for (line, out_lines, stack, locals, globals) in snaps {
+        let stack = stack.iter().map(|(f, l)| format!("{}:{}", f, l)).collect::<Vec<_>>().join(",");
+        lines.push(format!("@dbg {}\t{}\t{}\t{}\t{}", line, out_lines, stack, vars(locals), vars(globals)));
+    }
+    lines
+}
+
 fn run_inner(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: u64, dbg: Option<Debug>) -> Output {
     // lex with source lines, parse, and report a failure as "parse: baris N: ..."
     let lexed = match lang {

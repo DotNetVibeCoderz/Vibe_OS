@@ -237,13 +237,15 @@ atau `bz` di PATH).
 **Batasan (jujur).** Skrip *diputar ulang*: dijalankan sekali, lalu Anda
 bergerak di dalam rekamannya -- tidak bisa mengubah nilai lalu melanjutkan,
 dan hanya 400 henti pertama yang direkam. Skrip UI (yang membuka jendela)
-belum bisa di-debug. Program native tidak punya informasi baris (tidak ada
+berjalan di jendelanya di perangkat sambil merekam; launch menunggu sampai
+jendelanya Anda tutup (atau skripnya selesai), lalu pemutaran ulang dimulai.
+Program native tidak punya informasi baris (tidak ada
 DWARF di perangkat), jadi breakpoint-nya nama fungsi dan frame-nya menunjukkan
 alamat, bukan baris sumber; jeda (pause) tidak didukung (program berhenti di
 breakpoint, saat fault, atau saat selesai). Aplikasi C# managed (RustCLR)
 belum bisa di-debug di tingkat sumber. Pengujian: `bz dap --selftest`
 (perangkat simulasi, CI) dan `bz dap --check` (perangkat yang tersambung;
-langkah `[bzlink]` smoke test menjalankannya di x86 dengan skrip dan
+langkah `[bzlink]` smoke test menjalankannya di x86 dengan skrip, skrip UI, dan
 `crashme`). Ekstensinya sendiri tidak diuji oleh instance VS Code di CI --
 adapternya yang diuji.
 
