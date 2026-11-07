@@ -13,9 +13,11 @@ read its output and its errors — without leaving the desktop. Open it from the
 | **Project** pane (left, Ctrl+B) | The files of the current project folder; click a folder to enter it, `../` to go up, a file to open it. **+ Proyek baru** / **+ Berkas baru**. |
 | Tabs + editor | One tab per open file (`*` = unsaved). Line numbers, syntax colors (C#, C# script, JavaScript, TypeScript, Python, shell, JSON), the current line, a red mark on lines with errors. |
 | **Jalankan (F5)** | Saves every file and runs the current one: `.CSX` through the [C# script](csharp-script.md) bytecode engine, `.JS`/`.TS`/`.PY` through the kernel's script interpreter, `.SH` through the shell; a script that calls `window(...)` opens as its own app with a window ([UI apps](script-ui.md)). |
+| **Debug (F6)** | Runs the script under the debugger (see below). |
 | **Keluaran** | The program's output and how long it took. |
 | **Masalah** | Errors with file and line (`parse: baris 2: ...`); click one to jump there. |
 | **Terminal** | The same shell as the desktop Terminal (pipes, scripts, `bz`, ...). |
+| **Debug** | The debugger's stops, call stack, variables and output so far. |
 | Status bar | File, language, line and column, saved or not, path. |
 
 ## Keys
@@ -23,6 +25,9 @@ read its output and its errors — without leaving the desktop. Open it from the
 | Key | Does |
 |---|---|
 | F5 | run the current file |
+| F6 | debug the current file |
+| F9 | breakpoint on / off on the caret's line (or click a line number) |
+| F10 / F11 | next / previous debugger stop |
 | Ctrl+S / Ctrl+W | save / close the tab |
 | Ctrl+N | new project (template picker) |
 | Ctrl+Z / Ctrl+Y | undo / redo (typing is grouped per word) |
@@ -72,20 +77,41 @@ Python), `print` / `console.log`, `str`, `len`, `abs`. No arrays, objects,
 floats or imports yet; every run has a step budget. Parse errors carry the
 line number shown in **Masalah**.
 
+## Debugger (F6)
+
+Scripts in **JavaScript, TypeScript, Python and C# script** can be debugged:
+
+1. Set breakpoints: **F9** on the caret's line, or click a line number (a red
+   dot). No breakpoint = stop on every line.
+2. **F6** (or **Debug (F6)**): the file runs once in the kernel's interpreter
+   with the debugger on, which records the program's state at every stop.
+3. The **Debug** tab lists the stops (`#3  baris 7  fib  (n=2)`); **F10** /
+   **F11** walk forward / back through them. The editor marks the line, the
+   panel shows the **call stack**, the **local variables**, the **globals**
+   (lists and dictionaries with their items) and the output printed up to that
+   point.
+
+![The debugger in Studio: a breakpoint on line 3, the stop, the globals](img/studio-debugger.png)
+
+It is a *record, then replay* debugger: you can move backwards in time, but
+not change a value and continue. Up to 400 stops are recorded per run. UI
+scripts (the ones that open a window) are not debugged yet; native programs
+are debugged with `dbg` in the Terminal ([Debugging](debugging.md)). The
+same records come from the shell: `script debug js MAIN.JS 4,9` (or `all`).
+
 ## Limits (honest)
 
 - C# is not compiled inside the OS: the C# templates explain the build on a PC
   (bflat / `dotnet build`, `bz pack`, deploy).
-- No breakpoints or debugger yet; no mouse selection or clipboard in the
-  editor.
-- Runtime errors of a script have no line number (only parse errors do).
+- The debugger replays a recorded run (no changing values mid-run); UI
+  scripts are not debugged yet. No mouse selection or clipboard in the editor.
 - Large files: the editor keeps lines in memory and draws only the visible
   ones, but it runs in the RustCLR interpreter — files of a few thousand lines
   stay usable.
 
 Implementation: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
-`Syntax.cs`, `Templates.cs`); runs through syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 25 checks (it runs every runnable template, the UI ones as headless processes), part of
+`Syntax.cs`, `Templates.cs`, `Debugger.cs`); runs through syscall **`SHELL_RUN` (58)** —
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 30 checks (it runs every runnable template, the UI ones as headless processes), part of
 `Managed --selftest` at boot.
 
 ---

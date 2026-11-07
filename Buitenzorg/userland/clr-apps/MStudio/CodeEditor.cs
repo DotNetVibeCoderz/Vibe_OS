@@ -30,6 +30,25 @@ public sealed class CodeEditor : Control
 
     /// <summary>Lines (1-based) to mark with an error in the gutter.</summary>
     public HashSet<int> ErrorLines { get; } = new HashSet<int>();
+
+    /// <summary>Breakpoint lines (1-based): the open document's own set.</summary>
+    public HashSet<int> Breakpoints { get => _bps; set { _bps = value ?? new HashSet<int>(); InvalidateVisual(); } }
+    HashSet<int> _bps = new HashSet<int>();
+
+    /// <summary>The line (1-based) the debugger is showing, 0 = none.</summary>
+    public int ExecLine { get => _exec; set { _exec = value; InvalidateVisual(); } }
+    int _exec;
+
+    public event Action<CodeEditor>? BreakpointsChanged;
+
+    /// <summary>Set or clear the breakpoint on `line` (1-based).</summary>
+    public void ToggleBreakpoint(int line)
+    {
+        if (line < 1 || line > _lines.Count) return;
+        if (!_bps.Remove(line)) _bps.Add(line);
+        InvalidateVisual();
+        BreakpointsChanged?.Invoke(this);
+    }
     public int TabSize { get; set; } = 4;
 
     public CodeEditor()
@@ -408,6 +427,12 @@ public sealed class CodeEditor : Control
         int line = _top + Math.Max(0, (e.Y - r.Y - 4) / Lh);
         int col = _left + Math.Max(0, (e.X - r.X - GutterWidth - 6 + Gw / 2) / Gw);
         if (line >= _lines.Count) line = _lines.Count - 1;
+        if (e.X < r.X + GutterWidth)
+        {
+            ToggleBreakpoint(line + 1); // a click in the gutter: breakpoint
+            e.Handled = true;
+            return;
+        }
         MoveTo(line, col);
         e.Handled = true;
         base.OnPointerPressed(e);
@@ -467,6 +492,8 @@ public sealed class CodeEditor : Control
             int y = r.Y + 4 + (i - _top) * lh;
             if (i == _line && IsFocused)
                 dc.FillRect(new Rect(r.X + gutter, y - 1, r.Width - gutter, lh), dark ? Buitenzorg.UI.Color.Lighten(bg, 12) : Buitenzorg.UI.Color.Darken(bg, 10));
+            if (i + 1 == _exec)
+                dc.FillRect(new Rect(r.X + gutter, y - 1, r.Width - gutter, lh), dark ? 0x4A4214 : 0xFFF1A8);
             if (i == _matchLine)
             {
                 int mx = textX + (_matchCol - _left) * gw;
@@ -476,6 +503,8 @@ public sealed class CodeEditor : Control
             string num = (i + 1).ToString();
             bool err = ErrorLines.Contains(i + 1);
             if (err) dc.FillRect(new Rect(r.X + 2, y + 1, 4, lh - 4), Theme.Danger);
+            if (_bps.Contains(i + 1)) dc.Ellipse(new Rect(r.X + 3, y + (lh - 10) / 2, 10, 10), Theme.Danger, true);
+            if (i + 1 == _exec) dc.Text(r.X + 2, y, ">", Theme.Accent, 1);
             dc.Text(r.X + gutter - (num.Length + 1) * gw, y, num, err ? Theme.Danger : i == _line ? Theme.Text : Theme.TextFaint, 0);
             // the line's colored runs, cut to the visible columns
             string line = _lines[i];

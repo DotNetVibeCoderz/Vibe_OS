@@ -1646,12 +1646,15 @@ struct Func {
     nlocals: u32,
     code: Rc<[Op]>,
     lines: Rc<[u32]>,
+    /// local variables for the debugger: (name, slot, first pc, end pc)
+    vars: Rc<[(String, u32, u32, u32)]>,
 }
 
 struct Program {
     funcs: Vec<Func>,
     consts: Vec<Value>,
     nglobals: usize,
+    global_names: Vec<String>,
     main: u32,
 }
 
@@ -1663,6 +1666,7 @@ struct Loop {
 struct FnCtx {
     code: Vec<Op>,
     lines: Vec<u32>,
+    vars: Vec<(String, u32, u32, u32)>,
     scopes: Vec<Vec<(String, u32, Ty)>>,
     next_slot: u32,
     max_slot: u32,
@@ -1739,7 +1743,20 @@ impl Compiler {
         f.next_slot += 1;
         f.max_slot = f.max_slot.max(f.next_slot);
         f.scopes.last_mut().unwrap().push((String::from(name), slot, ty));
+        f.vars.push((String::from(name), slot, f.code.len() as u32, u32::MAX));
         Ok(Some(slot))
+    }
+
+    /// Leave a block: its variables end here (for the debugger).
+    fn pop_scope(f: &mut FnCtx) {
+        if let Some(scope) = f.scopes.pop() {
+            let end = f.code.len() as u32;
+            for (_, slot, _) in scope {
+                if let Some(v) = f.vars.iter_mut().rev().find(|v| v.1 == slot && v.3 == u32::MAX) {
+                    v.3 = end;
+                }
+            }
+        }
     }
 
     /// (is_global, index, type)
@@ -1777,6 +1794,7 @@ impl Compiler {
         let mut f = FnCtx {
             code: Vec::new(),
             lines: Vec::new(),
+            vars: Vec::new(),
             scopes: vec![Vec::new()],
             next_slot: 0,
             max_slot: 0,
@@ -1787,6 +1805,7 @@ impl Compiler {
         self.line = d.line;
         for (ty, n) in &d.params {
             f.scopes[0].push((n.clone(), f.next_slot, ty.clone()));
+            f.vars.push((n.clone(), f.next_slot, 0, u32::MAX));
             f.next_slot += 1;
         }
         f.max_slot = f.next_slot;
@@ -1804,7 +1823,14 @@ impl Compiler {
             self.stmt(&mut f, s)?;
         }
         self.emit(&mut f, Op::RetNull);
-        Ok(Func { name: d.name.clone(), nparams: d.params.len() as u32, nlocals: f.max_slot, code: Rc::from(f.code), lines: Rc::from(f.lines) })
+        Ok(Func {
+            name: d.name.clone(),
+            nparams: d.params.len() as u32,
+            nlocals: f.max_slot,
+            code: Rc::from(f.code),
+            lines: Rc::from(f.lines),
+            vars: Rc::from(f.vars),
+        })
     }
 
     fn block(&mut self, f: &mut FnCtx, body: &[St]) -> CResult<()> {
@@ -1813,7 +1839,7 @@ impl Compiler {
         for s in body {
             self.stmt(f, s)?;
         }
-        f.scopes.pop();
+        Self::pop_scope(f);
         f.next_slot = save;
         Ok(())
     }
@@ -1825,7 +1851,7 @@ impl Compiler {
                 f.scopes.push(Vec::new());
                 let save = f.next_slot;
                 self.stmt(f, s)?;
-                f.scopes.pop();
+                Self::pop_scope(f);
                 f.next_slot = save;
                 Ok(())
             }
@@ -1954,7 +1980,7 @@ impl Compiler {
                     Self::patch(f, j, end);
                 }
                 self.close_loop(f, cont, end);
-                f.scopes.pop();
+                Self::pop_scope(f);
                 f.next_slot = save;
             }
             S::Foreach(ty, name, seq, body) => {
@@ -1990,7 +2016,7 @@ impl Compiler {
                 let end = f.code.len();
                 Self::patch(f, jf, end);
                 self.close_loop(f, cont, end);
-                f.scopes.pop();
+                Self::pop_scope(f);
                 f.next_slot = save;
             }
             S::Switch(subject, sections) => {
@@ -2040,7 +2066,7 @@ impl Compiler {
                 } else if !lp.continues.is_empty() {
                     return self.err(String::from("'continue' di luar perulangan"));
                 }
-                f.scopes.pop();
+                Self::pop_scope(f);
                 f.next_slot = save;
             }
             S::Break => {
@@ -2099,7 +2125,7 @@ impl Compiler {
                 let end = f.code.len();
                 Self::patch(f, j, end);
                 self.block(f, fin)?;
-                f.scopes.pop();
+                Self::pop_scope(f);
                 f.next_slot = save;
             }
         }
@@ -2511,7 +2537,8 @@ fn compile(src: &str) -> CResult<Program> {
     let main_decl = FuncDecl { name: String::from("<main>"), params: Vec::new(), ret: Ty::Void, body: Vec::new(), line: 1 };
     out.push(c.function(&main_decl, true, &main)?);
     let nglobals = c.globals.len();
-    Ok(Program { main: (out.len() - 1) as u32, funcs: out, consts: c.consts, nglobals })
+    let global_names = c.globals.iter().map(|(n, _)| n.clone()).collect();
+    Ok(Program { main: (out.len() - 1) as u32, funcs: out, consts: c.consts, nglobals, global_names })
 }
 
 // ============================================================================
@@ -2533,6 +2560,51 @@ pub struct Output {
     pub error: Option<String>,
     /// Instructions executed.
     pub steps: u64,
+    /// the debugger's stops ([`run_debug`]; empty otherwise)
+    pub snaps: Vec<Snapshot>,
+}
+
+/// The program's state when it reached a stop (as script.rs's).
+pub struct Snapshot {
+    pub line: u32,
+    /// innermost first: (method, line)
+    pub stack: Vec<(String, u32)>,
+    pub locals: Vec<(String, String)>,
+    pub globals: Vec<(String, String)>,
+    pub out_lines: usize,
+}
+
+struct Dbg {
+    breaks: Vec<u32>,
+    every: bool,
+    max: usize,
+    snaps: Vec<Snapshot>,
+    /// the last line a stop was considered on, per frame depth
+    last: Vec<u32>,
+}
+
+/// A value as the debugger shows it: strings quoted, lists and arrays with
+/// their first items, dictionaries as `{k: v}`.
+fn show(v: &Value) -> String {
+    match v {
+        Value::Str(t) => {
+            let c: String = t.chars().take(60).collect();
+            format!("\"{}\"{}", c, if t.chars().count() > 60 { "..." } else { "" })
+        }
+        Value::Char(c) => format!("'{}'", c),
+        Value::Null => String::from("null"),
+        Value::Seq(items, list) => {
+            let items = items.borrow();
+            let shown: Vec<String> = items.iter().take(8).map(show).collect();
+            format!("{}[{}{}] ({})", if *list { "List" } else { "" }, shown.join(", "), if items.len() > 8 { ", ..." } else { "" }, items.len())
+        }
+        Value::Map(pairs) => {
+            let pairs = pairs.borrow();
+            let shown: Vec<String> = pairs.iter().take(6).map(|(k, x)| format!("{}: {}", show(k), show(x))).collect();
+            format!("{{{}{}}} ({})", shown.join(", "), if pairs.len() > 6 { ", ..." } else { "" }, pairs.len())
+        }
+        v => v.display(),
+    }
 }
 
 struct Frame {
@@ -2551,6 +2623,7 @@ struct Handler {
 }
 
 struct Vm<'h> {
+    dbg: Option<Dbg>,
     prog: Program,
     globals: Vec<Value>,
     stack: Vec<Value>,
@@ -3289,9 +3362,46 @@ impl<'h> Vm<'h> {
         }
     }
 
+    /// Before an instruction: a new line in this frame is a statement start;
+    /// record a stop there if the debugger wants one.
+    fn dbg_check(&mut self, fi: usize) {
+        let fr = &self.frames[fi];
+        let Some(&line) = fr.lines.get(fr.pc) else { return };
+        let d = self.dbg.as_mut().unwrap();
+        d.last.resize(fi + 1, 0);
+        if d.last[fi] == line || line == 0 {
+            return;
+        }
+        d.last[fi] = line;
+        if d.snaps.len() >= d.max || !(d.every || d.breaks.contains(&line)) {
+            return;
+        }
+        let mut stack = Vec::new();
+        for (k, f) in self.frames.iter().enumerate().rev() {
+            let at = if k == fi { line } else { f.lines.get(f.pc.saturating_sub(1)).copied().unwrap_or(0) };
+            stack.push((self.prog.funcs[f.func as usize].name.clone(), at));
+        }
+        let func = &self.prog.funcs[fr.func as usize];
+        let pc = fr.pc as u32;
+        let mut locals: Vec<(String, String)> = Vec::new();
+        for (name, slot, start, end) in func.vars.iter() {
+            if pc >= *start && pc < *end && !name.starts_with('\u{1}') {
+                let v = self.stack.get(fr.base + *slot as usize).map(show).unwrap_or_default();
+                locals.retain(|(n, _)| n != name); // an inner variable hides an outer one
+                locals.push((name.clone(), v));
+            }
+        }
+        let globals = self.prog.global_names.iter().zip(self.globals.iter()).map(|(n, v)| (n.clone(), show(v))).collect();
+        let snap = Snapshot { line, stack, locals, globals, out_lines: self.out.lines().count() };
+        self.dbg.as_mut().unwrap().snaps.push(snap);
+    }
+
     fn step_loop(&mut self) -> VResult<()> {
         loop {
             let fi = self.frames.len() - 1;
+            if self.dbg.is_some() {
+                self.dbg_check(fi);
+            }
             let (op, base) = {
                 let fr = &mut self.frames[fi];
                 let Some(op) = fr.code.get(fr.pc).copied() else { return Ok(()) };
@@ -3589,12 +3699,25 @@ impl<'h> Vm<'h> {
 /// Compile and run a C# script. `step_limit` bounds the instructions (the
 /// kernel's console path); a host gets `Console` output and unknown calls.
 pub fn run_with(src: &str, args: &[String], host: Option<&mut dyn Host>, step_limit: u64) -> Output {
+    run_inner(src, args, host, step_limit, None)
+}
+
+/// Run under the debugger: a [`Snapshot`] at every statement on a line in
+/// `breaks` (or on every line with `every`), at most `max`.
+pub fn run_debug(src: &str, breaks: Vec<u32>, every: bool, max: usize) -> Output {
+    run_inner(src, &[], None, 50_000_000, Some(Dbg { breaks, every, max, snaps: Vec::new(), last: Vec::new() }))
+}
+
+fn run_inner(src: &str, args: &[String], host: Option<&mut dyn Host>, step_limit: u64, dbg: Option<Dbg>) -> Output {
     let prog = match compile(src) {
         Ok(p) => p,
-        Err((msg, line)) => return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, msg)), steps: 0 },
+        Err((msg, line)) => {
+            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, msg)), steps: 0, snaps: Vec::new() }
+        }
     };
     let nglobals = prog.nglobals;
     let mut vm = Vm {
+        dbg,
         prog,
         globals: vec![Value::Null; nglobals],
         stack: Vec::with_capacity(256),
@@ -3609,7 +3732,8 @@ pub fn run_with(src: &str, args: &[String], host: Option<&mut dyn Host>, step_li
     };
     let error = vm.run().err();
     let lines = vm.out.lines().map(String::from).collect();
-    Output { lines, error, steps: vm.steps }
+    let snaps = vm.dbg.take().map(|d| d.snaps).unwrap_or_default();
+    Output { lines, error, steps: vm.steps, snaps }
 }
 
 /// The kernel's console path: 50 million instructions at most.

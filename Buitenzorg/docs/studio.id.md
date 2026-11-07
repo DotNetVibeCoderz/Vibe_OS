@@ -13,9 +13,11 @@ desktop **Studio**, menu Mulai → Kantor → Studio, atau `run mstudio`.
 | Panel **Proyek** (kiri, Ctrl+B) | Berkas folder proyek; klik folder untuk masuk, `../` untuk naik, berkas untuk membuka. **+ Proyek baru** / **+ Berkas baru**. |
 | Tab + editor | Satu tab per berkas (`*` = belum disimpan). Nomor baris, pewarnaan sintaks (C#, C# script, JavaScript, TypeScript, Python, shell, JSON), baris aktif, tanda merah di baris yang bergalat. |
 | **Jalankan (F5)** | Menyimpan semua berkas lalu menjalankan berkas aktif: `.CSX` lewat engine bytecode [C# script](csharp-script.id.md), `.JS`/`.TS`/`.PY` lewat interpreter skrip kernel, `.SH` lewat shell; skrip yang memanggil `window(...)` terbuka sebagai aplikasi berjendela sendiri ([aplikasi UI](script-ui.id.md)). |
+| **Debug (F6)** | Menjalankan skrip di bawah debugger (lihat di bawah). |
 | **Keluaran** | Keluaran program dan lama eksekusinya. |
 | **Masalah** | Galat beserta berkas dan barisnya (`parse: baris 2: ...`); klik untuk melompat. |
 | **Terminal** | Shell yang sama dengan Terminal desktop (pipe, skrip, `bz`, ...). |
+| **Debug** | Henti debugger, tumpukan panggilan, variabel dan keluaran sejauh itu. |
 | Bar status | Berkas, bahasa, baris dan kolom, status simpan, path. |
 
 ## Tombol
@@ -23,6 +25,9 @@ desktop **Studio**, menu Mulai → Kantor → Studio, atau `run mstudio`.
 | Tombol | Fungsi |
 |---|---|
 | F5 | jalankan berkas aktif |
+| F6 | debug berkas aktif |
+| F9 | breakpoint hidup / mati di baris kursor (atau klik nomor baris) |
+| F10 / F11 | henti debugger berikutnya / sebelumnya |
 | Ctrl+S / Ctrl+W | simpan / tutup tab |
 | Ctrl+N | proyek baru (pilih template) |
 | Ctrl+Z / Ctrl+Y | urungkan / ulangi (ketikan dikelompokkan per kata) |
@@ -74,19 +79,40 @@ string, `+ - * / %`, perbandingan, `&& || !`, fungsi dan rekursi, `if/else`
 atau import; setiap run punya batas langkah. Galat parse membawa nomor baris
 yang tampil di **Masalah**.
 
+## Debugger (F6)
+
+Skrip **JavaScript, TypeScript, Python dan C# script** bisa di-debug:
+
+1. Pasang breakpoint: **F9** di baris kursor, atau klik nomor baris (titik
+   merah). Tanpa breakpoint = berhenti di setiap baris.
+2. **F6** (atau **Debug (F6)**): berkas dijalankan sekali di interpreter kernel
+   dengan debugger aktif, yang merekam keadaan program di setiap henti.
+3. Tab **Debug** mendaftar henti-hentinya (`#3  baris 7  fib  (n=2)`); **F10**
+   / **F11** maju / mundur. Editor menandai barisnya, panel menampilkan
+   **tumpukan panggilan**, **variabel lokal**, **global** (list dan dictionary
+   beserta isinya) dan keluaran yang tercetak sampai titik itu.
+
+![Debugger di Studio: breakpoint di baris 3, hentinya, variabel global](img/studio-debugger.png)
+
+Ini debugger *rekam, lalu putar ulang*: bisa mundur dalam waktu, tetapi tidak
+bisa mengubah nilai lalu melanjutkan. Paling banyak 400 henti direkam per
+eksekusi. Skrip UI (yang membuka jendela) belum bisa di-debug; program native
+di-debug dengan `dbg` di Terminal ([Debugging](debugging.id.md)). Rekaman yang
+sama tersedia dari shell: `script debug js MAIN.JS 4,9` (atau `all`).
+
 ## Batasan (jujur)
 
 - C# belum dikompilasi di dalam OS: template C# menjelaskan build di PC
   (bflat / `dotnet build`, `bz pack`, deploy).
-- Belum ada breakpoint/debugger; belum ada seleksi mouse atau clipboard di
-  editor.
-- Galat runtime skrip belum punya nomor baris (hanya galat parse).
+- Debugger memutar ulang eksekusi yang direkam (tidak bisa mengubah nilai di
+  tengah jalan); skrip UI belum bisa di-debug. Belum ada seleksi mouse atau
+  clipboard di editor.
 - Berkas besar: editor hanya menggambar baris yang terlihat, tetapi berjalan di
   interpreter RustCLR — berkas beberapa ribu baris masih nyaman.
 
 Implementasi: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
-`Syntax.cs`, `Templates.cs`); menjalankan lewat syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 25 pemeriksaan (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless), bagian dari
+`Syntax.cs`, `Templates.cs`, `Debugger.cs`); menjalankan lewat syscall **`SHELL_RUN` (58)** —
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 30 pemeriksaan (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless), bagian dari
 `Managed --selftest` saat boot.
 
 ---

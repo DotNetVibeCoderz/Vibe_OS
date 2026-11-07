@@ -166,6 +166,8 @@ enum Stmt {
     ForRange(String, Expr, Expr, Vec<Stmt>),     // var, start, end(excl), body
     Func(String, Vec<String>, Vec<Stmt>),
     Return(Option<Expr>),
+    /// a statement with the source line it starts on (the debugger's stops)
+    At(u32, Box<Stmt>),
 }
 
 // --- JavaScript lexer --------------------------------------------------------
@@ -469,6 +471,8 @@ fn strip_word_block(src: &str, word: &str) -> String {
                 }
                 j += 1;
             }
+            // keep the line breaks: lines must still match the TS source
+            out.extend(b[i..j].iter().filter(|&&c| c == b'\n').map(|_| '\n'));
             i = j;
             continue;
         }
@@ -487,8 +491,8 @@ fn strip_type_alias(src: &str) -> String {
             while i < b.len() && b[i] != b';' && b[i] != b'\n' {
                 i += 1;
             }
-            if i < b.len() {
-                i += 1;
+            if i < b.len() && b[i] == b';' {
+                i += 1; // the newline stays: lines must still match the TS source
             }
             continue;
         }
@@ -513,10 +517,23 @@ fn word_at(b: &[u8], i: usize, word: &str) -> bool {
 
 struct Parser {
     t: Vec<Tok>,
+    /// the source line of each token
+    lines: Vec<u32>,
     pos: usize,
 }
 
 impl Parser {
+    fn line(&self) -> u32 {
+        self.lines.get(self.pos).copied().unwrap_or(0)
+    }
+    /// A parsed statement with the line it starts on (function definitions
+    /// stay bare: they are hoisted, and a stop on a `def` line means nothing).
+    fn at(line: u32, s: Stmt) -> Stmt {
+        match s {
+            Stmt::Func(..) => s,
+            s => Stmt::At(line, alloc::boxed::Box::new(s)),
+        }
+    }
     fn peek(&self) -> Option<&Tok> {
         self.t.get(self.pos)
     }
@@ -673,6 +690,11 @@ fn js_block(p: &mut Parser) -> Result<Vec<Stmt>, String> {
 }
 
 fn js_stmt(p: &mut Parser) -> Result<Stmt, String> {
+    let line = p.line();
+    Ok(Parser::at(line, js_stmt_bare(p)?))
+}
+
+fn js_stmt_bare(p: &mut Parser) -> Result<Stmt, String> {
     if is_kw(p.peek(), "function") {
         p.pos += 1;
         let name = ident_name(p)?;
@@ -798,6 +820,11 @@ fn py_suite(p: &mut Parser) -> Result<Vec<Stmt>, String> {
 }
 
 fn py_stmt(p: &mut Parser) -> Result<Stmt, String> {
+    let line = p.line();
+    Ok(Parser::at(line, py_stmt_bare(p)?))
+}
+
+fn py_stmt_bare(p: &mut Parser) -> Result<Stmt, String> {
     if is_kw(p.peek(), "def") {
         p.pos += 1;
         let name = ident_name(p)?;
@@ -896,6 +923,44 @@ struct Interp<'h> {
     steps: u64,
     step_limit: u64,
     host: Option<&'h mut dyn Host>,
+    /// the line of the statement being executed
+    line: u32,
+    /// active calls: (function, line it was called from)
+    frames: Vec<(String, u32)>,
+    dbg: Option<Debug>,
+}
+
+/// What the debugger records: stops at `breaks`, or at every line.
+pub struct Debug {
+    pub breaks: Vec<u32>,
+    pub every_line: bool,
+    pub max: usize,
+    pub snaps: Vec<Snapshot>,
+}
+
+/// The program's state when it reached a stop.
+pub struct Snapshot {
+    pub line: u32,
+    /// innermost first: (function, line), ending with ("<main>", line)
+    pub stack: Vec<(String, u32)>,
+    pub locals: Vec<(String, String)>,
+    pub globals: Vec<(String, String)>,
+    /// output lines printed before this stop
+    pub out_lines: usize,
+}
+
+/// A value as the debugger shows it (strings quoted).
+fn show(v: &Value) -> String {
+    match v {
+        Value::Str(s) => {
+            let mut t: String = s.chars().take(60).collect();
+            if s.chars().count() > 60 {
+                t.push_str("...");
+            }
+            format!("\"{}\"", t)
+        }
+        v => v.display(),
+    }
 }
 
 const STEP_LIMIT: u64 = 5_000_000;
@@ -910,6 +975,35 @@ impl<'h> Interp<'h> {
             steps: 0,
             step_limit,
             host,
+            line: 0,
+            frames: Vec::new(),
+            dbg: None,
+        }
+    }
+
+    /// Record a stop at `line` if the debugger wants one.
+    fn trace(&mut self, line: u32) {
+        let Some(d) = &self.dbg else { return };
+        if d.snaps.len() >= d.max || !(d.every_line || d.breaks.contains(&line)) {
+            return;
+        }
+        let vars = |m: &BTreeMap<String, Value>| m.iter().map(|(k, v)| (k.clone(), show(v))).collect::<Vec<_>>();
+        let mut stack: Vec<(String, u32)> = Vec::new();
+        let mut at = line;
+        for (f, called_from) in self.frames.iter().rev() {
+            stack.push((f.clone(), at));
+            at = *called_from;
+        }
+        stack.push((String::from("<main>"), at));
+        let snap = Snapshot {
+            line,
+            stack,
+            locals: if self.scopes.len() > 1 { vars(self.scopes.last().unwrap()) } else { Vec::new() },
+            globals: vars(&self.scopes[0]),
+            out_lines: self.out.lines().count(),
+        };
+        if let Some(d) = &mut self.dbg {
+            d.snaps.push(snap);
         }
     }
 
@@ -950,6 +1044,13 @@ impl<'h> Interp<'h> {
     }
 
     fn exec(&mut self, s: &Stmt) -> Result<Flow, String> {
+        if let Stmt::At(line, inner) = s {
+            self.line = *line;
+            if self.dbg.is_some() {
+                self.trace(*line);
+            }
+            return self.exec(inner);
+        }
         self.tick()?;
         match s {
             Stmt::Func(name, params, body) => {
@@ -1018,6 +1119,7 @@ impl<'h> Interp<'h> {
                 }
                 Ok(Flow::Normal)
             }
+            Stmt::At(_, inner) => self.exec(inner), // handled above; kept for completeness
         }
     }
 
@@ -1201,7 +1303,11 @@ impl<'h> Interp<'h> {
             local.insert(p.clone(), v);
         }
         self.scopes.push(local);
+        let caller_line = self.line;
+        self.frames.push((String::from(name), caller_line));
         let r = self.run_block(&body);
+        self.frames.pop();
+        self.line = caller_line;
         self.scopes.pop();
         match r? {
             Flow::Return(v) => Ok(v),
@@ -1224,6 +1330,8 @@ pub struct Output {
     pub lines: Vec<String>,
     pub error: Option<String>,
     pub steps: u64,
+    /// the debugger's stops ([`run_debug`]; empty otherwise)
+    pub snaps: Vec<Snapshot>,
 }
 
 /// Parse and run `src` in the given language. Never panics; parse/runtime
@@ -1235,6 +1343,16 @@ pub fn run(lang: Lang, src: &str) -> Output {
 /// [`run`] with an embedder's functions and a step budget (a UI program
 /// loops until its window closes: its host passes `u64::MAX`).
 pub fn run_with(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: u64) -> Output {
+    run_inner(lang, src, host, step_limit, None)
+}
+
+/// Run under the debugger: record a [`Snapshot`] at every line in `breaks`
+/// (or at every line with `every_line`), at most `max` of them.
+pub fn run_debug(lang: Lang, src: &str, breaks: Vec<u32>, every_line: bool, max: usize) -> Output {
+    run_inner(lang, src, None, STEP_LIMIT, Some(Debug { breaks, every_line, max, snaps: Vec::new() }))
+}
+
+fn run_inner(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: u64, dbg: Option<Debug>) -> Output {
     // lex with source lines, parse, and report a failure as "parse: baris N: ..."
     let lexed = match lang {
         Lang::Js => lex_js_at(src, 1),
@@ -1244,10 +1362,10 @@ pub fn run_with(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: 
     let (toks, lines) = match lexed {
         Ok(t) => t,
         Err((e, line)) => {
-            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0 }
+            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0, snaps: Vec::new() }
         }
     };
-    let mut p = Parser { t: toks, pos: 0 };
+    let mut p = Parser { t: toks, lines: lines.clone(), pos: 0 };
     let parsed = match lang {
         Lang::Python => parse_py_with(&mut p),
         _ => parse_js_with(&mut p),
@@ -1256,10 +1374,11 @@ pub fn run_with(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: 
         Ok(p) => p,
         Err(e) => {
             let line = lines.get(p.pos.min(lines.len().saturating_sub(1))).copied().unwrap_or(1);
-            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0 }
+            return Output { lines: Vec::new(), error: Some(format!("parse: baris {}: {}", line, e)), steps: 0, snaps: Vec::new() }
         }
     };
     let mut it = Interp::new(host, step_limit);
+    it.dbg = dbg;
     // hoist function definitions first (so calls before defs work)
     for s in &program {
         if let Stmt::Func(..) = s {
@@ -1272,12 +1391,14 @@ pub fn run_with(lang: Lang, src: &str, host: Option<&mut dyn Host>, step_limit: 
             continue;
         }
         if let Err(e) = it.exec(s) {
-            error = Some(e);
+            // a runtime error names the line it happened on
+            error = Some(if it.line > 0 { format!("baris {}: {}", it.line, e) } else { e });
             break;
         }
     }
     let lines: Vec<String> = it.out.lines().map(|l| l.to_string()).collect();
-    Output { lines, error, steps: it.steps }
+    let snaps = it.dbg.take().map(|d| d.snaps).unwrap_or_default();
+    Output { lines, error, steps: it.steps, snaps }
 }
 
 // --- Built-in sample programs (the polyglot templates, in three languages) ---

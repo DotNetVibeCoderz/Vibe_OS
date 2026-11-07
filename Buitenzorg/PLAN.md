@@ -714,7 +714,9 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > `MILESTONE: CRASH REPORT OK`. **Debugger app ring-3 tercapai** (`dbg`:
 > breakpoint, step, register, memori, backtrace, berhenti saat fault; x86/ARM64/
 > RISC-V, dari PC lewat `bz run "dbg ..."`, `MILESTONE: DEBUGGER OK`).
-> Berikutnya: GDB stub kernel, VS Code DAP, debugger skrip, integrasi Studio.
+> **Debugger skrip + Studio tercapai (2026-11-07):** JS/TS/Python/C# script,
+> rekam-lalu-putar-ulang (breakpoint F9, Debug F6, tab Debug, F10/F11).
+> Berikutnya: GDB stub kernel, VS Code DAP, debugger untuk skrip UI.
 
 ### E. Deploy & Run — lokal maupun remote
 > **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`

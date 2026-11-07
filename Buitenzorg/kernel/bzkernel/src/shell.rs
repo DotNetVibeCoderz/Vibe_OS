@@ -1543,6 +1543,44 @@ fn lang_of(s: &str) -> Option<script::Lang> {
     }
 }
 
+/// The script debugger's run: the output as `run_script` prints it, then one
+/// record per stop for Buitenzorg Studio:
+/// `@dbg LINE<TAB>OUTPUT_LINES<TAB>STACK<TAB>LOCALS<TAB>GLOBALS`, the stack as
+/// `fn:line` innermost first separated by `,`, variables as `name=value`
+/// separated by U+001F.
+fn debug_script(lang: script::Lang, src: &str, breaks: Vec<u32>, every: bool) -> Vec<String> {
+    let out = script::run_debug(lang, src, breaks, every, 400);
+    let snaps = out.snaps.iter().map(|s| (s.line, s.out_lines, &s.stack, &s.locals, &s.globals));
+    debug_lines(lang.name(), &out.lines, &out.error, out.steps, out.snaps.len(), snaps)
+}
+
+type VarList = Vec<(String, String)>;
+
+/// The output of a debugged run, then the `@dbg` records (see debug_script).
+fn debug_lines<'a>(
+    lang: &str,
+    out: &[String],
+    error: &Option<String>,
+    steps: u64,
+    count: usize,
+    snaps: impl Iterator<Item = (u32, usize, &'a Vec<(String, u32)>, &'a VarList, &'a VarList)>,
+) -> Vec<String> {
+    let mut lines = vec![format!("[{}] ({} langkah, {} henti)", lang, steps, count)];
+    for l in out {
+        lines.push(format!("  {}", l));
+    }
+    if let Some(e) = error {
+        lines.push(format!("  error: {}", e));
+    }
+    let clean = |t: &str| t.replace(['\t', '\u{1f}', '\n', '\r'], " ");
+    let vars = |v: &VarList| v.iter().map(|(k, x)| format!("{}={}", k, clean(x))).collect::<Vec<_>>().join("\u{1f}");
+    for (line, out_lines, stack, locals, globals) in snaps {
+        let stack = stack.iter().map(|(f, l)| format!("{}:{}", f, l)).collect::<Vec<_>>().join(",");
+        lines.push(format!("@dbg {}\t{}\t{}\t{}\t{}", line, out_lines, stack, vars(locals), vars(globals)));
+    }
+    lines
+}
+
 fn run_script(lang: script::Lang, src: &str) -> Vec<String> {
     let out = script::run(lang, src);
     let mut lines = vec![format!("[{}] ({} langkah)", lang.name(), out.steps)];
@@ -1726,7 +1764,31 @@ fn script_cmd(cmd: &str, args: &[&str]) -> (Vec<String>, Effect) {
                 Err(e) => (vec![format!("script: {}: {}", path, e)], Effect::None),
             }
         }
-        Some(sub) => (vec![format!("script {}: list|js|ts|py|run", sub)], Effect::None),
+        Some("debug") => {
+            // script debug <js|ts|py|csx> <file> <line,line,...|all>: run under
+            // the script debugger; after the output, one `@dbg` record per stop
+            let csx = matches!(args.get(1).copied(), Some("cs") | Some("csx"));
+            let lang = args.get(1).copied().and_then(lang_of);
+            let (true, Some(path)) = (csx || lang.is_some(), args.get(2).copied()) else {
+                return (vec![String::from("script debug <js|ts|py|csx> <file> <baris,baris,...|all>")], Effect::None);
+            };
+            let spec = args.get(3).copied().unwrap_or("all");
+            let every = spec == "all";
+            let breaks: Vec<u32> = spec.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            match vfs::read(&resolve(Some(path))) {
+                Ok(bytes) => match core::str::from_utf8(&bytes) {
+                    Ok(text) if csx => {
+                        let out = crate::csx::run_debug(text, breaks, every, 400);
+                        let snaps = out.snaps.iter().map(|s| (s.line, s.out_lines, &s.stack, &s.locals, &s.globals));
+                        (debug_lines("cs", &out.lines, &out.error, out.steps, out.snaps.len(), snaps), Effect::None)
+                    }
+                    Ok(text) => (debug_script(lang.unwrap(), text, breaks, every), Effect::None),
+                    Err(_) => (vec![format!("script: {}: bukan teks UTF-8", path)], Effect::None),
+                },
+                Err(e) => (vec![format!("script: {}: {}", path, e)], Effect::None),
+            }
+        }
+        Some(sub) => (vec![format!("script {}: list|js|ts|py|run|debug", sub)], Effect::None),
     }
 }
 

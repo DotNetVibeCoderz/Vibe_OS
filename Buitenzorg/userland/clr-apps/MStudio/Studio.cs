@@ -19,6 +19,8 @@ public sealed class Doc
     public bool Dirty { get; set; }
     public int Line { get; set; } = 1;
     public string Lang { get; }
+    /// <summary>Breakpoint lines of this file (the script debugger, F9).</summary>
+    public HashSet<int> Breakpoints { get; } = new HashSet<int>();
     public Doc(string path, string text) { Path = path; Text = text; Lang = Syntax.LangOf(path); }
     public string Name => Path.Substring(Path.LastIndexOf('/') + 1);
 }
@@ -41,7 +43,7 @@ public sealed class Problem
     public override string ToString() => File.Substring(File.LastIndexOf('/') + 1) + (Line > 0 ? ":" + Line : "") + "  " + Message;
 }
 
-public sealed class Studio
+public sealed partial class Studio
 {
     public Window W { get; }
     public CodeEditor Editor { get; } = new CodeEditor();
@@ -125,6 +127,7 @@ public sealed class Studio
         var editorCol = new DockPanel();
         var tabsRow = new DockPanel { Background = Theme.Surface };
         tabsRow.Children.Add(new Button(new TextBlock("Jalankan (F5)"), _ => Run()) { Margin = new Thickness(4, 3) }.DockTo(Dock.Right));
+        tabsRow.Children.Add(new Button(new TextBlock("Debug (F6)"), _ => Debug()) { Margin = new Thickness(4, 3) }.WithClass("subtle").DockTo(Dock.Right));
         tabsRow.Children.Add(_tabs);
         editorCol.Children.Add(tabsRow.DockTo(Dock.Top));
         editorCol.Children.Add(_findBar.DockTo(Dock.Top));
@@ -134,7 +137,7 @@ public sealed class Studio
         var term = new DockPanel();
         term.Children.Add(TerminalInput.DockTo(Dock.Bottom));
         term.Children.Add(_terminal);
-        Bottom.Add("Keluaran", _output).Add("Masalah", ProblemList).Add("Terminal", term);
+        Bottom.Add("Keluaran", _output).Add("Masalah", ProblemList).Add("Terminal", term).Add("Debug", BuildDebugPanel());
 
         var center = new DockPanel();
         center.Children.Add(Bottom.DockTo(Dock.Bottom));
@@ -159,6 +162,10 @@ public sealed class Studio
             .Add(new MenuItem("Ke baris...", _ => GoToLineDialog(), "Ctrl+G")));
         menu.Add(new MenuItem("Jalankan")
             .Add(new MenuItem("Jalankan berkas", _ => Run(), "F5", IconKind.Play))
+            .Add(new MenuItem("Debug berkas", _ => Debug(), "F6"))
+            .Add(new MenuItem("Breakpoint di baris ini", _ => ToggleBreakpoint(), "F9"))
+            .Add(new MenuItem("Henti berikutnya", _ => NextStop(), "F10"))
+            .Add(new MenuItem("Henti sebelumnya", _ => PrevStop(), "F11"))
             .Add(new MenuItem("Terminal", _ => { Bottom.SelectedIndex = 2; TerminalInput.Focus(); }, "")));
         menu.Add(new MenuItem("Tampilan")
             .Add(new MenuItem("Panel proyek", _ => _split.IsPaneOpen = !_split.IsPaneOpen, "Ctrl+B", IconKind.Menu))
@@ -194,6 +201,10 @@ public sealed class Studio
             case (char)2: _split.IsPaneOpen = !_split.IsPaneOpen; break; // Ctrl+B
             case (char)20: ToggleTheme(); break;          // Ctrl+T
             case Keys.F5: Run(); break;
+            case Keys.F6: Debug(); break;
+            case Keys.F9: ToggleBreakpoint(); break;
+            case Keys.F10: NextStop(); break;
+            case Keys.F11: PrevStop(); break;
             case Keys.Escape: HideFind(); break;
             default: return;
         }
@@ -257,6 +268,8 @@ public sealed class Studio
         _syncing = true;
         Editor.Language = d.Lang;
         Editor.Text = d.Text;
+        Editor.Breakpoints = d.Breakpoints;
+        Editor.ExecLine = StopIndex >= 0 && d.Path == _debugFile ? Stops[StopIndex].Line : 0;
         Editor.GoToLine(d.Line);
         MarkProblems();
         _syncing = false;
@@ -587,6 +600,21 @@ public sealed class Studio
         ed.GoToLine(3);
         c.That(ed.CaretLine == 3, "go to line");
 
+        // the script debugger: F9 / gutter breakpoints, replaying recorded stops
+        ed.GoToLine(4);
+        st.W.SimulateKeys(Keys.F9.ToString());
+        c.That(st.Current!.Breakpoints.Contains(4) && ed.Breakpoints.Contains(4), "F9 set a breakpoint on line 4");
+        st.LoadDebug(st.Current.Path, new[] {
+            "[js] (120 langkah, 2 henti)", "  halo",
+            "@dbg 4\t1\tfib:4,<main>:9\tn=3\ttotal=0",
+            "@dbg 4\t1\tfib:4,fib:5,<main>:9\tn=2\ttotal=0" });
+        st.W.SimulateKeys(Keys.F10.ToString());
+        c.That(st.Stops.Count == 2 && st.StopIndex == 1 && ed.ExecLine == 4 && st.DebugText.Contains("n = 2") && st.DebugText.Contains("fib  baris 5") && st.DebugText.Contains("halo"),
+               "recorded stops replay: F10 went to stop 2 (locals, call stack, output so far)");
+        st.EndDebug();
+        st.W.SimulateKeys(Keys.F9.ToString());
+        c.That(st.Current.Breakpoints.Count == 0 && ed.ExecLine == 0, "F9 again cleared it");
+
         // run (F5): real output on the device, the simulation elsewhere
         st.W.SimulateKeys(Keys.F5.ToString());
         string all = string.Join("\n", st.Output);
@@ -601,6 +629,20 @@ public sealed class Studio
             st.OpenFile(dir + "/T.PY");
             st.Run();
             c.That(string.Join("\n", st.Output).Contains("py 9"), "F5 runs Python too");
+            // a real debugged run: a breakpoint inside the loop of T.PY (line 2)
+            st.Current!.Breakpoints.Add(2);
+            st.W.SimulateKeys(Keys.F6.ToString());
+            c.That(st.Stops.Count == 3 && st.Stops[0].Line == 2 && st.Stops[2].Globals.Any(v => v.Name == "i" && v.Value == "3") && st.Editor.ExecLine == 2,
+                   "F6 debugged T.PY in the kernel: " + st.Stops.Count + " stops on line 2, i = 1..3");
+            st.EndDebug();
+            // C# script: locals by name from the bytecode VM, a List shown with its items
+            Files.WriteAllText(dir + "/T.CSX", "var xs = new List<int> { 4, 5 };\nint total = 0;\nforeach (var x in xs)\n{\n    total += x;\n}\nConsole.WriteLine(total);\n");
+            st.OpenFile(dir + "/T.CSX");
+            st.Current!.Breakpoints.Add(5);
+            st.Debug();
+            c.That(st.Stops.Count == 2 && st.Stops[1].Locals.Any(v => v.Name == "x" && v.Value == "5") && st.Stops[1].Globals.Any(v => v.Name == "xs" && v.Value.StartsWith("List[4, 5]")),
+                   "F6 debugged T.CSX: " + st.Stops.Count + " stops, x = 5 on the second, xs = List[4, 5]");
+            st.EndDebug();
             var tr = st.TerminalRun("echo halo studio | wc -w");
             c.That(tr.Ok && tr.Output.Trim() == "2", "terminal panel runs a pipeline");
             // every runnable template really runs: console ones in the kernel

@@ -14,6 +14,15 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Script debugger + Studio integration:** JavaScript, TypeScript, Python
+  (`script.rs`) and C# script (`csx.rs`) can run under a recording debugger
+  -- at every breakpoint line (or every line) it keeps the line, the call
+  stack, locals, globals (lists / dictionaries with their items) and the
+  output so far (`script debug LANG FILE LINES|all`, `@dbg` records).
+  Studio: F9 / click a line number = breakpoint, F6 = debug, a Debug tab
+  with the stops, F10 / F11 walk forward / back, the line is marked in the
+  editor. Script runtime errors now carry their line (`baris N: ...`), and
+  TypeScript keeps its line numbers through the transpile.
 - **Debugger for ring-3 programs** (`debug.rs`, shell `dbg`, every
   architecture): `dbg run APP` stops at the entry; `break` on a symbol or
   address, `cont`, `step`, `regs`, `set`, `mem`, `bt` (symbolized), `kill`,

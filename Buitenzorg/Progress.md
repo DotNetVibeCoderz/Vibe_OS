@@ -406,13 +406,13 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] **Aplikasi ber-UI dalam JS/TS/Python** ✓ (2026-11-06): `window/button/text/rect/...` immediate mode, proses ring-3 di `CLRHOST.ELF` (`scriptui.rs`), `run FILE.JS`, diuji live (keyboard + klik mouse); kolom teks `input()`/`Ui.Input` untuk form + `int/indexOf/trim/upper/lower`
   - [x] Run instan JS/TS/Python/shell via `script.rs` + syscall `SHELL_RUN` (58); galat parse bernomor baris ✓ — `Studio: 23 checks, 0 failed` saat boot
   - [ ] C# lewat remote build server (`bz build-server` di host) · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
-  - [ ] Integrasi debugger (breakpoint gutter, variabel, call stack)
+  - [x] **Integrasi debugger di Studio** ✓ (2026-11-07): breakpoint F9 / klik nomor baris, Debug F6, tab Debug (henti, call stack, variabel, keluaran), F10/F11 maju-mundur, baris aktif ditandai -- `Studio: 30 checks`
 - **Debugging & Diagnostik**
   - [x] **Crash report app ring-3** ✓ (2026-11-06): fault + pc/sp/lr + backtrace ter-simbolisasi (symtab ELF disimpan saat load, pindaian stack untuk alamat kembali setelah instruksi call; demangle Rust v0/legacy) → log + `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64, ARM64, RISC-V; `MILESTONE: CRASH REPORT OK` (`crashme.cs` / `crashme.rs`)
   - [x] **Debugger app ring-3** ✓ (2026-11-06): `dbg run/break/delete/cont/step/regs/set/mem/bt/kill/detach` (`debug.rs`) -- breakpoint `int3`/`brk`/`c.ebreak`, single-step (TF x86, software step ARM64, breakpoint sementara di RISC-V), baca/tulis register + memori, backtrace bersimbol, berhenti saat fault; juga dari PC lewat `bz run "dbg ..."`; x86-64/ARM64/RISC-V, `MILESTONE: DEBUGGER OK`
   - [ ] GDB remote stub di kernel (serial COM2 → TCP) — debug di hardware nyata
   - [ ] VS Code DAP adapter (breakpoint/step/variabel/stack)
-  - [ ] Debugger skrip JS/TS/Python di `script.rs`
+  - [x] **Debugger skrip** ✓ (2026-11-07): JS/TS/Python (`script.rs`) + C# script (`csx.rs`) -- rekam keadaan di breakpoint / setiap baris (baris, call stack, variabel lokal + global, keluaran), `script debug <lang> FILE <baris|all>`; galat runtime kini bernomor baris
   - [ ] Profiler app (`bz prof <app>`: zona via syscall + sampling RIP user) · [ ] `bz logs [-f] [app]`
 - **Deploy & Run (lokal + remote)**
   - [x] `run <path>` untuk ELF/`.DLL`/skrip `.js/.ts/.py/.csx`/`.SH` di path mana pun + Run (F5) dari Studio ✓ (2026-11-06) · [ ] hot-reload skrip
