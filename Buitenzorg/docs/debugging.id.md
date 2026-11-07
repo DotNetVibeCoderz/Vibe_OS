@@ -154,6 +154,44 @@ Batasan: mengukur waktu **inklusif** scope (termasuk anak-anaknya); rekursi zona
 bernama sama menghitung ganda. Untuk "self time", pisahkan kerja anak ke zona
 bernama sendiri (seperti `wm::compose` vs `fb::present`).
 
+## ⏱️ Profiler untuk aplikasi (`prof app`, `bz prof`)
+
+Di mana *program saya* menghabiskan waktunya? Profiler per aplikasi
+(`kernel/bzkernel/src/appprof.rs`) mengambil sampel satu proses: di setiap
+interupsi timer, di CPU mana pun, yang jatuh di proses itu, ia mencatat
+program counter (atau satu tik "kernel" kalau program sedang di dalam
+syscall). Laporannya mengelompokkan sampel per fungsi, memakai simbol yang
+disimpan kernel untuk laporan crash:
+
+```text
+> prof app crashme spin
+prof: memprofil pid 1000 'crashme' ('prof stop' atau tunggu ia selesai, lalu 'prof last')
+> prof last
+profil pid 1000 'crashme': 149 sampel dalam 1506 ms (147 di program, 2 di kernel/syscall)
+   sampel     %  fungsi
+      118  79.1  crashme_Crash__Hot
+       28  18.7  crashme_Crash__Cold
+        2   1.3  [kernel: syscall]
+        1   0.6  bz_clock_nanos
+```
+
+| Perintah | |
+|---|---|
+| `prof app NAMA [arg]` | jalankan program lalu profil |
+| `prof pid N` | profil proses yang sudah berjalan |
+| `prof show` / `prof stop` | laporan sejauh ini / berhenti + laporan |
+| `prof last` | laporan terakhir yang selesai (juga dicetak ke log saat program berakhir) |
+| `bz prof APP [arg] [--seconds N]` (PC) | sama, lewat bz-link: menunggu program selesai (atau N detik) lalu mencetak laporannya |
+| `bz prof --pid N [--seconds N]` (PC) | profil proses yang sedang berjalan |
+
+Batasan: hanya program native (ELF dengan tabel simbol; aplikasi managed atau
+skrip tampil sebagai fungsi interpreter di CLRHOST.ELF yang di-strip --
+`(tanpa simbol)`); satu proses sekaligus; laju sampel = laju timer (100 Hz di
+ARM64/RISC-V dan CPU sekunder x86, 18,2 Hz di CPU 0 x86), jadi profil program
+yang berjalan sedetik atau lebih; paling banyak 16.384 sampel. Boot
+self-test memprofil `crashme spin` (1,2 dtk di `Hot`, 0,3 dtk di `Cold`) dan
+mewajibkan `Hot` dominan -> `MILESTONE: APP PROFILER OK`.
+
 ## 🪲 Debugger untuk aplikasi (`dbg`)
 
 Program ring-3 (ELF native: C# dari bflat, Rust, ...) bisa dijalankan di

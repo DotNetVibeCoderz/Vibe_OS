@@ -14,6 +14,13 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Per-app profiler:** `appprof.rs` samples one process from every timer
+  interrupt on every CPU (user pc, or a kernel tick during its syscalls) and
+  groups the samples by function with the ELF symbols kept for crash
+  reports. Shell `prof app NAME [args] | pid N | show | stop | last`; host
+  `bz prof APP [args] [--seconds N]` / `--pid N`. `crashme spin` (1.2 s in
+  Hot, 0.3 s in Cold) is the boot check: `MILESTONE: APP PROFILER OK` on
+  x86-64, ARM64 and RISC-V.
 - **Debugger for UI scripts:** a script that opens a window (JS/TS/Python/
   C# script) runs as an app in its window while the debugger records its
   stops (`CLRHOST.ELF FILE --bzdebug LINES REPORT`); `script debug` answers

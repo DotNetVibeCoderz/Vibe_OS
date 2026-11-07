@@ -73,6 +73,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod appprof;
 mod crash;
 mod debug;
 mod deploy;
@@ -812,6 +813,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         let code = app::spawn_image("crashme", &image).ok().map(app::wait);
         crash::boot_check(code, &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
         debug::self_test("crashme", "Crash__Level2", "Crash__Level1");
+        appprof::self_test("crashme", "Crash__Hot", "Crash__Cold");
     }
 
     if let Some(image) = find("mproc") {

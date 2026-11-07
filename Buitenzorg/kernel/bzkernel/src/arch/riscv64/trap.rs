@@ -187,6 +187,7 @@ extern "C" fn bz_trap(f: &mut TrapFrame) {
         match cause & !INTERRUPT {
             IRQ_S_TIMER => {
                 super::timer::on_tick();
+                crate::appprof::sample(f.sepc, from_user);
                 // A tick may switch tasks (ring-3 code is always preemptible,
                 // kernel code only in the scheduler demo) -- as on x86/ARM64.
                 if super::cpu::id() == 0 {

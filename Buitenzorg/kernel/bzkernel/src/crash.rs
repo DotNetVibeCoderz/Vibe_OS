@@ -188,6 +188,7 @@ pub fn on_load(pid: u64, image: &[u8]) {
 
 /// The program ended: drop its symbols.
 pub fn on_exit(pid: u64) {
+    crate::appprof::on_exit(pid); // a profile's report needs the symbols
     SYMS.lock().remove(&pid);
 }
 

@@ -55,6 +55,7 @@ bz device connect 127.0.0.1 1234
 | `bz ls [/disk]` | lists a folder |
 | `bz logs [-f]` | the device's console log (`-f` follows it) |
 | `bz kill PID` | stops a process (`bz run ps` lists them) |
+| `bz prof APP [args] [--seconds N]` | profiles a program on the device, prints the hottest functions ([Debugging](debugging.md#%EF%B8%8F-profiler-for-apps-prof-app-bz-prof)) |
 | `bz dap` | Debug Adapter Protocol server for VS Code: breakpoints in scripts and native programs on the device ([Debugging](debugging.md#-vs-code-breakpoints-on-a-running-device-bz-dap)) |
 
 File names on the device are FAT 8.3 (`GAME.JS`, `HELLO.ELF`); `bz deploy`

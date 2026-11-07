@@ -197,6 +197,8 @@ if (-not $bzOk) {
     # the VS Code debug adapter: a whole DAP session against the device (the
     # native part runs when the C# crashme program is on the image)
     $dap = (& dotnet $bz dap --check --native crashme Crash__Level2 Crash__Level1 2>&1) -join "`n"
+    # the per-app profiler from the PC (crashme is a C# program: only when it is on the image)
+    $prof = (& dotnet $bz prof crashme spin 2>&1) -join "`n"
     Remove-Item Env:BZ_DEVICE, Env:BZ_CODE -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
@@ -209,6 +211,7 @@ if (-not $bzOk) {
     elseif (-not (Select-String -Path $linkLog -Pattern "BZLINK 42" -Quiet)) { $fail = "the deployed script did not print 'BZLINK 42' (bz deploy said: $dep)" }
     elseif (-not ((Test-Path $pulled) -and ((Get-Content $pulled -Raw) -match "Akar menembus tanah"))) { $fail = "bz pull: $pull" }
     elseif ($dap -notmatch "bz dap: \d+ checks, 0 failed") { $fail = "bz dap --check: $dap" }
+    elseif ($prof -match "prof: memprofil" -and $prof -notmatch "Crash__Hot") { $fail = "bz prof: $prof" }
     Remove-Item $pulled -Force -ErrorAction SilentlyContinue
     if ($fail) { Write-Error "SMOKE TEST FAILED (boot-bzlink.log): $fail"; exit 1 }
     Assert-Markers -Log $linkLog -Markers @("[deploy] service on at boot", "[deploy] exec: echo hello-bzlink", "[deploy] wrote /disk/BZLINK.JS")
@@ -234,7 +237,7 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: PERSONALIZE OK",
                      "MILESTONE: MMAP OK", "MILESTONE: MATANG OK",
                      "MILESTONE: THREAD OK", "MILESTONE: SYNC OK",
-                     "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: BCL3 OK", "MILESTONE: GCMEM OK",
+                     "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: BCL3 OK", "MILESTONE: GCMEM OK",
                      "MILESTONE: BCL OK", "MILESTONE: BCL2 OK",
                      "MILESTONE: DRAW OK",
                      "MILESTONE: UI OK", "MILESTONE: CALC OK",
@@ -469,7 +472,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
         "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 31 checks, 0 failed", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
     if (Select-String -Path $log -Pattern "program 'hello'" -Quiet) {
         Assert-Markers -Log $log -Markers @("Hello from C#!", "MILESTONE: ARM64 CSHARP OK", "MILESTONE: MATANG OK",
-            "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: BCL3 OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
+            "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: BCL3 OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
             "MILESTONE: BCL OK", "MILESTONE: PROCCTL OK", "MILESTONE: CALC OK", "MILESTONE: GAME OK", "MILESTONE: UI OK",
             "MILESTONE: DRAW OK", "MILESTONE: ARM64 DESKTOP FRAME OK", "MILESTONE: ARM64 SMP SCHED OK")
     }
@@ -543,7 +546,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     Start-Sleep -Seconds 3
     Send-VirtioInput -Log $log -Port 4484
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 31 checks, 0 failed", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 31 checks, 0 failed", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
     Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
     # The file the kernel wrote to /disk must be inside the image file.
     # (QEMU must be gone first: it holds the image open.)

@@ -722,6 +722,8 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > Code; diuji `bz dap --selftest` (CI) + `--check` di smoke `[bzlink]`.
 > **Debugger skrip UI tercapai (2026-11-08):** aplikasi berjalan di jendelanya
 > sambil merekam, hentinya diputar ulang di Studio / VS Code setelah ditutup.
+> **Profiler per aplikasi tercapai (2026-11-08):** `prof app NAMA` / `bz prof`
+> -- sampel timer per fungsi (simbol ELF), `MILESTONE: APP PROFILER OK`.
 > Berikutnya: GDB stub kernel.
 
 ### E. Deploy & Run — lokal maupun remote

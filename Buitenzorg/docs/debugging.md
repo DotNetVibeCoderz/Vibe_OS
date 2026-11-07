@@ -153,6 +153,43 @@ Limitation: it measures a scope's **inclusive** time (including its children);
 recursion of a same-named zone double-counts. For "self time", split the child
 work into its own zone (as with `wm::compose` vs `fb::present`).
 
+## ⏱️ Profiler for apps (`prof app`, `bz prof`)
+
+Where does *my program* spend its time? The per-app profiler
+(`kernel/bzkernel/src/appprof.rs`) samples one process: on every timer
+interrupt, on every CPU, that lands in it, it records the program counter (or
+a "kernel" tick when the program was inside a syscall). The report groups the
+samples by function, using the symbols the kernel keeps for crash reports:
+
+```text
+> prof app crashme spin
+prof: memprofil pid 1000 'crashme' ('prof stop' atau tunggu ia selesai, lalu 'prof last')
+> prof last
+profil pid 1000 'crashme': 149 sampel dalam 1506 ms (147 di program, 2 di kernel/syscall)
+   sampel     %  fungsi
+      118  79.1  crashme_Crash__Hot
+       28  18.7  crashme_Crash__Cold
+        2   1.3  [kernel: syscall]
+        1   0.6  bz_clock_nanos
+```
+
+| Command | |
+|---|---|
+| `prof app NAME [args]` | start a program and profile it |
+| `prof pid N` | profile a process that is already running |
+| `prof show` / `prof stop` | the report so far / stop and report |
+| `prof last` | the last finished report (also printed to the log when the program ends) |
+| `bz prof APP [args] [--seconds N]` (PC) | the same over bz-link: waits until the program ends (or N seconds) and prints the report |
+| `bz prof --pid N [--seconds N]` (PC) | profile a running process |
+
+Limits: native programs only (ELF with a symbol table; a managed app or
+script shows up as the interpreter's own functions in CLRHOST.ELF, which is
+stripped -- `(tanpa simbol)`); one process at a time; the sample rate is the
+timer's (100 Hz on ARM64/RISC-V and x86 secondary CPUs, 18.2 Hz on x86 CPU 0),
+so profile something that runs for a second or more; at most 16,384 samples.
+The self-test boot profiles `crashme spin` (1.2 s in `Hot`, 0.3 s in `Cold`)
+and requires `Hot` to dominate -> `MILESTONE: APP PROFILER OK`.
+
 ## 🪲 Debugger for apps (`dbg`)
 
 Ring-3 programs (native ELF: C# built with bflat, Rust, ...) can be run

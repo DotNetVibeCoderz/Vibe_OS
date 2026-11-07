@@ -838,6 +838,9 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "vm" => vm_cmd(&args),
         "script" | "js" | "ts" | "py" => script_cmd(cmd, &args),
         "csx" | "csharp" => csx_cmd(&args),
+        "prof" | "profile" if matches!(args.first().copied(), Some("app" | "pid" | "show" | "stop" | "last")) => {
+            (crate::appprof::command(&args), Effect::None)
+        }
         "prof" | "profile" => prof_cmd(args.first().copied()),
         "gfx3d" | "3d" => {
             // gfx3d [test]: the 3D API's resources, or its self-test
@@ -1042,6 +1045,7 @@ fn help_lines() -> Vec<String> {
      "  script <lang> [f] polyglot: js|ts|py (jalankan demo/file)",
      "  csx [FILE] [arg]  C# script (.csx) lewat engine bytecode; UI: run FILE.CSX",
      "  prof [self|on|off|reset|report]  profiler zona (TSC)",
+     "  prof app NAMA | pid N | stop | last  profil per aplikasi (sampel timer per fungsi)",
      "  shutdown|restart|sleep      power management",
      "  bz <sub>          CLI (install/remove/list, model, power, vm, virt, script)",
      "  clear|cls         bersihkan layar",

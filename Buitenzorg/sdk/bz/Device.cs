@@ -66,6 +66,7 @@ static class Device
                 ["logs"] => WithDevice(t => Logs(t, follow: false)),
                 ["logs", "-f"] or ["logs", "--follow"] => WithDevice(t => Logs(t, follow: true)),
                 ["kill", var pid] when uint.TryParse(pid, out var p) => WithDevice(t => Kill(t, p)),
+                ["prof", .. var rest] when rest.Length > 0 => WithDevice(t => Prof(t, rest)),
                 ["dap", .. var rest] => DapCli.Run(rest, () => Load() is Target t ? new BzdpDebugDevice(Client(t)) : null),
                 _ => null,
             };
@@ -190,6 +191,38 @@ static class Device
                 if (failed) Console.WriteLine("(failed)");
             }
             catch (BzdpException e) { Console.WriteLine("bz: " + e.Message); }
+        }
+    }
+
+    /// <summary>`bz prof APP [args] [--seconds N]` / `bz prof --pid N [--seconds N]`:
+    /// profile a program on the device (appprof.rs) and print its report when it
+    /// ends, or after N seconds.</summary>
+    static int Prof(Target t, string[] args)
+    {
+        int seconds = 0;
+        var rest = new List<string>();
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--seconds" && i + 1 < args.Length && int.TryParse(args[i + 1], out var s)) { seconds = s; i++; }
+            else rest.Add(args[i]);
+        }
+        string start = rest is ["--pid", var pid] ? "prof pid " + pid : "prof app " + string.Join(' ', rest);
+        using var c = Client(t);
+        var (_, output) = c.ExecAsync(start).GetAwaiter().GetResult();
+        Console.Write(output);
+        if (!output.StartsWith("prof: memprofil")) return 1; // the shell guesses "failed" for any "prof: ..." line
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            Thread.Sleep(1000);
+            var (_, show) = c.ExecAsync("prof show").GetAwaiter().GetResult();
+            bool ended = show.StartsWith("prof: tidak sedang");
+            if (ended || (seconds > 0 && sw.Elapsed.TotalSeconds >= seconds))
+            {
+                var (_, report) = c.ExecAsync(ended ? "prof last" : "prof stop").GetAwaiter().GetResult();
+                Console.Write(report);
+                return 0;
+            }
         }
     }
 

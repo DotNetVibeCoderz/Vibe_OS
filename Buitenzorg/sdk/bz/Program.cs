@@ -53,6 +53,9 @@ static int Help()
           bz run <command line>             run a shell line on the device, print its output
           bz shell                          an interactive device shell
           bz logs [-f]                      the device's console log (follow with -f)
+          bz prof APP [args] [--seconds N]  profile a program on the device (functions by samples)
+          bz prof --pid N [--seconds N]     profile a running process
+          bz dap                            debug adapter for VS Code (DAP on stdio)
           bz kill <pid>                     stop a process
 
           bz app|theme|model|vm ...         planned (see roadmap in requirements.md §16)

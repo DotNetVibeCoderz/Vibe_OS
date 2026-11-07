@@ -72,6 +72,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod appprof;
 mod crash;
 mod debug;
 mod deploy;
@@ -744,6 +745,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         let code = run_program("crashme", &image);
         crash::boot_check(code, &["crashme::level3", "crashme::level2", "crashme::level1"]);
         debug::self_test("crashme", "crashme::level2", "crashme::level1");
+        appprof::self_test("crashme", "crashme::hot", "crashme::cold");
     }
     let leaked = memory::frames_in_use() as i64 - frames0 as i64;
     println!("[riscv] programs done; frames leaked: {}", leaked);

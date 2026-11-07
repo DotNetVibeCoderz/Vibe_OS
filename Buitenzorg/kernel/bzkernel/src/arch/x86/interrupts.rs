@@ -45,6 +45,7 @@ pub fn lapic_system_tick(frame: &InterruptStackFrame) {
     TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::account_tick();
     crate::process::account_tick();
+    crate::appprof::sample(frame.instruction_pointer.as_u64(), from_user(frame));
     crate::task::watchdog(frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64(), from_user(frame));
     crate::task::preempt(from_user(frame));
 }
@@ -288,6 +289,7 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::account_tick();
     crate::process::account_tick();
+    crate::appprof::sample(frame.instruction_pointer.as_u64(), from_user(&frame));
     end_of_interrupt(InterruptIndex::Timer.as_u8());
     crate::task::watchdog(frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64(), from_user(&frame));
     // EOI is done, interrupts are still disabled: safe point to preempt. Ring-3

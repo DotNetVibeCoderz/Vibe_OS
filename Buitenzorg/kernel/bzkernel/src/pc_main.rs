@@ -70,6 +70,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod appprof;
 mod crash;
 mod debug;
 mod deploy;
@@ -562,6 +563,7 @@ fn matang_demo() {
     if let Ok(code) = app::run_named("crashme") {
         crash::boot_check(Some(code), &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
         debug::self_test("crashme", "Crash__Level2", "Crash__Level1");
+        appprof::self_test("crashme", "Crash__Hot", "Crash__Cold");
     }
     match app::run_named("statics") {
         Ok(code) => println!("[kernel] statics app exited (code {})", code),

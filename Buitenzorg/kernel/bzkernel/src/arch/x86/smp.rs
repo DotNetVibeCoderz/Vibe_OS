@@ -141,6 +141,7 @@ extern "x86-interrupt" fn lapic_timer_handler(frame: InterruptStackFrame) {
         return;
     }
     // After EOI, interrupts still off: the AP scheduler may switch tasks here.
+    crate::appprof::sample(frame.instruction_pointer.as_u64(), frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
     crate::task::ap_timer(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
 }
 
