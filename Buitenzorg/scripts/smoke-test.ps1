@@ -194,6 +194,9 @@ if (-not $bzOk) {
     $dep = (& dotnet $bz deploy $script --follow 4 2>&1) -join "`n"
     $pulled = Join-Path $root "dist\bzlink-pull.txt"
     $pull = (& dotnet $bz pull /disk/BATANG.TXT $pulled 2>&1) -join "`n"
+    # the VS Code debug adapter: a whole DAP session against the device (the
+    # native part runs when the C# crashme program is on the image)
+    $dap = (& dotnet $bz dap --check --native crashme Crash__Level2 Crash__Level1 2>&1) -join "`n"
     Remove-Item Env:BZ_DEVICE, Env:BZ_CODE -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
@@ -205,10 +208,11 @@ if (-not $bzOk) {
     elseif ($dep -notmatch "/disk/BZLINK.JS") { $fail = "bz deploy: $dep" }
     elseif (-not (Select-String -Path $linkLog -Pattern "BZLINK 42" -Quiet)) { $fail = "the deployed script did not print 'BZLINK 42' (bz deploy said: $dep)" }
     elseif (-not ((Test-Path $pulled) -and ((Get-Content $pulled -Raw) -match "Akar menembus tanah"))) { $fail = "bz pull: $pull" }
+    elseif ($dap -notmatch "bz dap: \d+ checks, 0 failed") { $fail = "bz dap --check: $dap" }
     Remove-Item $pulled -Force -ErrorAction SilentlyContinue
     if ($fail) { Write-Error "SMOKE TEST FAILED (boot-bzlink.log): $fail"; exit 1 }
     Assert-Markers -Log $linkLog -Markers @("[deploy] service on at boot", "[deploy] exec: echo hello-bzlink", "[deploy] wrote /disk/BZLINK.JS")
-    Write-Host "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran"
+    Write-Host "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran, bz dap debugged it"
 }
 
 $ideLog = Join-Path $root "dist\boot-ide.log"

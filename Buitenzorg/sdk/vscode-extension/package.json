@@ -1,43 +1,184 @@
 {
   "name": "buitenzorg-sdk",
   "displayName": "Buitenzorg SDK",
-  "description": "Build, run, and debug Buitenzorg OS apps from VS Code (requirements.md §13).",
-  "version": "0.16.0",
+  "description": "Build, run, deploy and debug Buitenzorg OS apps from VS Code: breakpoints in JS/TS/Python/C# scripts and native programs on a device over bz-link.",
+  "version": "1.1.0",
   "publisher": "buitenzorg",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Programming Languages", "Debuggers", "Other"],
-  "activationEvents": ["onLanguage:csharp", "workspaceContains:app.manifest"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:csharp",
+    "workspaceContains:app.manifest",
+    "onDebugResolve:buitenzorg",
+    "onDebugDynamicConfigurations:buitenzorg"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "buitenzorg.newProject", "title": "Buitenzorg: New Project (pick template)" },
-      { "command": "buitenzorg.buildRun", "title": "Buitenzorg: Build & Run in QEMU" },
-      { "command": "buitenzorg.deploy", "title": "Buitenzorg: Deploy (build image + smoke test)" },
-      { "command": "buitenzorg.debug", "title": "Buitenzorg: Debug Kernel (QEMU + GDB server)" },
-      { "command": "buitenzorg.validateManifest", "title": "Buitenzorg: Validate app.manifest" }
+      {
+        "command": "buitenzorg.newProject",
+        "title": "Buitenzorg: New Project (pick template)"
+      },
+      {
+        "command": "buitenzorg.buildRun",
+        "title": "Buitenzorg: Build & Run in QEMU"
+      },
+      {
+        "command": "buitenzorg.deploy",
+        "title": "Buitenzorg: Deploy (build image + smoke test)"
+      },
+      {
+        "command": "buitenzorg.debug",
+        "title": "Buitenzorg: Debug Kernel (QEMU + GDB server)"
+      },
+      {
+        "command": "buitenzorg.validateManifest",
+        "title": "Buitenzorg: Validate app.manifest"
+      }
     ],
     "debuggers": [
       {
         "type": "buitenzorg",
-        "label": "Buitenzorg App",
+        "label": "Buitenzorg (bz-link)",
+        "languages": [
+          "javascript",
+          "typescript",
+          "python",
+          "csharp"
+        ],
         "configurationAttributes": {
           "launch": {
+            "required": [
+              "program"
+            ],
             "properties": {
-              "program": { "type": "string", "description": "Path to the app source (.cs)." },
-              "manifest": { "type": "string", "description": "Path to app.manifest." },
-              "media": { "type": "string", "enum": ["ide", "ahci", "nvme", "usb"], "default": "ide" }
+              "program": {
+                "type": "string",
+                "description": "A script (.js .ts .py .csx) to upload and debug, a native ELF to upload, or the name of a program on the device (e.g. crashme).",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments (native programs).",
+                "default": []
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first statement / the program's entry.",
+                "default": false
+              },
+              "device": {
+                "type": "string",
+                "description": "host[:port] of the device (BZDP, UDP 7070). Empty = the device saved by 'bz device connect'."
+              },
+              "code": {
+                "type": "number",
+                "description": "Pairing code shown by 'deploy on' on the device."
+              },
+              "remotePath": {
+                "type": "string",
+                "description": "Where the file goes on the device (default /disk/<8.3 name>)."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "script",
+                  "native"
+                ],
+                "description": "Override the kind of program (by default: from the extension)."
+              }
             }
           }
-        }
+        },
+        "initialConfigurations": [
+          {
+            "type": "buitenzorg",
+            "request": "launch",
+            "name": "Buitenzorg: debug file on device",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Buitenzorg: debug script on device",
+            "body": {
+              "type": "buitenzorg",
+              "request": "launch",
+              "name": "Buitenzorg: debug script",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": false
+            }
+          },
+          {
+            "label": "Buitenzorg: debug native program on device",
+            "body": {
+              "type": "buitenzorg",
+              "request": "launch",
+              "name": "Buitenzorg: debug native",
+              "program": "crashme",
+              "stopOnEntry": true
+            }
+          }
+        ]
       }
     ],
     "languages": [
-      { "id": "buitenzorg-manifest", "extensions": [".manifest"], "aliases": ["Buitenzorg Manifest"] }
+      {
+        "id": "buitenzorg-manifest",
+        "extensions": [
+          ".manifest"
+        ],
+        "aliases": [
+          "Buitenzorg Manifest"
+        ]
+      }
     ],
     "jsonValidation": [
-      { "fileMatch": "app.manifest", "url": "../manifest.schema.json" }
-    ]
+      {
+        "fileMatch": "app.manifest",
+        "url": "../manifest.schema.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "javascript"
+      },
+      {
+        "language": "typescript"
+      },
+      {
+        "language": "python"
+      },
+      {
+        "language": "csharp"
+      }
+    ],
+    "configuration": {
+      "title": "Buitenzorg",
+      "properties": {
+        "buitenzorg.bzPath": {
+          "type": "string",
+          "default": "",
+          "description": "The bz CLI used as debug adapter (`bz dap`): bz.dll (run with dotnet) or a bz executable. Empty = dist/bz/bz.dll or sdk/bz/bin/Debug/net10.0/bz.dll of the workspace, else `bz` on PATH."
+        }
+      }
+    }
   },
-  "scripts": { "compile": "tsc -p ./" },
-  "devDependencies": { "typescript": "^5.4.0", "@types/vscode": "^1.90.0", "@types/node": "^20.0.0" }
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/vscode": "^1.90.0",
+    "@types/node": "^20.0.0"
+  }
 }

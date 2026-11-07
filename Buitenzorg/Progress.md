@@ -108,10 +108,10 @@
 - [x] Window syscall ABI (WIN_CREATE/CMD/PRESENT + KEY_READ) + `DrawCmd`
 - [x] Template Console (console-csharp) + Desktop (desktop-csharp + `BzUi`)
 - [x] Template XOX (Tic-Tac-Toe) — desktop app menggambar via syscall
-- [~] VS Code extension — new project (pemilih template)/build-run/deploy/GDB kernel/validasi manifest; IntelliSense/DAP belum
+- [~] VS Code extension — new project (pemilih template)/build-run/deploy/GDB kernel/validasi manifest + **DAP** (`bz dap`, 2026-11-08); IntelliSense belum
 - [~] UI toolkit (`Buitenzorg.UI`, v0.16; binding/MVVM/XAML belum) · [~] template utilitas (Kalkulator ada sbg app suite + template MagicAppGen; Minesweeper belum)
 - [~] WebView + web app (mini WebView, v0.9) · [x] widget host (v0.9)
-- [~] Debug bridge + DAP debugging — *GDB kernel via QEMU ✓ (v1.0); debug bridge & DAP dijadwalkan di §Developer Workstation*
+- [x] Debug bridge + DAP debugging — *GDB kernel via QEMU ✓ (v1.0); bz-link + `bz dap` ✓ (2026-11-08): skrip + program native di perangkat yang berjalan*
 
 ---
 
@@ -411,7 +411,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] **Crash report app ring-3** ✓ (2026-11-06): fault + pc/sp/lr + backtrace ter-simbolisasi (symtab ELF disimpan saat load, pindaian stack untuk alamat kembali setelah instruksi call; demangle Rust v0/legacy) → log + `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64, ARM64, RISC-V; `MILESTONE: CRASH REPORT OK` (`crashme.cs` / `crashme.rs`)
   - [x] **Debugger app ring-3** ✓ (2026-11-06): `dbg run/break/delete/cont/step/regs/set/mem/bt/kill/detach` (`debug.rs`) -- breakpoint `int3`/`brk`/`c.ebreak`, single-step (TF x86, software step ARM64, breakpoint sementara di RISC-V), baca/tulis register + memori, backtrace bersimbol, berhenti saat fault; juga dari PC lewat `bz run "dbg ..."`; x86-64/ARM64/RISC-V, `MILESTONE: DEBUGGER OK`
   - [ ] GDB remote stub di kernel (serial COM2 → TCP) — debug di hardware nyata
-  - [ ] VS Code DAP adapter (breakpoint/step/variabel/stack)
+  - [x] **VS Code DAP adapter** ✓ (2026-11-08): `bz dap` (`sdk/bz/Dap.cs`) lewat bz-link -- skrip JS/TS/Python/C# script: breakpoint baris, continue, step over/in/out, step back/reverse continue, call stack, lokal/global, hover, keluaran, galat sebagai exception; ELF native lewat `dbg`: breakpoint fungsi, step instruksi, step out, register (bisa diubah), Debug Console → `dbg`; ekstensi VS Code (F5 di berkas aktif); `bz dap --selftest` (CI) + `--check` di smoke `[bzlink]`; kernel `dbg wait`
   - [x] **Debugger skrip** ✓ (2026-11-07): JS/TS/Python (`script.rs`) + C# script (`csx.rs`) -- rekam keadaan di breakpoint / setiap baris (baris, call stack, variabel lokal + global, keluaran), `script debug <lang> FILE <baris|all>`; galat runtime kini bernomor baris
   - [ ] Profiler app (`bz prof <app>`: zona via syscall + sampling RIP user) · [ ] `bz logs [-f] [app]`
 - **Deploy & Run (lokal + remote)**
@@ -419,7 +419,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] **bz-link** ✓ (2026-11-06): agen di OS (`deploy.rs`, BZDP v1 + op READ/EXEC/OUTPUT) + host `bz device/deploy/run/shell/push/pull/ls/logs/kill` (`sdk/bz/Device.cs`); `bz deploy` file/folder proyek → jalan di OS yang hidup tanpa build ulang image; autostart (`/disk/DEPLOY.CFG`, fw_cfg); smoke `[bzlink]` · [ ] `bz debug --remote`
   - [ ] Transport serial COM2 (QEMU `-serial tcp`, hardware via USB-serial) · [x] UDP (BZDP v1, `deploy.rs`, port 7070, klien di MagicAppGen) · [ ] TCP (stack `tcp.rs` ada, BZDP belum memakainya)
   - [~] [x] Agen mati secara default (`deploy on [kode]`) + kode pairing 4 digit + verifikasi CRC-32 per berkas · [ ] hash kriptografis · [ ] audit log
-  - [~] [x] MagicAppGen deploy lewat BZDP (Perangkat) · [ ] ekstensi VS Code
+  - [~] [x] MagicAppGen deploy lewat BZDP (Perangkat) · [x] ekstensi VS Code: debug di perangkat (F5, `bz dap`) · [ ] perintah Deploy/Run ekstensi lewat bz-link
 - [ ] **Milestone:** `bz deploy --target serial` dari host → app jalan di OS yang sedang berjalan tanpa build ulang image, log mengalir balik, breakpoint kena; Studio menjalankan skrip Python di dalam OS; crash app menampilkan backtrace ter-simbolisasi
 
 ### 🎬 Multimedia, Internet, Game (2D/3D) & Hiburan (permintaan 2026-11-01)

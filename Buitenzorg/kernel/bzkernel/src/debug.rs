@@ -667,6 +667,12 @@ pub fn command(args: &[&str]) -> Vec<String> {
             }
             out
         }
+        // wait until the program stops or ends (a debugger front end polls with this
+        // after a `cont` that answered "is running")
+        ["wait", rest @ ..] => {
+            let ms = rest.first().and_then(|n| n.parse::<u64>().ok()).unwrap_or(1000).min(3000);
+            one(wait_stop(cur, ms))
+        }
         ["regs" | "r"] => request(cur, Req::Regs),
         ["set", reg, v] => match address(cur, v) {
             Ok(v) => request(cur, Req::Set(String::from(*reg), v)),
@@ -694,6 +700,7 @@ pub fn command(args: &[&str]) -> Vec<String> {
             String::from("dbg mem ADDR [N]     memory (hex + text)"),
             String::from("dbg set REG VALUE    change a register"),
             String::from("dbg delete SYM|ADDR | breaks | list | pid N | kill | detach"),
+            String::from("dbg wait [MS]         wait until the program stops or ends (max 3000 ms)"),
         ],
     }
 }

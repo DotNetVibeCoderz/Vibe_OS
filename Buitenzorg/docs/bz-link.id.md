@@ -56,6 +56,7 @@ bz device connect 127.0.0.1 1234
 | `bz ls [/disk]` | daftar isi folder |
 | `bz logs [-f]` | log konsol perangkat (`-f` mengikutinya) |
 | `bz kill PID` | hentikan proses (`bz run ps` mendaftarnya) |
+| `bz dap` | server Debug Adapter Protocol untuk VS Code: breakpoint di skrip dan program native di perangkat ([Debugging](debugging.id.md#-vs-code-breakpoint-di-perangkat-yang-berjalan-bz-dap)) |
 
 Nama berkas di perangkat berformat FAT 8.3 (`GAME.JS`, `HELLO.ELF`); `bz
 deploy` memendekkan nama yang lebih panjang.

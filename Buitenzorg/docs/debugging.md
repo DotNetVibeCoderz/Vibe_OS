@@ -202,6 +202,49 @@ Managed apps and scripts run inside `CLRHOST.ELF` and are not debugged at the
 source level. The self-test boot drives a whole session -> `MILESTONE:
 DEBUGGER OK`.
 
+## 🧭 VS Code: breakpoints on a running device (`bz dap`)
+
+The VS Code extension (`sdk/vscode-extension`) debugs programs **on a running
+Buitenzorg device** -- QEMU or real hardware -- through `bz dap`, a Debug
+Adapter Protocol server in the `bz` CLI (`sdk/bz/Dap.cs`) that talks to the
+device over bz-link ([bz-link](bz-link.md)).
+
+1. On the device: `deploy on` (shows the pairing code). On the PC: `bz device
+   connect <ip> <code>` -- or put `"device"` and `"code"` in `launch.json`.
+2. Open a `.js`, `.ts`, `.py` or `.csx` file, click in the gutter to set
+   breakpoints, press **F5** (no `launch.json` needed: it debugs the active
+   file).
+
+| Program | What happens | You get |
+|---|---|---|
+| **Script** (`.js .ts .py .csx`) | uploaded to `/disk/<8.3 name>`, run once under the recording debugger (`script debug LANG FILE all`) | line breakpoints, continue, step over / in / out, **step back + reverse continue**, call stack, locals + globals, hover, output as it was printed, the runtime error as an exception stop |
+| **Native ELF** (`"program": "crashme"`, or a local `.ELF` that is uploaded) | started with `dbg run` (stopped at its entry) | **function breakpoints** (symbol names, or a unique part), continue, step = one instruction, step out = to the caller, symbolized call stack, **registers** (editable), the Debug Console passes text to `dbg` (`mem 0x400000 32`, `bt`) |
+
+```jsonc
+// .vscode/launch.json
+{ "type": "buitenzorg", "request": "launch", "name": "Debug on device",
+  "program": "${file}",                 // or "crashme" (native, by name)
+  "stopOnEntry": false,
+  "device": "127.0.0.1:7070", "code": 4321 }   // optional: else ~/.bz/device.json
+```
+
+Under QEMU forward the port: `-netdev user,id=n0,hostfwd=udp::7070-:7070
+-device e1000,netdev=n0`. The extension starts `dotnet dist/bz/bz.dll dap`
+(or `sdk/bz/bin/Debug/net10.0/bz.dll`, or the setting `buitenzorg.bzPath`, or
+`bz` on PATH).
+
+**Honest limits.** A script is *replayed*: it runs once, then you move through
+the recording -- you cannot change a value and continue, and only the first
+400 statement stops are recorded. UI scripts (that open a window) are not
+debugged. Native programs have no line information (there is no DWARF on the
+device), so their breakpoints are function names and their frames show
+addresses, not source lines; pause is not supported (a program stops at a
+breakpoint, a fault, or when it ends). Managed C# apps (RustCLR) are not
+debugged at the source level yet. Tests: `bz dap --selftest` (a simulated
+device, CI) and `bz dap --check` (the connected device; the smoke test's
+`[bzlink]` step runs it on x86 with both a script and `crashme`). The
+extension itself is not tested by a VS Code instance in CI -- the adapter is.
+
 ## 💥 Crash reports (ring-3 programs)
 
 When a program faults (a bad pointer, an unmapped address, an undefined
@@ -246,7 +289,10 @@ backtrace (return addresses found on the stack, innermost first):
 prof self
 
 # App debugger (in the OS shell, or bz run "dbg ..." from a PC)
-dbg run crashme   # then: break Level3, cont, bt, regs, step, kill
+dbg run crashme   # then: break Level3, cont, bt, regs, step, kill, wait
+
+# VS Code debug adapter (on the PC)
+bz dap --selftest  # simulated device;  bz dap --check = the connected one
 
 # Crash reports (in the OS shell)
 crash            # list

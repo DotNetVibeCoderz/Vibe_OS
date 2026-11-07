@@ -716,7 +716,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > RISC-V, dari PC lewat `bz run "dbg ..."`, `MILESTONE: DEBUGGER OK`).
 > **Debugger skrip + Studio tercapai (2026-11-07):** JS/TS/Python/C# script,
 > rekam-lalu-putar-ulang (breakpoint F9, Debug F6, tab Debug, F10/F11).
-> Berikutnya: GDB stub kernel, VS Code DAP, debugger untuk skrip UI.
+> **VS Code DAP tercapai (2026-11-08):** `bz dap` (adapter DAP di CLI `bz`,
+> lewat bz-link) -- skrip: breakpoint, step over/in/out, step back, variabel;
+> ELF native: breakpoint fungsi, step instruksi, register; F5 di ekstensi VS
+> Code; diuji `bz dap --selftest` (CI) + `--check` di smoke `[bzlink]`.
+> Berikutnya: GDB stub kernel, debugger untuk skrip UI.
 
 ### E. Deploy & Run — lokal maupun remote
 > **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`
@@ -1233,7 +1237,7 @@ Item yang belum tuntas dan dijadwalkan menyusul (lihat anotasi di [Progress.md](
 - **TCP** — sudah Ethernet/ARP/IPv4/ICMP + **UDP** (loopback); TCP + driver NIC belum.
 - ~~**Multi-proses preemptive di ring 3**~~ — ✓ increment 1 (2026-11-01). Sisa: argv/`wait`/handle per proses, tutup window saat proses keluar, reklamasi frame, SMP.
 - **Tiling WM, settings/notifikasi, pipes/redirection shell** *(launcher Start menu + tray ✓ v0.16)*.
-- **VS Code DAP debugging + debug bridge** — extension punya new/build/deploy/GDB-kernel; DAP + bridge ke OS belum (lihat §Developer Workstation).
+- **VS Code DAP debugging + debug bridge** — ✓ 2026-11-08: bz-link (BZDP) + `bz dap`; sisa: debugging tingkat sumber untuk app C# managed (RustCLR).
 
 ---
 

@@ -14,6 +14,17 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **VS Code debugging on a running device (`bz dap`):** a Debug Adapter
+  Protocol server in the `bz` CLI (`sdk/bz/Dap.cs`) over bz-link. Scripts
+  (.js/.ts/.py/.csx) are uploaded and replayed from the kernel's recording
+  debugger: line breakpoints, continue, step over/in/out, step back and
+  reverse continue, call stack, locals/globals, hover, output, the runtime
+  error as an exception stop. Native ELF programs go through `dbg`: function
+  breakpoints, instruction step, step out, editable registers, the Debug
+  Console passes text to `dbg`. The VS Code extension registers the
+  `buitenzorg` debugger (F5 debugs the active file). Kernel: `dbg wait [ms]`.
+  Tests: `bz dap --selftest` (simulated device, CI) and `bz dap --check`
+  (smoke `[bzlink]`, x86: a script + crashme).
 - **Script debugger + Studio integration:** JavaScript, TypeScript, Python
   (`script.rs`) and C# script (`csx.rs`) can run under a recording debugger
   -- at every breakpoint line (or every line) it keeps the line, the call

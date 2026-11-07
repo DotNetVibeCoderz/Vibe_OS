@@ -66,6 +66,7 @@ static class Device
                 ["logs"] => WithDevice(t => Logs(t, follow: false)),
                 ["logs", "-f"] or ["logs", "--follow"] => WithDevice(t => Logs(t, follow: true)),
                 ["kill", var pid] when uint.TryParse(pid, out var p) => WithDevice(t => Kill(t, p)),
+                ["dap", .. var rest] => DapCli.Run(rest, () => Load() is Target t ? new BzdpDebugDevice(Client(t)) : null),
                 _ => null,
             };
         }

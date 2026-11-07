@@ -8,8 +8,12 @@
 //   - buitenzorg.debug          boot in QEMU with a GDB server (-s -S) for attach
 //   - buitenzorg.validateManifest   `bz manifest validate`
 //
-// Full DAP breakpoint debugging (mapping VS Code breakpoints to the managed
-// app) is still future work; buitenzorg.debug gives kernel-level GDB today.
+// Debugging (type "buitenzorg"): the debug adapter is `bz dap` (sdk/bz/Dap.cs),
+// which talks to a running device over bz-link (BZDP, UDP 7070) -- set
+// breakpoints in a .js/.ts/.py/.csx file and press F5 (the script is uploaded
+// and replayed from a recording: step, step back, variables), or launch a
+// native program by name with function breakpoints. Kernel debugging stays
+// on QEMU + GDB (buitenzorg.debug).
 
 import * as vscode from "vscode";
 import * as cp from "child_process";
@@ -100,15 +104,47 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Debug config provider: `launch` of type "buitenzorg" maps to the GDB flow.
+  // The debug adapter: `bz dap` on stdio.
   context.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory("buitenzorg", {
+      createDebugAdapterDescriptor(): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
+        const bz = findBz();
+        out.appendLine(`debug adapter: ${bz.command} ${bz.args.join(" ")}`);
+        return new vscode.DebugAdapterExecutable(bz.command, bz.args);
+      },
+    }),
+    // F5 without a launch.json: debug the active file on the device.
     vscode.debug.registerDebugConfigurationProvider("buitenzorg", {
       resolveDebugConfiguration(_folder, config) {
-        vscode.commands.executeCommand("buitenzorg.debug");
-        return undefined; // handled via the QEMU+GDB command (no DAP session yet)
+        if (!config.type && !config.request && !config.name) {
+          const doc = vscode.window.activeTextEditor?.document;
+          if (!doc) return undefined;
+          config.type = "buitenzorg";
+          config.request = "launch";
+          config.name = "Buitenzorg: debug file on device";
+          config.program = doc.fileName;
+        }
+        if (!config.program) {
+          vscode.window.showErrorMessage("Buitenzorg: 'program' is required (a script, an ELF, or a program name on the device).");
+          return undefined;
+        }
+        return config;
       },
     })
   );
+}
+
+/** `bz dap`: the configured bz, the workspace's build of it, or bz on PATH. */
+function findBz(): { command: string; args: string[] } {
+  const configured = vscode.workspace.getConfiguration("buitenzorg").get<string>("bzPath") ?? "";
+  const candidates = configured
+    ? [configured]
+    : [path.join(repoRoot(), "dist", "bz", "bz.dll"), path.join(repoRoot(), "sdk", "bz", "bin", "Debug", "net10.0", "bz.dll")];
+  for (const c of candidates) {
+    if (c.toLowerCase().endsWith(".dll") && fs.existsSync(c)) return { command: "dotnet", args: [c, "dap"] };
+    if (configured && fs.existsSync(c)) return { command: c, args: ["dap"] };
+  }
+  return { command: "bz", args: ["dap"] };
 }
 
 export function deactivate(): void {}

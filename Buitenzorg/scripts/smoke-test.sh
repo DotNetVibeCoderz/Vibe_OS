@@ -192,6 +192,9 @@ else
   echoed=$(dotnet "$bzdir/bz.dll" run "echo hello-bzlink" 2>&1 || true)
   dep=$(dotnet "$bzdir/bz.dll" deploy "$root/dist/BZLINK.JS" --follow 4 2>&1 || true)
   pull=$(MSYS_NO_PATHCONV=1 dotnet "$bzdir/bz.dll" pull /disk/BATANG.TXT "$root/dist/bzlink-pull.txt" 2>&1 || true)
+  # the VS Code debug adapter: a whole DAP session against the device (the
+  # native part runs when the C# crashme program is on the image)
+  dap=$(dotnet "$bzdir/bz.dll" dap --check --native crashme Crash__Level2 Crash__Level1 2>&1 || true)
   unset BZ_DEVICE BZ_CODE
   sleep 2
   kill "$lpid" 2>/dev/null || true
@@ -203,11 +206,12 @@ else
   elif ! printf '%s' "$dep" | grep -qF "/disk/BZLINK.JS"; then fail="bz deploy: $dep"
   elif ! grep -qF "BZLINK 42" "$linklog"; then fail="the deployed script did not print 'BZLINK 42' (bz deploy said: $dep)"
   elif ! grep -qF "Akar menembus tanah" "$root/dist/bzlink-pull.txt" 2>/dev/null; then fail="bz pull: $pull"
+  elif ! printf '%s' "$dap" | grep -qE "bz dap: [0-9]+ checks, 0 failed"; then fail="bz dap --check: $dap"
   fi
   rm -f "$root/dist/bzlink-pull.txt"
   if [ -n "$fail" ]; then echo "SMOKE TEST FAILED (boot-bzlink.log): $fail" >&2; exit 1; fi
   require "$linklog" "[deploy] service on at boot" "[deploy] exec: echo hello-bzlink" "[deploy] wrote /disk/BZLINK.JS"
-  echo "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran"
+  echo "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran, bz dap debugged it"
 fi
 
 # Full run on IDE: storage milestones must pass (file read via own driver).

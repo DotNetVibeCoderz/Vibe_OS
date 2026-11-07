@@ -203,6 +203,50 @@ memasang breakpoint sementara di setiap instruksi berikut yang mungkin
 dalam `CLRHOST.ELF` dan tidak di-debug di tingkat kode sumbernya. Boot
 self-test menjalankan satu sesi utuh -> `MILESTONE: DEBUGGER OK`.
 
+## 🧭 VS Code: breakpoint di perangkat yang berjalan (`bz dap`)
+
+Ekstensi VS Code (`sdk/vscode-extension`) men-debug program **di perangkat
+Buitenzorg yang sedang berjalan** -- QEMU atau hardware nyata -- lewat
+`bz dap`, server Debug Adapter Protocol di CLI `bz` (`sdk/bz/Dap.cs`) yang
+bicara dengan perangkat lewat bz-link ([bz-link](bz-link.id.md)).
+
+1. Di perangkat: `deploy on` (menampilkan kode pairing). Di PC: `bz device
+   connect <ip> <kode>` -- atau isi `"device"` dan `"code"` di `launch.json`.
+2. Buka berkas `.js`, `.ts`, `.py` atau `.csx`, klik di gutter untuk memasang
+   breakpoint, tekan **F5** (tanpa `launch.json` pun bisa: berkas aktif yang
+   di-debug).
+
+| Program | Yang terjadi | Yang Anda dapat |
+|---|---|---|
+| **Skrip** (`.js .ts .py .csx`) | diunggah ke `/disk/<nama 8.3>`, dijalankan sekali di debugger perekam (`script debug LANG FILE all`) | breakpoint baris, continue, step over / in / out, **step back + reverse continue**, call stack, variabel lokal + global, hover, keluaran sesuai urutan cetaknya, galat runtime sebagai henti exception |
+| **ELF native** (`"program": "crashme"`, atau `.ELF` lokal yang diunggah) | dijalankan dengan `dbg run` (berhenti di entry) | **breakpoint fungsi** (nama simbol, atau bagian unik darinya), continue, step = satu instruksi, step out = sampai pemanggil, call stack bersimbol, **register** (bisa diubah), Debug Console meneruskan teks ke `dbg` (`mem 0x400000 32`, `bt`) |
+
+```jsonc
+// .vscode/launch.json
+{ "type": "buitenzorg", "request": "launch", "name": "Debug di perangkat",
+  "program": "${file}",                 // atau "crashme" (native, menurut nama)
+  "stopOnEntry": false,
+  "device": "127.0.0.1:7070", "code": 4321 }   // opsional: selain itu ~/.bz/device.json
+```
+
+Di QEMU teruskan port-nya: `-netdev user,id=n0,hostfwd=udp::7070-:7070
+-device e1000,netdev=n0`. Ekstensi menjalankan `dotnet dist/bz/bz.dll dap`
+(atau `sdk/bz/bin/Debug/net10.0/bz.dll`, atau setelan `buitenzorg.bzPath`,
+atau `bz` di PATH).
+
+**Batasan (jujur).** Skrip *diputar ulang*: dijalankan sekali, lalu Anda
+bergerak di dalam rekamannya -- tidak bisa mengubah nilai lalu melanjutkan,
+dan hanya 400 henti pertama yang direkam. Skrip UI (yang membuka jendela)
+belum bisa di-debug. Program native tidak punya informasi baris (tidak ada
+DWARF di perangkat), jadi breakpoint-nya nama fungsi dan frame-nya menunjukkan
+alamat, bukan baris sumber; jeda (pause) tidak didukung (program berhenti di
+breakpoint, saat fault, atau saat selesai). Aplikasi C# managed (RustCLR)
+belum bisa di-debug di tingkat sumber. Pengujian: `bz dap --selftest`
+(perangkat simulasi, CI) dan `bz dap --check` (perangkat yang tersambung;
+langkah `[bzlink]` smoke test menjalankannya di x86 dengan skrip dan
+`crashme`). Ekstensinya sendiri tidak diuji oleh instance VS Code di CI --
+adapternya yang diuji.
+
 ## 💥 Laporan crash (program ring-3)
 
 Saat sebuah program fault (pointer salah, alamat tak terpetakan, instruksi
@@ -246,6 +290,12 @@ backtrace (return addresses found on the stack, innermost first):
 
 # Profiler (di shell OS)
 prof self
+
+# Debugger aplikasi (di shell OS, atau bz run "dbg ..." dari PC)
+dbg run crashme   # lalu: break Level3, cont, bt, regs, step, kill, wait
+
+# Debug adapter VS Code (di PC)
+bz dap --selftest  # perangkat simulasi;  bz dap --check = yang tersambung
 ```
 
 ---
