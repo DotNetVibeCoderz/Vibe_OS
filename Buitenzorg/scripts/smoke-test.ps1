@@ -177,7 +177,7 @@ if (-not $bzOk) {
     $linkImg = Join-Path $root "dist\bzlink-test.img"
     Copy-Item $image $linkImg -Force
     $largs = @('-smp', '2', '-drive', "format=raw,file=$linkImg", '-m', '512M',
-               '-netdev', 'user,id=n0,hostfwd=udp::7171-:7070', '-device', 'e1000,netdev=n0',
+               '-netdev', 'user,id=n0,hostfwd=udp::7171-:7070,hostfwd=tcp::1235-:1234', '-device', 'e1000,netdev=n0',
                '-fw_cfg', 'name=opt/buitenzorg/deploy,string=4321',
                '-display', 'none', '-serial', "file:$linkLog", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $largs -PassThru
@@ -203,6 +203,8 @@ if (-not $bzOk) {
     $repo = (& dotnet $bz repo --check --port 8089 2>&1) -join "`n"
     # C# compiled on this machine for the device, then run there
     $rbuild = (& dotnet $bz build-server --check --port 8090 2>&1) -join "`n"
+    # the GDB stub, driven with GDB's packets over TCP (crashme: when it is on the image)
+    $gdbc = (& dotnet $bz gdb-check --tcp 127.0.0.1:1235 2>&1) -join "`n"
     Remove-Item Env:BZ_DEVICE, Env:BZ_CODE -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
@@ -218,6 +220,7 @@ if (-not $bzOk) {
     elseif ($prof -match "prof: memprofil" -and $prof -notmatch "Crash__Hot") { $fail = "bz prof: $prof" }
     elseif ($repo -notmatch "bz repo: [0-9]+ checks, 0 failed") { $fail = "bz repo --check: $repo" }
     elseif ($rbuild -notmatch "bz build-server: [0-9]+ checks, 0 failed") { $fail = "bz build-server --check: $rbuild" }
+    elseif ($gdbc -notmatch "bz gdb-check: [0-9]+ checks, 0 failed") { $fail = "bz gdb-check: $gdbc" }
     Remove-Item $pulled -Force -ErrorAction SilentlyContinue
     if ($fail) { Write-Error "SMOKE TEST FAILED (boot-bzlink.log): $fail"; exit 1 }
     Assert-Markers -Log $linkLog -Markers @("[deploy] service on at boot", "[deploy] exec: echo hello-bzlink", "[deploy] wrote /disk/BZLINK.JS")

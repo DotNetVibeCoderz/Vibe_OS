@@ -67,6 +67,7 @@ static class Device
                 ["logs", "-f"] or ["logs", "--follow"] => WithDevice(t => Logs(t, follow: true)),
                 ["kill", var pid] when uint.TryParse(pid, out var p) => WithDevice(t => Kill(t, p)),
                 ["prof", .. var rest] when rest.Length > 0 => WithDevice(t => Prof(t, rest)),
+                ["gdb-check", .. var rest] => WithDevice(t => GdbCheck.Check(new BzdpDebugDevice(Client(t)), rest)),
                 ["build-server", "--check", .. var rest] => WithDevice(t => BuildServer.Check(new BzdpDebugDevice(Client(t)), rest)),
                 ["repo", "--check", .. var rest] => WithDevice(t => RepoCli.Check(new BzdpDebugDevice(Client(t)), rest)),
                 ["dap", .. var rest] => DapCli.Run(rest, () => Load() is Target t ? new BzdpDebugDevice(Client(t)) : null),

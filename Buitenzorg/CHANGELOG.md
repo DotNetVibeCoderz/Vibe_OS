@@ -14,6 +14,13 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **GDB remote stub for ring-3 programs:** `gdbserver PORT APP [args]`
+  (`gdbstub.rs`) starts APP under the debugger and serves the GDB Remote
+  Serial Protocol on TCP: registers in GDB's order on x86-64 / ARM64 /
+  RISC-V, memory reads, software breakpoints, continue, step, kill,
+  detach, `monitor` (`sym NAME`, else `dbg`). `debug.rs` gained raw
+  register / memory requests. Tested by `bz gdb-check` (GDB's packets over
+  TCP, smoke `[bzlink]`); a real GDB has not been run against it yet.
 - **Remote C# build server:** `bz build-server [--port N]` on a PC compiles a
   project for the device (`dotnet build` against Buitenzorg.App/UI/Three) and
   answers with the assembly or with the errors as

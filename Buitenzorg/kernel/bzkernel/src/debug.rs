@@ -61,6 +61,10 @@ const BP: &[u8] = &[0x02, 0x90]; // c.ebreak
 
 enum Req {
     Regs,
+    /// every named register as `name=value` (hex), in frame order (GDB stub)
+    RawRegs,
+    /// memory as one hex string, breakpoints hidden (GDB stub)
+    RawMem(u64, usize),
     Set(String, u64),
     Mem(u64, usize),
     Break(u64),
@@ -424,6 +428,26 @@ fn execute(pid: u64, req: Req, r: &mut Regs) -> (Vec<String>, Resume) {
             }
             (out, Resume::No)
         }
+        Req::RawRegs => {
+            let out = r.names.iter().enumerate().filter(|(_, n)| !n.is_empty()).map(|(i, n)| format!("{}={:x}", n, r.r[i])).collect();
+            (out, Resume::No)
+        }
+        Req::RawMem(addr, n) => match read_user(addr, n) {
+            Some(mut b) => {
+                with(pid, |s| {
+                    for (a, orig) in s.bps.iter().chain(s.temps.iter()) {
+                        for (k, o) in orig.iter().enumerate() {
+                            let at = a + k as u64;
+                            if at >= addr && at < addr + n as u64 && s.reinsert != Some(*a) {
+                                b[(at - addr) as usize] = *o;
+                            }
+                        }
+                    }
+                });
+                (alloc::vec![b.iter().map(|x| format!("{:02x}", x)).collect::<String>()], Resume::No)
+            }
+            None => (alloc::vec![String::from("E")], Resume::No),
+        },
         Req::Set(name, v) => match r.names.iter().position(|n| *n == name) {
             Some(i) => {
                 r.r[i] = v;
@@ -596,6 +620,29 @@ fn wait_stop(pid: u64, ms: u64) -> String {
         }
         crate::task::yield_now();
     }
+}
+
+/// GDB stub: the registers of stopped `pid` as (name, value), frame order.
+pub fn raw_regs(pid: u64) -> Option<Vec<(String, u64)>> {
+    let out = request(pid, Req::RawRegs);
+    let v: Vec<(String, u64)> = out
+        .iter()
+        .filter_map(|l| {
+            let (n, x) = l.split_once('=')?;
+            Some((String::from(n), u64::from_str_radix(x, 16).ok()?))
+        })
+        .collect();
+    (!v.is_empty()).then_some(v)
+}
+
+/// GDB stub: `n` bytes of stopped `pid`'s memory at `addr` (breakpoints hidden).
+pub fn raw_mem(pid: u64, addr: u64, n: usize) -> Option<Vec<u8>> {
+    let out = request(pid, Req::RawMem(addr, n.min(4096)));
+    let h = out.first()?;
+    if h == "E" || h.len() % 2 != 0 {
+        return None;
+    }
+    (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect()
 }
 
 /// An address: `0x...`, a decimal number, or a symbol of the program.

@@ -74,6 +74,7 @@ mod splash;
 mod clock;
 mod appprof;
 mod crash;
+mod gdbstub;
 mod debug;
 mod deploy;
 mod logring;

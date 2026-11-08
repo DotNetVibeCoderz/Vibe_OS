@@ -178,7 +178,7 @@ else
   rm -f "$linklog"
   cp "$img" "$root/dist/bzlink-test.img"
   timeout --foreground 300 "$qemu" -smp 2 -drive "format=raw,file=$root/dist/bzlink-test.img" -m 512M \
-    -netdev user,id=n0,hostfwd=udp::7171-:7070 -device e1000,netdev=n0 \
+    -netdev user,id=n0,hostfwd=udp::7171-:7070,hostfwd=tcp::1235-:1234 -device e1000,netdev=n0 \
     -fw_cfg name=opt/buitenzorg/deploy,string=4321 \
     -display none -serial "file:$linklog" -no-reboot &
   lpid=$!
@@ -201,6 +201,8 @@ else
   repo=$(dotnet "$bzdir/bz.dll" repo --check --port 8089 2>&1 || true)
   # C# compiled on this machine for the device, then run there
   rbuild=$(dotnet "$bzdir/bz.dll" build-server --check --port 8090 2>&1 || true)
+  # the GDB stub, driven with GDB's packets over TCP (crashme: when it is on the image)
+  gdbc=$(dotnet "$bzdir/bz.dll" gdb-check --tcp 127.0.0.1:1235 2>&1 || true)
   unset BZ_DEVICE BZ_CODE
   sleep 2
   kill "$lpid" 2>/dev/null || true
@@ -216,6 +218,7 @@ else
   elif printf '%s' "$prof" | grep -qF "prof: memprofil" && ! printf '%s' "$prof" | grep -qF "Crash__Hot"; then fail="bz prof: $prof"
   elif ! printf '%s' "$repo" | grep -qE "bz repo: [0-9]+ checks, 0 failed"; then fail="bz repo --check: $repo"
   elif ! printf '%s' "$rbuild" | grep -qE "bz build-server: [0-9]+ checks, 0 failed"; then fail="bz build-server --check: $rbuild"
+  elif ! printf '%s' "$gdbc" | grep -qE "bz gdb-check: [0-9]+ checks, 0 failed"; then fail="bz gdb-check: $gdbc"
   fi
   rm -f "$root/dist/bzlink-pull.txt"
   if [ -n "$fail" ]; then echo "SMOKE TEST FAILED (boot-bzlink.log): $fail" >&2; exit 1; fi

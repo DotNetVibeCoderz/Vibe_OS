@@ -287,6 +287,39 @@ langkah `[bzlink]` smoke test menjalankannya di x86 dengan skrip, skrip UI, dan
 `crashme`). Ekstensinya sendiri tidak diuji oleh instance VS Code di CI --
 adapternya yang diuji.
 
+## 🔌 GDB ke perangkat yang berjalan (`gdbserver`)
+
+`dbg` menjalankan debugger dari shell perangkat itu sendiri; `gdbserver`
+menaruh mesin yang sama di balik **GDB Remote Serial Protocol** di sebuah port
+TCP, sehingga GDB di PC bisa men-debug program yang berjalan di hardware nyata
+(atau VM):
+
+```text
+(perangkat) gdbserver 1234 crashme
+            gdbserver: pid 1000 stopped (entry) at 0x40008c  _start -- menunggu GDB di 10.0.2.15:1234
+(PC)        gdb userland/hello-csharp/crashme.elf
+            (gdb) target remote 192.168.1.30:1234    # QEMU: hostfwd=tcp::1235-:1234 -> localhost:1235
+            (gdb) break Crash__Level2
+            (gdb) continue
+            (gdb) info registers / x/4xb $pc / stepi / bt / kill
+            (gdb) monitor sym Crash__Level2          # pencarian simbol milik kernel
+            (gdb) monitor bt                         # teks monitor lain diteruskan ke `dbg`
+```
+
+Paket yang didukung: `?`, `g`/`p` (register dalam urutan GDB -- amd64
+rax..r15, rip, eflags; aarch64 x0..x30, sp, pc, cpsr; riscv64 x0..x31, pc),
+`P`, `m` (breakpoint disembunyikan), `Z0`/`z0`, `c`, `s`, `k`, `D`, query
+thread (satu thread), `QStartNoAckMode`, `qRcmd`. Belum: menulis memori
+(`M`/`X`), watchpoint, Ctrl+C (jeda), banyak thread, attach ke proses yang
+sudah berjalan, dan debugging kernel (tetap lewat stub QEMU, di atas). Satu
+sesi sekaligus; program yang ditinggal GDB dalam keadaan berhenti diakhiri
+bersama sesinya; tanpa GDB dalam 10 menit programnya juga diakhiri.
+
+Diverifikasi dengan klien yang mengirim paket-paket GDB (`bz gdb-check`: 13
+pemeriksaan, smoke `[bzlink]` di x86 bila `crashme` C# ada di image). **GDB
+asli belum dijalankan terhadapnya di sini** (tidak terpasang di PC
+pengembangan, dan image CI tidak punya program native) -- laporan dipersilakan.
+
 ## 💥 Laporan crash (program ring-3)
 
 Saat sebuah program fault (pointer salah, alamat tak terpetakan, instruksi

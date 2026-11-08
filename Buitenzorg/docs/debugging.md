@@ -283,6 +283,38 @@ device, CI) and `bz dap --check` (the connected device; the smoke test's
 `[bzlink]` step runs it on x86 with a script, a UI script and `crashme`). The
 extension itself is not tested by a VS Code instance in CI -- the adapter is.
 
+## 🔌 GDB on a running device (`gdbserver`)
+
+`dbg` drives the debugger from the device's own shell; `gdbserver` puts the
+same engine behind the **GDB Remote Serial Protocol** on a TCP port, so a GDB
+on a PC debugs a program running on real hardware (or a VM):
+
+```text
+(device)  gdbserver 1234 crashme
+          gdbserver: pid 1000 stopped (entry) at 0x40008c  _start -- menunggu GDB di 10.0.2.15:1234
+(PC)      gdb userland/hello-csharp/crashme.elf
+          (gdb) target remote 192.168.1.30:1234      # QEMU: hostfwd=tcp::1235-:1234 -> localhost:1235
+          (gdb) break Crash__Level2
+          (gdb) continue
+          (gdb) info registers / x/4xb $pc / stepi / bt / kill
+          (gdb) monitor sym Crash__Level2            # the kernel's own symbol lookup
+          (gdb) monitor bt                           # any other monitor text goes to `dbg`
+```
+
+Supported packets: `?`, `g`/`p` (registers in GDB's order -- amd64 rax..r15,
+rip, eflags; aarch64 x0..x30, sp, pc, cpsr; riscv64 x0..x31, pc), `P`, `m`
+(breakpoints hidden), `Z0`/`z0`, `c`, `s`, `k`, `D`, thread queries (one
+thread), `QStartNoAckMode`, `qRcmd`. Not supported: writing memory (`M`/`X`),
+watchpoints, Ctrl+C (pause), several threads, attaching to a running process,
+and kernel debugging (that stays on QEMU's stub, above). One session at a
+time; a program GDB leaves stopped is ended with the session; with no GDB
+within 10 minutes the program is ended too.
+
+Verified with a client that sends GDB's packets (`bz gdb-check`: 13 checks,
+smoke `[bzlink]` on x86 when the C# `crashme` is on the image). **A real GDB
+has not been run against it here** (none is installed on the development PC,
+and CI's image has no native program) -- reports welcome.
+
 ## 💥 Crash reports (ring-3 programs)
 
 When a program faults (a bad pointer, an unmapped address, an undefined

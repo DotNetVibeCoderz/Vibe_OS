@@ -728,7 +728,9 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > sambil merekam, hentinya diputar ulang di Studio / VS Code setelah ditutup.
 > **Profiler per aplikasi tercapai (2026-11-08):** `prof app NAMA` / `bz prof`
 > -- sampel timer per fungsi (simbol ELF), `MILESTONE: APP PROFILER OK`.
-> Berikutnya: GDB stub kernel.
+> **GDB stub tercapai (2026-11-08) untuk program ring-3:** `gdbserver PORT APP`
+> (RSP lewat TCP, `gdbstub.rs`); debugging kernel tetap lewat stub QEMU.
+> **Bagian D (Debugging & Diagnostik) selesai untuk app.**
 
 ### E. Deploy & Run — lokal maupun remote
 > **Status 2026-11-03:** transport UDP **tercapai** — layanan `deploy.rs`
