@@ -48,6 +48,24 @@ static class GdbCheck
             return sb.ToString();
         }
 
+        /// <summary>Send raw bytes (Ctrl+C is a bare 0x03) and read the next packet.</summary>
+        public string CallRaw(byte[] raw)
+        {
+            _s.Write(raw);
+            int ch;
+            do { ch = _s.ReadByte(); if (ch < 0) throw new IOException("stub closed the connection"); } while (ch != '$');
+            var sb = new StringBuilder();
+            while ((ch = _s.ReadByte()) != '#')
+            {
+                if (ch < 0) throw new IOException("stub closed the connection");
+                sb.Append((char)ch);
+            }
+            _s.ReadByte();
+            _s.ReadByte();
+            _s.WriteByte((byte)'+');
+            return sb.ToString();
+        }
+
         public void Send(string data)
         {
             byte sum = 0;
@@ -115,11 +133,62 @@ static class GdbCheck
             regs = g.Call("g");
             Expect(Le(regs, pcIndex) != addr, "pc moved after the step");
             Expect(g.Call($"z0,{addr:x},1") == "OK", "z0 (breakpoint removed)");
+            // M: write 8 bytes on the stack, read them back, put the old ones back
+            int spIndex = pcIndex == 16 ? 7 : regs.Length % 16 != 0 ? 31 : 2; // x86 rsp; ARM64 sp (cpsr makes the packet odd); RISC-V x2
+            ulong sp = Le(regs, spIndex);
+            var before = g.Call($"m{sp:x},8");
+            Expect(g.Call($"M{sp:x},8:1122334455667788") == "OK" && g.Call($"m{sp:x},8") == "1122334455667788", $"M: wrote 8 bytes at sp {sp:x} and read them back");
+            Expect(g.Call($"M{sp:x},8:{before}") == "OK", "M: old bytes restored");
             g.Send("k");
         }
         catch (Exception e) { failed++; Console.WriteLine("  FAIL " + e.Message); }
         // the session ends; the stub kills a program it leaves
         Thread.Sleep(1500);
+
+        // Ctrl+C: a program that spins, continued, then interrupted
+        try
+        {
+            var started = dev.Exec($"gdbserver {devPort} {app} spin").Output;
+            Expect(started.Contains("stopped (entry)"), "gdbserver ... spin (a program that runs ~1.5 s)");
+            var hp = tcp.Split(':');
+            using var g = new Rsp(hp[0], int.Parse(hp[1]));
+            g.Call("qSupported");
+            g.Send("c");
+            Thread.Sleep(400);
+            var raw = new byte[] { 0x03 };
+            var reply = g.CallRaw(raw);
+            Expect(reply == "S02", $"Ctrl+C while it runs -> {reply} (SIGINT)");
+            var bt = Encoding.ASCII.GetString(Convert.FromHexString(g.Call("qRcmd," + Convert.ToHexStringLower("bt"u8.ToArray()))));
+            Expect(bt.Contains("Hot") || bt.Contains("Cold") || bt.Contains("clock"), "stopped inside the spin: " + bt.Trim().Split('\n')[0]);
+            g.Send("k");
+        }
+        catch (Exception e) { failed++; Console.WriteLine("  FAIL " + e.Message); }
+        Thread.Sleep(1500);
+
+        // kgdb: the kernel, read-only
+        try
+        {
+            var started = dev.Exec($"kgdb {devPort}").Output;
+            var m = System.Text.RegularExpressions.Regex.Match(started, @"offset (0x[0-9a-f]+)");
+            Expect(m.Success, "kgdb: " + started.Trim());
+            var hp = tcp.Split(':');
+            using var g = new Rsp(hp[0], int.Parse(hp[1]));
+            g.Call("qSupported");
+            var off = g.Call("qOffsets");
+            Expect(off.StartsWith("Text="), "qOffsets: " + off);
+            ulong text = Convert.ToUInt64(off[5..off.IndexOf(';')], 16);
+            var low = g.Call("m1000,4");
+            Expect(low == "E14", "user-half addresses refused (" + low + ")");
+            if (text != 0)
+            {
+                var head = g.Call($"m{text:x},4");
+                Expect(head == "7f454c46", $"the kernel image at {text:x} starts with the ELF magic ({head})");
+            }
+            Expect(g.Call("M0,1:00") == "E01", "kgdb does not write");
+            g.Send("D");
+        }
+        catch (Exception e) { failed++; Console.WriteLine("  FAIL " + e.Message); }
+        Thread.Sleep(1000);
         Console.WriteLine($"bz gdb-check: {checks} checks, {failed} failed");
         return failed == 0 ? 0 : 1;
     }

@@ -78,10 +78,22 @@ Dependencies are installed first, depth first; a cycle is an error.
 Versions compare part by part, numerically where both parts are numbers
 (`1.10` is newer than `1.9`).
 
+**Publishing** (PC): `bz publish MYAPP.BZP --repo repo` copies it into the
+repository folder as `myapp-1.2.bzpkg` and rewrites the index (a running
+`bz repo serve repo` serves it at once). The same name + version again is
+refused (`--force` replaces it); older versions stay next to it, and the
+index offers the newest.
+
+**Rollback** (device): every install keeps its archive in
+`/disk/PKGHIST/<NAME>.BZP` and the one before as `.OLD`. `bz rollback myapp`
+installs the previous version again; a second rollback goes forward again.
+`bz remove` deletes the history too.
+
 Limits: plain HTTP to an IPv4 address (no DNS, no TLS -- the SHA-256 in the
 index protects against a damaged file, not against a hostile server or
-network); one repository; no rollback beyond installing an older file by
-hand; `bz remove` does not remove dependencies. Tests: `MILESTONE: REPO OK`
+network); one repository; rollback keeps one version back; `bz remove` does
+not remove dependencies; `bz publish` writes to a folder (no upload to a
+remote server). Tests: `MILESTONE: REPO OK`
 (versions, index, dependency order, cycle) at every self-test boot;
 `bz repo --selftest` (CI) and `bz repo --check` (smoke `[bzlink]`: update,
 install with a dependency, upgrade 1.0 -> 1.1, a tampered package refused).

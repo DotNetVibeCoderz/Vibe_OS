@@ -178,9 +178,9 @@ else
   rm -f "$linklog"
   cp "$img" "$root/dist/bzlink-test.img"
   timeout --foreground 300 "$qemu" -smp 2 -drive "format=raw,file=$root/dist/bzlink-test.img" -m 512M \
-    -netdev user,id=n0,hostfwd=udp::7171-:7070,hostfwd=tcp::1235-:1234 -device e1000,netdev=n0 \
+    -netdev user,id=n0,hostfwd=udp::7171-:7070,hostfwd=tcp::1235-:1234,hostfwd=tcp::7172-:7070 -device e1000,netdev=n0 \
     -fw_cfg name=opt/buitenzorg/deploy,string=4321 \
-    -display none -serial "file:$linklog" -no-reboot &
+    -display none -serial "file:$linklog" -serial tcp:127.0.0.1:4557,server=on,wait=off -no-reboot &
   lpid=$!
   for _ in $(seq 480); do
     sleep 0.25
@@ -203,6 +203,18 @@ else
   rbuild=$(dotnet "$bzdir/bz.dll" build-server --check --port 8090 2>&1 || true)
   # the GDB stub, driven with GDB's packets over TCP (crashme: when it is on the image)
   gdbc=$(dotnet "$bzdir/bz.dll" gdb-check --tcp 127.0.0.1:1235 2>&1 || true)
+  # the same protocol over TCP and over the PC's COM2 (QEMU's second serial port as a socket)
+  overtcp=$(BZ_DEVICE=tcp://127.0.0.1:7172 dotnet "$bzdir/bz.dll" run "echo over-tcp" 2>&1 || true)
+  overcom2=$(BZ_DEVICE=tcp://127.0.0.1:4557 dotnet "$bzdir/bz.dll" run "echo over-com2" 2>&1 || true)
+  # a program's own log, and the audit log of what this step did
+  dotnet "$bzdir/bz.dll" run "run helloclr" >/dev/null 2>&1 || true
+  applog=""
+  for _ in $(seq 30); do
+    sleep 2
+    applog=$(dotnet "$bzdir/bz.dll" logs helloclr 2>&1 || true)
+    printf '%s' "$applog" | grep -qF "Hello from managed C#" && break
+  done
+  audit=$(dotnet "$bzdir/bz.dll" run "deploy log 200" 2>&1 || true)
   unset BZ_DEVICE BZ_CODE
   sleep 2
   kill "$lpid" 2>/dev/null || true
@@ -219,6 +231,10 @@ else
   elif ! printf '%s' "$repo" | grep -qE "bz repo: [0-9]+ checks, 0 failed"; then fail="bz repo --check: $repo"
   elif ! printf '%s' "$rbuild" | grep -qE "bz build-server: [0-9]+ checks, 0 failed"; then fail="bz build-server --check: $rbuild"
   elif ! printf '%s' "$gdbc" | grep -qE "bz gdb-check: [0-9]+ checks, 0 failed"; then fail="bz gdb-check: $gdbc"
+  elif ! printf '%s' "$overtcp" | grep -qF "over-tcp"; then fail="bz over TCP: $overtcp"
+  elif ! printf '%s' "$overcom2" | grep -qF "over-com2"; then fail="bz over serial COM2: $overcom2"
+  elif ! printf '%s' "$applog" | grep -qF "Hello from managed C#"; then fail="bz logs helloclr: $applog"
+  elif ! printf '%s' "$audit" | grep -qE "tcp .*exec echo over-tcp" || ! printf '%s' "$audit" | grep -qE "serial COM2 .*exec echo over-com2" || ! printf '%s' "$audit" | grep -qE "write /disk/BZLINK.JS .*sha256"; then fail="deploy log (audit): $audit"
   fi
   rm -f "$root/dist/bzlink-pull.txt"
   if [ -n "$fail" ]; then echo "SMOKE TEST FAILED (boot-bzlink.log): $fail" >&2; exit 1; fi

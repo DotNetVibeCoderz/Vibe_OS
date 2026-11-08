@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Hashing;
 using System.Net;
 using System.Net.Sockets;
@@ -60,8 +61,11 @@ public sealed class BzdpClient : IDisposable
     public const int HeaderSize = 12;
     static readonly byte[] Magic = "BZDP"u8.ToArray();
 
-    readonly UdpClient _udp;
-    readonly IPEndPoint _device;
+    readonly UdpClient? _udp;
+    readonly IPEndPoint? _device;
+    /// <summary>Stream transports (TCP, serial): opens the byte stream; null = UDP.</summary>
+    readonly Func<Stream>? _open;
+    Stream? _stream;
     readonly SemaphoreSlim _gate = new(1, 1);
     uint _seq;
 
@@ -75,12 +79,26 @@ public sealed class BzdpClient : IDisposable
     /// <summary>Diagnostic sink (retries, resends); may be null.</summary>
     public Action<string>? Trace { get; init; }
 
+    /// <summary>A device over UDP (`host`), or over TCP when `host` is
+    /// `tcp://ADDRESS` -- the same packets, framed (see <see cref="Frame"/>).</summary>
     public BzdpClient(string host, int port = DefaultPort, int code = 0)
     {
         if (code is < 0 or > 9999) throw new ArgumentOutOfRangeException(nameof(code), "pairing code is 0000-9999");
         Host = host;
         Port = port;
         Code = (ushort)code;
+        _seq = (uint)Random.Shared.Next(1, int.MaxValue);
+        if (host.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase))
+        {
+            string h = host[6..];
+            _open = () =>
+            {
+                var c = new TcpClient { NoDelay = true };
+                c.Connect(h, port);
+                return c.GetStream();
+            };
+            return;
+        }
         var addr = IPAddress.TryParse(host, out var ip)
             ? ip
             : Array.Find(Dns.GetHostAddresses(host), a => a.AddressFamily == AddressFamily.InterNetwork)
@@ -93,10 +111,54 @@ public sealed class BzdpClient : IDisposable
         // eat a retry (SIO_UDP_CONNRESET = 0x9800000C).
         if (OperatingSystem.IsWindows())
             try { _udp.Client.IOControl(unchecked((int)0x9800000C), new byte[] { 0 }, null); } catch { }
+    }
+
+    /// <summary>A device over any byte stream (a serial port): `open` connects.</summary>
+    public BzdpClient(string name, Func<Stream> open, int code)
+    {
+        if (code is < 0 or > 9999) throw new ArgumentOutOfRangeException(nameof(code), "pairing code is 0000-9999");
+        Host = name;
+        Port = 0;
+        Code = (ushort)code;
+        _open = open;
         _seq = (uint)Random.Shared.Next(1, int.MaxValue);
     }
 
-    public void Dispose() { _udp.Dispose(); _gate.Dispose(); }
+    public void Dispose() { _udp?.Dispose(); _stream?.Dispose(); _gate.Dispose(); }
+
+    /// <summary>Stream framing (TCP and serial): "BZ" | length u16 | packet | CRC-32 of the packet.</summary>
+    public static byte[] Frame(ReadOnlySpan<byte> packet)
+    {
+        var f = new byte[4 + packet.Length + 4];
+        f[0] = (byte)'B'; f[1] = (byte)'Z';
+        BinaryPrimitives.WriteUInt16LittleEndian(f.AsSpan(2), (ushort)packet.Length);
+        packet.CopyTo(f.AsSpan(4));
+        BinaryPrimitives.WriteUInt32LittleEndian(f.AsSpan(4 + packet.Length), System.IO.Hashing.Crc32.HashToUInt32(packet));
+        return f;
+    }
+
+    /// <summary>Read one frame from `s` (skipping noise before "BZ"); null when the
+    /// stream ended. A frame with a wrong CRC is dropped (returns an empty array).</summary>
+    public static async Task<byte[]?> ReadFrameAsync(Stream s, CancellationToken ct)
+    {
+        var one = new byte[1];
+        async Task<bool> Byte() => await s.ReadAsync(one, ct) == 1;
+        int prev = -1;
+        while (true)
+        {
+            if (!await Byte()) return null;
+            if (prev == 'B' && one[0] == 'Z') break;
+            prev = one[0];
+        }
+        var head = new byte[2];
+        await s.ReadExactlyAsync(head, ct);
+        int len = BinaryPrimitives.ReadUInt16LittleEndian(head);
+        var body = new byte[len + 4];
+        await s.ReadExactlyAsync(body, ct);
+        uint crc = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(len));
+        if (crc != System.IO.Hashing.Crc32.HashToUInt32(body.AsSpan(0, len))) return Array.Empty<byte>();
+        return body[..len];
+    }
 
     // ---- operations ---------------------------------------------------------
 
@@ -167,8 +229,11 @@ public sealed class BzdpClient : IDisposable
             progress?.Report(new BzdpProgress(remotePath, offset, content.Length));
         }
 
-        var end = new byte[4];
+        // CRC-32 for damaged transfers, SHA-256 for a file that is not the one sent
+        // (a device older than the SHA check reads only the first four bytes)
+        var end = new byte[4 + 32];
         BinaryPrimitives.WriteUInt32LittleEndian(end, Crc32.HashToUInt32(content));
+        System.Security.Cryptography.SHA256.HashData(content).CopyTo(end, 4);
         await RequestAsync(BzdpOp.End, end, ct);
     }
 
@@ -279,9 +344,10 @@ public sealed class BzdpClient : IDisposable
         {
             uint seq = unchecked(++_seq);
             var datagram = Encode(op, seq, Code, payload.Span);
+            if (_open != null) return await StreamRequestAsync(op, seq, datagram, ct);
             for (int attempt = 1; attempt <= Attempts; attempt++)
             {
-                await _udp.SendAsync(datagram, _device, ct);
+                await _udp!.SendAsync(datagram, _device!, ct);
                 var deadline = DateTime.UtcNow + ReplyTimeout;
                 while (true)
                 {
@@ -307,6 +373,42 @@ public sealed class BzdpClient : IDisposable
                 $"is `deploy on` enabled and port {Port} forwarded?");
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>One request over the stream transport: a lost connection is
+    /// reopened and the request resent (the device answers a repeated seq from
+    /// its saved reply, so nothing runs twice).</summary>
+    async Task<ReadOnlyMemory<byte>> StreamRequestAsync(BzdpOp op, uint seq, byte[] packet, CancellationToken ct)
+    {
+        var frame = Frame(packet);
+        for (int attempt = 1; attempt <= Math.Max(2, Attempts / 2); attempt++)
+        {
+            try
+            {
+                _stream ??= _open!();
+                await _stream.WriteAsync(frame, ct);
+                await _stream.FlushAsync(ct);
+                var deadline = DateTime.UtcNow + ReplyTimeout * 4;
+                while (DateTime.UtcNow < deadline)
+                {
+                    using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    wait.CancelAfter(deadline - DateTime.UtcNow);
+                    var r = await ReadFrameAsync(_stream, wait.Token) ?? throw new IOException("connection closed");
+                    if (!TryDecode(r, out var rop, out var rseq, out _) || rseq != seq || rop != ((byte)op | 0x80)) continue;
+                    if (r.Length < HeaderSize + 1) throw new BzdpException(BzdpStatus.BadRequest, $"{op}: reply without a status byte");
+                    var status = (BzdpStatus)r[HeaderSize];
+                    if (status != BzdpStatus.Ok) throw new BzdpException(status, Describe(op, status));
+                    return r.AsMemory(HeaderSize + 1);
+                }
+            }
+            catch (Exception e) when (e is IOException or SocketException or OperationCanceledException or TimeoutException && !ct.IsCancellationRequested)
+            {
+                Trace?.Invoke($"[bzdp] {op} seq {seq}: {e.Message}, reconnect {attempt}");
+            }
+            _stream?.Dispose();
+            _stream = null;
+        }
+        throw new BzdpTimeoutException($"device not reachable at {Host}{(Port > 0 ? ":" + Port : "")} ({op} unanswered): is `deploy on` enabled?");
     }
 
     public static string Describe(BzdpOp op, BzdpStatus s) => s switch

@@ -308,15 +308,34 @@ TCP, sehingga GDB di PC bisa men-debug program yang berjalan di hardware nyata
 
 Paket yang didukung: `?`, `g`/`p` (register dalam urutan GDB -- amd64
 rax..r15, rip, eflags; aarch64 x0..x30, sp, pc, cpsr; riscv64 x0..x31, pc),
-`P`, `m` (breakpoint disembunyikan), `Z0`/`z0`, `c`, `s`, `k`, `D`, query
-thread (satu thread), `QStartNoAckMode`, `qRcmd`. Belum: menulis memori
-(`M`/`X`), watchpoint, Ctrl+C (jeda), banyak thread, attach ke proses yang
-sudah berjalan, dan debugging kernel (tetap lewat stub QEMU, di atas). Satu
-sesi sekaligus; program yang ditinggal GDB dalam keadaan berhenti diakhiri
-bersama sesinya; tanpa GDB dalam 10 menit programnya juga diakhiri.
+`P`, `m` (breakpoint disembunyikan), `M` (tulis memori; byte di bawah
+breakpoint mengubah salinan aslinya), `Z0`/`z0`, `c`, `s`, **Ctrl+C**
+(interupsi timer berikutnya yang jatuh di program membuatnya berhenti --
+trap flag x86, software step ARM64, breakpoint sementara RISC-V -- dan GDB
+melaporkan SIGINT), `k`, `D`, query thread (satu thread),
+`QStartNoAckMode`, `qRcmd`. **Watchpoint**: GDB memasang watchpoint
+*software* dengan single-step lalu membandingkan (lambat tapi benar); tidak
+ada watchpoint hardware (`Z2`..`Z4`). Belum: banyak thread, attach ke proses
+yang sudah berjalan. Satu sesi sekaligus; program yang ditinggal GDB dalam
+keadaan berhenti diakhiri bersama sesinya. `dbg pause` = jeda yang sama dari
+shell perangkat.
 
-Diverifikasi dengan klien yang mengirim paket-paket GDB (`bz gdb-check`: 13
-pemeriksaan, smoke `[bzlink]` di x86 bila `crashme` C# ada di image). **GDB
+**Kernel, baca saja: `kgdb PORT`.** GDB dengan ELF kernel yang tidak di-strip
+membaca memori kernel yang sedang berjalan -- static, struktur, log ring:
+
+```text
+(perangkat) kgdb 1234
+(PC)        gdb kernel/target/x86_64-unknown-none/release/bzkernel -ex "target remote 192.168.1.30:1234"
+            (gdb) print SOME_STATIC      # qOffsets memberi tahu GDB letak kernel PIE
+```
+
+Kernel tidak dihentikan (tanpa register, breakpoint atau step -- itu tetap
+`-s -S` QEMU), alamat separuh-user dan yang tidak terpetakan ditolak, dan
+tidak ada yang ditulis. **Tanpa kode pairing**: jalankan hanya di jaringan
+tepercaya; berakhir saat GDB lepas atau setelah 10 menit tanpa GDB.
+
+Diverifikasi dengan klien yang mengirim paket-paket GDB (`bz gdb-check`: 23
+pemeriksaan termasuk `M`, Ctrl+C pada program yang berputar dan sesi `kgdb`, smoke `[bzlink]` di x86 bila `crashme` C# ada di image). **GDB
 asli belum dijalankan terhadapnya di sini** (tidak terpasang di PC
 pengembangan, dan image CI tidak punya program native) -- laporan dipersilakan.
 

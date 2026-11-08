@@ -281,7 +281,17 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     );
 }
 
-extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
+/// A debugged program asked to pause (`dbg pause`, GDB Ctrl+C): set the trap
+/// flag in the interrupted ring-3 frame, so it stops after one instruction.
+pub fn pause_if_due(frame: &mut InterruptStackFrame) {
+    if frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 && crate::debug::pause_due() {
+        unsafe {
+            frame.as_mut().update(|f| f.cpu_flags |= x86_64::registers::rflags::RFlags::TRAP_FLAG);
+        }
+    }
+}
+
+extern "x86-interrupt" fn timer_handler(mut frame: InterruptStackFrame) {
     if crate::smp::ticks_from_lapic() {
         end_of_interrupt(InterruptIndex::Timer.as_u8());
         return; // the LAPIC drives the system tick (see smp::pit_alive)
@@ -290,6 +300,7 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     crate::task::account_tick();
     crate::process::account_tick();
     crate::appprof::sample(frame.instruction_pointer.as_u64(), from_user(&frame));
+    pause_if_due(&mut frame);
     end_of_interrupt(InterruptIndex::Timer.as_u8());
     crate::task::watchdog(frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64(), from_user(&frame));
     // EOI is done, interrupts are still disabled: safe point to preempt. Ring-3

@@ -1210,6 +1210,7 @@ fn sys_debug_write(ptr: u64, len: u64) -> u64 {
         Ok(s) => {
             // a program started from a terminal tab: its output shows there too
             crate::terminal::program_output(crate::aspace::current_id(), s);
+            crate::applog::note(crate::aspace::current_id(), s);
             print!("{}", s);
             len
         }

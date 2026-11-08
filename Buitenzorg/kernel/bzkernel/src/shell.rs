@@ -110,7 +110,7 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "dmesg", "lspci", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
@@ -736,13 +736,24 @@ fn deploy_cmd(args: &[&str]) -> Vec<String> {
             crate::deploy::remember(false, 0);
         }
         None | Some("status") => {}
-        Some(_) => return vec![String::from("pakai: deploy [on [kode] | off]")],
+        Some("log") => {
+            let n = args.get(1).and_then(|n| n.parse::<usize>().ok()).unwrap_or(30);
+            let lines = crate::deploy::audit_tail(n);
+            return if lines.is_empty() { vec![String::from("deploy log: kosong (/disk/DEPLOY.LOG)")] } else { lines };
+        }
+        Some(_) => return vec![String::from("pakai: deploy [on [kode] | off | log [N]]")],
     }
     let (on, code, served) = crate::deploy::status();
     let ip = crate::net::local_ip().map_or(String::from("(tanpa jaringan)"), |ip| format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
     if on {
         vec![
-            format!("deploy: AKTIF di {}:{} (UDP), kode pairing {:04}", ip, crate::deploy::PORT, code),
+            format!(
+                "deploy: AKTIF di {}:{} (UDP + TCP{}), kode pairing {:04}",
+                ip,
+                crate::deploy::PORT,
+                if crate::serial::aux_available() { " + serial COM2" } else { "" },
+                code
+            ),
             format!("         {} permintaan dilayani; dari PC: 'bz device connect {}:{} {:04}'", served, ip, crate::deploy::PORT, code),
             String::from("         tetap aktif setelah restart sampai 'deploy off'"),
         ]
@@ -804,6 +815,8 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "crash" | "crashes" => (crash_cmd(args.first().copied()), Effect::None),
         "dbg" | "debug" => (crate::debug::command(&args), Effect::None),
         "gdbserver" => (crate::gdbstub::command(&args), Effect::None),
+        "kgdb" => (crate::gdbstub::kgdb_command(&args), Effect::None),
+        "logs" => (crate::applog::command(&args), Effect::None),
         "tutup" | "closeall" => {
             let n = crate::wm::close_workspace_windows();
             (vec![format!("{} jendela ditutup", n)], Effect::Redraw)
@@ -1050,6 +1063,8 @@ fn help_lines() -> Vec<String> {
      "  kill <pid>        hentikan proses app",
      "  cmd &  | jobs | fg [%N] | kill %N  job: latar belakang / daftar / tunggu lagi / hentikan",
      "  tab [new|N|close]  tab terminal (Ctrl+T baru, Ctrl+N/P pindah, Ctrl+D tutup)",
+     "  logs [APP|PID]    keluaran per program (8 KiB terakhir, juga setelah selesai)",
+     "  kgdb PORT         baca memori kernel dari GDB di PC (tanpa kode: jaringan tepercaya)",
      "  gdbserver PORT APP  debug APP dari GDB di PC (target remote IP:PORT)",
      "  crash [PID|last]  laporan crash app (backtrace bersimbol)",
      "  dbg run <app>     debugger: break/cont/step/regs/mem/bt ('dbg help')",
@@ -1866,6 +1881,16 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
         }
         Some("repo") | Some("update") | Some("upgrade") => (crate::repo::command(args), Effect::None),
         Some("buildsrv") => (crate::rbuild::command(args), Effect::None),
+        Some("rollback") => (
+            match args.get(1) {
+                Some(n) => match crate::bzpkg::rollback(n) {
+                    Ok((from, to)) => vec![format!("dikembalikan: {} {} -> {} ('bz rollback {}' lagi = maju kembali)", n, from, to, n)],
+                    Err(e) => vec![format!("bz rollback: {}", e)],
+                },
+                None => vec![String::from("bz rollback NAMA   (pasang lagi versi sebelumnya)")],
+            },
+            Effect::None,
+        ),
         Some("build") => {
             // bz build DIR [--run]: the project folder, resolved like any path
             let dir = resolve(args.get(1).copied().filter(|a| !a.starts_with("--")));

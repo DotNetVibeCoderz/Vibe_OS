@@ -98,3 +98,12 @@ pub fn _print(args: fmt::Arguments) {
         Writer(base).write_fmt(args).ok();
     });
 }
+
+// No second UART on this platform (bz-link over serial is PC COM2 only).
+pub fn aux_available() -> bool {
+    false
+}
+pub fn aux_read() -> Option<u8> {
+    None
+}
+pub fn aux_write(_bytes: &[u8]) {}

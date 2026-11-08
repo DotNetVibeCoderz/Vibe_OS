@@ -188,6 +188,10 @@ extern "C" fn bz_trap(f: &mut TrapFrame) {
             IRQ_S_TIMER => {
                 super::timer::on_tick();
                 crate::appprof::sample(f.sepc, from_user);
+                // a debugged program asked to pause: a temporary breakpoint where it is
+                if from_user && crate::debug::pause_due() {
+                    crate::debug::pause_at(f.sepc);
+                }
                 // A tick may switch tasks (ring-3 code is always preemptible,
                 // kernel code only in the scheduler demo) -- as on x86/ARM64.
                 if super::cpu::id() == 0 {

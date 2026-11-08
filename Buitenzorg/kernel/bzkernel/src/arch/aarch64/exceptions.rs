@@ -198,6 +198,11 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
         // (ring-3 code is always preemptible, kernel code only in the demo).
         if super::gic::handle_irq() == Some(super::timer::INTID) {
             crate::appprof::sample(unsafe { frame.add(31).read() }, from_el0);
+            // a debugged program asked to pause: one software step, then it traps
+            if from_el0 && crate::debug::pause_due() {
+                unsafe { frame.add(32).write(frame.add(32).read() | (1 << 21)) }; // SPSR.SS
+                super::cpu::software_step(true);
+            }
             if super::cpu::id() == 0 {
                 crate::task::preempt(from_el0);
             } else {

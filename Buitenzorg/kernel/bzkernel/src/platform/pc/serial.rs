@@ -117,3 +117,63 @@ pub fn _print(args: fmt::Arguments) {
         SERIAL1.lock().write_fmt(args).ok();
     });
 }
+
+// ---- COM2: a second port for data (bz-link over serial, deploy.rs) ----------
+
+const COM2: u16 = 0x2F8;
+static AUX: Mutex<SerialPort> = Mutex::new(SerialPort::new(COM2));
+static AUX_PRESENT: AtomicBool = AtomicBool::new(false);
+static AUX_INIT: AtomicBool = AtomicBool::new(false);
+
+/// Whether COM2 exists (probed once, then set up at 115200 8N1).
+pub fn aux_available() -> bool {
+    if !AUX_INIT.swap(true, Ordering::SeqCst) {
+        let mut scratch = Port::<u8>::new(COM2 + 7);
+        let present = unsafe {
+            scratch.write(0x5A);
+            let a = scratch.read();
+            scratch.write(0xA5);
+            a == 0x5A && scratch.read() == 0xA5
+        };
+        if present {
+            AUX.lock().init();
+        }
+        AUX_PRESENT.store(present, Ordering::SeqCst);
+    }
+    AUX_PRESENT.load(Ordering::Relaxed)
+}
+
+/// One byte from COM2, if any (never blocks).
+pub fn aux_read() -> Option<u8> {
+    if !aux_available() {
+        return None;
+    }
+    crate::arch::cpu::without_interrupts(|| {
+        let mut s = AUX.lock();
+        unsafe {
+            if s.line_status.read() & 1 == 0 {
+                return None;
+            }
+            Some(s.data.read())
+        }
+    })
+}
+
+/// Write bytes to COM2 (raw: no newline translation; bounded waits).
+pub fn aux_write(bytes: &[u8]) {
+    if !aux_available() {
+        return;
+    }
+    let mut s = AUX.lock();
+    for &b in bytes {
+        let mut tries = 0u32;
+        while unsafe { s.line_status.read() } & 0x20 == 0 {
+            tries += 1;
+            if tries > 1_000_000 {
+                return;
+            }
+            core::hint::spin_loop();
+        }
+        unsafe { s.data.write(b) }
+    }
+}

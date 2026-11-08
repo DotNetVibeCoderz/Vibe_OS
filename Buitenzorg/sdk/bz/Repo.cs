@@ -189,6 +189,14 @@ static class RepoCli
                 Thread.Sleep(Timeout.Infinite);
                 return 0;
             }
+            case ["publish", var file, .. var rest]:
+            {
+                int i = Array.IndexOf(rest, "--repo");
+                string dir = i >= 0 && i + 1 < rest.Length ? rest[i + 1] : "repo";
+                var (ok, msg) = Publish(file, dir, rest.Contains("--force"));
+                Console.WriteLine(msg);
+                return ok ? 0 : 1;
+            }
             case ["--selftest"]:
                 return SelfTest();
             default:
@@ -197,6 +205,33 @@ static class RepoCli
     }
 
     static int Fail(string m) { Console.Error.WriteLine("bz: " + m); return 1; }
+
+    /// <summary>`bz publish PKG [--repo DIR] [--force]`: copy a package into a
+    /// repository folder and rewrite its index (a running `bz repo serve` of
+    /// that folder serves it at once). The same name + version again is refused
+    /// unless --force; a newer version keeps the older file next to it.</summary>
+    public static (bool Ok, string Message) Publish(string file, string dir, bool force)
+    {
+        if (!File.Exists(file)) return (false, $"bz publish: not found: {file}");
+        var bytes = File.ReadAllBytes(file);
+        var p = ReadManifest(bytes);
+        if (p == null) return (false, $"bz publish: {file} is not a .bzpkg");
+        Directory.CreateDirectory(dir);
+        foreach (var f in Directory.GetFiles(dir))
+        {
+            string ext = Path.GetExtension(f).ToLowerInvariant();
+            if (ext is not (".bzpkg" or ".bzp")) continue;
+            var q = ReadManifest(File.ReadAllBytes(f));
+            if (q != null && q.Name == p.Name && q.Version == p.Version && !force)
+                return (false, $"bz publish: {p.Name} {p.Version} is already in {dir} ({Path.GetFileName(f)}); bump the version or pass --force");
+        }
+        // one file per version: NAME-VERSION.bzpkg (the device fetches it by this name)
+        string safeVer = new string(p.Version.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' ? c : '_').ToArray());
+        string target = Path.Combine(dir, $"{p.Name}-{safeVer}.bzpkg");
+        File.WriteAllBytes(target, bytes);
+        var pkgs = WriteIndex(dir);
+        return (true, $"published {p.Name} {p.Version} -> {target}; {Path.Combine(dir, IndexName)} lists {pkgs.Count} package file(s)");
+    }
 
     static byte[] ScriptPackage(string name, string version, string file, string script, string depends = "") =>
         Build($"name={name}\nversion={version}\ntitle={name} (uji repo)\nkind=console\ncategory=LAINNYA\nentry={file}\n" + (depends.Length > 0 ? $"depends={depends}\n" : ""),
@@ -228,6 +263,17 @@ static class RepoCli
             var miss = http.GetAsync("../secret").GetAwaiter().GetResult();
             var none = http.GetAsync("NOPE.BZP").GetAwaiter().GetResult();
             Expect(miss.StatusCode == HttpStatusCode.NotFound && none.StatusCode == HttpStatusCode.NotFound, "outside the folder / missing -> 404");
+
+            // bz publish: a new version next to the old one; the same version again refused
+            string pkgFile = Path.Combine(dir, "..", "bzpub-" + Environment.ProcessId + ".bzpkg");
+            File.WriteAllBytes(pkgFile, ScriptPackage("repoapp", "1.11", "RAPP.SH", "echo repoapp 1.11\n", "repolib"));
+            var (ok1, _) = Publish(pkgFile, dir, force: false);
+            var (ok2, again) = Publish(pkgFile, dir, force: false);
+            File.Delete(pkgFile);
+            var idx = File.ReadAllLines(Path.Combine(dir, IndexName));
+            Expect(ok1 && idx.Count(l => l.StartsWith("repoapp\t")) == 2 && idx.Any(l => l.StartsWith("repoapp\t1.11\trepoapp-1.11.bzpkg")),
+                   "bz publish repoapp 1.11: next to 1.10, both in the index");
+            Expect(!ok2 && again.Contains("already"), "publishing the same version again is refused");
         }
         catch (Exception e) { failed++; Console.WriteLine("  FAIL " + e.Message); }
         finally { try { Directory.Delete(dir, true); } catch { } }
@@ -284,6 +330,12 @@ static class RepoCli
             Expect(r.Contains("repoapp-v2"), "the new version runs", r);
             r = Run("bz install repobad");
             Expect(r.Contains("SHA-256 tidak cocok") || r.Contains("checksum"), "a package that does not match the index is refused", r);
+            r = Run("bz rollback repoapp");
+            Expect(r.Contains("dikembalikan: repoapp 1.1 -> 1.0"), "bz rollback repoapp: back to 1.0", r);
+            r = Run("repoapp");
+            Expect(r.Contains("repoapp-v1"), "the old version runs again", r);
+            r = Run("bz rollback repoapp");
+            Expect(r.Contains("1.0 -> 1.1"), "a second rollback goes forward to 1.1", r);
             r = Run("bz install repolib");
             Expect(r.Contains("sudah terpasang"), "installing an installed package is a no-op", r);
         }

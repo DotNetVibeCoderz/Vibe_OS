@@ -86,6 +86,24 @@ bersama oleh `bz` dan Magic App Generator
 (`tools/MagicAppGen/Services/BzdpClient.cs`; `MagicAppGen --bzdp-selftest`
 mengujinya terhadap perangkat palsu).
 
+## Transport, log per aplikasi, audit
+
+**Tiga transport, perintah yang sama:** `192.168.1.50[:7070]` = UDP
+(bawaan); `tcp://192.168.1.50:7070` = TCP (port 7070 juga); `serial://COM5[@115200]`
+= serial, **COM2** perangkat (PC saja; papan ARM64/RISC-V hanya punya satu
+UART, yaitu konsol). Di QEMU, COM2 adalah `-serial` kedua: `-serial
+tcp:127.0.0.1:4557,server=on,wait=off`, lalu `BZ_DEVICE=tcp://127.0.0.1:4557`.
+Lewat TCP dan serial paketnya dibungkus `"BZ" | panjang u16 | paket | CRC-32`.
+END kini membawa CRC-32 **dan SHA-256** berkas; keduanya diperiksa sebelum
+ditulis.
+
+**`bz logs APP [-f]`:** apa yang dicetak satu program (8 KiB terakhir, juga
+setelah selesai; `logs` di perangkat mendaftarnya).
+
+**Audit log:** setiap berkas yang ditulis, RUN, EXEC, KILL, dan kode pairing
+yang ditolak disimpan beserta waktu dan pengirimnya di `/disk/DEPLOY.LOG`
+(di bawah 64 KiB); `deploy log [N]` menampilkan baris terakhir.
+
 ## Batasan
 
 - **Kecepatan:** sekitar 20 KB/dtk di QEMU — perangkat menjawab satu
@@ -94,5 +112,5 @@ mengujinya terhadap perangkat palsu).
 - **Keamanan:** kode pairing adalah satu-satunya pemeriksaan, dan lalu
   lintasnya tidak dienkripsi. Pakai di jaringan yang dipercaya, lalu matikan
   setelahnya. Untuk shell terenkripsi pakai `ssh on` (lihat panduan shell).
-- Hanya UDP (stack TCP sudah ada; BZDP belum memakainya); belum ada
-  breakpoint (debugger adalah langkah berikutnya Developer Workstation).
+- SHA-256 membuktikan berkas tiba utuh, bukan siapa pengirimnya; kode
+  pairing tetap satu-satunya pemeriksaan identitas.

@@ -41,7 +41,24 @@ static class Device
 
     // generous: the device serves requests from its desktop loop, and the first READ
     // of a large file reads all of it from disk before answering
-    static BzdpClient Client(Target t) => new(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(2), Attempts = 8 };
+    // Transports: "HOST" = UDP, "tcp://HOST" = TCP, "serial://COM5[@115200]" = a
+    // serial port (the device's COM2; the same frames as TCP).
+    static BzdpClient Client(Target t)
+    {
+        if (t.Host.StartsWith("serial://", StringComparison.OrdinalIgnoreCase))
+        {
+            var spec = t.Host[9..].Split('@');
+            int baud = spec.Length > 1 && int.TryParse(spec[1], out var b) ? b : 115200;
+            return new BzdpClient(t.Host, () =>
+            {
+                var sp = new System.IO.Ports.SerialPort(spec[0], baud, System.IO.Ports.Parity.None, 8, System.IO.Ports.StopBits.One)
+                { ReadTimeout = System.Threading.Timeout.Infinite, WriteTimeout = 5000 };
+                sp.Open();
+                return sp.BaseStream;
+            }, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(2), Attempts = 8 };
+        }
+        return new(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(2), Attempts = 8 };
+    }
 
     static int Fail(string m) { Console.Error.WriteLine("bz: " + m); return 1; }
 
@@ -65,6 +82,9 @@ static class Device
                 ["shell"] => WithDevice(Shell),
                 ["logs"] => WithDevice(t => Logs(t, follow: false)),
                 ["logs", "-f"] or ["logs", "--follow"] => WithDevice(t => Logs(t, follow: true)),
+                ["logs", var app] => WithDevice(t => AppLogs(t, app, follow: false)),
+                ["logs", var app, "-f" or "--follow"] => WithDevice(t => AppLogs(t, app, follow: true)),
+                ["logs", "-f" or "--follow", var fapp] => WithDevice(t => AppLogs(t, fapp, follow: true)),
                 ["kill", var pid] when uint.TryParse(pid, out var p) => WithDevice(t => Kill(t, p)),
                 ["prof", .. var rest] when rest.Length > 0 => WithDevice(t => Prof(t, rest)),
                 ["gdb-check", .. var rest] => WithDevice(t => GdbCheck.Check(new BzdpDebugDevice(Client(t)), rest)),
@@ -226,6 +246,40 @@ static class Device
                 Console.Write(report);
                 return 0;
             }
+        }
+    }
+
+    /// <summary>`bz logs APP [-f]`: what one program printed (applog.rs on the
+    /// device); -f follows it until it ends.</summary>
+    static int AppLogs(Target t, string app, bool follow)
+    {
+        using var c = Client(t);
+        if (!follow)
+        {
+            var (failed, output) = c.ExecAsync("logs " + app).GetAwaiter().GetResult();
+            Console.Write(output);
+            return output.StartsWith("logs: tidak ada") ? 1 : 0;
+        }
+        ulong since = 0;
+        while (true)
+        {
+            var (_, output) = c.ExecAsync($"logs {app} --since {since}").GetAwaiter().GetResult();
+            var lines = output.Split('\n');
+            if (!lines[0].StartsWith("@next "))
+            {
+                Console.Write(output); // no such program (yet): keep waiting for it
+                Thread.Sleep(1000);
+                continue;
+            }
+            var head = lines[0].Split(' ', 3);
+            since = ulong.Parse(head[1]);
+            foreach (var l in lines.Skip(1).Where((l, i) => i < lines.Length - 2 || l.Length > 0)) Console.WriteLine(l);
+            if (head.Length > 2 && head[2].StartsWith("exit"))
+            {
+                Console.WriteLine($"({app}: {head[2].Trim()})");
+                return 0;
+            }
+            Thread.Sleep(1000);
         }
     }
 

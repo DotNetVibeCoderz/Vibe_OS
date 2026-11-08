@@ -97,6 +97,35 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
 
+    // bz-link: the running device (UDP, tcp://HOST, serial://COM5 -- see docs/bz-link.md)
+    vscode.commands.registerCommand("buitenzorg.deviceConnect", async () => {
+      const target = await vscode.window.showInputBox({
+        title: "Buitenzorg device",
+        prompt: "HOST[:PORT] (UDP), tcp://HOST:PORT, or serial://COM5 -- shown by 'deploy on' on the device",
+        placeHolder: "192.168.1.30:7070",
+      });
+      if (!target) return;
+      const code = await vscode.window.showInputBox({ title: "Pairing code", prompt: "4 digits from 'deploy on'" });
+      if (!code) return;
+      runBz(["device", "connect", target, code], out);
+    }),
+    vscode.commands.registerCommand("buitenzorg.deviceDeploy", async () => {
+      // the active file, else the workspace (a project folder is packed first)
+      const file = vscode.window.activeTextEditor?.document.fileName;
+      const target = file && !file.endsWith("app.manifest") ? file : repoRoot();
+      await vscode.workspace.saveAll();
+      runBz(["deploy", target, "--follow", "5"], out);
+    }),
+    vscode.commands.registerCommand("buitenzorg.deviceRun", async () => {
+      const line = await vscode.window.showInputBox({ title: "Run on the device", prompt: "A shell line, e.g. 'ps', 'run hello', 'logs'" });
+      if (line) runBz(["run", line], out);
+    }),
+    vscode.commands.registerCommand("buitenzorg.deviceLogs", async () => {
+      const app = await vscode.window.showInputBox({ title: "Device logs", prompt: "A program name for its own log (empty = the whole system log)" });
+      if (app === undefined) return;
+      runBz(app ? ["logs", app, "-f"] : ["logs", "-f"], out);
+    }),
+
     vscode.commands.registerCommand("buitenzorg.validateManifest", () => {
       const doc = vscode.window.activeTextEditor?.document;
       const manifest = doc?.fileName ?? path.join(repoRoot(), "app.manifest");
@@ -132,6 +161,18 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     })
   );
+}
+
+/** Run `bz ARGS` (the same bz the debugger uses) into the output channel. */
+function runBz(args: string[], out: vscode.OutputChannel): void {
+  const bz = findBz();
+  const all = [...bz.args.slice(0, -1), ...args]; // findBz ends with "dap"
+  out.show(true);
+  out.appendLine(`$ ${bz.command} ${all.join(" ")}`);
+  const child = cp.spawn(bz.command, all, { cwd: repoRoot() });
+  child.stdout.on("data", (d) => out.append(d.toString()));
+  child.stderr.on("data", (d) => out.append(d.toString()));
+  child.on("close", (code) => out.appendLine(`[exit ${code}]`));
 }
 
 /** `bz dap`: the configured bz, the workspace's build of it, or bz on PATH. */

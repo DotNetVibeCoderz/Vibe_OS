@@ -26,6 +26,8 @@ fn bootloader_entry(bi: &'static mut BootInfo) -> ! {
         .into_option()
         .expect("bootloader must map physical memory");
     let mut info = boot::BootInfo::new("bootloader-0.11", phys_offset);
+    // where the PIE kernel was placed (kgdb reports it to GDB as qOffsets)
+    info.kernel_base = Some((bi.kernel_addr, bi.kernel_image_offset));
     for r in bi.memory_regions.iter() {
         info.add_region(r.start, r.end, r.kind == MemoryRegionKind::Usable);
     }

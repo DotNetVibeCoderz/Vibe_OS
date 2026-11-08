@@ -65,6 +65,8 @@ enum Req {
     RawRegs,
     /// memory as one hex string, breakpoints hidden (GDB stub)
     RawMem(u64, usize),
+    /// write memory (GDB `M`); bytes under a breakpoint go to its saved copy
+    Write(u64, Vec<u8>),
     Set(String, u64),
     Mem(u64, usize),
     Break(u64),
@@ -95,6 +97,8 @@ struct Session {
     user_step: bool,
     /// stopped at a fault: continuing ends the program
     faulted: bool,
+    /// `dbg pause` / GDB Ctrl+C: 1 = asked, 2 = a trap is on its way
+    pause: u8,
 }
 
 static SESSIONS: Mutex<Vec<Session>> = Mutex::new(Vec::new());
@@ -300,6 +304,7 @@ pub fn at_load(pid: u64, entry: u64) {
         reinsert: None,
         user_step: false,
         faulted: false,
+            pause: 0,
     };
     if let Some(o) = orig {
         s.bps.push((entry, o));
@@ -333,6 +338,11 @@ pub fn on_trap(kind: Trap, r: &mut Regs) -> bool {
                         s.bps[i].1 = orig;
                     }
                 }
+            }
+            // the trap a pause asked for
+            if s.pause == 2 {
+                s.pause = 0;
+                return Next::Stop("pause");
             }
             // stepping onto a real breakpoint stops there as a breakpoint
             if s.user_step || s.bps.iter().any(|b| b.0 == pc) {
@@ -376,6 +386,9 @@ fn serve(pid: u64, why: &'static str, r: &mut Regs) {
         s.stopped = true;
         s.at = pc;
         s.reason = why;
+        if s.pause == 1 {
+            s.pause = 0; // stopped anyway: the pause is served
+        }
     });
     crate::println!("[dbg] pid {} stopped ({}) at {}", pid, why, describe(pid, pc));
     crate::task::futex_wake(key(pid, 1), u64::MAX); // `dbg run` / `dbg cont` wait for this
@@ -448,6 +461,31 @@ fn execute(pid: u64, req: Req, r: &mut Regs) -> (Vec<String>, Resume) {
             }
             None => (alloc::vec![String::from("E")], Resume::No),
         },
+        Req::Write(addr, bytes) => {
+            let ok = with(pid, |s| {
+                let mut out = bytes.clone();
+                let mut keep = alloc::vec![true; bytes.len()];
+                // a breakpoint's bytes: change its saved original, not the trap
+                for (a, orig) in s.bps.iter_mut().chain(s.temps.iter_mut()) {
+                    for (k, o) in orig.iter_mut().enumerate() {
+                        let at = *a + k as u64;
+                        if at >= addr && at < addr + bytes.len() as u64 && s.reinsert != Some(*a) {
+                            *o = bytes[(at - addr) as usize];
+                            keep[(at - addr) as usize] = false;
+                        }
+                    }
+                }
+                let mut good = true;
+                for (i, b) in out.iter_mut().enumerate() {
+                    if keep[i] {
+                        good &= poke(addr + i as u64, core::slice::from_ref(b));
+                    }
+                }
+                good
+            })
+            .unwrap_or(false);
+            (alloc::vec![String::from(if ok { "OK" } else { "E" })], Resume::No)
+        }
         Req::Set(name, v) => match r.names.iter().position(|n| *n == name) {
             Some(i) => {
                 r.r[i] = v;
@@ -622,6 +660,54 @@ fn wait_stop(pid: u64, ms: u64) -> String {
     }
 }
 
+/// GDB stub: write `bytes` at `addr` in stopped `pid`.
+pub fn raw_write(pid: u64, addr: u64, bytes: Vec<u8>) -> bool {
+    request(pid, Req::Write(addr, bytes)).first().is_some_and(|l| l == "OK")
+}
+
+/// Ask a running debugged program to stop (`dbg pause`, GDB Ctrl+C): the next
+/// timer interrupt that lands in it makes it trap ([`pause_due`]).
+pub fn request_pause(pid: u64) -> bool {
+    with(pid, |s| {
+        if s.stopped {
+            return false;
+        }
+        s.pause = 1;
+        true
+    })
+    .unwrap_or(false)
+}
+
+/// Timer interrupt from ring 3 (interrupts off, any CPU): true when the
+/// interrupted program has a pause pending -- the caller then makes it trap
+/// right after the return (x86 TF, ARM64 software step; RISC-V: [`pause_at`]).
+pub fn pause_due() -> bool {
+    let Some(pid) = crate::task::current_space_id_irq() else { return false };
+    let Some(mut ss) = SESSIONS.try_lock() else { return false };
+    match ss.iter_mut().find(|s| s.pid == pid) {
+        Some(s) if s.pause == 1 => {
+            s.pause = 2;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// RISC-V (no single step): a temporary breakpoint at the interrupted pc,
+/// planted from the timer trap (the program's space is installed).
+#[allow(dead_code)]
+pub fn pause_at(pc: u64) {
+    let Some(pid) = crate::task::current_space_id_irq() else { return };
+    let Some(mut ss) = SESSIONS.try_lock() else { return };
+    if let Some(s) = ss.iter_mut().find(|s| s.pid == pid) {
+        if !s.temps.iter().any(|t| t.0 == pc) {
+            if let Some(orig) = insert(pc) {
+                s.temps.push((pc, orig));
+            }
+        }
+    }
+}
+
 /// GDB stub: the registers of stopped `pid` as (name, value), frame order.
 pub fn raw_regs(pid: u64) -> Option<Vec<(String, u64)>> {
     let out = request(pid, Req::RawRegs);
@@ -705,6 +791,8 @@ pub fn command(args: &[&str]) -> Vec<String> {
             Err(e) => one(e),
         },
         ["breaks"] => with(cur, |s| s.bps.iter().map(|b| describe(cur, b.0)).collect()).unwrap_or_else(|| one(String::from("dbg: no session"))),
+        // resume and return at once (the GDB stub watches for Ctrl+C meanwhile)
+        ["cont" | "c", "--nowait"] => request(cur, Req::Cont),
         ["cont" | "c"] | ["step" | "s"] => {
             let step = matches!(args, ["step" | "s"]);
             let mut out = request(cur, if step { Req::Step } else { Req::Cont });
@@ -719,6 +807,13 @@ pub fn command(args: &[&str]) -> Vec<String> {
         ["wait", rest @ ..] => {
             let ms = rest.first().and_then(|n| n.parse::<u64>().ok()).unwrap_or(1000).min(3000);
             one(wait_stop(cur, ms))
+        }
+        ["pause"] => {
+            if request_pause(cur) {
+                one(wait_stop(cur, 3000))
+            } else {
+                one(String::from("dbg: nothing to pause (stopped already, or no session)"))
+            }
         }
         ["regs" | "r"] => request(cur, Req::Regs),
         ["set", reg, v] => match address(cur, v) {
@@ -748,6 +843,7 @@ pub fn command(args: &[&str]) -> Vec<String> {
             String::from("dbg set REG VALUE    change a register"),
             String::from("dbg delete SYM|ADDR | breaks | list | pid N | kill | detach"),
             String::from("dbg wait [MS]         wait until the program stops or ends (max 3000 ms)"),
+            String::from("dbg pause             stop a running program where it is"),
         ],
     }
 }

@@ -271,7 +271,51 @@ pub fn entry_for(name: &str) -> Option<String> {
 /// Install a package file. Returns (name, version, upgraded-from).
 pub fn install_file(path: &str) -> Result<(String, String, Option<String>), String> {
     let bytes = crate::vfs::read(path).map_err(|e| format!("{}: {}", path, e))?;
-    let a = parse(&bytes).map_err(String::from)?;
+    let r = install_bytes(&bytes);
+    if let Ok((name, _, _)) = &r {
+        keep_history(name, &bytes);
+    }
+    r
+}
+
+/// Where installed archives are kept for `bz rollback`.
+const HISTORY_DIR: &str = "/disk/PKGHIST";
+
+fn history_stem(name: &str) -> String {
+    let s: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect::<String>().to_ascii_uppercase();
+    if s.is_empty() { String::from("PKG") } else { s }
+}
+
+/// Keep the archive just installed (`NAME.BZP`); the one before it becomes
+/// `NAME.OLD` -- what `bz rollback` installs (best effort: /disk may be full).
+fn keep_history(name: &str, bytes: &[u8]) {
+    if crate::vfs::stat(HISTORY_DIR).is_err() {
+        let _ = crate::vfs::mkdir(HISTORY_DIR);
+    }
+    let stem = history_stem(name);
+    let cur = format!("{}/{}.BZP", HISTORY_DIR, stem);
+    let old = format!("{}/{}.OLD", HISTORY_DIR, stem);
+    if let Ok(prev) = crate::vfs::read(&cur) {
+        if prev != bytes {
+            let _ = crate::vfs::write(&old, &prev);
+        }
+    }
+    let _ = crate::vfs::write(&cur, bytes);
+}
+
+/// `bz rollback NAME`: install the version before the current one again
+/// (a second rollback goes forward again).
+pub fn rollback(name: &str) -> Result<(String, String), String> {
+    let cur = find(name).ok_or_else(|| format!("'{}' tidak terpasang dari berkas/repo", name))?;
+    let old = format!("{}/{}.OLD", HISTORY_DIR, history_stem(name));
+    let bytes = crate::vfs::read(&old).map_err(|_| format!("tidak ada versi sebelumnya dari '{}' ({})", name, old))?;
+    let (n, v, _) = install_bytes(&bytes)?;
+    keep_history(&n, &bytes);
+    Ok((cur.version, v))
+}
+
+fn install_bytes(bytes: &[u8]) -> Result<(String, String, Option<String>), String> {
+    let a = parse(bytes).map_err(String::from)?;
     if crate::pkg::find(&a.name).is_some() {
         return Err(format!("'{}' adalah paket bawaan sistem", a.name));
     }
@@ -332,6 +376,9 @@ pub fn remove(name: &str) -> Result<usize, String> {
             }
         }
         save(state).map_err(|e| format!("menyimpan {}: {}", STATE_FILE, e))?;
+        let stem = history_stem(name);
+        let _ = crate::vfs::remove(&format!("{}/{}.BZP", HISTORY_DIR, stem));
+        let _ = crate::vfs::remove(&format!("{}/{}.OLD", HISTORY_DIR, stem));
         Ok(n)
     })
 }

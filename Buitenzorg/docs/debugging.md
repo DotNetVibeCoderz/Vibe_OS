@@ -303,14 +303,34 @@ on a PC debugs a program running on real hardware (or a VM):
 
 Supported packets: `?`, `g`/`p` (registers in GDB's order -- amd64 rax..r15,
 rip, eflags; aarch64 x0..x30, sp, pc, cpsr; riscv64 x0..x31, pc), `P`, `m`
-(breakpoints hidden), `Z0`/`z0`, `c`, `s`, `k`, `D`, thread queries (one
-thread), `QStartNoAckMode`, `qRcmd`. Not supported: writing memory (`M`/`X`),
-watchpoints, Ctrl+C (pause), several threads, attaching to a running process,
-and kernel debugging (that stays on QEMU's stub, above). One session at a
+(breakpoints hidden), `M` (write memory; bytes under a breakpoint change its
+saved original), `Z0`/`z0`, `c`, `s`, **Ctrl+C** (the next timer interrupt
+that lands in the program makes it trap -- x86 trap flag, ARM64 software
+step, RISC-V a temporary breakpoint -- and GDB reports SIGINT), `k`, `D`,
+thread queries (one thread), `QStartNoAckMode`, `qRcmd`. **Watchpoints**:
+GDB sets *software* watchpoints by single-stepping and comparing (slow but
+correct); there are no hardware ones (`Z2`..`Z4`). Not supported: several
+threads, attaching to a process that is already running. One session at a
 time; a program GDB leaves stopped is ended with the session; with no GDB
-within 10 minutes the program is ended too.
+within 10 minutes the program is ended too. `dbg pause` is the same pause
+from the device's shell.
 
-Verified with a client that sends GDB's packets (`bz gdb-check`: 13 checks,
+**The kernel, read-only: `kgdb PORT`.** GDB with the un-stripped kernel ELF
+reads the running kernel's memory -- statics, structures, the log ring:
+
+```text
+(device)  kgdb 1234
+(PC)      gdb kernel/target/x86_64-unknown-none/release/bzkernel -ex "target remote 192.168.1.30:1234"
+          (gdb) print SOME_STATIC        # qOffsets tells GDB where the PIE kernel was loaded
+```
+
+It does not stop the kernel (no registers, breakpoints or steps -- that
+remains QEMU's `-s -S`), refuses user-half addresses and anything unmapped,
+and writes nothing. It has **no pairing code**: start it only on a network
+you trust; it ends when GDB detaches or after 10 minutes without one.
+
+Verified with a client that sends GDB's packets (`bz gdb-check`: 23 checks
+incl. `M`, Ctrl+C on a spinning program and a `kgdb` session,
 smoke `[bzlink]` on x86 when the C# `crashme` is on the image). **A real GDB
 has not been run against it here** (none is installed on the development PC,
 and CI's image has no native program) -- reports welcome.

@@ -13,6 +13,10 @@ pipeline yang sama dengan yang membangun app suite bawaan.
 | **Deploy (build image + smoke test)** | `build.ps1` + `smoke-test.ps1` (verifikasi 4 media) | ✅ berfungsi |
 | **Debug Kernel (QEMU + GDB server)** | boot QEMU ditahan dengan server GDB (`-s -S`) di `:1234` untuk di-attach | ✅ GDB kernel-level |
 | **F5 / Run and Debug** (tipe `buitenzorg`) | debug skrip / program native di perangkat lewat `bz dap` | ✅ DAP |
+| **Connect to Device (bz-link)** | `bz device connect` (UDP, `tcp://`, `serial://COM5`) | ✅ |
+| **Deploy to Device** | `bz deploy` berkas aktif (atau folder proyek) ke perangkat yang hidup, lalu jalankan | ✅ |
+| **Run Command on Device** | `bz run "..."` -- keluarannya di panel Output | ✅ |
+| **Show Device Logs** | `bz logs -f` (log sistem) atau `bz logs APP -f` (satu program) | ✅ |
 | **Validate app.manifest** | `bz manifest validate` | ✅ berfungsi |
 
 ## Membangun & memasang ekstensi

@@ -78,10 +78,22 @@ Dependensi dipasang lebih dulu, depth first; dependensi melingkar ditolak.
 Versi dibandingkan per bagian, secara angka bila keduanya angka (`1.10` lebih
 baru dari `1.9`).
 
+**Publikasi** (PC): `bz publish APPKU.BZP --repo repo` menyalinnya ke folder
+repo sebagai `appku-1.2.bzpkg` dan menulis ulang indeksnya (`bz repo serve
+repo` yang sedang berjalan langsung menyajikannya). Nama + versi yang sama
+ditolak (`--force` menggantinya); versi lama tetap ada, dan indeks
+menawarkan yang terbaru.
+
+**Rollback** (perangkat): setiap pemasangan menyimpan arsipnya di
+`/disk/PKGHIST/<NAMA>.BZP` dan yang sebelumnya sebagai `.OLD`. `bz rollback
+appku` memasang lagi versi sebelumnya; rollback kedua maju kembali.
+`bz remove` ikut menghapus riwayatnya.
+
 Batasan: HTTP biasa ke alamat IPv4 (belum ada DNS maupun TLS -- SHA-256 di
 indeks melindungi dari berkas rusak, bukan dari server atau jaringan yang
-jahat); satu repo; belum ada rollback selain memasang berkas lama secara
-manual; `bz remove` tidak menghapus dependensi. Pengujian: `MILESTONE: REPO
+jahat); satu repo; rollback menyimpan satu versi ke belakang; `bz remove`
+tidak menghapus dependensi; `bz publish` menulis ke folder (belum unggah ke
+server jarak jauh). Pengujian: `MILESTONE: REPO
 OK` (versi, indeks, urutan dependensi, siklus) di setiap boot self-test;
 `bz repo --selftest` (CI) dan `bz repo --check` (smoke `[bzlink]`: update,
 install dengan dependensi, upgrade 1.0 -> 1.1, paket yang diubah ditolak).

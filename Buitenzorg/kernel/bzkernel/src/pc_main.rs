@@ -72,6 +72,7 @@ mod vmm;
 mod wallpaper;
 mod splash;
 mod clock;
+mod applog;
 mod appprof;
 mod crash;
 mod gdbstub;

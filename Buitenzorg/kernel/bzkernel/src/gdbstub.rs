@@ -11,13 +11,22 @@
 //!
 //! Packets: `?`, `g`/`p` (registers in GDB's order: amd64 rax..r15, rip,
 //! eflags; aarch64 x0..x30, sp, pc, cpsr; riscv64 x0..x31, pc), `P` (set),
-//! `m` (memory, breakpoints hidden), `Z0`/`z0` (software breakpoints), `c`,
-//! `s`, `k`, `D`, thread queries (one thread), `QStartNoAckMode`, and
-//! `qRcmd` (`monitor ...`: `monitor sym NAME` = a symbol's address, anything
-//! else goes to the shell's `dbg`). Memory writes (`M`/`X`), watchpoints and
-//! pause (Ctrl+C) are not supported: the program stops at breakpoints, after
-//! a step, or at a fault. One session at a time; the stub is a kernel task
-//! polling the network, so the desktop stays live meanwhile.
+//! `m` (memory, breakpoints hidden), `M` (write memory; under a breakpoint
+//! its saved original changes), `Z0`/`z0` (software breakpoints), `c`, `s`,
+//! **Ctrl+C** while running (the next timer interrupt in the program makes it
+//! trap: x86 TF, ARM64 software step, RISC-V a temporary breakpoint -> `S02`),
+//! `k`, `D`, thread queries (one thread), `QStartNoAckMode`, and `qRcmd`
+//! (`monitor sym NAME` = a symbol's address, anything else goes to `dbg`).
+//! Watchpoints: GDB does them itself by single-stepping (software
+//! watchpoints) -- slow but correct; there are no hardware ones (`Z2`..`Z4`).
+//!
+//! **`kgdb PORT`** serves the *kernel* read-only: memory reads of mapped
+//! kernel addresses and `qOffsets` (where the kernel was loaded), so
+//! `gdb kernel/target/.../bzkernel` + `target remote` can print kernel
+//! statics and structures of the running system. It does not stop the
+//! kernel (no registers, breakpoints or stepping: that stays QEMU's `-s`).
+//! It needs no pairing code -- start it only on a network you trust; it ends
+//! when GDB detaches or after 10 minutes without a connection.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -25,6 +34,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// The session serves the kernel (`kgdb`), not a program.
+static KERNEL: AtomicBool = AtomicBool::new(false);
 static PORT: AtomicU64 = AtomicU64::new(0);
 static PID: AtomicU64 = AtomicU64::new(0);
 /// `handle` already answered (the reply had to go out before a mode change).
@@ -80,6 +91,19 @@ fn now_ms() -> u64 {
     crate::arch::cpu::nanos() / 1_000_000
 }
 
+/// Take the one session slot; a session that is just ending (GDB sent `k`
+/// a moment ago) gets up to 3 s to finish.
+fn claim() -> bool {
+    let t0 = now_ms();
+    while ACTIVE.swap(true, Ordering::SeqCst) {
+        if now_ms() - t0 > 3000 {
+            return false;
+        }
+        crate::task::yield_now();
+    }
+    true
+}
+
 /// `gdbserver PORT APP [args]`.
 pub fn command(args: &[&str]) -> Vec<String> {
     let one = |s: String| alloc::vec![s];
@@ -87,7 +111,7 @@ pub fn command(args: &[&str]) -> Vec<String> {
         return one(String::from("gdbserver PORT APP [arg...]   (lalu di PC: gdb APP.ELF -ex 'target remote IP:PORT')"));
     };
     let Ok(port) = port.parse::<u16>() else { return one(format!("gdbserver: port tidak sah: {}", port)) };
-    if ACTIVE.swap(true, Ordering::SeqCst) {
+    if !claim() {
         return one(String::from("gdbserver: sudah ada sesi (satu sesi sekaligus)"));
     }
     if crate::net::local_ip().is_none() {
@@ -108,9 +132,85 @@ pub fn command(args: &[&str]) -> Vec<String> {
     }
     PORT.store(port as u64, Ordering::SeqCst);
     PID.store(pid, Ordering::SeqCst);
+    KERNEL.store(false, Ordering::SeqCst);
     crate::task::spawn_named("gdbstub", serve);
     let ip = crate::net::local_ip().map(crate::net::fmt_ip).unwrap_or_default();
     one(format!("gdbserver: {} -- menunggu GDB di {}:{} (target remote {}:{})", started, ip, port, ip, port))
+}
+
+/// `kgdb PORT`: the kernel, read-only.
+pub fn kgdb_command(args: &[&str]) -> Vec<String> {
+    let one = |s: String| alloc::vec![s];
+    let Some(Ok(port)) = args.first().map(|p| p.parse::<u16>()) else {
+        return one(String::from("kgdb PORT   (baca memori kernel dari GDB: gdb bzkernel -ex 'target remote IP:PORT'; tanpa kode pairing!)"));
+    };
+    if !claim() {
+        return one(String::from("kgdb: sudah ada sesi gdbserver/kgdb"));
+    }
+    if crate::net::local_ip().is_none() || crate::tcp::listen(port).is_err() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        return one(format!("kgdb: tidak bisa mendengarkan di port {}", port));
+    }
+    PORT.store(port as u64, Ordering::SeqCst);
+    PID.store(0, Ordering::SeqCst);
+    KERNEL.store(true, Ordering::SeqCst);
+    crate::task::spawn_named("gdbstub", serve);
+    let ip = crate::net::local_ip().map(crate::net::fmt_ip).unwrap_or_default();
+    one(format!("kgdb: kernel (baca saja, offset {:#x}) menunggu GDB di {}:{} -- tanpa kode pairing, 10 menit", kernel_offset(), ip, port))
+}
+
+/// How far the kernel sits from its link address (a PIE x86 kernel is linked at 0).
+fn kernel_offset() -> u64 {
+    match crate::boot::info().kernel_base {
+        Some((_, virt)) if cfg!(target_arch = "x86_64") => virt,
+        _ => 0,
+    }
+}
+
+/// Read kernel memory, page by page, only where it is mapped.
+fn kernel_read(addr: u64, n: usize) -> Option<Vec<u8>> {
+    if addr < 0x8000_0000 || addr.checked_add(n as u64).is_none() {
+        return None; // the user half belongs to whichever program is installed
+    }
+    let mut page = addr & !0xFFF;
+    while page < addr + n as u64 {
+        if !crate::memory::with_ctx(|ctx| crate::arch::paging::is_mapped(&mut ctx.mapper, page)) {
+            return None;
+        }
+        page += 0x1000;
+    }
+    Some((0..n).map(|i| unsafe { core::ptr::read_volatile((addr + i as u64) as *const u8) }).collect())
+}
+
+fn handle_kernel(p: &str) -> Option<String> {
+    let reply = match p {
+        "?" => String::from("S05"),
+        "qAttached" => String::from("1"),
+        "qC" => String::from("QC1"),
+        "qfThreadInfo" => String::from("m1"),
+        "qsThreadInfo" => String::from("l"),
+        "qOffsets" => {
+            let o = kernel_offset();
+            format!("Text={:x};Data={:x};Bss={:x}", o, o, o)
+        }
+        "g" => LAYOUT.iter().map(|(_, n)| "xx".repeat(*n)).collect(), // the kernel keeps running: no registers
+        "k" | "D" | "D;1" => return None,
+        "c" | "s" => String::from("S05"), // nothing to resume: the kernel never stopped
+        _ if p.starts_with("qSupported") => String::from("PacketSize=1000;QStartNoAckMode+"),
+        _ if p.starts_with('H') || p.starts_with('T') => String::from("OK"),
+        _ if p.starts_with("qSymbol") => String::from("OK"),
+        _ if p.starts_with('m') => {
+            let parsed = p[1..].split_once(',').and_then(|(a, n)| Some((u64::from_str_radix(a, 16).ok()?, usize::from_str_radix(n, 16).ok()?)));
+            match parsed.and_then(|(a, n)| kernel_read(a, n.min(4096))) {
+                Some(b) => b.iter().map(|x| format!("{:02x}", x)).collect(),
+                None => String::from("E14"),
+            }
+        }
+        _ if p.starts_with("qRcmd,") => hex_text("kgdb: baca saja (kernel tetap berjalan); breakpoint kernel = QEMU -s -S\n"),
+        _ if p.starts_with('M') || p.starts_with('Z') || p.starts_with('P') || p.starts_with('p') => String::from("E01"),
+        _ => String::new(),
+    };
+    Some(reply)
 }
 
 struct Conn {
@@ -120,6 +220,19 @@ struct Conn {
 }
 
 impl Conn {
+    /// Whether GDB sent Ctrl+C (0x03) since the last look (reads what arrived).
+    fn interrupted(&mut self) -> bool {
+        crate::net::poll();
+        self.buf.extend_from_slice(&crate::tcp::recv(self.id, 4096));
+        match self.buf.iter().position(|&b| b == 0x03) {
+            Some(i) => {
+                self.buf.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
     fn send_packet(&mut self, data: &str) {
         let sum = data.bytes().fold(0u8, |a, b| a.wrapping_add(b));
         let p = format!("${}#{:02x}", data, sum);
@@ -181,6 +294,9 @@ fn stop_reply(status: &str) -> Option<String> {
         let code = u64::from_str_radix(status[i + 19..].split_whitespace().next().unwrap_or("0"), 16).unwrap_or(0);
         return Some(format!("W{:02x}", code & 0xff));
     }
+    if status.contains("stopped (pause)") {
+        return Some(String::from("S02")); // SIGINT: GDB shows "Program received signal SIGINT"
+    }
     if status.contains("stopped") {
         return Some(String::from("S05"));
     }
@@ -221,19 +337,44 @@ fn handle(pid: u64, p: &str, conn: &mut Conn) -> Option<String> {
             return None;
         }
         "c" | "s" => {
-            let mut status = dbg(pid, &[if p == "c" { "cont" } else { "step" }]);
+            let mut status = if p == "c" {
+                dbg(pid, &["cont", "--nowait"]); // "continuing": watch for Ctrl+C from here on
+                String::from("is running")
+            } else {
+                dbg(pid, &["step"])
+            };
             loop {
                 if let Some(r) = stop_reply(&status) {
                     break r;
                 }
+                // Ctrl+C from GDB (0x03) while the program runs: pause it
+                if conn.interrupted() {
+                    crate::debug::request_pause(pid);
+                }
                 crate::task::yield_now();
-                status = dbg(pid, &["wait", "2000"]);
+                status = dbg(pid, &["wait", "200"]);
+            }
+        }
+        _ if p.starts_with('M') => {
+            let parsed = p[1..].split_once(':').and_then(|(h, data)| {
+                let (a, n) = h.split_once(',')?;
+                let (a, n) = (u64::from_str_radix(a, 16).ok()?, usize::from_str_radix(n, 16).ok()?);
+                let bytes: Option<Vec<u8>> = (0..data.len() / 2).map(|i| u8::from_str_radix(&data[2 * i..2 * i + 2], 16).ok()).collect();
+                bytes.filter(|b| b.len() == n).map(|b| (a, b))
+            });
+            match parsed {
+                Some((a, b)) => {
+                    let pid_s = pid.to_string();
+                    crate::debug::command(&["pid", &pid_s]);
+                    if crate::debug::raw_write(pid, a, b) { String::from("OK") } else { String::from("E14") }
+                }
+                None => String::from("E01"),
             }
         }
         _ if p.starts_with("qSupported") => String::from("PacketSize=1000;QStartNoAckMode+"),
         _ if p.starts_with('H') || p.starts_with('T') => String::from("OK"),
         _ if p.starts_with("qSymbol") => String::from("OK"),
-        _ if p.starts_with('p') => {
+        _ if p.starts_with('p') && !p.starts_with("pause") => {
             let n = usize::from_str_radix(&p[1..], 16).unwrap_or(usize::MAX);
             match (registers(pid), LAYOUT.get(n)) {
                 (Some(v), Some((_, bytes))) => hex_le(v[n], *bytes),
@@ -302,17 +443,28 @@ fn serve() {
         if let Some(id) = crate::tcp::accept(port) {
             break Some(id);
         }
-        if now_ms() - t0 > 600_000 || !crate::process::is_alive(pid) {
+        if now_ms() - t0 > 600_000 || (pid != 0 && !crate::process::is_alive(pid)) {
             break None;
         }
         crate::task::yield_now();
     };
     crate::tcp::unlisten(port);
     if let Some(id) = id {
-        crate::println!("[gdbstub] GDB connected (pid {})", pid);
+        let kernel = KERNEL.load(Ordering::SeqCst);
+        crate::println!("[gdbstub] GDB connected ({})", if kernel { String::from("kernel, read-only") } else { format!("pid {}", pid) });
         let mut conn = Conn { id, buf: Vec::new(), ack: true };
         while let Some(p) = conn.next_packet() {
-            match handle(pid, &p, &mut conn) {
+            let r = if kernel {
+                if p == "QStartNoAckMode" {
+                    conn.send_packet("OK");
+                    conn.ack = false;
+                    continue;
+                }
+                handle_kernel(&p)
+            } else {
+                handle(pid, &p, &mut conn)
+            };
+            match r {
                 Some(r) if r == ALREADY_SENT => {}
                 Some(r) => conn.send_packet(&r),
                 None => break,
@@ -328,7 +480,7 @@ fn serve() {
         crate::println!("[gdbstub] no GDB within 10 minutes (or the program ended)");
     }
     // a program GDB left stopped (or never attached to) ends with the session
-    if crate::process::is_alive(pid) && dbg(pid, &["list"]).contains(&format!("pid {}", pid)) {
+    if pid != 0 && crate::process::is_alive(pid) && dbg(pid, &["list"]).contains(&format!("pid {}", pid)) {
         dbg(pid, &["kill"]);
     }
     crate::println!("[gdbstub] session ended (pid {})", pid);

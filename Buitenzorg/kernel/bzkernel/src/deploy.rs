@@ -1,6 +1,7 @@
 //! Remote deploy + debug service: the device side of the **Buitenzorg Deploy
 //! Protocol (BZDP v1)** that the Magic App Generator (tools/MagicAppGen)
-//! speaks, over UDP port 7070 (there is no TCP yet).
+//! speaks, over UDP port 7070 -- and the same packets over **TCP 7070** and the
+//! PC's **COM2** (serial), framed as `"BZ" | length u16 | packet | CRC-32`.
 //!
 //! Off by default: `deploy on [code]` in the shell starts it with a 4-digit
 //! pairing code that every request must carry. The desktop loop calls
@@ -12,7 +13,8 @@
 //! * 1 HELLO -> "Buitenzorg OS <arch> <host>; max_chunk=1024"
 //! * 2 BEGIN size u32 | path_len u16 | path   (starts an upload)
 //! * 3 DATA offset u32 | bytes                -> next_offset u32
-//! * 4 END crc32 u32                          (writes the file)
+//! * 4 END crc32 u32 [| sha256 32 bytes]      (writes the file; the SHA-256,
+//!   when sent, must match too)
 //! * 5 RUN command line (a shell command)     -> pid u32 (0 = ran in the shell)
 //! * 6 LOG cursor u32                         -> next_cursor u32 | text
 //! * 7 KILL pid u32
@@ -27,6 +29,10 @@
 //! A retransmitted request (same seq as the last one) gets the saved reply
 //! again instead of running twice -- a RUN must not start two copies because
 //! a reply was lost.
+//!
+//! **Audit log:** every write, RUN, EXEC, KILL and refused pairing code is
+//! appended (with the time and the peer) to `/disk/DEPLOY.LOG` -- buffered,
+//! flushed every few seconds, kept under 64 KiB; `deploy log` shows the tail.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -57,8 +63,22 @@ struct Upload {
     data: Vec<u8>,
 }
 
+/// A TCP client of the service and the bytes it sent that are not a frame yet.
+struct StreamConn {
+    id: u64,
+    peer: String,
+    buf: Vec<u8>,
+}
+
 struct State {
     socket: u64,
+    tcp: Vec<StreamConn>,
+    tcp_listening: bool,
+    serial_buf: Vec<u8>,
+    audit: Vec<String>,
+    audit_flushed: u64,
+    /// What the last END wrote (for the audit log).
+    last_write: Option<String>,
     upload: Option<Upload>,
     last: Option<(u32, Vec<u8>)>,
     requests: u64,
@@ -81,7 +101,21 @@ pub fn enable(code: u16) -> bool {
             let _ = crate::net::udp_close(socket);
             return false;
         }
-        *st = Some(State { socket, upload: None, last: None, requests: 0, output: Vec::new(), reading: None });
+        let tcp_listening = crate::tcp::listen(PORT).is_ok();
+        *st = Some(State {
+            socket,
+            tcp: Vec::new(),
+            tcp_listening,
+            serial_buf: Vec::new(),
+            audit: Vec::new(),
+            audit_flushed: 0,
+            last_write: None,
+            upload: None,
+            last: None,
+            requests: 0,
+            output: Vec::new(),
+            reading: None,
+        });
     }
     CODE.store(code as u32 % 10_000, Ordering::Relaxed);
     ENABLED.store(true, Ordering::Release);
@@ -90,8 +124,15 @@ pub fn enable(code: u16) -> bool {
 
 pub fn disable() {
     ENABLED.store(false, Ordering::Release);
-    if let Some(st) = STATE.lock().take() {
+    if let Some(mut st) = STATE.lock().take() {
         let _ = crate::net::udp_close(st.socket);
+        if st.tcp_listening {
+            crate::tcp::unlisten(PORT);
+        }
+        for c in st.tcp.drain(..) {
+            crate::tcp::close(c.id);
+        }
+        flush_audit(&mut st, true);
     }
 }
 
@@ -159,12 +200,136 @@ pub fn poll() {
     let Some(st) = guard.as_mut() else { return };
     for _ in 0..32 {
         let Some((ip, port, pkt)) = crate::net::udp_recv(st.socket) else { break };
-        if let Some(reply) = handle(st, &pkt) {
+        let peer = alloc::format!("udp {}:{}", crate::net::fmt_ip(ip), port);
+        if let Some(reply) = handle(st, &pkt, &peer) {
             if let Err(e) = crate::net::udp_send(st.socket, ip, port, &reply) {
                 crate::println!("[deploy] reply of {} bytes not sent: {}", reply.len(), e);
             }
         }
     }
+    // TCP: new clients, then whole frames from each
+    if st.tcp_listening {
+        while let Some(id) = crate::tcp::accept(PORT) {
+            let peer = crate::tcp::peer(id).map_or(String::from("tcp ?"), |(ip, p)| alloc::format!("tcp {}:{}", crate::net::fmt_ip(ip), p));
+            st.tcp.push(StreamConn { id, peer, buf: Vec::new() });
+        }
+    }
+    let mut i = 0;
+    while i < st.tcp.len() {
+        let id = st.tcp[i].id;
+        let chunk = crate::tcp::recv(id, 16 * 1024);
+        st.tcp[i].buf.extend_from_slice(&chunk);
+        while let Some(pkt) = take_frame(&mut st.tcp[i].buf) {
+            let peer = st.tcp[i].peer.clone();
+            if let Some(reply) = handle(st, &pkt, &peer) {
+                crate::tcp::send(id, &frame(&reply));
+            }
+        }
+        if chunk.is_empty() && crate::tcp::at_eof(id) {
+            crate::tcp::close(id);
+            st.tcp.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    // serial (COM2 on a PC)
+    if crate::serial::aux_available() {
+        for _ in 0..4096 {
+            match crate::serial::aux_read() {
+                Some(b) => st.serial_buf.push(b),
+                None => break,
+            }
+        }
+        if st.serial_buf.len() > 64 * 1024 {
+            st.serial_buf.clear(); // noise, not frames
+        }
+        while let Some(pkt) = take_frame(&mut st.serial_buf) {
+            if let Some(reply) = handle(st, &pkt, "serial COM2") {
+                crate::serial::aux_write(&frame(&reply));
+            }
+        }
+    }
+    flush_audit(st, false);
+}
+
+/// Stream framing: `"BZ" | length u16 | packet | CRC-32 of the packet`.
+fn frame(pkt: &[u8]) -> Vec<u8> {
+    let mut f = Vec::with_capacity(pkt.len() + 8);
+    f.extend_from_slice(b"BZ");
+    f.extend_from_slice(&(pkt.len() as u16).to_le_bytes());
+    f.extend_from_slice(pkt);
+    f.extend_from_slice(&crc32(pkt).to_le_bytes());
+    f
+}
+
+/// The next whole frame in `buf` (bytes before "BZ" and frames with a wrong
+/// CRC are dropped).
+fn take_frame(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
+    loop {
+        let start = buf.windows(2).position(|w| w == b"BZ")?;
+        buf.drain(..start);
+        if buf.len() < 4 {
+            return None;
+        }
+        let len = u16::from_le_bytes([buf[2], buf[3]]) as usize;
+        if buf.len() < 4 + len + 4 {
+            return None;
+        }
+        let pkt = buf[4..4 + len].to_vec();
+        let crc = u32::from_le_bytes([buf[4 + len], buf[5 + len], buf[6 + len], buf[7 + len]]);
+        if crc == crc32(&pkt) {
+            buf.drain(..4 + len + 4);
+            return Some(pkt);
+        }
+        buf.drain(..2); // not a frame after all: look for the next "BZ"
+    }
+}
+
+const AUDIT_FILE: &str = "/disk/DEPLOY.LOG";
+const AUDIT_MAX: usize = 64 * 1024;
+
+fn audit(st: &mut State, peer: &str, what: &str) {
+    let (y, mo, d, h, mi, s) = crate::clock::now();
+    let line = alloc::format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}  {:<22} {}", y, mo, d, h, mi, s, peer, what);
+    st.audit.push(line);
+}
+
+/// Append the buffered audit lines to the file (every few seconds, or now).
+fn flush_audit(st: &mut State, now: bool) {
+    if st.audit.is_empty() {
+        return;
+    }
+    let t = crate::arch::cpu::nanos() / 1_000_000;
+    if !now && st.audit.len() < 32 && t.saturating_sub(st.audit_flushed) < 3000 {
+        return;
+    }
+    st.audit_flushed = t;
+    let mut text = crate::vfs::read(AUDIT_FILE).unwrap_or_default();
+    for l in st.audit.drain(..) {
+        text.extend_from_slice(l.as_bytes());
+        text.push(b'\n');
+    }
+    if text.len() > AUDIT_MAX {
+        // keep the newer half, from a line start
+        let cut = text.len() - AUDIT_MAX / 2;
+        let from = text[cut..].iter().position(|&b| b == b'\n').map_or(cut, |i| cut + i + 1);
+        text.drain(..from);
+    }
+    let _ = crate::vfs::write(AUDIT_FILE, &text);
+}
+
+/// `deploy log`: the last lines of the audit log (the file + what is buffered).
+pub fn audit_tail(n: usize) -> Vec<String> {
+    let mut lines: Vec<String> = crate::vfs::read(AUDIT_FILE)
+        .map(|b| String::from_utf8_lossy(&b).lines().map(String::from).collect())
+        .unwrap_or_default();
+    if let Some(g) = STATE.try_lock() {
+        if let Some(st) = g.as_ref() {
+            lines.extend(st.audit.iter().cloned());
+        }
+    }
+    let skip = lines.len().saturating_sub(n);
+    lines.split_off(skip)
 }
 
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
@@ -187,7 +352,7 @@ fn reply(op: u8, seq: u32, status: u8, data: &[u8]) -> Vec<u8> {
     r
 }
 
-fn handle(st: &mut State, pkt: &[u8]) -> Option<Vec<u8>> {
+fn handle(st: &mut State, pkt: &[u8], peer: &str) -> Option<Vec<u8>> {
     if pkt.len() < 12 || &pkt[0..4] != b"BZDP" || pkt[4] != 1 {
         return None; // not ours: no reply
     }
@@ -196,6 +361,7 @@ fn handle(st: &mut State, pkt: &[u8]) -> Option<Vec<u8>> {
     let code = u16_at(pkt, 10)?;
     let body = &pkt[12..];
     if code as u32 != CODE.load(Ordering::Relaxed) {
+        audit(st, peer, "refused: wrong pairing code");
         return Some(reply(op, seq, BAD_CODE, b"wrong pairing code (see 'deploy' in the shell)"));
     }
     if let Some((last_seq, ref saved)) = st.last {
@@ -205,6 +371,13 @@ fn handle(st: &mut State, pkt: &[u8]) -> Option<Vec<u8>> {
     }
     st.requests += 1;
     SERVED.store(st.requests, Ordering::Relaxed);
+    let text = |b: &[u8]| String::from(core::str::from_utf8(b).unwrap_or("?").trim());
+    match op {
+        5 => audit(st, peer, &alloc::format!("run {}", text(body))),
+        10 => audit(st, peer, &alloc::format!("exec {}", text(body))),
+        7 => audit(st, peer, &alloc::format!("kill {}", u32_at(body, 0).unwrap_or(0))),
+        _ => {}
+    }
     let r = match op {
         1 => {
             let text = alloc::format!(
@@ -217,7 +390,14 @@ fn handle(st: &mut State, pkt: &[u8]) -> Option<Vec<u8>> {
         }
         2 => begin(st, op, seq, body),
         3 => data(st, op, seq, body),
-        4 => end(st, op, seq, body),
+        4 => {
+            let r = end(st, op, seq, body);
+            let path = st.last_write.take();
+            if let Some(w) = path {
+                audit(st, peer, &w);
+            }
+            r
+        }
         5 => run(op, seq, body),
         6 => log(op, seq, body),
         7 => match u32_at(body, 0) {
@@ -279,8 +459,22 @@ fn end(st: &mut State, op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
         crate::println!("[deploy] {}: incomplete or CRC mismatch", up.path);
         return reply(op, seq, IO_ERROR, b"incomplete upload or CRC mismatch");
     }
+    // a SHA-256 sent with END: the file must be exactly the one the client meant
+    let sha = if let Some(h) = b.get(4..36) {
+        use sha2::{Digest, Sha256};
+        let got: [u8; 32] = Sha256::digest(&up.data).into();
+        if got != h {
+            crate::println!("[deploy] {}: SHA-256 mismatch", up.path);
+            st.last_write = Some(alloc::format!("refused {}: SHA-256 mismatch", up.path));
+            return reply(op, seq, IO_ERROR, b"SHA-256 mismatch");
+        }
+        got.iter().take(8).map(|x| alloc::format!("{:02x}", x)).collect::<String>()
+    } else {
+        String::from("(no sha256)")
+    };
     match crate::vfs::write(&up.path, &up.data) {
         Ok(()) => {
+            st.last_write = Some(alloc::format!("write {} ({} bytes, sha256 {}...)", up.path, up.size, sha));
             crate::println!("[deploy] wrote {} ({} bytes)", up.path, up.size);
             reply(op, seq, OK, &[])
         }
@@ -293,7 +487,7 @@ fn end(st: &mut State, op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
 
 fn run(op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
     let Ok(line) = core::str::from_utf8(b) else { return reply(op, seq, BAD_REQUEST, &[]) };
-    if line.trim_start().starts_with("deploy") {
+    if switches_service(line) {
         // the service's own switch is not remote-controllable (and its lock is held here)
         return reply(op, seq, BAD_REQUEST, b"'deploy' can only be changed on the device");
     }
@@ -339,7 +533,7 @@ fn read(st: &mut State, op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
 
 fn exec(st: &mut State, op: u8, seq: u32, b: &[u8]) -> Vec<u8> {
     let Ok(line) = core::str::from_utf8(b) else { return reply(op, seq, BAD_REQUEST, &[]) };
-    if line.trim_start().starts_with("deploy") {
+    if switches_service(line) {
         return reply(op, seq, BAD_REQUEST, b"'deploy' can only be changed on the device");
     }
     crate::println!("[deploy] exec: {}", line.trim());
@@ -388,4 +582,12 @@ pub fn crc32(data: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+/// `deploy on|off ...`: the service's own switch is not remote-controllable
+/// (and its lock is held while a request runs). `deploy log` / `deploy
+/// status` only read, so they are allowed.
+fn switches_service(line: &str) -> bool {
+    let mut w = line.split_whitespace();
+    w.next() == Some("deploy") && !matches!(w.next(), None | Some("log") | Some("status"))
 }

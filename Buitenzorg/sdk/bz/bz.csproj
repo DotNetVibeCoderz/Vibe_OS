@@ -5,6 +5,8 @@
     <!-- the BZDP client, shared with the Magic App Generator -->
     <Compile Include="..\..\tools\MagicAppGen\Services\BzdpClient.cs" Link="BzdpClient.cs" />
     <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
+    <!-- bz-link over a serial port (serial://COM5) -->
+    <PackageReference Include="System.IO.Ports" Version="9.0.0" />
   </ItemGroup>
 
   <PropertyGroup>

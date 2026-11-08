@@ -2,7 +2,7 @@
   "name": "buitenzorg-sdk",
   "displayName": "Buitenzorg SDK",
   "description": "Build, run, deploy and debug Buitenzorg OS apps from VS Code: breakpoints in JS/TS/Python/C# scripts and native programs on a device over bz-link.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "buitenzorg",
   "engines": {
     "vscode": "^1.90.0"
@@ -40,6 +40,22 @@
       {
         "command": "buitenzorg.validateManifest",
         "title": "Buitenzorg: Validate app.manifest"
+      },
+      {
+        "command": "buitenzorg.deviceConnect",
+        "title": "Buitenzorg: Connect to Device (bz-link)"
+      },
+      {
+        "command": "buitenzorg.deviceDeploy",
+        "title": "Buitenzorg: Deploy to Device (current file or project)"
+      },
+      {
+        "command": "buitenzorg.deviceRun",
+        "title": "Buitenzorg: Run Command on Device"
+      },
+      {
+        "command": "buitenzorg.deviceLogs",
+        "title": "Buitenzorg: Show Device Logs (follow)"
       }
     ],
     "debuggers": [

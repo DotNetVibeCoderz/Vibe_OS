@@ -177,9 +177,9 @@ if (-not $bzOk) {
     $linkImg = Join-Path $root "dist\bzlink-test.img"
     Copy-Item $image $linkImg -Force
     $largs = @('-smp', '2', '-drive', "format=raw,file=$linkImg", '-m', '512M',
-               '-netdev', 'user,id=n0,hostfwd=udp::7171-:7070,hostfwd=tcp::1235-:1234', '-device', 'e1000,netdev=n0',
+               '-netdev', 'user,id=n0,hostfwd=udp::7171-:7070,hostfwd=tcp::1235-:1234,hostfwd=tcp::7172-:7070', '-device', 'e1000,netdev=n0',
                '-fw_cfg', 'name=opt/buitenzorg/deploy,string=4321',
-               '-display', 'none', '-serial', "file:$linkLog", '-no-reboot')
+               '-display', 'none', '-serial', "file:$linkLog", '-serial', 'tcp:127.0.0.1:4557,server=on,wait=off', '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList $largs -PassThru
     foreach ($i in 1..480) {
         Start-Sleep -Milliseconds 250
@@ -205,6 +205,17 @@ if (-not $bzOk) {
     $rbuild = (& dotnet $bz build-server --check --port 8090 2>&1) -join "`n"
     # the GDB stub, driven with GDB's packets over TCP (crashme: when it is on the image)
     $gdbc = (& dotnet $bz gdb-check --tcp 127.0.0.1:1235 2>&1) -join "`n"
+    # the same protocol over TCP and over the PC's COM2 (QEMU's second serial port as a socket)
+    $env:BZ_DEVICE = "tcp://127.0.0.1:7172"
+    $overTcp = (& dotnet $bz run "echo over-tcp" 2>&1) -join "`n"
+    $env:BZ_DEVICE = "tcp://127.0.0.1:4557"
+    $overCom2 = (& dotnet $bz run "echo over-com2" 2>&1) -join "`n"
+    $env:BZ_DEVICE = "127.0.0.1:7171"
+    # a program's own log, and the audit log of what this step did
+    $null = (& dotnet $bz run "run helloclr" 2>&1)
+    $applog = ""
+    foreach ($i in 1..30) { Start-Sleep 2; $applog = (& dotnet $bz logs helloclr 2>&1) -join "`n"; if ($applog -match "Hello from managed C#") { break } }
+    $audit = (& dotnet $bz run "deploy log 200" 2>&1) -join "`n"
     Remove-Item Env:BZ_DEVICE, Env:BZ_CODE -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
@@ -221,6 +232,10 @@ if (-not $bzOk) {
     elseif ($repo -notmatch "bz repo: [0-9]+ checks, 0 failed") { $fail = "bz repo --check: $repo" }
     elseif ($rbuild -notmatch "bz build-server: [0-9]+ checks, 0 failed") { $fail = "bz build-server --check: $rbuild" }
     elseif ($gdbc -notmatch "bz gdb-check: [0-9]+ checks, 0 failed") { $fail = "bz gdb-check: $gdbc" }
+    elseif ($overTcp -notmatch "over-tcp") { $fail = "bz over TCP: $overTcp" }
+    elseif ($overCom2 -notmatch "over-com2") { $fail = "bz over serial COM2: $overCom2" }
+    elseif ($applog -notmatch "Hello from managed C#") { $fail = "bz logs helloclr: $applog" }
+    elseif ($audit -notmatch "tcp .*exec echo over-tcp" -or $audit -notmatch "serial COM2 .*exec echo over-com2" -or $audit -notmatch "write /disk/BZLINK.JS .*sha256") { $fail = "deploy log (audit): $audit" }
     Remove-Item $pulled -Force -ErrorAction SilentlyContinue
     if ($fail) { Write-Error "SMOKE TEST FAILED (boot-bzlink.log): $fail"; exit 1 }
     Assert-Markers -Log $linkLog -Markers @("[deploy] service on at boot", "[deploy] exec: echo hello-bzlink", "[deploy] wrote /disk/BZLINK.JS")

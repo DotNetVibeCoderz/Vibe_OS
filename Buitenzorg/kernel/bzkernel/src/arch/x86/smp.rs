@@ -129,7 +129,7 @@ fn eoi() {
     lapic_write(LAPIC_EOI, 0);
 }
 
-extern "x86-interrupt" fn lapic_timer_handler(frame: InterruptStackFrame) {
+extern "x86-interrupt" fn lapic_timer_handler(mut frame: InterruptStackFrame) {
     this_cpu().timer_ticks.fetch_add(1, Ordering::Relaxed);
     eoi();
     if cpu_index() == 0 && LAPIC_TICKS.load(Ordering::Relaxed) {
@@ -141,6 +141,7 @@ extern "x86-interrupt" fn lapic_timer_handler(frame: InterruptStackFrame) {
         return;
     }
     // After EOI, interrupts still off: the AP scheduler may switch tasks here.
+    crate::interrupts::pause_if_due(&mut frame);
     crate::appprof::sample(frame.instruction_pointer.as_u64(), frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
     crate::task::ap_timer(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
 }

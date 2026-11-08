@@ -69,14 +69,20 @@ pub fn parse_index(text: &str) -> Result<Vec<Entry>, String> {
             continue;
         }
         let depends = if f[4] == "-" { Vec::new() } else { f[4].split(',').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect() };
-        out.push(Entry {
+        let e = Entry {
             name: f[0].to_string(),
             version: f[1].to_string(),
             file: f[2].to_string(),
             sha256: f[3].to_ascii_lowercase(),
             depends,
             title: f[5].to_string(),
-        });
+        };
+        // a repository may keep several versions of a package: the newest counts
+        match out.iter().position(|x: &Entry| x.name == e.name) {
+            Some(i) if compare_versions(&out[i].version, &e.version) == Ordering::Less => out[i] = e,
+            Some(_) => {}
+            None => out.push(e),
+        }
     }
     Ok(out)
 }
@@ -380,6 +386,7 @@ pub fn self_test() -> bool {
         parse_index(idx).and_then(|i| resolve(&i, "alpha")).is_ok_and(|p| p.iter().map(|e| e.name.as_str()).collect::<Vec<_>>() == ["gamma", "beta", "alpha"]),
         parse_index(idx).and_then(|i| resolve(&i, "loop1")).is_err_and(|e| e.contains("melingkar")),
         parse_index("nope\n").is_err(),
+        parse_index("BZREPO 1\nx\t1.2\tA\t00\t-\tX\nx\t1.10\tB\t00\t-\tX\nx\t1.9\tC\t00\t-\tX\n").is_ok_and(|i| i.len() == 1 && i[0].file == "B"),
         parse_url("http://10.0.2.2:8080/repo").is_ok_and(|(ip, p, pre)| ip == [10, 0, 2, 2] && p == 8080 && pre == "/repo"),
         parse_url("https://x").is_err(),
     ];

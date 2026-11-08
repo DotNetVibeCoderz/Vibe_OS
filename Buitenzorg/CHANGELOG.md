@@ -14,6 +14,22 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **bz-link over TCP and serial:** the deploy service also listens on TCP
+  7070 and reads the PC's COM2, with the packets framed as
+  `"BZ" | len | packet | CRC-32`; the client takes `tcp://HOST:PORT` and
+  `serial://COM5[@baud]`. END carries a SHA-256 of the file (checked before
+  it is written). An audit log (`/disk/DEPLOY.LOG`, `deploy log`) records
+  every write, RUN, EXEC, KILL and refused pairing code with the time and
+  the peer.
+- **Per-program logs:** `applog.rs` keeps the last 8 KiB each program printed
+  (also after it ended): shell `logs [APP|PID]`, PC `bz logs APP [-f]`.
+- **Packages:** `bz publish PKG --repo DIR` (PC) and `bz rollback NAME`
+  (device, `/disk/PKGHIST`); a repository index offers the newest of several
+  versions of a package.
+- **GDB stub:** memory writes (`M`), Ctrl+C / `dbg pause` (the next timer
+  interrupt in the program makes it trap), and `kgdb PORT` -- read-only
+  access to the running kernel's memory with `qOffsets`.
+- **VS Code extension:** Connect / Deploy / Run / Logs commands over bz-link.
 - **GDB remote stub for ring-3 programs:** `gdbserver PORT APP [args]`
   (`gdbstub.rs`) starts APP under the debugger and serves the GDB Remote
   Serial Protocol on TCP: registers in GDB's order on x86-64 / ARM64 /
