@@ -646,7 +646,10 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > pipes/redirection/`; && ||`, variabel + `$?`, kutip, glob, coreutils
 > (`coreutils.rs`), lalu alias, skrip `.SH` (if/for/while, argumen), `source`,
 > `$PATH`/`which`, `test`/`[ ]`, `/disk/PROFILE.SH` (`bzsh.rs`) — diuji di QEMU.
-> Belum: `$(...)`/aritmetika, fungsi, job control, app Terminal multi-tab.
+> **Tab + job control tercapai (2026-11-08):** Terminal kernel punya tab
+> (Ctrl+T/N/P/D, `tab`) dengan cwd/variabel sendiri, dan job (`&`, `jobs`,
+> `fg`, `kill %N`, Ctrl+C/Ctrl+Z; keluaran program masuk ke tab-nya).
+> Belum: `$(...)`/aritmetika, fungsi, app Terminal mandiri (copy/paste, ANSI).
 - **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
   (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
 - **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment
@@ -666,7 +669,8 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 - **Format paket `.bzpkg`**: arsip berisi `app.manifest` + ELF/skrip + aset +
   hash SHA-256 (tanda tangan menyusul). `bz install ./app.bzpkg` dari berkas.
 - **Host CLI**: `bz pack` (buat `.bzpkg` dari proyek), `bz publish` (ke repo).
-- **Repository index remote** + `bz update/upgrade/search` (butuh TCP/HTTP);
+- **Repository index remote** + `bz update/upgrade/search` ✓ (2026-11-08: `repo.rs`,
+  `bz repo serve` di PC; belum DNS/TLS/rollback);
   **versi + dependency resolution + rollback**; state terpasang **persisten**.
 - **Library SDK sebagai paket** ber-versi (`Buitenzorg.Drawing/UI/Audio/Bcl`).
 - **Izin dari manifest** (fs/net/audio/ai) ditegakkan permission broker.
@@ -688,9 +692,9 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
   terintegrasi**, **panel Problems** (error parser dengan baris/kolom), **Output**.
 - **Run instan untuk JS/TS/Python** lewat `script.rs` (tanpa compiler — jalur
   pertama yang realistis di dalam OS).
-- **C#**: fase awal = **remote build** (Studio kirim sumber ke host build server
-  `bz build-server` → bflat → ELF kembali ke OS); compiler C# di dalam OS
-  (Roslyn/ILC) jangka panjang, bergantung CoreCLR.
+- **C#**: fase awal = **remote build** ✓ (2026-11-08: Studio / `bz build` kirim
+  sumber ke `bz build-server` di PC → `dotnet build` → .dll kembali dan jalan di
+  RustCLR); compiler C# di dalam OS (Roslyn/ILC) jangka panjang.
 - **Integrasi debugger** (breakpoint di gutter, panel variabel/call stack).
 
 ### D. Debugging & Diagnostik

@@ -174,3 +174,5 @@ jobs:
           dotnet run --project sdk/bz -c Release -- version
           dotnet run --project sdk/bz -c Release -- manifest validate sdk/templates/console-csharp/app.manifest
           dotnet run --project sdk/bz -c Release -- dap --selftest
+          dotnet run --project sdk/bz -c Release -- repo --selftest
+          dotnet run --project sdk/bz -c Release -- build-server --selftest

@@ -58,6 +58,8 @@ mod shell;
 mod coreutils;
 mod csx;
 mod bzpkg;
+mod rbuild;
+mod repo;
 mod bzsh;
 mod syscall;
 mod task;
@@ -223,6 +225,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
             Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
+        repo::self_test();
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();
         users::load();
@@ -288,6 +291,12 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             paging::mode_name(),
             if info.framebuffer.is_some() { "on" } else { "absent" }
         );
+    }
+    // Terminal tabs + jobs through the keys a user types (the session is
+    // reset when the desktop starts); before READY: the smoke test stops at it
+    if crate::bootmode::selftest() {
+        desktop::ensure_session_windows();
+        terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG RISCV READY -- increments 1-6 (boot, traps, memory, address spaces, timer, U-mode, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU + input + net, RTC, SBI power, shared syscalls + window system, JS/TS/Python, interactive desktop, SMP via SBI HSM) -- M4 complete");
     // The interactive desktop session, shared with the PC and ARM64 kernels:

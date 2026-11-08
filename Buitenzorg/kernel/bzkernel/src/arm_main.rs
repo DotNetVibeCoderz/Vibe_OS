@@ -57,6 +57,8 @@ mod shell;
 mod coreutils;
 mod csx;
 mod bzpkg;
+mod rbuild;
+mod repo;
 mod bzsh;
 mod syscall;
 mod task;
@@ -205,6 +207,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
             Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
+        repo::self_test();
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();
         users::load();
@@ -311,6 +314,12 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             uart,
             gic_name
         );
+    }
+    // Terminal tabs + jobs through the keys a user types (the session is
+    // reset when the desktop starts); before READY: the smoke test stops at it
+    if crate::bootmode::selftest() {
+        desktop::ensure_session_windows();
+        terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows");
     // The interactive desktop session, shared with the PC kernel: virtio

@@ -22,6 +22,8 @@ return args switch
     ["pack", .. var rest] when rest.Length >= 1 => Pack(rest),
     ["pack"] => Fail("usage: bz pack <project-dir> [--entry FILE] [--name NAME] [-o OUT.bzpkg]"),
     ["inspect", var file] => Inspect(file),
+    ["repo", .. var rest] => RepoCli.Run(rest),
+    ["build-server", .. var rest] => BuildServer.Run(rest),
     ["app", ..] => Stub("app", "v0.10 'Buah' (package manager + registry)"),
     ["theme", ..] => Stub("theme", "v0.10 'Buah' (theme engine, 8 built-in styles)"),
     ["model", ..] => Stub("model", "v0.12 'Nalar' (Model Manager + Hugging Face gallery)"),
@@ -37,7 +39,11 @@ static int Help()
         commands:
           bz new <template> <name>          scaffold an app from an SDK template
           bz manifest validate <file>       validate an app.manifest
-          bz pack <dir> [--entry F] [-o X]  build a .bzpkg from <dir>/app.manifest + <dir>/package/*
+          bz pack <dir> [--entry F] [-o X] [--depends a,b]
+                                            build a .bzpkg from <dir>/app.manifest + <dir>/package/*
+          bz repo serve DIR [--port N]      serve a package repository (INDEX.TXT + .bzpkg files)
+          bz repo index DIR                 (re)write DIR/INDEX.TXT
+          bz build-server [--port N]        compile C# for devices (they send .CS, get a .dll for RustCLR)
           bz inspect <file.bzpkg>           list and verify a package
 
         a running device (BZDP over UDP 7070; on the device: 'deploy on [code]'):
@@ -142,7 +148,7 @@ static bool Is83(string n)
 static int Pack(string[] args)
 {
     string dir = args[0];
-    string? entry = null, outPath = null, nameOverride = null;
+    string? entry = null, outPath = null, nameOverride = null, depends = null;
     for (int i = 1; i < args.Length; i++)
     {
         switch (args[i])
@@ -150,6 +156,7 @@ static int Pack(string[] args)
             case "--entry" when i + 1 < args.Length: entry = args[++i].ToUpperInvariant(); break;
             case "--name" when i + 1 < args.Length: nameOverride = args[++i]; break;
             case "-o" when i + 1 < args.Length: outPath = args[++i]; break;
+            case "--depends" when i + 1 < args.Length: depends = args[++i]; break;
             default: return Fail($"unknown option '{args[i]}'");
         }
     }
@@ -178,7 +185,8 @@ static int Pack(string[] args)
         return Fail($"entry {entry} is not in {payload}");
 
     string category = m.Type switch { "game" => "GAME", "widget" => "UTILITAS", "web" => "INTERNET", _ => "LAINNYA" };
-    string manifest = $"name={name}\nversion={m.Version}\ntitle={m.Name}\nkind={m.Type}\ncategory={category}\nentry={entry ?? ""}\n";
+    string manifest = $"name={name}\nversion={m.Version}\ntitle={m.Name}\nkind={m.Type}\ncategory={category}\nentry={entry ?? ""}\n"
+        + (string.IsNullOrWhiteSpace(depends) ? "" : $"depends={depends.Replace(" ", "")}\n");
     using var ms = new MemoryStream();
     using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
     {

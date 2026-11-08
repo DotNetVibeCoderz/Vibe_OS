@@ -225,9 +225,19 @@ fn load_references(interp: &mut Interpreter, image: &Image, dir: &str, depth: u3
         if framework || interp.loader.find_assembly(&name).is_some() {
             continue;
         }
-        let file = library_file(dir, &name);
-        let Some(bytes) = sys::read_file(&file) else {
-            return Err(format!("references '{}', not found as {}", name, file));
+        // next to the app first, then /disk (where the system libraries live:
+        // an app built into a project folder references /disk/BZAPP.DLL)
+        let mut file = library_file(dir, &name);
+        let mut bytes = sys::read_file(&file);
+        if bytes.is_none() && dir != "/disk" {
+            let shared = library_file("/disk", &name);
+            if let Some(b) = sys::read_file(&shared) {
+                file = shared;
+                bytes = Some(b);
+            }
+        }
+        let Some(bytes) = bytes else {
+            return Err(format!("references '{}', not found as {} (nor in /disk)", name, file));
         };
         let lib = Image::from_bytes(bytes).map_err(|e| format!("{}: not a .NET assembly ({})", file, e))?;
         load_references(interp, &lib, dir, depth + 1)?;

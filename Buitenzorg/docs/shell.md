@@ -36,6 +36,38 @@ find hexdump/xxd seq basename dirname true false env set export unset history
 test [`. Everything else (`ls`, `rm`, `ps`, `kill`, `run`, `bz`, `ipconfig`,
 `ping`, `theme`, ...) is listed by `help`.
 
+## Tabs and jobs
+
+**Tabs.** One Terminal window holds up to 8 sessions. Each has its own
+scrollback, input line, working directory and variables; the command history
+is shared. With more than one tab the first row is the tab bar
+(`[1:/disk]  2:/ram*` -- `*` = jobs running).
+
+| Key / command | |
+|---|---|
+| Ctrl+T, `tab new` | a new tab |
+| Ctrl+N / Ctrl+P, `tab N` | next / previous tab, tab N |
+| Ctrl+D on an empty line, `tab close` | close the tab (its running programs go on) |
+| `tab` | list the tabs |
+
+**Jobs.** A program started from a tab (`run hello`, or just `hello`) is a
+*job* of that tab, and what it prints appears in the tab.
+
+| | |
+|---|---|
+| `run X` | foreground: the prompt waits until X ends; **Ctrl+C** ends it, **Ctrl+Z** lets it go on in the background |
+| `run X &` | background: the prompt comes back at once (`[1] 1004`); the tab says `[1]  Selesai (kode 0)` when it ends |
+| `jobs` | the tab's jobs, running or finished, with their exit codes |
+| `fg [%N]` | wait for a running job again (the newest by default) |
+| `kill %N` | end job N |
+
+A window app started in the foreground keeps the prompt waiting until its
+window closes -- add `&`, or press Ctrl+Z. Limits: there is no stdin (a
+program reads the keyboard only through its own window), so `fg` only waits;
+jobs belong to the Terminal (`jobs` from `bz run` says so); a closed tab's
+programs keep running, unlisted. The self-test boot drives all of it with
+keystrokes (`MILESTONE: TERMINAL TABS OK`).
+
 ## Aliases and `which`
 
 ```sh

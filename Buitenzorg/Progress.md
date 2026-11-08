@@ -393,11 +393,11 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] Line editing (kursor, Home/End, Ctrl+A/E/U/K/W/L/C) + history (↑/↓, `history`, persist `/disk/HISTORY.TXT`) + tab-completion perintah/path ✓ (2026-11-06, diuji di QEMU)
   - [x] Pipes `|`, redirection `> >> <`, `&& || ;`, env vars (`NAME=`, `export`/`env`/`unset`/`$?`), kutip, glob `*`/`?` ✓ · alias, skrip `.SH` (if/for/while, `$1..$9 $# $@`) + `source`, `$PATH`, `which`, `/disk/PROFILE.SH` ✓ (2026-11-06, `bzsh.rs`; ekstensi `.SH` karena FAT 8.3)
   - [~] Coreutils: [x] `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch find hexdump seq basename dirname` (`coreutils.rs`, 2026-11-06) · [x] `which`, `test`/`[` · [x] `ps` + `kill <pid>` (2026-11-01, terverifikasi `multiproc_demo` + desktop live) · [ ] `top` · [x] `dmesg` + `df` · [ ] `free uptime`
-  - [~] Terminal: [x] scrollback 1000 baris + PageUp/PageDown + roda mouse (2026-11-05) · [ ] app mandiri multi-tab, copy/paste, ANSI · [ ] job control (`&`/`jobs`/`fg`/Ctrl+C) — butuh multi-proses
+  - [~] Terminal: [x] scrollback 1000 baris + PageUp/PageDown + roda mouse (2026-11-05) · [x] **multi-tab** (Ctrl+T/N/P/D, `tab`; cwd + variabel per tab) + **job control** (`&`, `jobs`, `fg`, `kill %N`, Ctrl+C/Ctrl+Z, keluaran program masuk ke tab-nya) ✓ (2026-11-08, `MILESTONE: TERMINAL TABS OK`) · [ ] app Terminal mandiri, copy/paste, ANSI
 - **Package Manager**
   - [x] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install /disk/X.BZP` / `bz remove` / `bz info` ✓ (2026-11-06, `bzpkg.rs`, `MILESTONE: BZPKG OK`, diuji di QEMU dengan paket buatan `bz pack`)
   - [~] [x] Host `bz pack` / `bz inspect` ✓ (2026-11-06) · [ ] `bz publish`
-  - [ ] Repo index remote + `bz update/upgrade` + versi + dependency resolution + rollback — butuh TCP
+  - [x] **Repo paket remote** ✓ (2026-11-08): `repo.rs` (HTTP/1.0 GET di atas `tcp.rs`, indeks `BZREPO 1`, SHA-256 per paket, dependensi depth-first + tolak siklus, versi per bagian) -- `bz repo URL/off`, `bz update`, `bz search`, `bz install NAMA` (+dependensi), `bz upgrade`; host `bz repo serve/index`, `bz pack --depends`; `MILESTONE: REPO OK`, `bz repo --check` di smoke `[bzlink]` · [ ] rollback · [ ] DNS/TLS
   - [x] State terpasang persisten (`/disk/PKGS.CFG`) ✓ · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
 - **IDE "Buitenzorg Studio"**
   - [x] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/shell/JSON) + find/replace + undo/redo + auto-indent ✓ (2026-11-06, `MStudio`)
@@ -405,7 +405,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] **C# script `.csx`** ✓ (2026-11-06): engine bytecode + VM (`csx.rs`, 16x lebih cepat dari interpreter pohon), konsol di kernel (`csx FILE`) + UI `Ui.*` di `CLRHOST.ELF`, 11 template Studio
   - [x] **Aplikasi ber-UI dalam JS/TS/Python** ✓ (2026-11-06): `window/button/text/rect/...` immediate mode, proses ring-3 di `CLRHOST.ELF` (`scriptui.rs`), `run FILE.JS`, diuji live (keyboard + klik mouse); kolom teks `input()`/`Ui.Input` untuk form + `int/indexOf/trim/upper/lower`
   - [x] Run instan JS/TS/Python/shell via `script.rs` + syscall `SHELL_RUN` (58); galat parse bernomor baris ✓ — `Studio: 23 checks, 0 failed` saat boot
-  - [ ] C# lewat remote build server (`bz build-server` di host) · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
+  - [x] **C# lewat remote build server** ✓ (2026-11-08): `bz build-server` di PC (dotnet build, referensi Buitenzorg.App/UI/Three) + `rbuild.rs` (`bz buildsrv URL`, `bz build DIR [--run]`, HTTP POST); F5 Studio pada template C# managed; galat kompilasi bernomor baris ke panel Masalah; `bz build-server --check` di smoke `[bzlink]` · [ ] compiler C# di dalam OS (jangka panjang, butuh CoreCLR)
   - [x] **Integrasi debugger di Studio** ✓ (2026-11-07): breakpoint F9 / klik nomor baris, Debug F6, tab Debug (henti, call stack, variabel, keluaran), F10/F11 maju-mundur, baris aktif ditandai -- `Studio: 30 checks`
 - **Debugging & Diagnostik**
   - [x] **Crash report app ring-3** ✓ (2026-11-06): fault + pc/sp/lr + backtrace ter-simbolisasi (symtab ELF disimpan saat load, pindaian stack untuk alamat kembali setelah instruksi call; demangle Rust v0/legacy) → log + `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64, ARM64, RISC-V; `MILESTONE: CRASH REPORT OK` (`crashme.cs` / `crashme.rs`)

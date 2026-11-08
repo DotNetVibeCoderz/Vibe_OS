@@ -104,6 +104,39 @@ self-tests run three ways:
 Off the device, `Buitenzorg.App` falls back to an in-memory `/ram` and sample
 process data, so the same code runs on a laptop.
 
+## Building on a PC from the device (`bz build-server`)
+
+C# is not compiled inside the OS -- but you do not have to leave it to build.
+A PC runs the build server; the device sends a project folder's `.CS` files
+and gets the assembly back:
+
+```powershell
+# on the PC, from the Buitenzorg repository (it finds userland/clr-apps/dist)
+bz build-server --port 8090
+```
+
+```text
+# on the device (QEMU user networking: the PC is 10.0.2.2)
+bz buildsrv http://10.0.2.2:8090
+bz build /disk/PROYEK/HALO --run     # -> /disk/PROYEK/HALO/HALO.DLL, started
+```
+
+The server writes the files with a csproj (net10.0, references to
+`Buitenzorg.App`, `Buitenzorg.UI`, `Buitenzorg.Three`), runs `dotnet build`,
+and answers with the `.dll` -- or with the compiler errors, one per line:
+`error: PROGRAM.CS baris 2: CS1003: Syntax error, ',' expected`. In
+**Studio**, F5 on the *Aplikasi Managed* template (its BUILD.TXT names
+`bz build`) does exactly this, and the errors land in the Problems panel with
+their line numbers. The assembly is named after the folder (8 characters), so
+the project folder's name is the app's name.
+
+Limits: plain HTTP (no authentication: run it on a network you trust, or with
+`--local` behind QEMU); every `.CS` file of the folder, no subfolders and no
+NuGet packages; one build at a time; the first build on a PC is slow (restore).
+Tests: `bz build-server --selftest` (CI) and `bz build-server --check` (smoke
+`[bzlink]`: a project built on the PC runs on the device, a broken one comes
+back with its line).
+
 ## Limits (honest)
 
 - **Speed.** The managed code is interpreted. Under QEMU's software emulation a

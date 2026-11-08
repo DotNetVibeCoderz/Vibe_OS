@@ -121,7 +121,7 @@ starts `CLRHOST.ELF FILE --bzdebug LINES REPORT`; Studio polls
 
 Implementation: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
 `Syntax.cs`, `Templates.cs`, `Debugger.cs`); runs through syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 31 checks on the device (it runs every runnable template, the UI ones as headless processes, and debugs a UI script), part of
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 32 checks on the device (it runs every runnable template, the UI ones as headless processes, and debugs a UI script), part of
 `Managed --selftest` at boot.
 
 ---

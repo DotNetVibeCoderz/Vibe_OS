@@ -36,6 +36,38 @@ find hexdump/xxd seq basename dirname true false env set export unset history
 test [`. Perintah lain (`ls`, `rm`, `ps`, `kill`, `run`, `bz`, `ipconfig`,
 `ping`, `theme`, ...) ada di `help`.
 
+## Tab dan job
+
+**Tab.** Satu jendela Terminal menampung sampai 8 sesi. Masing-masing punya
+scrollback, baris input, direktori kerja dan variabelnya sendiri; riwayat
+perintah dipakai bersama. Kalau tab lebih dari satu, baris pertama adalah
+bilah tab (`[1:/disk]  2:/ram*` -- `*` = ada job berjalan).
+
+| Tombol / perintah | |
+|---|---|
+| Ctrl+T, `tab new` | tab baru |
+| Ctrl+N / Ctrl+P, `tab N` | tab berikutnya / sebelumnya, tab N |
+| Ctrl+D di baris kosong, `tab close` | tutup tab (program yang berjalan tetap jalan) |
+| `tab` | daftar tab |
+
+**Job.** Program yang dijalankan dari sebuah tab (`run hello`, atau cukup
+`hello`) adalah *job* tab itu, dan apa yang dicetaknya muncul di tab itu.
+
+| | |
+|---|---|
+| `run X` | foreground: prompt menunggu sampai X selesai; **Ctrl+C** menghentikannya, **Ctrl+Z** membiarkannya jalan di latar belakang |
+| `run X &` | latar belakang: prompt langsung kembali (`[1] 1004`); tab memberi tahu `[1]  Selesai (kode 0)` saat selesai |
+| `jobs` | job tab ini, yang berjalan maupun selesai, dengan kode keluarnya |
+| `fg [%N]` | tunggu lagi job yang berjalan (yang terbaru bila tanpa argumen) |
+| `kill %N` | hentikan job N |
+
+Aplikasi berjendela yang dijalankan di foreground membuat prompt menunggu
+sampai jendelanya ditutup -- tambahkan `&`, atau tekan Ctrl+Z. Batasan: tidak
+ada stdin (program membaca keyboard hanya lewat jendelanya sendiri), jadi `fg`
+hanya menunggu; job milik Terminal (`jobs` dari `bz run` mengatakannya);
+program dari tab yang ditutup tetap berjalan tanpa terdaftar. Boot self-test
+menjalankan semuanya lewat penekanan tombol (`MILESTONE: TERMINAL TABS OK`).
+
 ## Alias dan `which`
 
 ```sh

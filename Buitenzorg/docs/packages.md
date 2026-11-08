@@ -48,6 +48,44 @@ Installed packages, and registry apps installed with `bz install NAME`, are
 kept in `/disk/PKGS.CFG` and restored at boot. Packages from files show up in
 the App Store list (`PKG_LIST`) too.
 
+## A remote repository (`bz update`, `bz upgrade`)
+
+Packages can come from a repository: a folder of `.bzpkg` files plus an
+`INDEX.TXT`, served over HTTP -- by `bz` on a PC:
+
+```powershell
+bz pack myapp --depends mylib -o repo\MYAPP.BZP   # --depends: packages it needs
+bz pack mylib -o repo\MYLIB.BZP
+bz repo serve repo --port 8080                    # writes repo\INDEX.TXT, then serves
+```
+
+On the device:
+
+```text
+bz repo http://192.168.1.20:8080    # the PC (QEMU user networking: http://10.0.2.2:8080)
+bz update                           # download the index: "2 paket ...", what can be upgraded
+bz search                           # built-in, installed and repository packages
+bz install myapp                    # "dependensi: mylib", then both are installed
+bz upgrade                          # every installed package the index has newer
+bz repo off                         # forget the repository
+```
+
+`INDEX.TXT` is `BZREPO 1`, then one line per package:
+`name TAB version TAB file TAB sha256 TAB depends (a,b or -) TAB title`
+(`bz repo index DIR` rewrites it). The device checks every download against
+the index's SHA-256 *and* the archive's own hashes before installing it.
+Dependencies are installed first, depth first; a cycle is an error.
+Versions compare part by part, numerically where both parts are numbers
+(`1.10` is newer than `1.9`).
+
+Limits: plain HTTP to an IPv4 address (no DNS, no TLS -- the SHA-256 in the
+index protects against a damaged file, not against a hostile server or
+network); one repository; no rollback beyond installing an older file by
+hand; `bz remove` does not remove dependencies. Tests: `MILESTONE: REPO OK`
+(versions, index, dependency order, cycle) at every self-test boot;
+`bz repo --selftest` (CI) and `bz repo --check` (smoke `[bzlink]`: update,
+install with a dependency, upgrade 1.0 -> 1.1, a tampered package refused).
+
 ## Format, version 1
 
 ```text

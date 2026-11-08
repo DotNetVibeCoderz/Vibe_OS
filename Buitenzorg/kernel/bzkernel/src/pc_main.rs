@@ -56,6 +56,8 @@ mod shell;
 mod coreutils;
 mod csx;
 mod bzpkg;
+mod rbuild;
+mod repo;
 mod bzsh;
 mod syscall;
 mod task;
@@ -255,6 +257,9 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
 
     println!("[kernel] boot OK: full stack up through v0.15 'Matang' (increment 1)");
     println!();
+    // Terminal tabs + jobs through the keys a user types (the session is
+    // reset when the desktop starts); before READY: the smoke test stops at it
+    terminal::self_test("helloclr", "Hello from managed C#");
     println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 
     desktop::run();
@@ -1811,6 +1816,7 @@ fn dahan_demo() {
             Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
             Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
+        repo::self_test();
     }
     disk_persist_demo();
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).

@@ -20,6 +20,17 @@ pub struct ShellState {
 
 static STATE: Mutex<ShellState> = Mutex::new(ShellState { cwd: String::new(), vars: alloc::collections::BTreeMap::new(), ok: true });
 
+/// A fresh shell state (a new terminal tab).
+pub fn new_state() -> ShellState {
+    ShellState { cwd: String::new(), vars: alloc::collections::BTreeMap::new(), ok: true }
+}
+
+/// Exchange the shell's state with `s`: a terminal tab swaps its own state in
+/// while its command line runs, and back out afterwards.
+pub fn swap_state(s: &mut ShellState) {
+    core::mem::swap(&mut *STATE.lock(), s);
+}
+
 /// The shell variables (set ones, then the built-in PWD/HOME/USER/SHELL).
 pub fn vars() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = STATE.lock().vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -99,7 +110,7 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "gpu", "theme", "ws", "run", "ps", "crash", "dbg", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "dmesg", "lspci", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
@@ -802,6 +813,9 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         }
         "cpu" | "cpus" => (cpu_cmd(args.first().copied()), Effect::None),
         "kill" => (kill_cmd(args.first().copied()), Effect::Redraw),
+        "jobs" => (crate::terminal::jobs_cmd(), Effect::None),
+        "fg" => (crate::terminal::fg_cmd(args.first().copied()), Effect::Redraw),
+        "tab" => (crate::terminal::tab_cmd(args.first().copied()), Effect::Redraw),
         "deploy" => (deploy_cmd(&args), Effect::None),
         "ssh" | "sshd" => (ssh_cmd(args.first().copied()), Effect::None),
         "ipconfig" | "ifconfig" | "ip" => (ipconfig(), Effect::None),
@@ -1033,6 +1047,8 @@ fn help_lines() -> Vec<String> {
      "  rm <file>         hapus file",
      "  df                ruang kosong tiap mount",
      "  kill <pid>        hentikan proses app",
+     "  cmd &  | jobs | fg [%N] | kill %N  job: latar belakang / daftar / tunggu lagi / hentikan",
+     "  tab [new|N|close]  tab terminal (Ctrl+T baru, Ctrl+N/P pindah, Ctrl+D tutup)",
      "  crash [PID|last]  laporan crash app (backtrace bersimbol)",
      "  dbg run <app>     debugger: break/cont/step/regs/mem/bt ('dbg help')",
      "  deploy on|off     terima app dari Magic App Generator (UDP 7070)",
@@ -1233,7 +1249,10 @@ fn run_cmd(arg: Option<&str>, app_args: &[&str]) -> (Vec<String>, Effect) {
     // Start it as its own process: the desktop and shell stay responsive while
     // it runs, and several apps can run side by side.
     match app::spawn_with_args(name, &app_args.join(" ")) {
-        Ok(pid) => (vec![format!("app '{}' berjalan (pid {})", name, pid)], Effect::Redraw),
+        Ok(pid) => {
+            crate::terminal::spawned(pid); // a job of the terminal tab that ran this
+            (vec![format!("app '{}' berjalan (pid {})", name, pid)], Effect::Redraw)
+        }
         Err(e) => (vec![format!("run: {}: {}", name, e)], Effect::None),
     }
 }
@@ -1275,6 +1294,12 @@ fn ps_cmd() -> Vec<String> {
 }
 
 fn kill_cmd(arg: Option<&str>) -> Vec<String> {
+    // `kill %N`: a job of this terminal tab
+    let job = arg.filter(|a| a.starts_with('%')).map(|a| crate::terminal::job_pid(a));
+    if let Some(found) = job {
+        let Some(pid) = found else { return vec![String::from("kill: tidak ada job seperti itu ('jobs')")] };
+        return if crate::process::kill(pid) { vec![format!("job {} (pid {}) dihentikan", arg.unwrap_or(""), pid)] } else { vec![format!("kill: pid {} sudah berakhir", pid)] };
+    }
     let Some(pid) = arg.and_then(|a| a.parse::<u64>().ok()) else {
         return vec![String::from("kill: butuh pid (lihat 'ps')")];
     };
@@ -1832,7 +1857,20 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
         Some("theme") => theme_cmd(args.get(1).copied()),
         Some("ws") => ws_cmd(args.get(1).copied()),
         Some("version") | None => (vec![format!("bz {} - Buitenzorg CLI", VERSION)], Effect::None),
-        Some("list") | Some("search") => (pkg_list(args.get(1).copied()), Effect::None),
+        Some("list") | Some("search") => {
+            let mut out = pkg_list(args.get(1).copied());
+            out.extend(crate::repo::command(&["search", args.get(1).copied().unwrap_or("")]));
+            (out, Effect::None)
+        }
+        Some("repo") | Some("update") | Some("upgrade") => (crate::repo::command(args), Effect::None),
+        Some("buildsrv") => (crate::rbuild::command(args), Effect::None),
+        Some("build") => {
+            // bz build DIR [--run]: the project folder, resolved like any path
+            let dir = resolve(args.get(1).copied().filter(|a| !a.starts_with("--")));
+            let mut a: Vec<&str> = vec!["build", dir.as_str()];
+            a.extend(args.iter().skip(1).filter(|x| x.starts_with("--")));
+            (crate::rbuild::command(&a), Effect::Redraw)
+        }
         Some("install") | Some("add") => (pkg_install(args.get(1).copied()), Effect::None),
         Some("remove") | Some("uninstall") => (pkg_remove(args.get(1).copied()), Effect::None),
         Some("info") => (pkg_info(args.get(1).copied()), Effect::None),
@@ -1909,6 +1947,10 @@ fn pkg_install(name: Option<&str>) -> Vec<String> {
             Ok((n, v, None)) => vec![format!("terpasang: {} v{} (dari berkas; jalankan '{}')", n, v, n)],
             Err(e) => vec![format!("bz install: {}", e)],
         };
+    }
+    // not a built-in package: the remote repository (with its dependencies)
+    if pkg::find(name).is_none() && crate::repo::knows(name) {
+        return crate::repo::command(&["install", name]);
     }
     match pkg::install(name) {
         Ok(ver) => vec![format!("terpasang: {} v{}", name, ver)],

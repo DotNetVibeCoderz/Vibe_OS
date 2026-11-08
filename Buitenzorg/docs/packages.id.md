@@ -48,6 +48,44 @@ Paket terpasang, dan app registry yang dipasang dengan `bz install NAMA`,
 disimpan di `/disk/PKGS.CFG` dan dipulihkan saat boot. Paket dari berkas juga
 muncul di daftar App Store (`PKG_LIST`).
 
+## Repo remote (`bz update`, `bz upgrade`)
+
+Paket bisa datang dari repo: folder berisi berkas `.bzpkg` dan `INDEX.TXT`,
+disajikan lewat HTTP -- oleh `bz` di PC:
+
+```powershell
+bz pack appku --depends libku -o repo\APPKU.BZP   # --depends: paket yang dibutuhkan
+bz pack libku -o repo\LIBKU.BZP
+bz repo serve repo --port 8080                    # menulis repo\INDEX.TXT, lalu menyajikan
+```
+
+Di perangkat:
+
+```text
+bz repo http://192.168.1.20:8080    # PC-nya (QEMU user networking: http://10.0.2.2:8080)
+bz update                           # unduh indeks: "2 paket ...", yang bisa diperbarui
+bz search                           # paket bawaan, terpasang, dan dari repo
+bz install appku                    # "dependensi: libku", lalu keduanya terpasang
+bz upgrade                          # semua paket terpasang yang versinya lebih baru di indeks
+bz repo off                         # lepas repo
+```
+
+`INDEX.TXT` = `BZREPO 1`, lalu satu baris per paket:
+`nama TAB versi TAB berkas TAB sha256 TAB depends (a,b atau -) TAB judul`
+(`bz repo index DIR` menulisnya ulang). Perangkat memeriksa setiap unduhan
+terhadap SHA-256 di indeks *dan* hash arsipnya sendiri sebelum memasangnya.
+Dependensi dipasang lebih dulu, depth first; dependensi melingkar ditolak.
+Versi dibandingkan per bagian, secara angka bila keduanya angka (`1.10` lebih
+baru dari `1.9`).
+
+Batasan: HTTP biasa ke alamat IPv4 (belum ada DNS maupun TLS -- SHA-256 di
+indeks melindungi dari berkas rusak, bukan dari server atau jaringan yang
+jahat); satu repo; belum ada rollback selain memasang berkas lama secara
+manual; `bz remove` tidak menghapus dependensi. Pengujian: `MILESTONE: REPO
+OK` (versi, indeks, urutan dependensi, siklus) di setiap boot self-test;
+`bz repo --selftest` (CI) dan `bz repo --check` (smoke `[bzlink]`: update,
+install dengan dependensi, upgrade 1.0 -> 1.1, paket yang diubah ditolak).
+
 ## Format, versi 1
 
 ```text

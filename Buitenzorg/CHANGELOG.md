@@ -14,6 +14,31 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Remote C# build server:** `bz build-server [--port N]` on a PC compiles a
+  project for the device (`dotnet build` against Buitenzorg.App/UI/Three) and
+  answers with the assembly or with the errors as
+  `error: FILE baris N: CSxxxx: ...`. Device: `rbuild.rs`, `bz buildsrv URL`,
+  `bz build DIR [--run]` (HTTP POST; `repo.rs` gained `http_request`).
+  Studio F5 on the managed C# template builds and runs it. Tests:
+  `bz build-server --selftest` (CI), `--check` (smoke `[bzlink]`); Studio
+  self-test 32 checks on the device.
+- **Remote package repository:** `repo.rs` -- a minimal HTTP/1.0 client over
+  `tcp.rs`, an index format (`BZREPO 1`: name, version, file, SHA-256,
+  depends, title), dependency resolution (depth first, cycles refused) and
+  part-wise version comparison. Device: `bz repo URL|off`, `bz update`,
+  `bz search` (with the repository), `bz install NAME` (dependencies first,
+  every download checked against the index), `bz upgrade`. PC:
+  `bz repo serve DIR [--port N]`, `bz repo index DIR`, `bz pack --depends`.
+  Tests: `MILESTONE: REPO OK`, `bz repo --selftest` (CI), `bz repo --check`
+  (smoke `[bzlink]`).
+- **Terminal tabs and job control:** up to 8 tabs in the Terminal window
+  (Ctrl+T new, Ctrl+N/P switch, Ctrl+D closes, `tab [new|N|close]`), each
+  with its own scrollback, working directory and variables (a
+  `shell::ShellState` swapped in while its command runs). A program started
+  from a tab is a job: its DEBUG_WRITE output shows in the tab; `run X`
+  waits in the foreground (Ctrl+C ends it, Ctrl+Z backgrounds it), `run X &`
+  starts it in the background; `jobs`, `fg [%N]`, `kill %N`. Self-test boot:
+  `MILESTONE: TERMINAL TABS OK` on every architecture.
 - **Per-app profiler:** `appprof.rs` samples one process from every timer
   interrupt on every CPU (user pc, or a kernel tick during its syscalls) and
   groups the samples by function with the ELF symbols kept for crash

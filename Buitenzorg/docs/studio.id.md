@@ -122,7 +122,7 @@ laporannya ada.
 
 Implementasi: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
 `Syntax.cs`, `Templates.cs`, `Debugger.cs`); menjalankan lewat syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 31 pemeriksaan di perangkat (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless, dan men-debug satu skrip UI), bagian dari
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 32 pemeriksaan di perangkat (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless, dan men-debug satu skrip UI), bagian dari
 `Managed --selftest` saat boot.
 
 ---

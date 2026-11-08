@@ -565,12 +565,13 @@ public static class Program
 }
 """),
             ("BUILD.TXT", """
-Build di PC:
-  1. Buat proyek net10.0 (OutputType Exe), AssemblyName maksimal 8 huruf (mis. HALOAPP)
-  2. ProjectReference ke userland/clr-apps/Buitenzorg.UI/Buitenzorg.UI.csproj
-  3. dotnet build -c Release; uji dulu di PC: dotnet bin/Release/net10.0/HALOAPP.dll
-  4. Salin HALOAPP.DLL ke /disk (atau kemas dengan 'bz pack'), lalu 'run haloapp'
-Panduan: docs/managed-apps.md.
+Build lewat build server (F5 di Studio = bz build <folder ini> --run):
+  1. Di PC, dari folder repositori Buitenzorg: bz build-server
+  2. Di Terminal perangkat: bz buildsrv http://<IP PC>:8090   (QEMU: http://10.0.2.2:8090)
+  3. F5: berkas .CS dikirim ke PC, dotnet build di sana, <FOLDER>.DLL kembali dan dijalankan
+     (galat kompilasi muncul di panel Masalah dengan nomor barisnya)
+Manual di PC: proyek net10.0 dengan ProjectReference ke Buitenzorg.UI, dotnet build,
+salin DLL ke /disk, lalu 'run NAMA'. Panduan: docs/managed-apps.md.
 """)),
 
         // ---------------- packages / data ----------------

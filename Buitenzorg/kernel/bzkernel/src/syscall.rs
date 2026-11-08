@@ -1208,6 +1208,8 @@ fn sys_debug_write(ptr: u64, len: u64) -> u64 {
     let bytes = copy_user_bytes(ptr, len as usize);
     match core::str::from_utf8(&bytes) {
         Ok(s) => {
+            // a program started from a terminal tab: its output shows there too
+            crate::terminal::program_output(crate::aspace::current_id(), s);
             print!("{}", s);
             len
         }

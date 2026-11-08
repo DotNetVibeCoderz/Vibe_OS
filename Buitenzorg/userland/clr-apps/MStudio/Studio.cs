@@ -455,13 +455,26 @@ public sealed partial class Studio
         }
     }
 
+    /// <summary>A managed C# project (its BUILD.TXT names `bz build`): F5 sends it
+    /// to the build server on a PC (`bz buildsrv`) and runs the assembly.</summary>
+    public static string? BuildCommand(string path)
+    {
+        if (Syntax.LangOf(path) != "cs") return null;
+        int slash = path.LastIndexOf('/');
+        if (slash <= 0) return null;
+        string dir = path.Substring(0, slash);
+        string build = dir + "/BUILD.TXT";
+        if (Files.GetInfo(build) == null || !Files.ReadAllText(build).Contains("bz build")) return null;
+        return "bz build " + dir + " --run";
+    }
+
     /// <summary>F5: save everything, run the current file, collect problems.</summary>
     public ShellResult? Run()
     {
         if (Current == null) { Log("Tidak ada berkas untuk dijalankan."); return null; }
         SaveAll();
         Bottom.SelectedIndex = 0;
-        string? cmd = RunCommand(Current.Path);
+        string? cmd = RunCommand(Current.Path) ?? BuildCommand(Current.Path);
         if (cmd == null)
         {
             Log(Current.Lang == "cs"
@@ -690,6 +703,11 @@ public sealed partial class Studio
             c.That(all.Contains("(simulasi) script js"), "F5 asked the shell to run MAIN.JS (simulated off the device)");
             c.That(st.TerminalRun("echo halo studio").Output.Contains("halo studio"), "terminal panel (simulated)");
         }
+
+        // a managed C# project: F5 asks the build server (none at boot: the shell says so)
+        string? d3 = st.CreateProject(Templates.Find("cs-managed")!, "csm");
+        st.W.SimulateKeys(Keys.F5.ToString());
+        c.That(d3 != null && string.Join("\n", st.Output).Contains("bz build " + d3), "F5 on a managed C# project: bz build " + d3 + " --run");
 
         // a second template of another language, closing tabs
         string? d2 = st.CreateProject(Templates.Find("py-kalender")!, "kal");

@@ -156,6 +156,9 @@ pub fn run() -> ! {
             }
         }
 
+        // jobs of terminal tabs: their output and their end
+        terminal::poll();
+
         // Keys go to the terminal unless the focused window belongs to a
         // running program — then they stay queued for its KEY_READ.
         if !process::is_alive(wm::focus_owner()) {

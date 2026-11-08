@@ -197,6 +197,10 @@ else
   dap=$(dotnet "$bzdir/bz.dll" dap --check --native crashme Crash__Level2 Crash__Level1 2>&1 || true)
   # the per-app profiler from the PC (crashme is a C# program: only when it is on the image)
   prof=$(dotnet "$bzdir/bz.dll" prof crashme spin 2>&1 || true)
+  # a package repository on this machine: update, install with a dependency, upgrade
+  repo=$(dotnet "$bzdir/bz.dll" repo --check --port 8089 2>&1 || true)
+  # C# compiled on this machine for the device, then run there
+  rbuild=$(dotnet "$bzdir/bz.dll" build-server --check --port 8090 2>&1 || true)
   unset BZ_DEVICE BZ_CODE
   sleep 2
   kill "$lpid" 2>/dev/null || true
@@ -210,11 +214,13 @@ else
   elif ! grep -qF "Akar menembus tanah" "$root/dist/bzlink-pull.txt" 2>/dev/null; then fail="bz pull: $pull"
   elif ! printf '%s' "$dap" | grep -qE "bz dap: [0-9]+ checks, 0 failed"; then fail="bz dap --check: $dap"
   elif printf '%s' "$prof" | grep -qF "prof: memprofil" && ! printf '%s' "$prof" | grep -qF "Crash__Hot"; then fail="bz prof: $prof"
+  elif ! printf '%s' "$repo" | grep -qE "bz repo: [0-9]+ checks, 0 failed"; then fail="bz repo --check: $repo"
+  elif ! printf '%s' "$rbuild" | grep -qE "bz build-server: [0-9]+ checks, 0 failed"; then fail="bz build-server --check: $rbuild"
   fi
   rm -f "$root/dist/bzlink-pull.txt"
   if [ -n "$fail" ]; then echo "SMOKE TEST FAILED (boot-bzlink.log): $fail" >&2; exit 1; fi
   require "$linklog" "[deploy] service on at boot" "[deploy] exec: echo hello-bzlink" "[deploy] wrote /disk/BZLINK.JS"
-  echo "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran, bz dap debugged it"
+  echo "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran, bz dap debugged it, bz repo served packages, bz build-server compiled C#"
 fi
 
 # Full run on IDE: storage milestones must pass (file read via own driver).
@@ -224,7 +230,7 @@ require "$root/dist/boot-ide.log" "${basic[@]}" \
   "MILESTONE: STORAGE OK" "MILESTONE: MOUSE OK" "MILESTONE: PIXELS OK" \
   "MILESTONE: VFS OK" "MILESTONE: SERVICES OK" "MILESTONE: ASYNC IO OK" \
   "MILESTONE: NETWORK OK" "MILESTONE: TERMINAL OK" "MILESTONE: THEME OK" \
-  "MILESTONE: WORKSPACE OK" "MILESTONE: KANOPI OK"   "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 31 checks, 0 failed" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
+  "MILESTONE: WORKSPACE OK" "MILESTONE: KANOPI OK"   "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
 # C# ring-3 milestones only when the ELFs were embedded (bflat present).
 if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
   require "$root/dist/boot-ide.log" "MILESTONE: TUNAS OK" "MILESTONE: DAHAN OK" \
@@ -234,7 +240,7 @@ if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
     "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" \
     "MILESTONE: GCMEM OK" "MILESTONE: BCL OK" "MILESTONE: BCL2 OK" "MILESTONE: DRAW OK" \
     "MILESTONE: UI OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: CLOCK OK" "MILESTONE: PIANO OK" "MILESTONE: STORE OK" "MILESTONE: FILES OK" "MILESTONE: EDITOR OK" "MILESTONE: IMGVIEW OK" "MILESTONE: JPEG OK" \
-    "MILESTONE: MULTIPROC OK" "MILESTONE: DISK WRITE OK" "MILESTONE: PROCCTL OK" "MILESTONE: WALLPAPERS OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: ICONS OK" \
+    "MILESTONE: MULTIPROC OK" "MILESTONE: DISK WRITE OK" "MILESTONE: PROCCTL OK" "MILESTONE: WALLPAPERS OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: ICONS OK" \
     "MILESTONE: SMP SCHED OK" "MILESTONE: SMP KERNEL OK" "MILESTONE: SMP FINELOCK OK" "MILESTONE: SMP THREADS OK"
   # Persistent /disk: the exact bytes the kernel wrote to /disk/BOOTCNT.TXT
   # must now be inside the image file on the host (they reached the medium).
@@ -430,7 +436,7 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" \
     "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "MILESTONE: ARM64 EL0 OK" "Hello from EL0" "MILESTONE: ARM64 RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: ARM64 DISK OK" "MILESTONE: VIRTIO GPU OK" "MILESTONE: DHCP OK"     "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: ARM64 PSCI OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" \
-    "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: ARM64 SMP OK (2 CPUs" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 31 checks, 0 failed" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
+    "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: ARM64 SMP OK (2 CPUs" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
   if grep -qF "program 'hello'" "$log"; then
     require "$log" "Hello from C#!" "MILESTONE: ARM64 CSHARP OK" "MILESTONE: MATANG OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" "MILESTONE: GCMEM OK" "MILESTONE: ARM64 MULTIPROC OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "frames leaked: 0" "from /disk"       "MILESTONE: BCL OK" "MILESTONE: PROCCTL OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: UI OK"       "MILESTONE: DRAW OK" "MILESTONE: ARM64 DESKTOP FRAME OK" "MILESTONE: ARM64 SMP SCHED OK"
   fi
@@ -461,7 +467,7 @@ if [ -n "$qemu_arm" ] && [ -f "$kernel8" ] && "$qemu_arm" -M help | grep -q '^ra
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "BREM" "framebuffer 1280x720" "ARM64 SMP OK (4 CPUs: spin tables" "window system: 1280x720" "MILESTONE: HELLO KERNEL OK" "loader=rpi-direct" "MILESTONE: DTB OK" "MILESTONE: ARM64 MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "GICv2 at 0xff841000/0xff842000" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 EL0 OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RPI4 BOOT OK" "BUITENZORG ARM64 READY"
   if [ ${#sdargs[@]} -gt 0 ]; then
-    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK" "Studio: 31 checks, 0 failed" "Lab Perangkat: 10 checks, 0 failed"
+    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "Lab Perangkat: 10 checks, 0 failed"
   fi
   # Board I/O for applications (GPIO, I2C, SPI, UART, LEDs, sensors), and the
   # native sample when the C# programs were built.
@@ -505,7 +511,7 @@ if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64
   sleep 3
   virtio_input "$log" 4484
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
-  require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" "MILESTONE: RISCV MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: RISCV ASPACE OK" "MILESTONE: RISCV CONTEXT OK" "MILESTONE: RISCV TIMER OK" "Hello from U-mode" "MILESTONE: RISCV UMODE OK" "Hello from Rust on RISC-V" "MILESTONE: RISCV ELF OK" "MILESTONE: RISCV USERMEM OK" "MILESTONE: RISCV MULTIPROC OK" "MILESTONE: RISCV THREAD OK" "MILESTONE: RISCV SYNC OK" "MILESTONE: RISCV PROCESSES OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 31 checks, 0 failed" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0" "MILESTONE: RISCV SMP OK (2 harts" "MILESTONE: RISCV SMP SCHED OK" "MILESTONE: RISCV RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: RISCV DISK OK" "MILESTONE: RISCV PLIC OK" "user programs from /disk" "MILESTONE: VIRTIO GPU OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RISCV POWER OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: RISCV POLYGLOT OK" "MILESTONE: RISCV PROCCTL OK" "MILESTONE: RISCV GUI OK" "MILESTONE: RISCV DESKTOP FRAME OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: RISCV BOOT OK" "BUITENZORG RISCV READY"
+  require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" "MILESTONE: RISCV MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: RISCV ASPACE OK" "MILESTONE: RISCV CONTEXT OK" "MILESTONE: RISCV TIMER OK" "Hello from U-mode" "MILESTONE: RISCV UMODE OK" "Hello from Rust on RISC-V" "MILESTONE: RISCV ELF OK" "MILESTONE: RISCV USERMEM OK" "MILESTONE: RISCV MULTIPROC OK" "MILESTONE: RISCV THREAD OK" "MILESTONE: RISCV SYNC OK" "MILESTONE: RISCV PROCESSES OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0" "MILESTONE: RISCV SMP OK (2 harts" "MILESTONE: RISCV SMP SCHED OK" "MILESTONE: RISCV RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: RISCV DISK OK" "MILESTONE: RISCV PLIC OK" "user programs from /disk" "MILESTONE: VIRTIO GPU OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RISCV POWER OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: RISCV POLYGLOT OK" "MILESTONE: RISCV PROCCTL OK" "MILESTONE: RISCV GUI OK" "MILESTONE: RISCV DESKTOP FRAME OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: RISCV BOOT OK" "BUITENZORG RISCV READY"
   echo "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
   needle="$(grep -a -o 'RISCV.TXT = BZRISCV[^[:cntrl:]]*' "$log" | head -1 | sed 's/^RISCV.TXT = //')"
   if [ -z "$needle" ] || ! grep -a -q -F "$needle" "$root/dist/buitenzorg-riscv64.img"; then
