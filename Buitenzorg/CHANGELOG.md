@@ -14,6 +14,15 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Games:** `Buitenzorg.Game` (`BZGAME.DLL`), a fixed-timestep 2D game
+  framework on Buitenzorg.UI (raw key input with edges and axes, seeded RNG,
+  collisions, particles, sound effects, high scores), and five original
+  games: Ular (snake), Ranjau (mines), Bata (bricks), Balok (falling
+  crates), Kartu (Klondike patience) -- Start > Permainan (the start menu
+  grew a third row of cards). Syscalls `KEY_EVENT` (59), `KEY_STATE` (60)
+  and `SLEEP_UNTIL` (61, ~1 ms); Buitenzorg.UI `Window.RawKeys` /
+  `Control.OnKeyEvent`. `MILESTONE: KEY EVENTS OK`; every game has a
+  self-test (Ular in the boot's managed suite).
 - **bz-link over TCP and serial:** the deploy service also listens on TCP
   7070 and reads the PC's COM2, with the packets framed as
   `"BZ" | len | packet | CRC-32`; the client takes `tcp://HOST:PORT` and

@@ -123,6 +123,9 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::WIN_CMD
             | sysno::WIN_PRESENT
             | sysno::KEY_READ
+            | sysno::KEY_EVENT
+            | sysno::KEY_STATE
+            | sysno::SLEEP_UNTIL
             | sysno::PROC_LIST
             | sysno::PROC_ARGS
             | sysno::SYS_STAT
@@ -275,6 +278,12 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
             0
         }
         sysno::KEY_READ => sys_key_read(),
+        sysno::KEY_EVENT => sys_key_event(),
+        sysno::KEY_STATE => {
+            let me = crate::aspace::current_id();
+            (me != 0 && crate::wm::focus_owner() == me && crate::keyboard::is_down(a0 as u32)) as u64
+        }
+        sysno::SLEEP_UNTIL => sys_sleep_until(a0),
         sysno::PROC_SPAWN => sys_proc_spawn(a0, a1),
         sysno::PROC_WAIT => sys_proc_wait(a0),
         sysno::PROC_ARGS => sys_proc_args(a0, a1),
@@ -1028,6 +1037,47 @@ fn sys_key_read() -> u64 {
         task::yield_now();
     }
     key
+}
+
+/// KEY_EVENT: the next press / release for the focused program.
+fn sys_key_event() -> u64 {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    /// The program that read events last: events queued before another one
+    /// started reading were typed for someone else.
+    static READER: AtomicU64 = AtomicU64::new(0);
+    let me = crate::aspace::current_id();
+    if me == 0 || crate::wm::focus_owner() != me {
+        task::yield_now();
+        return 0;
+    }
+    if READER.swap(me, Ordering::Relaxed) != me {
+        crate::keyboard::clear_events();
+    }
+    crate::keyboard::clear_chars(); // an app reads either characters or events
+    match crate::keyboard::pop_event() {
+        Some(e) => e as u64 | 1 << 17,
+        None => {
+            task::yield_now();
+            0
+        }
+    }
+}
+
+/// SLEEP_UNTIL: block until shortly before `deadline` (timed waits expire on
+/// the timer tick, ~10 ms), then yield until it.
+fn sys_sleep_until(deadline: u64) -> u64 {
+    static WORD: u32 = 0; // nobody wakes it: only the clock ends the wait
+    loop {
+        let now = crate::arch::cpu::nanos();
+        if now >= deadline {
+            return 0;
+        }
+        if deadline - now > 12_000_000 {
+            task::futex_wait_timeout_if(&WORD as *const u32 as u64, 0, deadline - 11_000_000);
+        } else {
+            task::yield_now();
+        }
+    }
 }
 
 /// PROC_SPAWN: start `path` (app name or VFS path) with `args` as a new

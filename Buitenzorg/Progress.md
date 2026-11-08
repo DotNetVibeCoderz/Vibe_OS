@@ -428,9 +428,9 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 - **Prasyarat (kernel & driver)**
   - [x] Multi-proses preemptif (musik di latar saat game/browsing) — ✓ increment 1 (2026-11-01), lihat §Developer Workstation
   - [ ] Surface shared-memory zero-copy (ganti salinan per-piksel `BLIT`) + vsync/frame pacing + fullscreen eksklusif
-  - [ ] Timer resolusi tinggi (APIC timer/HPET)
+  - [~] Timer resolusi tinggi: [x] `SLEEP_UNTIL` (61) presisi ~1 ms (blok + yield) ✓ (2026-11-08) · [ ] APIC timer/HPET one-shot
   - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [x] driver Intel HDA (`hda.rs`, terbukti di Dell Latitude 7290) · [ ] capture mic
-  - [ ] Event keyboard tekan/lepas + status tombol (kini `KEY_READ` hanya karakter) · [ ] mouse relatif/capture
+  - [x] **Event keyboard tekan/lepas + status tombol** ✓ (2026-11-08): syscall `KEY_EVENT` (59) / `KEY_STATE` (60) dari scancode mentah semua keyboard, `MILESTONE: KEY EVENTS OK` · [ ] mouse relatif/capture
   - [~] Stack USB xHCI + HID keyboard/mouse + mass storage ✓ · [ ] gamepad · [ ] UVC webcam · [ ] audio USB
   - [x] Storage AHCI/NVMe/USB + FS tulis persisten untuk media & aset game
   - [ ] Float/SIMD di ring-3 teruji (SSE/AVX untuk decoder & 3D)
@@ -449,9 +449,9 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [ ] Browser: parser HTML5 · CSS (box model/flexbox/font) · layout + gambar · JS (subset ES + DOM di `script.rs`) · tab/bookmark/riwayat
   - [ ] App: Web Browser · radio internet/podcast · klien chat · pengaturan jaringan · firewall + izin jaringan per-app
 - **Game 2D**
-  - [ ] `Buitenzorg.Game`: game loop fixed-timestep, input (keyboard state/mouse/gamepad), sprite + animasi, tilemap, kamera, collision, particle, scene, SFX/musik, loader aset, save game
+  - [~] **`Buitenzorg.Game`** ✓ (2026-11-08, `BZGAME.DLL`): loop fixed-timestep, input tekan/lepas + tepi + axis, `Rng` ber-seed, `Vec2`, `Collide`, `Particles`, `Sfx`, `HighScores`, banner, skala playfield · [ ] sprite/tilemap/kamera/scene · [ ] gamepad · [ ] musik
   - [ ] Performa: blit SIMD · dirty-rect · surface zero-copy · fullscreen
-  - [ ] Game bawaan: Minesweeper · Solitaire · Snake · Tetris-like · Breakout · platformer demo
+  - [x] **Game bawaan** ✓ (2026-11-08): **Ular** (snake), **Ranjau** (mines), **Bata** (bricks), **Balok** (falling crates), **Kartu** (solitaire Klondike) -- orisinal, Start > Permainan, self-test semua · [ ] platformer demo
   - [ ] Template game di SDK + MagicAppGen · binding game untuk JS/Python
 - **Game 3D**
   - [x] Rasterizer software + `Buitenzorg.Graphics3D`: math vektor/matriks, perspektif, clipping, z-buffer, culling, texture mapping, shading, loader OBJ (G3) · [ ] loader glTF

@@ -351,6 +351,29 @@ public sealed class Window : Control
     }
 
     /// <summary>A key from KEY_READ: to the focused control (bubbling), then Tab / Escape / shortcuts.</summary>
+    /// <summary>Games: deliver key presses and releases (KEY_EVENT) to the focused
+    /// control's <see cref="Control.OnKeyEvent"/> instead of characters.</summary>
+    public bool RawKeys { get; set; }
+
+    readonly HashSet<int> _down = new HashSet<int>();
+
+    /// <summary>Whether a raw key is held (from the events this window got).</summary>
+    public bool IsKeyDown(int code) => _down.Contains(code);
+
+    /// <summary>A raw key press / release (the device's KEY_EVENT, or a test).</summary>
+    public void DispatchKeyEvent(int code, bool pressed)
+    {
+        if (pressed) _down.Add(code); else _down.Remove(code);
+        var e = new RawKeyEventArgs { Code = code, Pressed = pressed };
+        for (var c = _focused; c != null && !e.Handled; c = c.Parent) c.OnKeyEvent(e);
+    }
+
+    /// <summary>Tests: press and release keys by character ("aa d").</summary>
+    public void SimulateKeyEvents(string keys)
+    {
+        foreach (char k in keys) { int code = RawKey.FromChar(k); DispatchKeyEvent(code, true); DispatchKeyEvent(code, false); }
+    }
+
     public void DispatchKey(char key)
     {
         if (key == Keys.Rubout) key = Keys.Delete;
@@ -490,13 +513,28 @@ public sealed class Window : Control
                 if (kind == 5) DispatchWheel(x, y, (short)((ev >> 40) & 0xFFFF));
                 else DispatchPointer(kind, x, y, left);
             }
-            for (int n = 0; n < 32; n++)
+            if (RawKeys)
             {
-                int k = Native.KeyRead();
-                if (k == 0) break;
-                any = true;
-                DispatchKey((char)k);
+                for (int n = 0; n < 32; n++)
+                {
+                    int ev = Native.KeyEvent();
+                    if (ev == 0) break;
+                    any = true;
+                    DispatchKeyEvent(ev & 0xFFFF, (ev & 0x10000) != 0);
+                }
+                // a release that went elsewhere (focus moved): ask the device
+                if (_down.Count > 0)
+                    foreach (var code in _down.ToArray())
+                        if (Native.KeyState(code) == 0) DispatchKeyEvent(code, false);
             }
+            else
+                for (int n = 0; n < 32; n++)
+                {
+                    int k = Native.KeyRead();
+                    if (k == 0) break;
+                    any = true;
+                    DispatchKey((char)k);
+                }
         }
         return any;
     }

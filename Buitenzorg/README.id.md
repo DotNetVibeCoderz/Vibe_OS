@@ -121,6 +121,13 @@ NVMe / USB)** lewat marker `MILESTONE: … OK` yang dicek smoke test.
 
 ### Studio & aplikasi skrip
 
+**[Game](docs/games.id.md):** lima game 2D buatan sendiri -- Ular, Ranjau,
+Bata, Balok dan Kartu (solitaire) -- di atas `Buitenzorg.Game`, framework game
+fixed-timestep di atas Buitenzorg.UI dengan event tekan/lepas tombol
+(`KEY_EVENT`).
+
+![Game 2D](docs/img/games-2d.png)
+
 **[Buitenzorg Studio](docs/studio.id.md)** adalah IDE di dalam OS, dengan 52
 template proyek. Aplikasi berjendela bisa ditulis dalam JavaScript,
 TypeScript, Python ([panduan](docs/script-ui.id.md)) atau C# script

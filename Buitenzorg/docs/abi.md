@@ -79,6 +79,9 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 56 | `GFX3D` | pointer to a `Gfx3dCmd` | — | new resource id (CREATE / MESH / TEXTURE), `pixels << 32 \| triangles` (DRAW), a pixel (READ_PIXEL), 0, or `INVAL`. The 3D API (G3): see **3D (GFX3D)** below |
 | 57 | `RANDOM` | output buffer | length (1..=4096) | length written, or `INVAL`. Bytes from the kernel's ChaCha20 DRBG (`rng.rs`, seeded from RDRAND when present, cycle jitter, clocks and a seed file); used by `BzGuid.NewGuid` |
 | 58 | `SHELL_RUN` | NUL-terminated command line (≤ 4096 bytes) | output buffer (a2 = its size) | output bytes written (lines joined by `\n`, cut to the buffer) \| failed << 32, or `INVAL`. Runs the line in the built-in shell with the user's rights, exactly as typed at the Terminal (pipes, scripts, `script js FILE`, ...); used by Buitenzorg Studio |
+| 59 | `KEY_EVENT` | — | — | 0 = no event, else `code \| pressed << 16 \| 1 << 17` for the focused program. `code` = PC scancode set 1 (make code), `\| 0x100` for 0xE0-prefixed keys (arrows: up 0x148, down 0x150, left 0x14B, right 0x14D). Reading events discards the program's pending characters. For games (`Buitenzorg.Game`) |
+| 60 | `KEY_STATE` | key code (as `KEY_EVENT`) | — | 1 while the key is held down, else 0 (always 0 for a program without the focus) |
+| 61 | `SLEEP_UNTIL` | absolute deadline (CLOCK_NANOS ns) | — | 0. Blocks until shortly before the deadline, then yields until it: about 1 ms precision (frame pacing) |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.

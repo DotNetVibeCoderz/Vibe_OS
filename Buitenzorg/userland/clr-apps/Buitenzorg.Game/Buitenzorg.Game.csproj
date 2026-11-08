@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Buitenzorg.Game: a 2D game framework on Buitenzorg.UI (/disk/BZGAME.DLL). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Buitenzorg.Game</AssemblyName>
+    <RootNamespace>Buitenzorg.Game</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+    <ProjectReference Include="..\Buitenzorg.App\Buitenzorg.App.csproj" />
+  </ItemGroup>
+</Project>

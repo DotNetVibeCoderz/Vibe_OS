@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Ranjau (mines game, managed): /disk/MRANJAU.DLL, `run mranjau`. Buitenzorg.Game. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MRanjau</AssemblyName>
+    <RootNamespace>MRanjau</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.Game\Buitenzorg.Game.csproj" />
+  </ItemGroup>
+</Project>

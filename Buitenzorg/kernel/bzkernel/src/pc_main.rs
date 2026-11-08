@@ -1819,6 +1819,7 @@ fn dahan_demo() {
             Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
         repo::self_test();
+        keyboard::self_test();
     }
     disk_persist_demo();
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).

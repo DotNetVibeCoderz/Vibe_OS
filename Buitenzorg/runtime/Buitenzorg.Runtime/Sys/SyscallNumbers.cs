@@ -184,8 +184,17 @@ public static class SyscallNumbers
     /// <summary>Run a shell command line: a0 = NUL-terminated line (at most 4096 bytes), a1 = output buffer, a2 = its size. Returns bytes written (low 32 bits) | failed &lt;&lt; 32.</summary>
     public const ulong ShellRun = 58;
 
+    /// <summary>Next key press/release for the focused program: 0 = none, else code | pressed &lt;&lt; 16 | 1 &lt;&lt; 17 (code = set-1 make scancode, | 0x100 for E0 keys).</summary>
+    public const ulong KeyEvent = 59;
+
+    /// <summary>Whether key a0 (a KeyEvent code) is held down: 1 / 0.</summary>
+    public const ulong KeyState = 60;
+
+    /// <summary>Sleep until CLOCK_NANOS reaches a0 (absolute ns), ~1 ms precision.</summary>
+    public const ulong SleepUntil = 61;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 59;
+    public const ulong Count = 62;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Gfx3d"/> (bz-abi <c>gfx3d_op</c>).</summary>

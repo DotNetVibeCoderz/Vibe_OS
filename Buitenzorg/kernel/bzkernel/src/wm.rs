@@ -27,7 +27,7 @@ const START_W: i32 = 76; // Start button width on the taskbar
 // Start menu ("herbarium drawer"): a category rail on the left, the chosen
 // category's apps as icon cards on the right, power actions in the footer.
 const SM_W: i32 = 528; // start-menu width
-const SM_H: i32 = 412; // start-menu height (two rows of app cards)
+const SM_H: i32 = 508; // start-menu height (three rows of app cards)
 const SM_HDR: i32 = 46; // header band height
 const SM_FTR: i32 = 46; // footer band height
 const SM_RAIL_W: i32 = 168; // category rail width
@@ -63,7 +63,17 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Permainan",
         leaf: gfx::rgb(0xF3, 0xC9, 0x69),
-        apps: &[("m2048", "2048"), ("mxox", "Tic-Tac-Toe"), ("mruang", "Ruang 3D"), ("mbuah", "Panen Buah 3D")],
+        apps: &[
+            ("m2048", "2048"),
+            ("mxox", "Tic-Tac-Toe"),
+            ("mular", "Ular"),
+            ("mranjau", "Ranjau"),
+            ("mbata", "Bata"),
+            ("mbalok", "Balok"),
+            ("mkartu", "Kartu"),
+            ("mruang", "Ruang 3D"),
+            ("mbuah", "Panen Buah 3D"),
+        ],
     },
     Category {
         name: "Utilitas",

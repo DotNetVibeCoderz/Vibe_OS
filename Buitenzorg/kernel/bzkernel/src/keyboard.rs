@@ -19,6 +19,69 @@ pub fn pushed() -> u64 {
 
 static DECODER: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Mutex::new(None);
 
+// ---- raw key events (KEY_EVENT / KEY_STATE, for games) -----------------------
+
+/// The last byte was the 0xE0 prefix.
+static E0: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Which keys are down: bit `code` (set-1 make code, | 0x100 for E0 keys).
+static DOWN: [core::sync::atomic::AtomicU64; 8] = [const { core::sync::atomic::AtomicU64::new(0) }; 8];
+/// Press / release events: `code | pressed << 16`.
+static EVENTS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+
+/// Track one raw scancode byte (interrupts off): key state + an event per
+/// change (typematic repeats of a held key are not events).
+fn raw_scancode(byte: u8) {
+    use core::sync::atomic::Ordering::Relaxed;
+    match byte {
+        0xE0 => {
+            E0.store(true, Relaxed);
+            return;
+        }
+        0xE1 | 0xFA | 0xFE | 0x00 | 0xFF => return, // pause prefix, acks, errors
+        _ => {}
+    }
+    let ext = E0.swap(false, Relaxed);
+    let code = (byte & 0x7F) as u32 | if ext { 0x100 } else { 0 };
+    if ext && (code == 0x12A || code == 0x136) {
+        return; // the fake shifts around E0 keys
+    }
+    let pressed = byte & 0x80 == 0;
+    let (w, bit) = ((code / 64) as usize, 1u64 << (code % 64));
+    let was = DOWN[w].load(Relaxed) & bit != 0;
+    if pressed {
+        DOWN[w].fetch_or(bit, Relaxed);
+    } else {
+        DOWN[w].fetch_and(!bit, Relaxed);
+    }
+    if was != pressed {
+        let mut q = EVENTS.lock();
+        if q.len() >= 128 {
+            q.pop_front();
+        }
+        q.push_back(code | (pressed as u32) << 16);
+    }
+}
+
+/// The next raw key event (`code | pressed << 16`).
+pub fn pop_event() -> Option<u32> {
+    crate::arch::cpu::without_interrupts(|| EVENTS.lock().pop_front())
+}
+
+/// Forget queued events (they were typed for someone else).
+pub fn clear_events() {
+    crate::arch::cpu::without_interrupts(|| EVENTS.lock().clear());
+}
+
+/// Forget queued characters (a program reading events does not want them).
+pub fn clear_chars() {
+    crate::arch::cpu::without_interrupts(|| QUEUE.lock().clear());
+}
+
+/// Whether key `code` is held down.
+pub fn is_down(code: u32) -> bool {
+    code < 512 && DOWN[(code / 64) as usize].load(core::sync::atomic::Ordering::Relaxed) & (1u64 << (code % 64)) != 0
+}
+
 /// Feed one PC scancode (set 1, `0xE0` prefixes included) from any keyboard:
 /// the PS/2 IRQ handler, or the virtio-input driver translating Linux key
 /// codes. Decoded characters go to the queue once the desktop is up, and are
@@ -29,6 +92,7 @@ pub fn feed_scancode(byte: u8) {
         let kb = guard.get_or_insert_with(|| {
             Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::MapLettersToUnicode)
         });
+        raw_scancode(byte);
         // pc-keyboard 0.7 decodes the backslash key (set 1: 0x2B) as Oem7,
         // which its Us104Key layout has no character for ('\' and '|' sit on
         // Oem5 = 0x56 there), so the key produced nothing -- no pipes in the
@@ -178,4 +242,32 @@ pub fn push(c: char) {
 /// while the desktop loop holds it would deadlock.
 pub fn pop() -> Option<char> {
     crate::arch::cpu::without_interrupts(|| QUEUE.lock().pop_front())
+}
+
+/// Boot self-test of the raw key path (KEY_EVENT / KEY_STATE): press and
+/// release 'A' (0x1E), an E0 arrow (0xE0 0x48 = 0x148), a typematic repeat
+/// that must not become a second event. Fed below the character decoder, so
+/// nothing reaches the terminal.
+pub fn self_test() -> bool {
+    clear_events();
+    let feed = |b: &[u8]| crate::arch::cpu::without_interrupts(|| b.iter().for_each(|&x| raw_scancode(x)));
+    feed(&[0x1E]);
+    let a_down = is_down(0x1E);
+    feed(&[0x1E]); // repeat
+    feed(&[0xE0, 0x48]);
+    let up_down = is_down(0x148);
+    feed(&[0x9E, 0xE0, 0xC8]);
+    let released = !is_down(0x1E) && !is_down(0x148);
+    let mut got = alloc::vec::Vec::new();
+    while let Some(e) = pop_event() {
+        got.push(e);
+    }
+    let want = [0x1E | 1 << 16, 0x148 | 1 << 16, 0x1E, 0x148];
+    let ok = a_down && up_down && released && got == want;
+    if ok {
+        crate::println!("[kernel] MILESTONE: KEY EVENTS OK (press/release + state for A and E0 up-arrow, repeat ignored)");
+    } else {
+        crate::println!("[keyboard] self-test failed: down {} {} released {} events {:x?}", a_down, up_down, released, got);
+    }
+    ok
 }

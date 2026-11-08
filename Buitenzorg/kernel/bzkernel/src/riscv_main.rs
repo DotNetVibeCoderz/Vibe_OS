@@ -228,6 +228,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),
         }
         repo::self_test();
+        keyboard::self_test();
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();
         users::load();

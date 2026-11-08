@@ -136,6 +136,13 @@ Avalonia-style toolkit. Double-click **Managed Apps** on the desktop, or see
 
 ### Studio & script apps
 
+**[Games](docs/games.md):** five 2D games of its own -- Ular (snake),
+Ranjau (mines), Bata (bricks), Balok (falling crates) and Kartu (patience) --
+on `Buitenzorg.Game`, a fixed-timestep game framework over Buitenzorg.UI with
+raw key press/release events (`KEY_EVENT`).
+
+![The 2D games](docs/img/games-2d.png)
+
 **[Buitenzorg Studio](docs/studio.md)** is the IDE inside the OS, with 52
 project templates. Apps with a window can be written in JavaScript,
 TypeScript, Python ([guide](docs/script-ui.md)) or C# script

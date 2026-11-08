@@ -35,6 +35,11 @@ public static class Folder
         new AppInfo("mimage", "Gambar", "Wallpaper dan foto di /disk", IconKind.Sun, 0xC792EA),
         new AppInfo("mpaint", "Paint", "Menggambar dengan mouse", IconKind.Leaf, 0xE3A6C9),
         new AppInfo("mbuah", "Panen Buah 3D", "Tangkap buah yang jatuh, hindari batu", IconKind.Leaf, 0xE0352B),
+        new AppInfo("mular", "Ular", "Makan buah, tumbuh panjang, jangan menabrak", IconKind.Leaf, 0x5FB85A),
+        new AppInfo("mranjau", "Ranjau", "Buka kebun tanpa menggali ranjau", IconKind.Grid, 0xE0563B),
+        new AppInfo("mbata", "Bata", "Pantulkan biji, runtuhkan tembok bata", IconKind.Grid, 0xE9A64C),
+        new AppInfo("mbalok", "Balok", "Susun peti jatuh, panen baris penuh", IconKind.Grid, 0x4FA3E0),
+        new AppInfo("mkartu", "Kartu", "Solitaire: pulangkan semua kartu", IconKind.File, 0xC8352B),
         new AppInfo("mruang", "Ruang 3D", "Taman 3D: orbit kamera, lampu, kabut", IconKind.Grid, 0x7CC4A4),
         new AppInfo("mpiano", "Piano", "Satu oktaf, mainkan dengan keyboard", IconKind.Play, 0xB99AE8),
         new AppInfo("mgallery", "Galeri Kontrol", "Semua kontrol Buitenzorg.UI", IconKind.Info, 0xC7A6E0),
@@ -168,6 +173,7 @@ public static class Folder
         Report(MSettings.SettingsApp.SelfTest()); // the SETTING syscall, end to end (restores every value)
         Report(MWaktu.WaktuApp.SelfTest()); // time zone / language / 12-24 h / setting the clock (restores them)
         Report(MRuang.RuangApp.SelfTest()); // G3: the scene graph through the kernel's 3D rasterizer (GFX3D)
+        Report(MUlar.UlarApp.SelfTest()); // Buitenzorg.Game: the loop, raw key events, drawing
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());
@@ -179,6 +185,10 @@ public static class Folder
             Report(MPaint.PaintApp.SelfTest());
             Report(MPiano.PianoApp.SelfTest());
             Report(MBuah.BuahApp.SelfTest());
+            Report(MRanjau.RanjauApp.SelfTest());
+            Report(MBata.BataApp.SelfTest());
+            Report(MBalok.BalokApp.SelfTest());
+            Report(MKartu.KartuApp.SelfTest());
         }
         if (failed == 0) Console.WriteLine("MILESTONE: MANAGED APPS OK");
         return failed;

@@ -520,6 +520,8 @@ public class Control : UIObject
     protected internal virtual void OnPointerEntered() => PointerEntered?.Invoke(this);
     protected internal virtual void OnPointerExited() => PointerExited?.Invoke(this);
     protected internal virtual void OnKeyDown(KeyEventArgs e) => KeyDown?.Invoke(this, e);
+    /// <summary>A raw key press / release (only in a window with <see cref="Window.RawKeys"/> on).</summary>
+    protected internal virtual void OnKeyEvent(RawKeyEventArgs e) { }
     protected internal virtual void OnGotFocus() { SetPseudo(":focus", true); GotFocus?.Invoke(this); }
     protected internal virtual void OnLostFocus() { SetPseudo(":focus", false); SetPseudo(":focus-visible", false); LostFocus?.Invoke(this); }
     /// <summary>A long press (600 ms without moving) -- opens the context menu.</summary>

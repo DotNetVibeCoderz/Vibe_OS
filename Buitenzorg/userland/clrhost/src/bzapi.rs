@@ -40,6 +40,9 @@ const HW_LED: u64 = 52;
 const SETTING: u64 = 53;
 const FS_OP: u64 = 54;
 const SHELL_RUN: u64 = 58;
+const KEY_EVENT: u64 = 59;
+const KEY_STATE: u64 = 60;
+const SLEEP_UNTIL: u64 = 61;
 const USER_OP: u64 = 55;
 const AUDIO_STAT: u64 = 23;
 const AUDIO_SET_VOLUME: u64 = 24;
@@ -549,6 +552,24 @@ fn key_read(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
     ret_i32(sys::syscall(KEY_READ, 0, 0, 0) as i64)
 }
 
+/// `KeyEvent()` -> 0, or code | pressed << 16 | 1 << 17 (KEY_EVENT).
+fn key_event(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
+    ret_i32(sys::syscall(KEY_EVENT, 0, 0, 0) as i64)
+}
+
+/// `KeyState(int code)` -> 1 while held down (KEY_STATE).
+fn key_state(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    ret_i32(sys::syscall(KEY_STATE, int(a, 0) as u64, 0, 0) as i64)
+}
+
+/// `SleepUntil(long ns)`: until CLOCK_NANOS reaches ns (other managed threads
+/// and the collector go on meanwhile).
+fn sleep_until(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let ns = int(a, 0) as u64;
+    i.blocking(|_| sys::syscall(SLEEP_UNTIL, ns, 0, 0));
+    ret_i32(0)
+}
+
 /// `bz_abi::FramebufferInfo`: [address, size, width, height, stride, bpp, format].
 fn fb_info() -> [u64; 7] {
     let mut fb = [0u64; 7];
@@ -604,12 +625,15 @@ fn shell_run(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 40] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 43] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
         ("WinPresent", win_present),
         ("KeyRead", key_read),
+        ("KeyEvent", key_event),
+        ("KeyState", key_state),
+        ("SleepUntil", sleep_until),
         ("ScreenWidth", screen_width),
         ("ScreenHeight", screen_height),
         ("IsInteractive", is_interactive),

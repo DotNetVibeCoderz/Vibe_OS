@@ -14,6 +14,8 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int WinPresent(int window);
     [DllImport("buitenzorg")] internal static extern long WinEvent(int window);
     [DllImport("buitenzorg")] internal static extern int KeyRead();
+    [DllImport("buitenzorg")] internal static extern int KeyEvent();
+    [DllImport("buitenzorg")] internal static extern int KeyState(int code);
     [DllImport("buitenzorg")] internal static extern long TextMetrics(int style);
     [DllImport("buitenzorg")] internal static extern int IsInteractive();
 }
@@ -28,6 +30,40 @@ public struct Thickness
     public int Horizontal => Left + Right;
     public int Vertical => Top + Bottom;
     public static implicit operator Thickness(int all) => new Thickness(all);
+}
+
+/// <summary>Raw key codes of press / release events (Window.RawKeys, games):
+/// the PC scancode set-1 make code, | 0x100 for the 0xE0-prefixed keys.</summary>
+public static class RawKey
+{
+    public const int Escape = 0x01, D1 = 0x02, D2 = 0x03, D3 = 0x04, D4 = 0x05, D5 = 0x06, D6 = 0x07, D7 = 0x08, D8 = 0x09, D9 = 0x0A, D0 = 0x0B;
+    public const int Backspace = 0x0E, Tab = 0x0F, Enter = 0x1C, LeftCtrl = 0x1D, LeftShift = 0x2A, RightShift = 0x36, LeftAlt = 0x38, Space = 0x39;
+    public const int Q = 0x10, W = 0x11, E = 0x12, R = 0x13, T = 0x14, Y = 0x15, U = 0x16, I = 0x17, O = 0x18, P = 0x19;
+    public const int A = 0x1E, S = 0x1F, D = 0x20, F = 0x21, G = 0x22, H = 0x23, J = 0x24, K = 0x25, L = 0x26;
+    public const int Z = 0x2C, X = 0x2D, C = 0x2E, V = 0x2F, B = 0x30, N = 0x31, M = 0x32;
+    public const int F1 = 0x3B, F2 = 0x3C, F3 = 0x3D, F4 = 0x3E, F5 = 0x3F, F6 = 0x40, F7 = 0x41, F8 = 0x42, F9 = 0x43, F10 = 0x44, F11 = 0x57, F12 = 0x58;
+    public const int Up = 0x148, Down = 0x150, Left = 0x14B, Right = 0x14D, Home = 0x147, End = 0x14F, PageUp = 0x149, PageDown = 0x151, Delete = 0x153, RightCtrl = 0x11D, RightAlt = 0x138;
+
+    /// <summary>The raw key for a character a test types ('a' -> A, ' ' -> Space).</summary>
+    public static int FromChar(char c)
+    {
+        string row1 = "qwertyuiop", row2 = "asdfghjkl", row3 = "zxcvbnm";
+        c = char.ToLowerInvariant(c);
+        int i = row1.IndexOf(c); if (i >= 0) return Q + i;
+        i = row2.IndexOf(c); if (i >= 0) return A + i;
+        i = row3.IndexOf(c); if (i >= 0) return Z + i;
+        if (c >= '1' && c <= '9') return D1 + (c - '1');
+        if (c == '0') return D0;
+        return c switch { ' ' => Space, '\n' => Enter, (char)27 => Escape, _ => 0 };
+    }
+}
+
+/// <summary>A raw key press or release (Control.OnKeyEvent).</summary>
+public sealed class RawKeyEventArgs
+{
+    public int Code { get; init; }
+    public bool Pressed { get; init; }
+    public bool Handled { get; set; }
 }
 
 public struct Size
