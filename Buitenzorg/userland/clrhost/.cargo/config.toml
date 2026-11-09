@@ -3,10 +3,10 @@
 # and alloc use it (LTO refuses a mix), and sign-extended 32-bit addresses
 # cover 0x400000 as well.
 [target.x86_64-unknown-none]
-rustflags = ["-C", "relocation-model=static"]
+rustflags = ["-C", "relocation-model=static", "--cfg", "aes_force_soft", "--cfg", "polyval_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
 
 [target.aarch64-unknown-none]
-rustflags = ["-C", "relocation-model=static"]
+rustflags = ["-C", "relocation-model=static", "--cfg", "aes_force_soft", "--cfg", "polyval_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
 
 [target.riscv64imac-unknown-none-elf]
-rustflags = ["-C", "relocation-model=static", "-C", "link-arg=--no-relax"]
+rustflags = ["-C", "relocation-model=static", "-C", "link-arg=--no-relax", "--cfg", "aes_force_soft", "--cfg", "polyval_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']

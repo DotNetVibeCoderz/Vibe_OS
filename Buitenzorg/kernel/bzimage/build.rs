@@ -80,10 +80,10 @@ const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
 
 /// App icons, in launcher order: (asset name in assets/icons, launch name used
 /// by the kernel's `icons.rs` / `wm.rs` LAUNCH list).
-const APP_ICONS: [&str; 22] = [
+const APP_ICONS: [&str; 23] = [
     "files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint",
     "xox", "audiopanel", "wallpaper", "theme", "managed", "msetting", "mwaktu", "mgallery", "mhwlab",
-    "mruang", "mbuah", "mstudio",
+    "mruang", "mbuah", "mstudio", "mweb",
 ];
 /// Icon sizes in ICONS.BIN: desktop tile and start-menu row.
 const ICON_BIG: usize = 44;
@@ -615,6 +615,22 @@ fn main() {
         }
     }
 
+    // Musik: two original pieces synthesized here, so the music player has
+    // something to play on every image (WAV, 16 kHz mono, with a title).
+    for (name, title, seed, bpm) in [("lagu1.wav", "Embun Pagi di Kebun Raya", 7u32, 96u32), ("lagu2.wav", "Hujan Sore di Bogor", 23, 72)] {
+        add_file(&mut builder, &mut files, name.into(), synth_song(title, seed, bpm));
+    }
+
+    // Gambar: sample photos in the formats the viewer decodes besides BMP
+    // (assets/photos: a JPEG, a PNG with transparency, an animated GIF).
+    for name in ["KEBUN.JPG", "ANGGREK.PNG", "DAUN.GIF"] {
+        let p = manifest_dir().join("..").join("..").join("assets").join("photos").join(name);
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, name.to_ascii_lowercase(), bytes);
+        }
+    }
+
     // The managed C# path (RustCLR): CLRHOST.ELF for this image's
     // architecture (scripts/build-clrhost.*) and the managed apps -- .NET
     // assemblies, identical on every architecture (userland/clr-apps/dist).
@@ -765,6 +781,100 @@ fn clrhost_elf(target: &str) -> Option<Vec<u8>> {
     let path = manifest_dir().join("..").join("..").join("userland").join("clrhost").join("target").join(target).join("release").join("clrhost");
     println!("cargo:rerun-if-changed={}", path.display());
     std::fs::read(&path).ok()
+}
+
+/// An original piece for the music player: a melody of bell tones on a
+/// five-note (slendro-like) scale over a slow gong bass, deterministic per
+/// `seed`. 16 kHz mono 16-bit WAV with a LIST/INFO title.
+fn synth_song(title: &str, seed: u32, bpm: u32) -> Vec<u8> {
+    const RATE: usize = 16_000;
+    let seconds = 20.0f32;
+    let n = (RATE as f32 * seconds) as usize;
+    let mut buf = vec![0f32; n];
+    let scale = [1.0f32, 1.1487, 1.3195, 1.5157, 1.7411];
+    let base = 293.66f32; // D4
+    let mut rng = seed.wrapping_mul(2654435761).max(1);
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        rng
+    };
+    // a bell: inharmonic partials, each decaying at its own rate
+    let mut bell = |buf: &mut [f32], at: usize, hz: f32, amp: f32, len: f32| {
+        let partials = [(1.0f32, 1.0f32, 3.0f32), (2.76, 0.45, 6.0), (5.40, 0.18, 10.0), (0.5, 0.25, 2.0)];
+        let end = (at + (len * RATE as f32) as usize).min(buf.len());
+        for (i, s) in buf[at..end].iter_mut().enumerate() {
+            let t = i as f32 / RATE as f32;
+            let attack = (t * 400.0).min(1.0);
+            let mut v = 0.0;
+            for (m, a, d) in partials {
+                v += a * (2.0 * core::f32::consts::PI * hz * m * t).sin() * (-d * t).exp();
+            }
+            *s += v * amp * attack;
+        }
+    };
+    let beat = 60.0 / bpm as f32;
+    let eighth = (beat / 2.0 * RATE as f32) as usize;
+    let mut degree = 2i32;
+    let mut pos = 0usize;
+    let mut k = 0u32;
+    while pos + eighth < n {
+        // melody: a step or a leap in the scale, now and then a rest or a held note
+        let r = next() % 10;
+        if r < 8 {
+            let mv = [-2, -1, -1, 1, 1, 2, 0, 3][(next() % 8) as usize];
+            degree = (degree + mv).clamp(0, 9);
+            let hz = base * scale[(degree % 5) as usize] * if degree >= 5 { 2.0 } else { 1.0 };
+            bell(&mut buf, pos, hz, 0.35, 1.6);
+        }
+        // gong + a low tone on the beat, every two beats
+        if k % 4 == 0 {
+            bell(&mut buf, pos, base / 4.0, 0.5, 3.0);
+        }
+        if k % 4 == 2 {
+            bell(&mut buf, pos, base / 2.0 * scale[(next() % 5) as usize], 0.22, 1.2);
+        }
+        pos += if r == 9 { eighth * 2 } else { eighth };
+        k += 1;
+    }
+    // fade out over the last 1.5 s, normalize to 70 %
+    let fade = (1.5 * RATE as f32) as usize;
+    for (i, s) in buf.iter_mut().enumerate().skip(n - fade) {
+        *s *= (n - i) as f32 / fade as f32;
+    }
+    let peak = buf.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-6);
+    let pcm: Vec<i16> = buf.iter().map(|v| (v / peak * 0.7 * 32767.0) as i16).collect();
+    // RIFF/WAVE: fmt, LIST/INFO/INAM, data
+    let mut name = title.as_bytes().to_vec();
+    name.push(0);
+    if name.len() % 2 == 1 {
+        name.push(0);
+    }
+    let list_len = 4 + 8 + name.len();
+    let data_len = pcm.len() * 2;
+    let mut w = Vec::with_capacity(44 + list_len + 8 + data_len);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&((4 + 24 + 8 + list_len + 8 + data_len) as u32).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes());
+    w.extend_from_slice(&(RATE as u32).to_le_bytes());
+    w.extend_from_slice(&(RATE as u32 * 2).to_le_bytes());
+    w.extend_from_slice(&2u16.to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes());
+    w.extend_from_slice(b"LIST");
+    w.extend_from_slice(&(list_len as u32).to_le_bytes());
+    w.extend_from_slice(b"INFOINAM");
+    w.extend_from_slice(&((title.len() + 1) as u32).to_le_bytes());
+    w.extend_from_slice(&name);
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for v in pcm {
+        w.extend_from_slice(&v.to_le_bytes());
+    }
+    w
 }
 
 /// The managed C# apps: .NET assemblies built by `dotnet build`

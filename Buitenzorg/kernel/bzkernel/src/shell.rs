@@ -110,7 +110,7 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "dmesg", "lspci", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
@@ -598,8 +598,12 @@ fn ipconfig() -> Vec<String> {
 }
 
 fn ping(args: &[&str]) -> Vec<String> {
-    let Some(dest) = args.first().and_then(|a| crate::net::parse_ip(a)) else {
-        return vec![String::from("pakai: ping <alamat-ip> [jumlah]   (mis. ping 10.0.2.2)")];
+    let Some(target) = args.first() else {
+        return vec![String::from("pakai: ping <alamat-ip|nama> [jumlah]   (mis. ping 10.0.2.2)")];
+    };
+    let dest = match crate::dns::resolve(target) {
+        Ok(ip) => ip,
+        Err(e) => return vec![format!("ping: {}", e)],
     };
     let n = args.get(1).and_then(|c| c.parse::<u16>().ok()).unwrap_or(4).clamp(1, 20);
     let ip = crate::net::fmt_ip(dest);
@@ -817,6 +821,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "gdbserver" => (crate::gdbstub::command(&args), Effect::None),
         "kgdb" => (crate::gdbstub::kgdb_command(&args), Effect::None),
         "logs" => (crate::applog::command(&args), Effect::None),
+        "mixer" => (mixer_cmd(&args), Effect::None),
         "tutup" | "closeall" => {
             let n = crate::wm::close_workspace_windows();
             (vec![format!("{} jendela ditutup", n)], Effect::Redraw)
@@ -846,10 +851,26 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "route" => (route(), Effect::None),
         "netstat" => (netstat(), Effect::None),
         "hostname" => (vec![String::from("buitenzorg")], Effect::None),
-        "nslookup" | "dig" | "host" => (
-            vec![String::from("nslookup: belum ada DNS resolver -- pakai alamat IP (mis. ping 10.0.2.2)")],
-            Effect::None,
-        ),
+        "nslookup" | "dig" | "host" => {
+            let lines = match args.first() {
+                None => {
+                    let mut l = vec![format!(
+                        "server DNS: {}",
+                        crate::dns::server().map(crate::net::fmt_ip).unwrap_or_else(|| String::from("(tidak ada)"))
+                    )];
+                    for (n, ip) in crate::dns::cached() {
+                        l.push(format!("  {}  {}", crate::net::fmt_ip(ip), n));
+                    }
+                    l.push(String::from("pakai: nslookup NAMA"));
+                    l
+                }
+                Some(name) => match crate::dns::resolve(name) {
+                    Ok(ip) => vec![format!("{}: {}", name, crate::net::fmt_ip(ip))],
+                    Err(e) => vec![format!("nslookup: {}", e)],
+                },
+            };
+            (lines, Effect::None)
+        }
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
         "cursor" => cursor_cmd(args.first().copied()),
@@ -1063,6 +1084,7 @@ fn help_lines() -> Vec<String> {
      "  kill <pid>        hentikan proses app",
      "  cmd &  | jobs | fg [%N] | kill %N  job: latar belakang / daftar / tunggu lagi / hentikan",
      "  tab [new|N|close]  tab terminal (Ctrl+T baru, Ctrl+N/P pindah, Ctrl+D tutup)",
+     "  mixer [PID VOL]   aliran audio per program dan volumenya",
      "  logs [APP|PID]    keluaran per program (8 KiB terakhir, juga setelah selesai)",
      "  kgdb PORT         baca memori kernel dari GDB di PC (tanpa kode: jaringan tepercaya)",
      "  gdbserver PORT APP  debug APP dari GDB di PC (target remote IP:PORT)",
@@ -1306,6 +1328,25 @@ fn ps_cmd() -> Vec<String> {
         let name = core::str::from_utf8(&p.name[..len]).unwrap_or("?");
         let kind = if p.kind == 1 { "app" } else { "kernel" };
         out.push(format!("{:>5}  {:<6} {:>5}  {}", p.pid, kind, p.cpu_ticks, name));
+    }
+    out
+}
+
+/// `mixer` (the streams), `mixer PID VOLUME`.
+fn mixer_cmd(args: &[&str]) -> Vec<String> {
+    if let [pid, vol] = args {
+        let (Ok(p), Ok(v)) = (pid.parse::<u64>(), vol.parse::<u32>()) else { return vec![String::from("mixer PID VOLUME (0-100)")] };
+        return vec![format!("mixer: pid {} volume {}", p, crate::mixer::set_volume(p, v))];
+    }
+    let streams = crate::mixer::list();
+    let mut out = vec![format!(
+        "mixer: {} -- {} stream(s), master {}%",
+        if crate::audio::is_streaming() { "playing" } else if crate::audio::can_stream() { "idle" } else { "no streaming sound card" },
+        streams.len(),
+        crate::audio::volume()
+    )];
+    for (pid, ms, vol) in streams {
+        out.push(format!("  pid {:<6} {:<14} {:>5} ms queued  volume {}%", pid, crate::process::name_of(pid).unwrap_or_else(|| String::from(if pid == 0 { "system" } else { "-" })), ms, vol));
     }
     out
 }

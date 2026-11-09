@@ -18,6 +18,9 @@ internal static class SettingsNative
     [DllImport("buitenzorg")] internal static extern long AudioStat(int field);
     [DllImport("buitenzorg")] internal static extern int AudioSetVolume(int percent);
     [DllImport("buitenzorg")] internal static extern int AudioTone(int hz, int ms);
+    [DllImport("buitenzorg")] internal static extern int AudioWrite(byte[] data, int offset, int count, int format);
+    [DllImport("buitenzorg")] internal static extern int AudioQueuedMs();
+    [DllImport("buitenzorg")] internal static extern int AudioAppVolume(long pid, int volume);
 }
 
 /// <summary>The desktop's settings (what the shell's theme / bg / saver / anim / cursor change).</summary>
@@ -174,6 +177,49 @@ public static class Audio
         }
     }
     public static bool IsMuted => Stat(5) == 1;
+    /// <summary>The PCM format word of AUDIO_WRITE: rate | channels &lt;&lt; 20 | bits &lt;&lt; 24.</summary>
+    public static int Format(int rate, int channels, int bits) => rate | channels << 20 | bits << 24;
+
+    /// <summary>Whether the card streams (the mixer: PCs today).</summary>
+    public static bool CanStream
+    {
+        get
+        {
+            if (_sim) return false;
+            try { return SettingsNative.AudioQueuedMs() >= 0; }
+            catch (Exception e) when (Fallback(e)) { return false; }
+        }
+    }
+
+    /// <summary>Queue PCM in this program's mixer stream: returns the bytes taken
+    /// (fewer when about two seconds are already queued -- write the rest later),
+    /// -1 without a streaming card. Off the device everything is "taken".</summary>
+    public static int Write(byte[] data, int offset, int count, int format)
+    {
+        if (_sim) return count;
+        try { return SettingsNative.AudioWrite(data, offset, count, format); }
+        catch (Exception e) when (Fallback(e)) { return count; }
+    }
+
+    /// <summary>Milliseconds of this program's stream not played yet.</summary>
+    public static int QueuedMs
+    {
+        get
+        {
+            if (_sim) return 0;
+            try { return Math.Max(0, SettingsNative.AudioQueuedMs()); }
+            catch (Exception e) when (Fallback(e)) { return 0; }
+        }
+    }
+
+    /// <summary>A program's volume in the mixer (pid 0 = this one).</summary>
+    public static int AppVolume(long pid = 0, int set = -1)
+    {
+        if (_sim) return set < 0 ? 100 : set;
+        try { return SettingsNative.AudioAppVolume(pid, set); }
+        catch (Exception e) when (Fallback(e)) { return set < 0 ? 100 : set; }
+    }
+
     /// <summary>Play a sine tone (blocks for its length).</summary>
     public static bool Beep(int hz = 880, int ms = 200)
     {

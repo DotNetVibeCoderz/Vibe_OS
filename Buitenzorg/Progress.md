@@ -84,7 +84,7 @@
 - [x] FAT12/16/32 read + **write** (FAT12/16/32 sejak 2026-11-01; teruji lintas reboot)
 - [x] Service/init manager (parallel, dependency-aware)
 - [~] Async I/O io_uring-style (SQ/CQ + benchmark) — *zero-copy & syscall submit belum*
-- [~] Networking: Ethernet/ARP/IPv4/ICMP/UDP/TCP, virtio-net + GENET (Pi 4), DHCP, SNTP, SSH; perintah terminal `ipconfig`/`ping`/`arp`/`route`/`netstat`/`hostname` (2026-11-03) — *DNS, WiFi, e1000 belum*
+- [~] Networking: Ethernet/ARP/IPv4/ICMP/UDP/TCP, virtio-net + GENET (Pi 4), DHCP, SNTP, SSH; perintah terminal `ipconfig`/`ping`/`arp`/`route`/`netstat`/`hostname` (2026-11-03) · **DNS resolver** + `nslookup` + ping nama ✓ (2026-11-08) — *WiFi belum*
 - [ ] Filesystem kustom journaled · [ ] permission broker · [x] package manager (`pkg.rs`, v0.10)
 
 ### 🖼️ Graphics & Window System
@@ -397,7 +397,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
 - **Package Manager**
   - [x] Format `.bzpkg` (manifest + ELF/skrip + aset + SHA-256) + `bz install /disk/X.BZP` / `bz remove` / `bz info` ✓ (2026-11-06, `bzpkg.rs`, `MILESTONE: BZPKG OK`, diuji di QEMU dengan paket buatan `bz pack`)
   - [x] Host `bz pack` / `bz inspect` ✓ (2026-11-06) · [x] **`bz publish PKG --repo DIR`** ✓ (2026-11-08) · [x] **`bz rollback NAMA`** (`/disk/PKGHIST`, satu versi ke belakang) ✓ (2026-11-08)
-  - [x] **Repo paket remote** ✓ (2026-11-08): `repo.rs` (HTTP/1.0 GET di atas `tcp.rs`, indeks `BZREPO 1`, SHA-256 per paket, dependensi depth-first + tolak siklus, versi per bagian) -- `bz repo URL/off`, `bz update`, `bz search`, `bz install NAMA` (+dependensi), `bz upgrade`; host `bz repo serve/index`, `bz pack --depends`; `MILESTONE: REPO OK`, `bz repo --check` di smoke `[bzlink]` · [ ] rollback · [ ] DNS/TLS
+  - [x] **Repo paket remote** ✓ (2026-11-08): `repo.rs` (HTTP/1.0 GET di atas `tcp.rs`, indeks `BZREPO 1`, SHA-256 per paket, dependensi depth-first + tolak siklus, versi per bagian) -- `bz repo URL/off`, `bz update`, `bz search`, `bz install NAMA` (+dependensi), `bz upgrade`; host `bz repo serve/index`, `bz pack --depends`; `MILESTONE: REPO OK`, `bz repo --check` di smoke `[bzlink]` · [ ] rollback · [x] DNS (2026-11-08) · [ ] TLS untuk repo
   - [x] State terpasang persisten (`/disk/PKGS.CFG`) ✓ · [ ] library SDK sebagai paket ber-versi · [ ] izin manifest ditegakkan permission broker
 - **IDE "Buitenzorg Studio"**
   - [x] Editor multi-tab + nomor baris + syntax highlighting (C#/JS/TS/Python/shell/JSON) + find/replace + undo/redo + auto-indent ✓ (2026-11-06, `MStudio`)
@@ -429,25 +429,25 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [x] Multi-proses preemptif (musik di latar saat game/browsing) — ✓ increment 1 (2026-11-01), lihat §Developer Workstation
   - [ ] Surface shared-memory zero-copy (ganti salinan per-piksel `BLIT`) + vsync/frame pacing + fullscreen eksklusif
   - [~] Timer resolusi tinggi: [x] `SLEEP_UNTIL` (61) presisi ~1 ms (blok + yield) ✓ (2026-11-08) · [ ] APIC timer/HPET one-shot
-  - [ ] Audio berbasis IRQ + ring buffer latensi rendah · [x] driver Intel HDA (`hda.rs`, terbukti di Dell Latitude 7290) · [ ] capture mic
+  - [~] [x] **Ring buffer streaming** ✓ (2026-11-08: AC'97 32 buffer, HDA 16 halaman siklik, diisi pump -- polled, belum IRQ) · [x] driver Intel HDA (`hda.rs`, terbukti di Dell Latitude 7290) · [ ] capture mic
   - [x] **Event keyboard tekan/lepas + status tombol** ✓ (2026-11-08): syscall `KEY_EVENT` (59) / `KEY_STATE` (60) dari scancode mentah semua keyboard, `MILESTONE: KEY EVENTS OK` · [ ] mouse relatif/capture
   - [~] Stack USB xHCI + HID keyboard/mouse + mass storage ✓ · [ ] gamepad · [ ] UVC webcam · [ ] audio USB
   - [x] Storage AHCI/NVMe/USB + FS tulis persisten untuk media & aset game
   - [ ] Float/SIMD di ring-3 teruji (SSE/AVX untuk decoder & 3D)
 - **Multimedia**
   - [ ] `Buitenzorg.Media`: pipeline demux→decode→render, jam media (A/V sync), `MediaPlayer`, media key
-  - [ ] Mixer software multi-stream + volume per-app + resampling
-  - [ ] Codec audio: WAV · FLAC · Ogg Vorbis/Opus · MP3 · [ ] synth MIDI (wavetable/FM)
-  - [ ] Gambar: PNG (inflate) · GIF animasi · JPEG progresif · thumbnail/EXIF
+  - [x] **Mixer software multi-stream + volume per-app + resampling** ✓ (2026-11-08): `mixer.rs`, syscall `AUDIO_WRITE` (62) / `AUDIO_APP_VOLUME` (63), shell `mixer`, `MILESTONE: MIXER OK` + `AUDIO STREAM OK` (PC) · [ ] streaming di ARM64/RISC-V/Pi
+  - [~] Codec audio: [x] **WAV** (8/16-bit, mono/stereo, laju apa pun, judul INAM; `Buitenzorg.Media`) · [ ] FLAC · [ ] Ogg Vorbis/Opus · [ ] MP3 · [ ] synth MIDI (wavetable/FM)
+  - [~] Gambar: [x] **PNG** · [x] **GIF animasi** · [x] **JPEG progresif** ✓ (2026-11-08: di clrhost `imgdecode.rs` -- zune-png/zune-jpeg + dekoder GIF sendiri; `Buitenzorg.Media.Picture`) · [ ] thumbnail/EXIF
   - [ ] Video: MJPEG · container MP4/MKV/WebM · VP8/VP9/AV1 software · YUV→RGB SIMD · subtitle SRT · decode hardware
-  - [ ] App: Media Player · Music Player + perpustakaan · Photo Viewer (slideshow/zoom) · Sound Recorder · Camera · screenshot/perekam layar · widget Now Playing + OSD volume
+  - [~] App: [ ] Media Player · [x] **Music Player** (`mmusik`, 2 lagu orisinal tersintesis di image) ✓ (2026-11-08) · [ ] perpustakaan · [x] **Photo Viewer** (`mimage`: BMP/PNG/JPEG/GIF, zoom, geser, slideshow, GIF animasi; 3 foto contoh) ✓ (2026-11-08) · Sound Recorder · Camera · screenshot/perekam layar · widget Now Playing + OSD volume
 - **Internet**
   - [~] Driver NIC: virtio-net ✓ → e1000 ✓ → [ ] Realtek · [ ] Wi-Fi (jangka panjang)
-  - [~] TCP ✓ (`tcp.rs`, dipakai SSH) · DHCP ✓ · [ ] DNS resolver · [ ] socket `STREAM` + `poll` untuk app · [ ] IPv6
+  - [~] TCP ✓ (`tcp.rs`, dipakai SSH) · DHCP ✓ · [x] **DNS resolver** (`dns.rs`, cache TTL, `MILESTONE: DNS OK`) · [x] **TCP untuk app** (syscall `TCP_OP` 64 + `DNS_RESOLVE` 65, `appnet.rs`, handle per proses) ✓ (2026-11-08) · [ ] IPv6
   - [~] Kripto: [x] CSPRNG (`rng.rs`), SHA-2/HMAC/PBKDF2, ChaCha20-Poly1305, X25519, Ed25519 (dipakai SSH, 2026-11-03) · [ ] AES-GCM, RSA/ECDSA, store sertifikat root · [ ] TLS 1.3/1.2
-  - [ ] `BzHttp` jadi klien nyata (HTTP/1.1 + HTTPS) · WebSocket · download manager
-  - [ ] Browser: parser HTML5 · CSS (box model/flexbox/font) · layout + gambar · JS (subset ES + DOM di `script.rs`) · tab/bookmark/riwayat
-  - [ ] App: Web Browser · radio internet/podcast · klien chat · pengaturan jaringan · firewall + izin jaringan per-app
+  - [~] [x] **Klien HTTP/1.1 + HTTPS** (`Buitenzorg.Net.HttpClient`; TLS 1.3/1.2 lewat rustls di clrhost, sertifikat diverifikasi terhadap akar CA Mozilla) ✓ (2026-11-08) · [ ] WebSocket · [ ] download manager
+  - [~] Browser: [x] parser HTML toleran · [ ] CSS · [x] layout + gambar · [ ] JS · [~] riwayat (mundur/maju) · [ ] tab/bookmark
+  - [~] App: [x] **Web Browser** (`mweb`, Peramban) ✓ (2026-11-08) · [ ] radio internet/podcast · klien chat · pengaturan jaringan · firewall + izin jaringan per-app
 - **Game 2D**
   - [~] **`Buitenzorg.Game`** ✓ (2026-11-08, `BZGAME.DLL`): loop fixed-timestep, input tekan/lepas + tepi + axis, `Rng` ber-seed, `Vec2`, `Collide`, `Particles`, `Sfx`, `HighScores`, banner, skala playfield · [ ] sprite/tilemap/kamera/scene · [ ] gamepad · [ ] musik
   - [ ] Performa: blit SIMD · dirty-rect · surface zero-copy · fullscreen

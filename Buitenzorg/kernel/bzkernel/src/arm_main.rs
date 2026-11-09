@@ -58,6 +58,7 @@ mod coreutils;
 mod csx;
 mod bzpkg;
 mod rbuild;
+mod mixer;
 mod repo;
 mod bzsh;
 mod syscall;
@@ -84,6 +85,8 @@ mod deploy;
 mod logring;
 mod users;
 mod tcp;
+mod dns;
+mod appnet;
 mod rng;
 mod ssh;
 mod wm;
@@ -211,6 +214,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         }
         repo::self_test();
         keyboard::self_test();
+        mixer::self_test();
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();
         users::load();
@@ -1121,12 +1125,16 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
         Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
     }
+    if let Err(e) = dns::self_test() {
+        println!("[kernel] dns self-test FAILED: {}", e);
+    }
     if let Some(mut nic) = virtio::net::probe() {
         // The address from DHCP (QEMU's user network serves one), else QEMU's defaults.
         let (me, gw) = match dhcp::lease(&mut nic, 6) {
             Some(l) => {
                 print_lease("virtio-net", &l);
                 net::set_route(l.mask, l.router);
+                net::set_dns(l.dns);
                 (l.ip, l.router)
             }
             None => ([10, 0, 2, 15], [10, 0, 2, 2]),
@@ -1171,6 +1179,7 @@ fn boot_background() {
                     Some(l) => {
                         print_lease("virtio-net", &l);
                         net::set_route(l.mask, l.router);
+                        net::set_dns(l.dns);
                         (l.ip, l.router)
                     }
                     None => ([10, 0, 2, 15], [10, 0, 2, 2]),
@@ -1239,6 +1248,7 @@ fn ethernet_init() {
     let gw = lease.router;
     net::attach(alloc::boxed::Box::new(nic), lease.ip);
     net::set_route(lease.mask, gw);
+    net::set_dns(lease.dns);
     let icmp0 = net::counters().0;
     let wait = |done: &dyn Fn() -> bool| {
         let t0 = interrupts::ticks();

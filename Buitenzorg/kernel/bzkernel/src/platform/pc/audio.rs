@@ -34,7 +34,9 @@ const CR_RR: u8 = 0x02; // reset registers
 // PO_SR status bits.
 const SR_DCH: u16 = 0x01; // DMA controller halted
 
-const NUM_BUFFERS: usize = 8;
+/// DMA buffers of 4 KiB: a one-shot sound uses the first ones; streaming
+/// (the mixer) cycles through all of them -- 32 x 1024 frames = 680 ms.
+const NUM_BUFFERS: usize = 32;
 const FRAME_BYTES: usize = 4096;
 /// 16-bit samples (words) per DMA buffer.
 const WORDS_PER_BUF: usize = FRAME_BYTES / 2;
@@ -50,6 +52,11 @@ struct Ac97 {
     muted: bool,
     reset_caps: u16,                  // NAM reset-register readback (capabilities)
     mixer_ok: bool,                   // volume write/readback verified
+    /// The mixer streams into the ring (LVI moves ahead of the current index).
+    streaming: bool,
+    lvi: usize,
+    /// Buffers in a row filled with silence (a full ring of them stops it).
+    idle: usize,
 }
 
 // Only accessed behind the global Mutex; the addresses are plain integers.
@@ -158,6 +165,9 @@ pub fn init() -> bool {
         muted: false,
         reset_caps,
         mixer_ok,
+        streaming: false,
+        lvi: 0,
+        idle: 0,
     };
     // Apply the default volume.
     outw(nam + NAM_MASTER_VOL, vol_encode(ac.volume, ac.muted));
@@ -174,9 +184,105 @@ pub fn is_present() -> bool {
     DEVICE.lock().is_some() || super::hda::present()
 }
 
-/// Let the HD Audio stream stop once its sound is over (desktop loop).
+/// Let the HD Audio stream stop once its sound is over, and keep the
+/// mixer's stream fed (desktop loop, AUDIO_WRITE).
 pub fn poll() {
     super::hda::poll();
+    stream_pump();
+}
+
+/// Streams refilled (tests).
+pub static STREAM_FILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Whether the mixer stream is playing.
+pub fn is_streaming() -> bool {
+    if super::hda::present() {
+        return super::hda::is_streaming();
+    }
+    DEVICE.try_lock().is_some_and(|g| g.as_ref().is_some_and(|d| d.streaming))
+}
+
+/// Whether this card can stream (the mixer's AUDIO_WRITE).
+pub fn can_stream() -> bool {
+    is_present()
+}
+
+fn fill_from_mixer(buf_virt: u64) -> bool {
+    let mut tmp = [0i16; WORDS_PER_BUF];
+    let any = crate::mixer::mix(&mut tmp);
+    let out = buf_virt as *mut i16;
+    for (k, v) in tmp.iter().enumerate() {
+        unsafe { out.add(k).write_volatile(*v) };
+    }
+    any
+}
+
+/// Feed the ring from the mixer: start it when a stream has data, refill
+/// the buffers the DMA engine has played (between LVI and the current
+/// index), stop after a whole ring of silence.
+pub fn stream_pump() {
+    if super::hda::present() {
+        return super::hda::stream_pump();
+    }
+    let Some(mut g) = DEVICE.try_lock() else { return };
+    let Some(d) = g.as_mut() else { return };
+    use core::sync::atomic::Ordering::Relaxed;
+    if !d.streaming {
+        if !crate::mixer::has_data() {
+            return;
+        }
+        outb(d.nabm + PO_CR, 0);
+        outb(d.nabm + PO_CR, CR_RR);
+        for _ in 0..100_000 {
+            if inb(d.nabm + PO_CR) & CR_RR == 0 {
+                break;
+            }
+        }
+        for i in 0..NUM_BUFFERS {
+            fill_from_mixer(d.bufs[i].1);
+        }
+        let bdl = d.bdl_virt as *mut u32;
+        for i in 0..NUM_BUFFERS {
+            unsafe {
+                bdl.add(i * 2).write_volatile(d.bufs[i].0 as u32);
+                bdl.add(i * 2 + 1).write_volatile(WORDS_PER_BUF as u32);
+            }
+        }
+        outl(d.nabm + PO_BDBAR, d.bdl_phys as u32);
+        d.lvi = NUM_BUFFERS - 1;
+        outb(d.nabm + PO_LVI, d.lvi as u8);
+        outw(d.nabm + PO_SR, inw(d.nabm + PO_SR));
+        outb(d.nabm + PO_CR, CR_RPBM);
+        d.streaming = true;
+        d.idle = 0;
+        STREAM_FILLS.fetch_add(NUM_BUFFERS as u64, Relaxed);
+        return;
+    }
+    if inw(d.nabm + PO_SR) & SR_DCH != 0 {
+        // ran past the last valid buffer (nobody pumped in time): start over
+        outb(d.nabm + PO_CR, 0);
+        d.streaming = false;
+        return;
+    }
+    let civ = inb(d.nabm + PO_CIV) as usize % NUM_BUFFERS;
+    loop {
+        let next = (d.lvi + 1) % NUM_BUFFERS;
+        if next == civ {
+            break;
+        }
+        if fill_from_mixer(d.bufs[next].1) {
+            d.idle = 0;
+        } else {
+            d.idle += 1;
+        }
+        d.lvi = next;
+        outb(d.nabm + PO_LVI, next as u8);
+        STREAM_FILLS.fetch_add(1, Relaxed);
+    }
+    if d.idle >= NUM_BUFFERS {
+        outb(d.nabm + PO_CR, 0);
+        d.streaming = false;
+    }
 }
 
 /// Was the mixer write/readback check successful (proves the NAM path works)?
@@ -298,6 +404,15 @@ fn sine_fx(phase: u32) -> i16 {
 
 /// Play a generated sine tone of `freq` Hz for `ms` milliseconds.
 pub fn play_tone(freq: u32, ms: u32) -> bool {
+    if is_streaming() {
+        // the ring belongs to the mixer: the tone becomes the system stream
+        let frames = (SAMPLE_RATE as u64 * ms.min(10_000) as u64 / 1000) as usize;
+        let mut pcm = alloc::vec![0i16; frames * 2];
+        fill_tone(pcm.as_mut_ptr() as u64, frames, freq, 0);
+        let bytes: alloc::vec::Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+        crate::mixer::write(0, &bytes, 0);
+        return true;
+    }
     if super::hda::present() {
         return super::hda::play_tone(freq, ms, fill_tone);
     }
@@ -335,6 +450,13 @@ pub fn play_tone(freq: u32, ms: u32) -> bool {
 /// Play interleaved 16-bit stereo PCM from a caller buffer (read per-sample to
 /// avoid aliasing a user region). `len_bytes` is capped to the DMA pool size.
 pub fn play_pcm(src_ptr: u64, len_bytes: u64) -> bool {
+    if is_streaming() {
+        let n = (len_bytes as usize).min(4 << 20) & !3;
+        let p = src_ptr as *const u8;
+        let bytes: alloc::vec::Vec<u8> = (0..n).map(|i| unsafe { p.add(i).read_volatile() }).collect();
+        crate::mixer::write(0, &bytes, 0);
+        return true;
+    }
     if super::hda::present() {
         return super::hda::play_pcm(src_ptr, len_bytes);
     }

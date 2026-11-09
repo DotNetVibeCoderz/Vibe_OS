@@ -26,6 +26,8 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 | [Shell & Skrip](shell.id.md) | Edit baris, pipe/redirect, variabel, coreutils, alias, skrip `.SH` dengan if/for/while, profil saat mulai. |
 | [bz-link: perangkat yang berjalan dari PC](bz-link.id.md) | `bz deploy` app atau skrip ke OS yang sedang berjalan (tanpa build ulang image), `bz run`/`shell`/`push`/`pull`/`logs` lewat jaringan. |
 | [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
+| [Internet dan peramban web](internet.id.md) | Peramban (HTTP/HTTPS), `nslookup`, dan `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) untuk program. |
+| [Suara dan media](media.id.md) | Musik dan Gambar, mixer kernel (stream per program, volume per aplikasi), WAV, MediaPlayer dan gambar PNG/JPEG/GIF untuk program. |
 | [Game dan Buitenzorg.Game](games.id.md) | Ular, Ranjau, Bata, Balok, Kartu, dan framework game 2D (loop fixed-timestep, event tombol mentah, partikel, skor tertinggi). |
 | [Debugging & Profiling](debugging.id.md) | Attach GDB ke kernel yang berjalan, dan profiler zona berbasis TSC. |
 

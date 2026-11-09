@@ -247,8 +247,29 @@ pub mod sysno {
     /// shortly before, then yields until the deadline -- about 1 ms precision,
     /// for frame pacing. Returns 0 (at once when the deadline passed).
     pub const SLEEP_UNTIL: u64 = 61;
+    /// Queue PCM for the caller's audio stream (the kernel mixer sums every
+    /// program's stream): `a0` = samples, `a1` = their length in bytes (0 =
+    /// only report), `a2` = format: sample rate | channels << 20 | bits << 24
+    /// (0 = 48000 Hz, 2 channels, 16 bits; bits 8 = unsigned, 16 = signed
+    /// little-endian). Returns the bytes taken (fewer than `a1` when the
+    /// stream already holds about two seconds: write the rest later), or with
+    /// `a1` = 0 the stream's queued milliseconds; `NOSYS` without a sound card.
+    pub const AUDIO_WRITE: u64 = 62;
+    /// A program's volume in the mixer: `a0` = pid (0 = the caller), `a1` =
+    /// 0..=100 to set, `u64::MAX` to read. Returns the volume.
+    pub const AUDIO_APP_VOLUME: u64 = 63;
+    /// TCP for programs: `a0` = op ([`super::tcp_op`]) | handle << 8, `a1`/`a2`
+    /// per op. CONNECT (a1 = IPv4 address big-endian, a2 = port) -> handle;
+    /// SEND (a1 = data, a2 = length) -> bytes queued; RECV (a1 = buffer, a2 =
+    /// capacity) -> bytes read (0 = nothing yet); STATE -> [`super::tcp_state`];
+    /// CLOSE; LISTEN (a2 = port) -> listener handle; ACCEPT -> a connection's
+    /// handle or 0. Handles belong to the calling process and close when it ends.
+    pub const TCP_OP: u64 = 64;
+    /// Resolve a host name: `a0` = NUL-terminated name. Returns the IPv4
+    /// address big-endian in the low 32 bits (a.b.c.d = a << 24 | ...).
+    pub const DNS_RESOLVE: u64 = 65;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 62;
+    pub const COUNT: u64 = 66;
 }
 
 /// Operations of the [`sysno::GFX3D`] syscall ([`Gfx3dCmd::op`]). Every
@@ -486,9 +507,38 @@ pub mod hw_status {
 
 /// Socket kinds for the [`sysno::NET_SOCKET`] syscall.
 ///
-/// Only UDP is implemented: the kernel stack is Ethernet + ARP + IPv4 +
-/// ICMP + UDP over a loopback device. `STREAM` is reserved for the TCP work
-/// that `System.Net.Http` needs and currently fails with an error.
+/// Operations of [`sysno::TCP_OP`] (low 8 bits of `a0`).
+pub mod tcp_op {
+    /// Open a connection: a1 = IPv4 address big-endian, a2 = port.
+    pub const CONNECT: u64 = 0;
+    /// Queue data: a1 = bytes, a2 = length.
+    pub const SEND: u64 = 1;
+    /// Read what arrived: a1 = buffer, a2 = capacity.
+    pub const RECV: u64 = 2;
+    /// The connection state ([`super::tcp_state`]).
+    pub const STATE: u64 = 3;
+    /// Close the handle (a connection or a listener).
+    pub const CLOSE: u64 = 4;
+    /// Accept connections on port a2.
+    pub const LISTEN: u64 = 5;
+    /// The next connection a listener took, or 0.
+    pub const ACCEPT: u64 = 6;
+}
+
+/// What [`tcp_op::STATE`] returns.
+pub mod tcp_state {
+    /// The handshake is still running.
+    pub const CONNECTING: u64 = 0;
+    /// Data flows both ways.
+    pub const OPEN: u64 = 1;
+    /// The peer closed its side and everything it sent has been read.
+    pub const PEER_CLOSED: u64 = 2;
+    /// Closed, refused or timed out.
+    pub const CLOSED: u64 = 3;
+}
+
+/// The NET_SOCKET kinds. Only `DGRAM` (UDP); TCP has its own syscall,
+/// [`sysno::TCP_OP`].
 pub mod sock_kind {
     /// Connectionless datagrams (UDP).
     pub const DGRAM: u64 = 0;
@@ -613,7 +663,8 @@ pub mod draw_op {
     /// Blit a client ARGB pixel buffer (`text_ptr`, `w`×`h` `u32` pixels,
     /// `text_len` bytes) into the window canvas at (x,y). Enables full
     /// client-side software rendering (v0.16 "Panen" `Buitenzorg.Drawing`).
-    pub const BLIT: u64 = 7;
+    pub const BLIT: u64 = 7;
+
     /// Fill a rounded rectangle x,y,w,h with `color`; radius = `_pad`.
     pub const FILL_ROUND_RECT: u64 = 8;
     /// Outline a rounded rectangle (1 px) with `color`; radius = `_pad`.
@@ -949,7 +1000,13 @@ mod tests {
         assert_eq!(sysno::KEY_EVENT, 59);
         assert_eq!(sysno::KEY_STATE, 60);
         assert_eq!(sysno::SLEEP_UNTIL, 61);
-        assert_eq!(sysno::COUNT, 62);
+        assert_eq!(sysno::AUDIO_WRITE, 62);
+        assert_eq!(sysno::AUDIO_APP_VOLUME, 63);
+        assert_eq!(sysno::TCP_OP, 64);
+        assert_eq!(sysno::DNS_RESOLVE, 65);
+        assert_eq!(sysno::COUNT, 66);
+        assert_eq!(tcp_op::ACCEPT, 6);
+        assert_eq!(tcp_state::CLOSED, 3);
     }
 
     /// **ABI freeze gate (v1.0).** The v1 table is frozen: numbers are
@@ -965,7 +1022,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 62, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 66, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

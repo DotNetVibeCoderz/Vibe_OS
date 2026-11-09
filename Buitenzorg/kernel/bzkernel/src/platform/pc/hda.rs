@@ -25,6 +25,7 @@ const ICOI: usize = 0x60;
 const ICII: usize = 0x64;
 const ICIS: usize = 0x68;
 const SD_CTL: usize = 0x00;
+const SD_LPIB: usize = 0x04;
 const SD_STS: usize = 0x03;
 const SD_CBL: usize = 0x08;
 const SD_LVI: usize = 0x0C;
@@ -57,6 +58,11 @@ struct Hda {
     outputs: usize,
     stop_at: u64,
     running: bool,
+    /// The mixer streams through the cyclic pages; `wpage` = the next page to
+    /// refill once the link position has passed it.
+    streaming: bool,
+    wpage: usize,
+    idle: usize,
 }
 
 // The registers and DMA pages belong to this driver instance.
@@ -274,6 +280,9 @@ fn bring_up(dev: &PciDevice) -> Result<Hda, &'static str> {
         outputs: 0,
         stop_at: 0,
         running: false,
+        streaming: false,
+        wpage: 0,
+        idle: 0,
     };
     // controller reset: CRST low, then high
     h.w32(GCTL, h.r32(GCTL) & !1);
@@ -425,6 +434,56 @@ pub fn toggle_mute() -> bool {
     h.muted
 }
 
+pub fn is_streaming() -> bool {
+    DEVICE.try_lock().is_some_and(|g| g.as_ref().is_some_and(|h| h.streaming))
+}
+
+/// Feed the cyclic pages from the mixer (see the AC'97 pump).
+pub fn stream_pump() {
+    let Some(mut g) = DEVICE.try_lock() else { return };
+    let Some(h) = g.as_mut() else { return };
+    let fill = |h: &Hda, p: usize| -> bool {
+        let mut tmp = [0i16; FRAME_BYTES / 2];
+        let any = crate::mixer::mix(&mut tmp);
+        let out = h.pages[p].1 as *mut i16;
+        for (k, v) in tmp.iter().enumerate() {
+            unsafe { write_volatile(out.add(k), h.scale(*v)) };
+        }
+        any
+    };
+    if !h.streaming {
+        if !crate::mixer::has_data() {
+            return;
+        }
+        h.stop();
+        for p in 0..PAGES {
+            fill(h, p);
+        }
+        h.w8(h.sd + SD_STS, 0x1C);
+        h.w8(h.sd + SD_CTL, h.r8(h.sd + SD_CTL) | 0x02); // RUN
+        h.running = true;
+        h.streaming = true;
+        h.idle = 0;
+        h.wpage = (h.r32(h.sd + SD_LPIB) as usize / FRAME_BYTES) % PAGES;
+        super::audio::STREAM_FILLS.fetch_add(PAGES as u64, core::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    let cur = (h.r32(h.sd + SD_LPIB) as usize / FRAME_BYTES) % PAGES;
+    while h.wpage != cur {
+        if fill(h, h.wpage) {
+            h.idle = 0;
+        } else {
+            h.idle += 1;
+        }
+        h.wpage = (h.wpage + 1) % PAGES;
+        super::audio::STREAM_FILLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+    if h.idle >= PAGES {
+        h.stop();
+        h.streaming = false;
+    }
+}
+
 pub fn is_playing() -> bool {
     DEVICE.lock().as_ref().is_some_and(|h| h.running)
 }
@@ -433,7 +492,7 @@ pub fn is_playing() -> bool {
 pub fn poll() {
     if let Some(mut g) = DEVICE.try_lock() {
         if let Some(h) = g.as_mut() {
-            if h.running && crate::arch::cpu::timestamp() > h.stop_at {
+            if h.running && !h.streaming && crate::arch::cpu::timestamp() > h.stop_at {
                 h.stop();
             }
         }

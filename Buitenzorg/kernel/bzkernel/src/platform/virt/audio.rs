@@ -9,6 +9,18 @@ pub const SAMPLE_RATE: u32 = 48_000;
 #[cfg(target_arch = "aarch64")]
 use super::rpi_io as jack;
 
+/// The mixer's stream (AUDIO_WRITE): PC sound cards only so far -- the Pi's
+/// jack and HDMI are fed by the CPU in one go (`play_pcm`), not from a ring.
+pub fn can_stream() -> bool {
+    false
+}
+
+pub fn is_streaming() -> bool {
+    false
+}
+
+pub fn stream_pump() {}
+
 pub fn is_present() -> bool {
     #[cfg(target_arch = "aarch64")]
     return jack::audio_present();

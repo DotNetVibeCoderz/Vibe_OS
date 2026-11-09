@@ -128,6 +128,8 @@ pub fn run() -> ! {
         crate::usb::poll();
         #[cfg(target_arch = "x86_64")]
         crate::audio::poll();
+        #[cfg(not(target_arch = "x86_64"))]
+        crate::audio::stream_pump();
         crate::deploy::poll();
         crate::crash::flush();
         crate::ssh::poll();

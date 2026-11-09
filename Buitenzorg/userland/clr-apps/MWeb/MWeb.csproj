@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Peramban (web browser, managed): /disk/MWEB.DLL, `run mweb`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MWeb</AssemblyName>
+    <RootNamespace>MWeb</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+  </ItemGroup>
+</Project>

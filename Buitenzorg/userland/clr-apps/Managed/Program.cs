@@ -35,6 +35,8 @@ public static class Folder
         new AppInfo("mimage", "Gambar", "Wallpaper dan foto di /disk", IconKind.Sun, 0xC792EA),
         new AppInfo("mpaint", "Paint", "Menggambar dengan mouse", IconKind.Leaf, 0xE3A6C9),
         new AppInfo("mbuah", "Panen Buah 3D", "Tangkap buah yang jatuh, hindari batu", IconKind.Leaf, 0xE0352B),
+        new AppInfo("mweb", "Peramban", "Jelajahi web: HTTP dan HTTPS", IconKind.Search, 0x5FA8D3),
+        new AppInfo("mmusik", "Musik", "Putar lagu WAV, volume per aplikasi", IconKind.Play, 0xB99AE8),
         new AppInfo("mular", "Ular", "Makan buah, tumbuh panjang, jangan menabrak", IconKind.Leaf, 0x5FB85A),
         new AppInfo("mranjau", "Ranjau", "Buka kebun tanpa menggali ranjau", IconKind.Grid, 0xE0563B),
         new AppInfo("mbata", "Bata", "Pantulkan biji, runtuhkan tembok bata", IconKind.Grid, 0xE9A64C),
@@ -174,6 +176,9 @@ public static class Folder
         Report(MWaktu.WaktuApp.SelfTest()); // time zone / language / 12-24 h / setting the clock (restores them)
         Report(MRuang.RuangApp.SelfTest()); // G3: the scene graph through the kernel's 3D rasterizer (GFX3D)
         Report(MUlar.UlarApp.SelfTest()); // Buitenzorg.Game: the loop, raw key events, drawing
+        Report(MMusik.MusikApp.SelfTest()); // Buitenzorg.Media: WAV, the player on the kernel mixer (AUDIO_WRITE)
+        Report(MImage.PhotoApp.SelfTest()); // Buitenzorg.Media.Picture: PNG/JPEG/GIF decoded by the host
+        Report(MWeb.BrowserApp.SelfTest()); // Buitenzorg.Net: TCP_OP + HTTP over loopback, the page engine
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());
@@ -181,7 +186,6 @@ public static class Folder
             Report(MXox.XoxApp.SelfTest());
             Report(MClock.ClockApp.SelfTest());
             Report(MGallery.GalleryApp.SelfTest());
-            Report(MImage.ImageApp.SelfTest());
             Report(MPaint.PaintApp.SelfTest());
             Report(MPiano.PianoApp.SelfTest());
             Report(MBuah.BuahApp.SelfTest());

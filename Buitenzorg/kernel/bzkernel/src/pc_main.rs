@@ -57,6 +57,7 @@ mod coreutils;
 mod csx;
 mod bzpkg;
 mod rbuild;
+mod mixer;
 mod repo;
 mod bzsh;
 mod syscall;
@@ -81,6 +82,8 @@ mod deploy;
 mod logring;
 mod users;
 mod tcp;
+mod dns;
+mod appnet;
 mod rng;
 mod ssh;
 mod wm;
@@ -396,6 +399,7 @@ fn network_up_inner() {
         name, l.ip[0], l.ip[1], l.ip[2], l.ip[3], l.router[0], l.router[1], l.router[2], l.router[3]
     );
     net::set_route(l.mask, l.router);
+    net::set_dns(l.dns);
     net::attach(nic, l.ip);
     match net::ping_once(l.router, 1, 1000) {
         Some(_) => println!("[kernel] MILESTONE: NIC OK ({}: DHCP + ping to the router)", name),
@@ -650,6 +654,7 @@ fn panen_audio_demo() {
 
     if up && audio::is_present() && audio::mixer_ok() {
         println!("[kernel] MILESTONE: AUDIO OK (AC'97 detected + mixer verified + PCM DMA playback)");
+        audio_stream_test();
     } else {
         println!("[kernel] audio: subsystem not fully up (present={}, mixer_ok={})", audio::is_present(), audio::mixer_ok());
     }
@@ -1723,6 +1728,45 @@ fn tunas_demo() {
 /// find the same bytes inside the disk image on the host — proof the write
 /// reached the medium, not just a cache. IDE only (the other boot media have no
 /// /disk driver yet).
+/// The mixer streams into the card's ring: a second of tone queued, the pump
+/// refills the buffers the DMA engine played for ~0.6 s, then the ring stops
+/// by itself once the stream is gone.
+fn audio_stream_test() {
+    use core::sync::atomic::Ordering;
+    const PID: u64 = u64::MAX - 3;
+    let frames = 48_000usize;
+    let mut bytes = alloc::vec::Vec::with_capacity(frames * 4);
+    for n in 0..frames {
+        let s = if (n / 55) % 2 == 0 { 4000i16 } else { -4000 }; // ~436 Hz square
+        bytes.extend_from_slice(&s.to_le_bytes());
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    let took = mixer::write(PID, &bytes, 0);
+    let f0 = audio::STREAM_FILLS.load(Ordering::Relaxed);
+    audio::stream_pump();
+    let started = audio::is_streaming();
+    let t0 = arch::cpu::nanos();
+    while arch::cpu::nanos() - t0 < 600_000_000 {
+        audio::stream_pump();
+        task::yield_now();
+    }
+    let refills = audio::STREAM_FILLS.load(Ordering::Relaxed) - f0;
+    let left = mixer::queued_ms(PID);
+    mixer::on_exit(PID);
+    let t1 = arch::cpu::nanos();
+    while audio::is_streaming() && arch::cpu::nanos() - t1 < 3_000_000_000 {
+        audio::stream_pump();
+        task::yield_now();
+    }
+    let stopped = !audio::is_streaming();
+    // the ring holds 680 ms (AC'97) / 340 ms (HDA): 600 ms of play needs refills
+    if took == bytes.len() && started && refills > 32 && left < 1000 && stopped {
+        println!("[kernel] MILESTONE: AUDIO STREAM OK (mixer -> DMA ring: {} buffer fills in 0.6 s, {} ms left of 1000, ring stopped after the stream)", refills, left);
+    } else {
+        println!("[audio] stream test: took {} started {} refills {} left {} ms stopped {}", took, started, refills, left, stopped);
+    }
+}
+
 fn disk_persist_demo() {
     const COUNTER: &str = "/disk/BOOTCNT.TXT";
     if vfs::free_space("/disk").is_err() {
@@ -1820,6 +1864,7 @@ fn dahan_demo() {
         }
         repo::self_test();
         keyboard::self_test();
+        mixer::self_test();
     }
     disk_persist_demo();
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).
@@ -1887,6 +1932,9 @@ fn dahan_demo() {
     match tcp::self_test() {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
         Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
+    }
+    if let Err(e) = dns::self_test() {
+        println!("[kernel] dns self-test FAILED: {}", e);
     }
     virtio_net_demo();
 

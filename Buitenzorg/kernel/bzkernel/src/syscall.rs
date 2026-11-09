@@ -151,6 +151,10 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::AUDIO_SET_VOLUME
             | sysno::AUDIO_TONE
             | sysno::AUDIO_PLAY
+            | sysno::AUDIO_WRITE
+            | sysno::AUDIO_APP_VOLUME
+            | sysno::TCP_OP
+            | sysno::DNS_RESOLVE
     )
 }
 
@@ -325,6 +329,23 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::THREAD_SELF => task::current_id(),
         sysno::CLOCK_MONO => crate::arch::cpu::timestamp(),
         sysno::AUDIO_STAT => sys_audio_stat(a0),
+        sysno::AUDIO_WRITE => sys_audio_write(a0, a1, a2),
+        sysno::TCP_OP => sys_tcp_op(a0, a1, a2),
+        sysno::DNS_RESOLVE => match read_user_path_checked(a0) {
+            Some(name) => match crate::dns::resolve(&name) {
+                Ok(ip) => u32::from_be_bytes(ip) as u64,
+                Err(_) => syserr::INVAL,
+            },
+            None => syserr::INVAL,
+        },
+        sysno::AUDIO_APP_VOLUME => {
+            let pid = if a0 == 0 { crate::aspace::current_id() } else { a0 };
+            if a1 == u64::MAX {
+                crate::mixer::volume(pid) as u64
+            } else {
+                crate::mixer::set_volume(pid, a1.min(100) as u32) as u64
+            }
+        }
         sysno::AUDIO_SET_VOLUME => {
             if crate::audio::set_volume(a0 as u32) {
                 0
@@ -1037,6 +1058,82 @@ fn sys_key_read() -> u64 {
         task::yield_now();
     }
     key
+}
+
+/// AUDIO_WRITE: queue PCM in the caller's mixer stream, then feed the card.
+fn sys_audio_write(ptr: u64, len: u64, format: u64) -> u64 {
+    if !crate::audio::can_stream() {
+        return syserr::NOSYS;
+    }
+    let me = crate::aspace::current_id();
+    if len == 0 {
+        return crate::mixer::queued_ms(me);
+    }
+    if crate::mixer::decode_format(format as u32).is_none() || len > 1 << 20 || !user_read(ptr, len) {
+        return syserr::INVAL;
+    }
+    let fb = crate::mixer::frame_bytes(format as u32) as u64;
+    let bytes = copy_user_bytes(ptr, (len - len % fb) as usize);
+    let took = crate::mixer::write(me, &bytes, format as u32);
+    crate::audio::stream_pump();
+    took as u64
+}
+
+/// TCP_OP: a program's TCP connections (`appnet.rs`).
+fn sys_tcp_op(a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::tcp_op;
+    let me = crate::aspace::current_id();
+    let (op, handle) = (a0 & 0xFF, a0 >> 8);
+    match op {
+        tcp_op::CONNECT => {
+            if a2 == 0 || a2 > 65535 {
+                return syserr::INVAL;
+            }
+            crate::appnet::connect(me, (a1 as u32).to_be_bytes(), a2 as u16).unwrap_or(syserr::INVAL)
+        }
+        tcp_op::LISTEN => {
+            if a2 == 0 || a2 > 65535 {
+                return syserr::INVAL;
+            }
+            crate::appnet::listen(me, a2 as u16).unwrap_or(syserr::INVAL)
+        }
+        tcp_op::ACCEPT => crate::appnet::accept(me, handle).unwrap_or(0),
+        tcp_op::SEND => {
+            let len = (a2 as usize).min(crate::appnet::MAX_IO);
+            if !user_read(a1, len as u64) {
+                return syserr::INVAL;
+            }
+            let data = copy_user_bytes(a1, len);
+            match crate::appnet::send(me, handle, &data) {
+                Some(n) => n as u64,
+                None => syserr::INVAL,
+            }
+        }
+        tcp_op::RECV => {
+            let cap = (a2 as usize).min(crate::appnet::MAX_IO);
+            if !user_write(a1, cap as u64) {
+                return syserr::INVAL;
+            }
+            let Some(data) = crate::appnet::recv(me, handle, cap) else { return syserr::INVAL };
+            let out = a1 as *mut u8;
+            for (i, b) in data.iter().enumerate() {
+                unsafe { out.add(i).write_volatile(*b) };
+            }
+            if data.is_empty() {
+                task::yield_now(); // a polling reader gives the CPU away
+            }
+            data.len() as u64
+        }
+        tcp_op::STATE => crate::appnet::state(me, handle).unwrap_or(syserr::INVAL),
+        tcp_op::CLOSE => {
+            if crate::appnet::close(me, handle) {
+                0
+            } else {
+                syserr::INVAL
+            }
+        }
+        _ => syserr::INVAL,
+    }
 }
 
 /// KEY_EVENT: the next press / release for the focused program.

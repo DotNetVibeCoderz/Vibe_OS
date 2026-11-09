@@ -30,6 +30,8 @@
     <ProjectReference Include="..\MRuang\MRuang.csproj" />
     <ProjectReference Include="..\MBuah\MBuah.csproj" />
     <ProjectReference Include="..\MUlar\MUlar.csproj" />
+    <ProjectReference Include="..\MMusik\MMusik.csproj" />
+    <ProjectReference Include="..\MWeb\MWeb.csproj" />
     <ProjectReference Include="..\MRanjau\MRanjau.csproj" />
     <ProjectReference Include="..\MBata\MBata.csproj" />
     <ProjectReference Include="..\MBalok\MBalok.csproj" />

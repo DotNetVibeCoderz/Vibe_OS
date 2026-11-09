@@ -180,6 +180,17 @@ pub fn set_route(mask: Ipv4Addr, gateway: Ipv4Addr) {
     }
 }
 
+static DNS: spin::Mutex<Option<Ipv4Addr>> = spin::Mutex::new(None);
+
+/// The DNS server from the DHCP lease (0.0.0.0 = none).
+pub fn set_dns(server: Ipv4Addr) {
+    *DNS.lock() = (server != [0; 4]).then_some(server);
+}
+
+pub fn dns_server() -> Option<Ipv4Addr> {
+    *DNS.lock()
+}
+
 /// Broadcast an ARP request for `target`.
 pub fn arp_request(target: Ipv4Addr) {
     let mut guard = STACK.lock();

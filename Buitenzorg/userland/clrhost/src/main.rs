@@ -26,6 +26,9 @@ extern crate alloc;
 mod bzapi;
 mod g3d;
 mod heap;
+mod imgdecode;
+mod netapi;
+mod htmlpage;
 /// The kernel's JS/TS/Python interpreter (same source), for UI scripts.
 #[path = "../../../kernel/bzkernel/src/script.rs"]
 #[allow(dead_code)]

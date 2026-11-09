@@ -59,6 +59,7 @@ mod coreutils;
 mod csx;
 mod bzpkg;
 mod rbuild;
+mod mixer;
 mod repo;
 mod bzsh;
 mod syscall;
@@ -83,6 +84,8 @@ mod deploy;
 mod logring;
 mod users;
 mod tcp;
+mod dns;
+mod appnet;
 mod rng;
 mod ssh;
 mod wm;
@@ -229,6 +232,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         }
         repo::self_test();
         keyboard::self_test();
+        mixer::self_test();
         // The rest of the boot runs under the splash (its image is on /disk).
         rng::init();
         users::load();
@@ -1036,6 +1040,9 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
     match tcp::self_test() {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
         Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
+    }
+    if let Err(e) = dns::self_test() {
+        println!("[kernel] dns self-test FAILED: {}", e);
     }
     if let Some(nic) = virtio::net::probe() {
         const ME: [u8; 4] = [10, 0, 2, 15];

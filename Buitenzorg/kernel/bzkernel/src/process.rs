@@ -74,6 +74,8 @@ pub fn args(pid: u64) -> String {
 /// Remove a program from the registry and remember its exit code.
 pub fn app_exit(pid: u64, code: u64) {
     crate::applog::on_exit(pid, code);
+    crate::mixer::on_exit(pid);
+    crate::appnet::on_exit(pid);
     APPS.lock().retain(|a| a.pid != pid);
     let mut ex = EXITED.lock();
     if ex.len() >= 32 {

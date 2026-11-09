@@ -18,6 +18,17 @@ rustclr-core = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev =
 rustclr-bcl = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false, features = ["libm-math", "threads"] }
 rustclr-thread = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false }
 linked_list_allocator = { version = "0.10", default-features = false }
+# images for managed apps (imgdecode.rs): PNG + JPEG decoders without std
+zune-png = { version = "0.4", default-features = false }
+zune-jpeg = { version = "0.4", default-features = false }
+zune-core = { version = "0.4", default-features = false }
+# TLS for managed programs (netapi.rs): rustls without std, RustCrypto
+# primitives (forced to their portable code in .cargo/config.toml -- the
+# targets have no SIMD), Mozilla's root certificates
+rustls = { version = "0.23", default-features = false, features = ["tls12"] }
+rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12"] }
+webpki-roots = "1"
+getrandom = { version = "0.2", features = ["custom"] }
 
 [profile.release]
 panic = "abort"

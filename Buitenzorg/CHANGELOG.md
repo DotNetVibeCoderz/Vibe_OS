@@ -14,6 +14,26 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 ## [Unreleased]
 
 ### Added
+- **Sound mixer and music:** `mixer.rs` keeps one stream per program
+  (converted to 48 kHz stereo, up to 2 s), mixes them at per-program
+  volumes with saturation, and the PC drivers stream it through a ring
+  (AC'97: 32 DMA buffers with a moving last-valid index; Intel HDA: 16
+  cyclic pages behind the link position). Syscalls `AUDIO_WRITE` (62) and
+  `AUDIO_APP_VOLUME` (63), shell `mixer`. `Buitenzorg.Media` (WAV parser with
+  titles, `MediaPlayer`) and the **Musik** app; two original pieces are
+  synthesized into every image (`LAGU1.WAV`, `LAGU2.WAV`). Boot checks
+  `MILESTONE: MIXER OK` and `MILESTONE: AUDIO STREAM OK`.
+- **Internet:** a DNS resolver in the kernel (`nslookup`, `ping NAME`), TCP for
+  programs (syscalls `TCP_OP` 64, `DNS_RESOLVE` 65), and `Buitenzorg.Net` --
+  `TcpConnection`, `TcpServer`, `TlsConnection` (rustls in the managed host,
+  certificates checked against Mozilla's roots) and an HTTP/1.1 `HttpClient`.
+  **Peramban**, the web browser: HTTP and HTTPS pages, links, images, history,
+  local files. Boot check `MILESTONE: DNS OK`.
+- **Pictures:** managed programs open BMP, PNG, JPEG (incl. progressive) and
+  animated GIF through `Buitenzorg.Media.Picture`; the host decodes and scales
+  (`imgdecode.rs`, natives `ImageInfo`/`ImageDecodeScaled`). The **Gambar**
+  viewer gained zoom, panning, GIF playback and a slide show; three sample
+  photos ship on `/disk`.
 - **Games:** `Buitenzorg.Game` (`BZGAME.DLL`), a fixed-timestep 2D game
   framework on Buitenzorg.UI (raw key input with edges and axes, seeded RNG,
   collisions, particles, sound effects, high scores), and five original

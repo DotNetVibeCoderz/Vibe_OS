@@ -489,6 +489,11 @@ pub fn recv(id: u64, max: usize) -> Vec<u8> {
     data
 }
 
+/// Received bytes not read yet.
+pub fn recv_pending(id: u64) -> usize {
+    TCP.lock().conn(id).map_or(0, |c| c.rx.len())
+}
+
 /// The peer closed its side and every byte was read.
 pub fn at_eof(id: u64) -> bool {
     TCP.lock().conn(id).map_or(true, |c| (c.peer_fin || c.state == State::Closed) && c.rx.is_empty())

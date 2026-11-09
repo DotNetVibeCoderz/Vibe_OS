@@ -43,6 +43,8 @@ const SHELL_RUN: u64 = 58;
 const KEY_EVENT: u64 = 59;
 const KEY_STATE: u64 = 60;
 const SLEEP_UNTIL: u64 = 61;
+const AUDIO_WRITE: u64 = 62;
+const AUDIO_APP_VOLUME: u64 = 63;
 const USER_OP: u64 = 55;
 const AUDIO_STAT: u64 = 23;
 const AUDIO_SET_VOLUME: u64 = 24;
@@ -80,7 +82,7 @@ struct DrawCmd {
     text_len: u64,
 }
 
-fn int(a: &[Value], i: usize) -> i64 {
+pub(crate) fn int(a: &[Value], i: usize) -> i64 {
     match a.get(i) {
         Some(Value::I32(v)) => *v as i64,
         Some(Value::I64(v)) | Some(Value::NativeInt(v)) => *v,
@@ -88,7 +90,7 @@ fn int(a: &[Value], i: usize) -> i64 {
     }
 }
 
-fn string(interp: &Interpreter, a: &[Value], i: usize) -> String {
+pub(crate) fn string(interp: &Interpreter, a: &[Value], i: usize) -> String {
     match a.get(i) {
         Some(Value::Obj(h)) if !h.is_null() => interp.string_value(*h).unwrap_or_default(),
         _ => String::new(),
@@ -562,6 +564,132 @@ fn key_state(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_i32(sys::syscall(KEY_STATE, int(a, 0) as u64, 0, 0) as i64)
 }
 
+/// `AudioWrite(byte[] data, int offset, int count, int format)` -> bytes the
+/// mixer took, -1 without a streaming card (AUDIO_WRITE). Copies only the
+/// range (a song is megabytes; it is written a quarter second at a time).
+fn audio_write(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (off, cnt, fmt) = (int(a, 1).max(0) as usize, int(a, 2).max(0) as usize, int(a, 3) as u64);
+    let chunk: Vec<u8> = match a.first() {
+        Some(Value::Obj(h)) if !h.is_null() => i
+            .heap
+            .with::<ClrArray, _>(*h, |arr| match &arr.storage {
+                ArrayStorage::U8(v) => v.get(off.min(v.len())..(off + cnt).min(v.len())).map(|s| s.to_vec()).unwrap_or_default(),
+                _ => Vec::new(),
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let r = sys::syscall(AUDIO_WRITE, chunk.as_ptr() as u64, chunk.len() as u64, fmt);
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `AudioQueuedMs()` -> the caller's queued milliseconds, -1 without a streaming card.
+fn audio_queued(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
+    let r = sys::syscall(AUDIO_WRITE, 0, 0, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `AudioAppVolume(long pid, int volume)` -> the volume (volume < 0 = read).
+fn audio_app_volume(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let v = int(a, 1);
+    let r = sys::syscall(AUDIO_APP_VOLUME, int(a, 0) as u64, if v < 0 { u64::MAX } else { v as u64 }, 0);
+    ret_i32(r as i64)
+}
+
+/// `ImageInfo(byte[] data)` -> width | height << 16 | frames << 32, or -1
+/// (BMP, PNG, JPEG, GIF -- imgdecode.rs).
+fn image_info(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let data = bytes(i, a, 0);
+    let r = crate::imgdecode::with_picture(&data, |p| (p.width as i64) | (p.height as i64) << 16 | (p.frames.len() as i64) << 32);
+    Ok(Some(Value::I64(r.unwrap_or(-1))))
+}
+
+/// `ImageDecodeInto(byte[] data, int frame, int[] pixels)` -> the frame's
+/// delay in ms (0 for a still picture), or -1.
+fn image_decode_into(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let data = bytes(i, a, 0);
+    let frame = int(a, 1).max(0) as usize;
+    let Some((px, delay)) = crate::imgdecode::with_picture(&data, |p| p.frames.get(frame).map(|(f, d)| (f.clone(), *d))).flatten() else {
+        return ret_i32(-1);
+    };
+    let Some(Value::Obj(h)) = a.get(2) else { return ret_i32(-1) };
+    let ok = i
+        .heap
+        .with_mut::<ClrArray, _>(*h, |arr| {
+            if let ArrayStorage::I32(v) = &mut arr.storage {
+                for (d, s) in v.iter_mut().zip(px.iter()) {
+                    *d = *s as i32;
+                }
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false);
+    ret_i32(if ok { delay as i64 } else { -1 })
+}
+
+/// `ImageDecodeScaled(byte[] data, int frame, int[] pixels, int dw, int dh,
+/// int sx, int sy, int sw, int sh, int bg1, int bg2)`: the frame's source
+/// rectangle (sx, sy, sw, sh) sampled (nearest) into dw x dh pixels, alpha
+/// composited over an 8-pixel checkerboard of bg1/bg2 -- so the interpreter
+/// never touches single pixels. Returns the frame's delay in ms, or -1.
+fn image_decode_scaled(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let data = bytes(i, a, 0);
+    let frame = int(a, 1).max(0) as usize;
+    let (dw, dh) = (int(a, 3).max(0) as usize, int(a, 4).max(0) as usize);
+    let (sx, sy, sw, sh) = (int(a, 5), int(a, 6), int(a, 7).max(1), int(a, 8).max(1));
+    let (bg1, bg2) = (int(a, 9) as u32 & 0xFF_FFFF, int(a, 10) as u32 & 0xFF_FFFF);
+    if dw == 0 || dh == 0 || dw * dh > 16 << 20 {
+        return ret_i32(-1);
+    }
+    let out = crate::imgdecode::with_picture(&data, |p| {
+        let (f, delay) = p.frames.get(frame)?;
+        let (w, h) = (p.width as i64, p.height as i64);
+        let mut px = alloc::vec![0u32; dw * dh];
+        for y in 0..dh {
+            let ty = sy + (y as i64 * sh) / dh as i64;
+            for x in 0..dw {
+                let tx = sx + (x as i64 * sw) / dw as i64;
+                let bg = if ((x >> 3) ^ (y >> 3)) & 1 == 0 { bg1 } else { bg2 };
+                px[y * dw + x] = if tx < 0 || ty < 0 || tx >= w || ty >= h {
+                    bg
+                } else {
+                    let c = f[(ty * w + tx) as usize];
+                    let al = c >> 24;
+                    if al == 255 {
+                        c & 0xFF_FFFF
+                    } else {
+                        let mix = |s: u32| -> u32 {
+                            let (cs, bs) = ((c >> s) & 255, (bg >> s) & 255);
+                            ((cs * al + bs * (255 - al)) / 255) << s
+                        };
+                        mix(16) | mix(8) | mix(0)
+                    }
+                };
+            }
+        }
+        Some((px, *delay))
+    })
+    .flatten();
+    let Some((px, delay)) = out else { return ret_i32(-1) };
+    let Some(Value::Obj(h)) = a.get(2) else { return ret_i32(-1) };
+    let ok = i
+        .heap
+        .with_mut::<ClrArray, _>(*h, |arr| {
+            if let ArrayStorage::I32(v) = &mut arr.storage {
+                for (d, s) in v.iter_mut().zip(px.iter()) {
+                    *d = *s as i32;
+                }
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false);
+    ret_i32(if ok { delay as i64 } else { -1 })
+}
+
 /// `SleepUntil(long ns)`: until CLOCK_NANOS reaches ns (other managed threads
 /// and the collector go on meanwhile).
 fn sleep_until(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
@@ -625,7 +753,7 @@ fn shell_run(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 43] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 49] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -634,6 +762,12 @@ pub fn install(interp: &mut Interpreter) {
         ("KeyEvent", key_event),
         ("KeyState", key_state),
         ("SleepUntil", sleep_until),
+        ("AudioWrite", audio_write),
+        ("AudioQueuedMs", audio_queued),
+        ("AudioAppVolume", audio_app_volume),
+        ("ImageInfo", image_info),
+        ("ImageDecodeInto", image_decode_into),
+        ("ImageDecodeScaled", image_decode_scaled),
         ("ScreenWidth", screen_width),
         ("ScreenHeight", screen_height),
         ("IsInteractive", is_interactive),
@@ -673,4 +807,5 @@ pub fn install(interp: &mut Interpreter) {
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);
     }
+    crate::netapi::register(interp);
 }

@@ -193,8 +193,20 @@ public static class SyscallNumbers
     /// <summary>Sleep until CLOCK_NANOS reaches a0 (absolute ns), ~1 ms precision.</summary>
     public const ulong SleepUntil = 61;
 
+    /// <summary>Queue PCM for the caller's mixer stream: a0 = samples, a1 = bytes (0 = report queued ms), a2 = rate | channels &lt;&lt; 20 | bits &lt;&lt; 24 (0 = 48 kHz stereo 16-bit). Returns bytes taken.</summary>
+    public const ulong AudioWrite = 62;
+
+    /// <summary>A program's mixer volume: a0 = pid (0 = self), a1 = 0..100 or ulong.MaxValue to read.</summary>
+    public const ulong AudioAppVolume = 63;
+
+    /// <summary>TCP for programs: a0 = op (<see cref="TcpOp"/>) | handle &lt;&lt; 8; a1/a2 per op.</summary>
+    public const ulong TcpOp = 64;
+
+    /// <summary>Resolve a host name: a0 = NUL-terminated name. Returns the IPv4 address big-endian in the low 32 bits.</summary>
+    public const ulong DnsResolve = 65;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 62;
+    public const ulong Count = 66;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Gfx3d"/> (bz-abi <c>gfx3d_op</c>).</summary>
@@ -330,6 +342,18 @@ public static class HwStatus
 
 /// <summary>Socket kinds for <see cref="SyscallNumbers.NetSocket"/>. Only UDP is implemented;
 /// <see cref="Stream"/> is reserved for the TCP work that System.Net.Http needs.</summary>
+/// <summary>Operations of <see cref="SyscallNumbers.TcpOp"/>.</summary>
+public static class TcpOp
+{
+    public const ulong Connect = 0, Send = 1, Recv = 2, State = 3, Close = 4, Listen = 5, Accept = 6;
+}
+
+/// <summary>What <see cref="TcpOp.State"/> returns.</summary>
+public static class TcpState
+{
+    public const ulong Connecting = 0, Open = 1, PeerClosed = 2, Closed = 3;
+}
+
 public static class SockKind
 {
     /// <summary>Connectionless datagrams (UDP).</summary>

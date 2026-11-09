@@ -27,6 +27,8 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [The Shell & Scripts](shell.md) | Line editing, pipes/redirection, variables, coreutils, aliases, `.SH` scripts with if/for/while, the startup profile. |
 | [bz-link: a running device from your PC](bz-link.md) | `bz deploy` an app or script to a running OS (no image rebuild), `bz run`/`shell`/`push`/`pull`/`logs` over the network. |
 | [Packages (`.bzpkg`)](packages.md) | `bz pack` on the host, `bz install/remove` on the device, the format and its safety rules. |
+| [Internet and the web browser](internet.md) | Peramban (HTTP/HTTPS), `nslookup`, and `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) for programs. |
+| [Sound and media](media.md) | Musik and Gambar, the kernel mixer (a stream per program, per-app volume), WAV, MediaPlayer and PNG/JPEG/GIF pictures for programs. |
 | [Games and Buitenzorg.Game](games.md) | Ular, Ranjau, Bata, Balok, Kartu, and the 2D game framework (fixed-timestep loop, raw key events, particles, high scores). |
 | [Debugging & Profiling](debugging.md) | Attach GDB to the running kernel, and the instrumented TSC zone profiler. |
 

@@ -82,6 +82,10 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 59 | `KEY_EVENT` | — | — | 0 = no event, else `code \| pressed << 16 \| 1 << 17` for the focused program. `code` = PC scancode set 1 (make code), `\| 0x100` for 0xE0-prefixed keys (arrows: up 0x148, down 0x150, left 0x14B, right 0x14D). Reading events discards the program's pending characters. For games (`Buitenzorg.Game`) |
 | 60 | `KEY_STATE` | key code (as `KEY_EVENT`) | — | 1 while the key is held down, else 0 (always 0 for a program without the focus) |
 | 61 | `SLEEP_UNTIL` | absolute deadline (CLOCK_NANOS ns) | — | 0. Blocks until shortly before the deadline, then yields until it: about 1 ms precision (frame pacing) |
+| 62 | `AUDIO_WRITE` | samples | length in bytes (0 = report) | bytes taken (fewer when the stream holds ~2 s: write the rest later), or the queued milliseconds when a1 = 0; `NOSYS` without a streaming sound card. `a2` = format: rate \| channels << 20 \| bits << 24 (0 = 48000 Hz stereo 16-bit; 8 = unsigned, 16 = signed LE). The kernel mixer converts and sums every program's stream |
+| 63 | `AUDIO_APP_VOLUME` | pid (0 = self) | 0..=100, or `u64::MAX` to read | the program's mixer volume |
+| 64 | `TCP_OP` | op \| handle << 8 (`tcp_op`: CONNECT 0, SEND 1, RECV 2, STATE 3, CLOSE 4, LISTEN 5, ACCEPT 6) | CONNECT: IPv4 big-endian, LISTEN: -; SEND/RECV: data ptr; a2: port / length / capacity | handle, bytes, or `tcp_state` (CONNECTING 0, OPEN 1, PEER_CLOSED 2, CLOSED 3); handles are the process's own |
+| 65 | `DNS_RESOLVE` | NUL-terminated host name | - | IPv4 address big-endian in the low 32 bits (DNS over UDP 53, cached) |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.
