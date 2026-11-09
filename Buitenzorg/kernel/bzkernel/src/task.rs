@@ -48,13 +48,23 @@ use crate::arch::context::{self, FpuState};
 use crate::arch::cpu as interrupts;
 use crate::{aspace, gdt, usermode};
 
-const STACK_SIZE: usize = 32 * 1024;
+/// A task's kernel stack. On ARM64 and RISC-V an exception from user mode
+/// lands on SP_EL1 / the trap stack, which *is* this stack, so every syscall
+/// a program makes runs on it (x86 has a separate 64 KiB SYSCALL stack): a
+/// Studio self-test (SHELL_RUN -> script debug -> spawn) reached 30 of 32 KiB
+/// there, and one layout later it overflowed into the heap block below
+/// (a corrupted heap free list, panic in the allocator).
+const STACK_SIZE: usize = if cfg!(target_arch = "x86_64") { 32 * 1024 } else { 96 * 1024 };
 /// Per-thread SYSCALL + ring-0 interrupt stack for ring-3 processes/threads.
 /// Sized like the boot task's privilege stack (gdt.rs): a WIN_PRESENT syscall
 /// composites every window on it, which needs real headroom.
 const SYS_STACK_SIZE: usize = 64 * 1024;
 const MAX_CPUS: usize = crate::arch::cpu::MAX_CPUS;
 const NO_TASK: usize = usize::MAX;
+/// Written at the bottom of every task stack and checked on every switch away
+/// from the task: a kernel stack that overflowed would otherwise silently
+/// overwrite the heap block below it (found as a corrupted heap free list).
+const STACK_CANARY: u64 = 0x5354_4143_4B5F_425A; // "BZ_KCATS"
 
 fn cpu() -> usize {
     crate::arch::cpu::id()
@@ -242,7 +252,10 @@ struct Task {
 }
 
 impl Task {
-    fn new(name: &'static str, entry: fn(), rsp: u64, stack: Option<Box<[u8]>>) -> Task {
+    fn new(name: &'static str, entry: fn(), rsp: u64, mut stack: Option<Box<[u8]>>) -> Task {
+        if let Some(s) = stack.as_mut() {
+            s[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
+        }
         Task {
             id: 0,
             name,
@@ -552,13 +565,26 @@ fn spawn_task(name: &'static str, entry: fn(), bkl: bool, idle: bool, pinned: Op
     idx
 }
 
+/// Bytes of a zero-initialized stack that were ever written (its high-water mark).
+fn stack_used(st: &[u8]) -> usize {
+    let first = st[8..].iter().position(|&b| b != 0).map(|p| p + 8).unwrap_or(st.len());
+    st.len() - first
+}
+
 fn push_task(mut t: Task) -> usize {
-    interrupts::without_interrupts(|| {
+    let mut deep: alloc::vec::Vec<(&'static str, usize, usize)> = alloc::vec::Vec::new();
+    let idx = interrupts::without_interrupts(|| {
         let mut guard = SCHEDULER.lock();
         let sched = guard.as_mut().expect("scheduler not initialized");
         // Lazily reap stacks of finished tasks no CPU is running.
         for task in sched.tasks.iter_mut() {
             if task.state == State::Finished && !task.running {
+                if let Some(st) = task.stack.as_ref() {
+                    let used = stack_used(st);
+                    if used * 4 > st.len() * 3 {
+                        deep.push((task.name, used, st.len()));
+                    }
+                }
                 task.stack = None;
                 task.user = None;
             }
@@ -567,7 +593,11 @@ fn push_task(mut t: Task) -> usize {
         sched.next_id += 1;
         sched.tasks.push(Box::new(t));
         sched.tasks.len() - 1
-    })
+    });
+    for (name, used, size) in deep {
+        println!("[task] stack high-water: '{}' used {} of {} KiB", name, used / 1024, size / 1024);
+    }
+    idx
 }
 
 // --- Ring-3 threads and processes --------------------------------------------
@@ -1187,6 +1217,11 @@ fn switch_with(before: impl FnOnce(&mut Scheduler)) -> bool {
                 if next == cur || next == NO_TASK {
                     None
                 } else {
+                    if let Some(st) = sched.tasks[cur].stack.as_ref() {
+                        if st[..8] != STACK_CANARY.to_le_bytes() {
+                            panic!("kernel stack overflow in task '{}' ({} KiB stack)", sched.tasks[cur].name, st.len() / 1024);
+                        }
+                    }
                     sched.tasks[cur].bkl = held;
                     sched.tasks[cur].in_user_syscall = CPU_USER_SYSCALL[c].load(Ordering::Relaxed);
                     let n = &mut sched.tasks[next];

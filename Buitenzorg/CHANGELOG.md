@@ -13,6 +13,14 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Fixed
+
+- **ARM64/RISC-V kernel stack overflow:** syscalls there run on the task's
+  kernel stack, which was 32 KiB; a deep syscall (Studio's script debugger)
+  reached 30 KiB and, in CI's image layout, overflowed into the kernel heap
+  (allocator panic). Task stacks are 96 KiB on those architectures, with a
+  canary checked on every switch and a high-water report.
+
 ### Added
 - **Sound mixer and music:** `mixer.rs` keeps one stream per program
   (converted to 48 kHz stereo, up to 2 s), mixes them at per-program
