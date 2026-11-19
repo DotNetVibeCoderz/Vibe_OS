@@ -84,6 +84,20 @@ pub fn write(path: &str, data: &[u8]) -> Result<(), &'static str> {
     })
 }
 
+/// Add `data` to the end of the file at `path` (created when missing).
+pub fn append(path: &str, data: &[u8]) -> Result<(), &'static str> {
+    let (mount, file) = split_path(path)?;
+    if file.is_empty() {
+        return Err("path names a directory, not a file");
+    }
+    with_mount(mount, |m| {
+        if m.read_only {
+            return Err("mount is read-only");
+        }
+        m.volume.append_file(m.device.as_mut(), file, data)
+    })
+}
+
 /// Delete the file (or empty folder) at `path`, freeing its clusters.
 pub fn remove(path: &str) -> Result<(), &'static str> {
     let (mount, file) = split_path(path)?;
@@ -228,6 +242,23 @@ pub fn folder_self_test(base: &str) -> Result<String, &'static str> {
     if !stat(&format!("{}/SUB2", d))?.is_dir || read(&format!("{}/SUB2/F17.TXT", d))? != b"berkas 17" {
         return Err("renamed folder lost its content");
     }
+    // append: created when missing, then pieces that end inside a sector,
+    // exactly on a sector, and cross cluster boundaries; nothing leaks
+    let free_before = free_space(&d)?.0;
+    let ap = format!("{}/TUMBUH.BIN", d);
+    let mut want: Vec<u8> = Vec::new();
+    for (k, len) in [100usize, 412, 1, 3000, 7, 2048].iter().enumerate() {
+        let piece: Vec<u8> = (0..*len).map(|i| (i * 7 + k * 31) as u8).collect();
+        append(&ap, &piece)?;
+        want.extend_from_slice(&piece);
+    }
+    if read(&ap)? != want || stat(&ap)?.size as usize != want.len() {
+        return Err("appended file differs from what was appended");
+    }
+    remove(&ap)?;
+    if free_space(&d)?.0 != free_before {
+        return Err("append leaked clusters");
+    }
     if remove(&d).is_ok() {
         return Err("a non-empty folder was deleted");
     }
@@ -240,5 +271,5 @@ pub fn folder_self_test(base: &str) -> Result<String, &'static str> {
     if stat(&d).is_ok() {
         return Err("cleanup left the folder behind");
     }
-    Ok(format!("{}: nested mkdir, 20 files in a sub-folder (chain grew), move, rename, non-empty delete refused, cleanup", base))
+    Ok(format!("{}: nested mkdir, 20 files in a sub-folder (chain grew), move, rename, non-empty delete refused, append (5568 bytes in 6 pieces, no leak), cleanup", base))
 }

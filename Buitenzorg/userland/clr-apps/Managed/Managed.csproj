@@ -24,6 +24,7 @@
     <ProjectReference Include="..\MHwLab\MHwLab.csproj" />
     <ProjectReference Include="..\MSetting\MSetting.csproj" />
     <ProjectReference Include="..\MWaktu\MWaktu.csproj" />
+    <ProjectReference Include="..\MUnduh\MUnduh.csproj" />
     <ProjectReference Include="..\MImage\MImage.csproj" />
     <ProjectReference Include="..\MPaint\MPaint.csproj" />
     <ProjectReference Include="..\MPiano\MPiano.csproj" />

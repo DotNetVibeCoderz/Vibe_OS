@@ -417,7 +417,39 @@ public sealed class BrowserApp
                 string line = req.ToString();
                 int sp = line.IndexOf(' '), sp2 = line.IndexOf(' ', sp + 1);
                 string path = sp > 0 && sp2 > sp ? line.Substring(sp + 1, sp2 - sp - 1) : "/";
-                if (path == "/")
+                if (path == "/besar.bin")
+                {
+                    // a download: 300000 bytes, honouring "Range: bytes=N-"
+                    var all = BigFile();
+                    c.TimeoutMs = 2000;   // a cancelled client stops reading: give up soon
+                    long from = 0;
+                    int ri = line.IndexOf("Range: bytes=");
+                    if (ri >= 0)
+                    {
+                        int e = line.IndexOf('-', ri);
+                        long.TryParse(line.Substring(ri + 13, e - ri - 13), out from);
+                    }
+                    if (from >= all.Length)
+                    {
+                        var h = Encoding.ASCII.GetBytes("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        c.Write(h, 0, h.Length);
+                    }
+                    else
+                    {
+                        string head = (from > 0 ? "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes " + from + "-" + (all.Length - 1) + "/" + all.Length + "\r\n" : "HTTP/1.1 200 OK\r\n")
+                            + "Content-Type: application/octet-stream\r\nContent-Length: " + (all.Length - from) + "\r\nConnection: close\r\n\r\n";
+                        var h = Encoding.ASCII.GetBytes(head);
+                        c.Write(h, 0, h.Length);
+                        for (long o = from; o < all.Length; o += 16384) c.Write(all, (int)o, (int)Math.Min(16384, all.Length - o));
+                    }
+                }
+                else if (path == "/ws")
+                {
+                    c.TimeoutMs = 60000; // a slow emulator: the client may take a while between messages
+                    var ws = WebSocket.Accept(c, line);
+                    if (ws != null) EchoWs(ws);
+                }
+                else if (path == "/")
                 {
                     string body = "<html><head><title>Uji Peramban</title><script>document.write('x')</script></head><body>" +
                         "<h1>Halo &amp; selamat datang</h1><p>Paragraf <b>tebal</b> dengan <a href=\"/dua\">tautan ke dua</a>.</p>" +
@@ -436,10 +468,40 @@ public sealed class BrowserApp
                 else
                     Reply(c, "404 Not Found", "text/html", Encoding.UTF8.GetBytes("<title>404</title><p>tidak ada</p>"), chunked: false);
             }
-            catch (Exception) { }
+            catch (Exception e) { ServerError = e.Message; }
             c.Close();
         }
         server.Close();
+    }
+
+    static byte[] BigFile()
+    {
+        var b = new byte[300000];
+        for (int i = 0; i < b.Length; i++) b[i] = (byte)(i * 13 + (i >> 9));
+        return b;
+    }
+
+    static bool SameFile(byte[]? got, byte[] want)
+    {
+        if (got == null || got.Length != want.Length) return false;
+        for (int i = 0; i < want.Length; i += 997) if (got[i] != want[i]) return false;
+        return got[want.Length - 1] == want[want.Length - 1];
+    }
+
+    /// <summary>The test server's WebSocket: echo every message; before echoing
+    /// "ping-me" it pings the client first (the client must answer on its own).</summary>
+    /// <summary>The test server's last exception (shown in a failed check).</summary>
+    static string ServerError = "";
+
+    static void EchoWs(WebSocket ws)
+    {
+        while (true)
+        {
+            var m = ws.Receive();
+            if (m == null) return;
+            if (m.IsText && m.Text == "ping-me") ws.Ping(new byte[] { 1, 2, 3 });
+            if (m.IsText) ws.Send(m.Text); else ws.Send(m.Data);
+        }
     }
 
     static void Reply(TcpConnection c, string status, string type, byte[] body, bool chunked)
@@ -523,6 +585,58 @@ public sealed class BrowserApp
                 c.That(app.LastError.Length > 0 && app.Current?.Title == "Tidak dapat memuat", "an unreachable address shows an error page (" + app.LastError + ")");
             }
             catch (Exception e) { c.That(false, "network: " + e.Message); }
+            try
+            {
+                c.That(WebSocket.AcceptKey("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "WebSocket accept key (RFC 6455 example)");
+                var ws = WebSocket.Connect("ws://localhost:" + TestPort + "/ws", 30000);
+                try
+                {
+                ws.Send("halo websocket");
+                var m1 = ws.Receive();
+                c.That(m1 != null && m1.IsText && m1.Text == "halo websocket", "WebSocket text echo");
+                var mid = new byte[300];
+                for (int i = 0; i < mid.Length; i++) mid[i] = (byte)(i * 7);
+                ws.Send(mid);
+                var m2 = ws.Receive();
+                bool same = m2 != null && !m2.IsText && m2.Data.Length == 300;
+                for (int i = 0; same && i < 300; i++) same = m2!.Data[i] == mid[i];
+                c.That(same, "WebSocket binary echo, 16-bit length");
+                var big = new byte[66000];
+                for (int i = 0; i < big.Length; i++) big[i] = (byte)(i >> 3);
+                ws.Send(big);
+                var m3 = ws.Receive();
+                c.That(m3 != null && m3.Data.Length == 66000 && m3.Data[65999] == big[65999] && m3.Data[1234] == big[1234], "WebSocket 64-bit length (66000 bytes)");
+                ws.Send("ping-me");
+                var m4 = ws.Receive();
+                c.That(m4 != null && m4.Text == "ping-me", "WebSocket ping from the server answered" + (m4 == null ? " (closed; server: " + ServerError + ")" : ""));
+                ws.Close();
+                c.That(!ws.IsOpen && ws.CloseCode == 1000, "WebSocket close handshake (" + ws.CloseCode + ")");
+                }
+                finally { if (ws.IsOpen) ws.Close(); }   // a failed check must not leave the test server busy
+            }
+            catch (Exception e) { c.That(false, "WebSocket: " + e.Message); }
+            try
+            {
+                var want = BigFile();
+                string dl = Files.ScratchDirectory + "/UNDUH.BIN";
+                Files.Delete(dl);
+                var http = new HttpClient { TimeoutMs = 30000 };
+                int calls = 0;
+                var r = http.Download("http://localhost:" + TestPort + "/besar.bin", dl, (done, total) => { calls++; });
+                c.That(r.Status == 200 && r.Saved == 300000 && !r.Cancelled && SameFile(Files.ReadAllBytes(dl), want) && calls >= 2,
+                    "download 300000 bytes to a file in pieces (" + r.Saved + ", " + calls + " progress calls)");
+                // stop after the first piece, then continue it
+                Files.Delete(dl);
+                var r2 = http.Download("http://localhost:" + TestPort + "/besar.bin", dl, null, () => Files.Size(dl) > 0);
+                long part = Files.Size(dl);
+                c.That(r2.Cancelled && part > 0 && part < 300000, "download cancelled after " + part + " bytes");
+                var r3 = http.Download("http://localhost:" + TestPort + "/besar.bin", dl);
+                c.That(r3.Status == 206 && r3.Resumed && r3.Saved == 300000 && SameFile(Files.ReadAllBytes(dl), want), "download resumed with Range (206) and complete");
+                var r4 = http.Download("http://localhost:" + TestPort + "/besar.bin", dl);
+                c.That(r4.Status == 416 && r4.Saved == 300000, "a complete file is not fetched again (416)");
+                Files.Delete(dl);
+            }
+            catch (Exception e) { c.That(false, "download: " + e.Message); }
             stop = true;
             th.Join();
         }

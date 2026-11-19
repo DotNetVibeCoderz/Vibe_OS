@@ -142,8 +142,31 @@ fakt() {
 fakt 5          # 120
 ```
 
-* **Not yet:** `case`, here-documents, `local` variables (a function's
-  variables are the shell's).
+* **`local NAME[=value]`** inside a function (or a script) gives the
+  variable back its earlier value -- or removes it -- when the function
+  returns.
+* **`case WORD in pattern) ...;; esac`**: patterns use `*` and `?`, `a|b`
+  lists alternatives, a quoted pattern is literal, `$X` in a pattern is
+  expanded; the first match runs, `*)` catches the rest.
+* **Here-documents:** `cat <<EOF` feeds the following lines, up to a line
+  `EOF`, to the command's input; `$X`, `$(cmd)` and `$((..))` are expanded
+  unless the delimiter is quoted (`<<'EOF'`); `<<-EOF` strips leading tabs.
+  In scripts (several lines), not on a single typed line.
+
+```sh
+case $1 in
+  start|mulai) echo memulai ;;
+  *.TXT)       cat $1 ;;
+  *)           echo "tidak dikenal: $1" ;;
+esac
+
+salam() {
+    local NAMA=$1
+    cat <<EOF
+Halo $NAMA, sekarang $(date)
+EOF
+}
+```
 
 **Limits:** scripts run on the desktop's kernel task, so one run executes at
 most 20,000 statements and a `while` loop at most 5,000 rounds; a runaway

@@ -42,6 +42,30 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   canary checked on every switch and a high-water report.
 
 ### Added
+- **System keys:** Print Screen saves the screen to `/disk/LAYAR` (shell
+  `layar` too), volume up / down / mute change the sound card's volume with an
+  on-screen display -- from any window (`MILESTONE: MEDIA KEYS OK`).
+- **Packages in folders:** a `.bzpkg` may carry sub-folders (`bz pack` takes
+  everything under `package/`, up to 4 levels); install creates them, remove
+  and upgrade prune the ones left empty.
+- **Shell:** `case ... esac` (glob patterns, alternatives), `local` variables
+  restored when a function returns, and here-documents (`<<EOF`, `<<'EOF'`,
+  `<<-EOF`) in scripts.
+- **Downloads:** the **Unduhan** app (Start > Utilitas) -- a download manager
+  with a queue, progress and speed, pause / continue (HTTP `Range`), and a
+  list that survives a restart; `HttpClient.Download` streams a body straight
+  to a file; new syscall **`FS_APPEND`** (68) appends to a FAT file without
+  rewriting it (`Files.AppendAllBytes`, `Files.WriteAllBytes`).
+- **WebSocket:** `Buitenzorg.Net.WebSocket` -- RFC 6455 client over `ws://`
+  and `wss://` (TLS), text/binary messages of any length, fragments, pings
+  answered, close handshake, and the server side for a `TcpServer`; checked by
+  Peramban's self-test against its own echo server.
+- **MIDI music:** a small integer synthesizer in the CLR host plays Standard
+  MIDI Files (General MIDI families, drums on channel 10, tempo changes);
+  Musik plays `.MID`; an original piece (`LAGU5.MID`) on every image.
+- **MP3 music:** the CLR host decodes MP3 (MP1/MP2/MP3) through `nanomp3`
+  (a safe no_std port of minimp3); Musik plays `.MP3` files with their ID3v2
+  title; `LAGU4.MP3` on every image.
 - **FLAC music:** a no_std FLAC decoder in the CLR host (fixed / LPC
   predictors, Rice residuals, stereo decorrelation, 8-24 bit; bit-exact with
   ffmpeg) behind `AudioDecodeInfo` / `AudioDecodeInto`; Musik plays `.FLA` /

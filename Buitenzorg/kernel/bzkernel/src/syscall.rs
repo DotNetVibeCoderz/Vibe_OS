@@ -133,6 +133,7 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FS_LIST
             | sysno::FS_READ
             | sysno::FS_WRITE
+            | sysno::FS_APPEND
             | sysno::FS_OP
             | sysno::USER_OP
             | sysno::GFX3D
@@ -382,6 +383,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_READ => sys_fs_read(a0, a1, a2),
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
+        sysno::FS_APPEND => sys_fs_append(a0, a1, a2),
         sysno::FS_OP => sys_fs_op(a0, a1, a2),
         sysno::USER_OP => sys_user_op(a0, a1, a2),
         sysno::GFX3D => sys_gfx3d(a0),
@@ -747,6 +749,25 @@ fn sys_fs_write(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
     };
     let data = copy_user_bytes(buf_ptr, len as usize);
     match crate::vfs::write(&path, &data) {
+        Ok(()) => len,
+        Err(_) => 0,
+    }
+}
+
+/// FS_APPEND: add bytes to the end of a VFS file (created when missing).
+fn sys_fs_append(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
+    if len > 1024 * 1024 {
+        return syserr::INVAL;
+    }
+    if !user_read(buf_ptr, len) {
+        return syserr::INVAL;
+    }
+    let path = match read_user_path_checked(path_ptr) {
+        Some(p) => p,
+        None => return syserr::INVAL,
+    };
+    let data = copy_user_bytes(buf_ptr, len as usize);
+    match crate::vfs::append(&path, &data) {
         Ok(()) => len,
         Err(_) => 0,
     }

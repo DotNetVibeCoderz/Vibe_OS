@@ -24,6 +24,24 @@ gambar, teks praformat, kutipan, garis, dan tabel (satu baris per baris).
 dengan skrip hanya tampil sedikit; situs berbasis teks (`text.npr.org`,
 `lite.duckduckgo.com`, Wikipedia versi seluler, dokumentasi) nyaman dibaca.
 
+## Unduhan
+
+`run munduh [alamat]`, atau **Mulai > Utilitas > Unduhan**. Tempel alamat
+`http://` atau `https://` lalu Enter: berkas disimpan ke `/disk/UNDUHAN`
+dengan nama 8.3 dari alamatnya (`laporan-akhir.pdf` menjadi `LAPORANA.PDF`;
+nama yang sudah dipakai diberi angka). Tiap unduhan menampilkan bilah
+kemajuan, jumlah dan kecepatan; **Jeda** menghentikan sementara,
+**Lanjutkan** meneruskan dari titik berhenti (server diminta sisanya dengan
+permintaan HTTP `Range`), **Hapus** mengeluarkannya dari daftar (berkas yang
+belum selesai dihapus, yang sudah selesai tetap ada). Unduhan berjalan satu
+per satu di latar, dan daftarnya -- termasuk yang dijeda -- tetap ada setelah
+restart (`/disk/UNDUHAN/DAFTAR.TXT`).
+
+Ukuran berkas tidak dibatasi memori: isi ditulis ke disk per 256 KiB begitu
+datang, lewat syscall baru **`FS_APPEND`** (68). Untuk program:
+`HttpClient.Download(url, path, progress, cancel)` (`r.Saved`, `r.Cancelled`,
+`r.Resumed`), `Files.WriteAllBytes` dan `Files.AppendAllBytes`.
+
 ## Di Terminal
 
 | Perintah | |
@@ -38,7 +56,12 @@ dengan skrip hanya tampil sedikit; situs berbasis teks (`text.npr.org`,
 `r.Status`, `r.Text`, `r.Body`, `r.Header(...)`, `r.Tls`);
 `TcpConnection.Connect(host, port)` + `Write` / `Read` / `Close`;
 `TcpServer(port).Accept(waitMs)`; `TlsConnection.Connect(host, 443)` dan
-`TlsConnection.AddRoot(der)` (CA privat); `Dns.Resolve(nama)`. Pemanggilan
+`TlsConnection.AddRoot(der)` (CA privat); `Dns.Resolve(nama)`;
+**WebSocket** (RFC 6455): `WebSocket.Connect("ws://..." / "wss://...")`,
+`Send(teks)` / `Send(byte[])`, `Receive()` (null bila koneksi tertutup; ping
+dijawab otomatis, pesan terfragmen disatukan), `Close()`, dan sisi server
+`WebSocket.Accept(koneksi, kepalaRequest)` -- self-test Peramban menjalankan
+server echo seperti itu. Pemanggilan
 menahan thread pemanggil selama menunggu -- program UI mengambil data di
 `Thread` latar dan menyerahkan hasilnya ke UI dengan `Dispatcher.Post`, seperti
 Peramban. Di luar perangkat (`dotnet X.dll`) kelas yang sama memakai socket

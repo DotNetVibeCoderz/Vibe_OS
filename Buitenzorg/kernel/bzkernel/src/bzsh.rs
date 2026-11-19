@@ -44,6 +44,39 @@ static FRAMES: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
 static STEPS: Mutex<usize> = Mutex::new(0);
 /// Defined functions: name -> body statements.
 static FUNCS: Mutex<BTreeMap<String, Vec<String>>> = Mutex::new(BTreeMap::new());
+/// `local` variables, one list per running frame: (name, value before).
+static LOCALS: Mutex<Vec<Vec<(String, Option<String>)>>> = Mutex::new(Vec::new());
+/// Here-document bodies by id: (lines, expand `$`). A statement refers to one
+/// as `<< \u{1}H<id>`; the newest [`MAX_HEREDOCS`] are kept.
+static HEREDOCS: Mutex<BTreeMap<u32, (Vec<String>, bool)>> = Mutex::new(BTreeMap::new());
+static NEXT_HEREDOC: Mutex<u32> = Mutex::new(0);
+const MAX_HEREDOCS: usize = 256;
+/// The word a statement uses for here-document `id`.
+const HEREDOC_MARK: char = '\u{1}';
+
+/// The lines of here-document `word` (a `\u{1}H<id>` marker), `$` expanded
+/// unless its delimiter was quoted. None: not a here-document.
+pub fn heredoc(word: &str) -> Option<Vec<String>> {
+    let id: u32 = word.strip_prefix(HEREDOC_MARK)?.strip_prefix('H')?.parse().ok()?;
+    let (lines, expand) = HEREDOCS.lock().get(&id).cloned()?;
+    if !expand {
+        return Some(lines);
+    }
+    Some(lines.iter().map(|l| crate::shell::expand_string(l)).collect())
+}
+
+fn store_heredoc(lines: Vec<String>, expand: bool) -> u32 {
+    let mut n = NEXT_HEREDOC.lock();
+    let id = *n;
+    *n = n.wrapping_add(1);
+    let mut h = HEREDOCS.lock();
+    h.insert(id, (lines, expand));
+    while h.len() > MAX_HEREDOCS {
+        let oldest = *h.keys().next().unwrap();
+        h.remove(&oldest);
+    }
+    id
+}
 
 // ---- aliases ----------------------------------------------------------------
 
@@ -186,7 +219,7 @@ pub fn which(args: &[String]) -> (Vec<String>, bool) {
 }
 
 /// Commands this module implements.
-pub const NAMES: &[&str] = &["alias", "unalias", "sh", "source", ".", "which", "type", "exit", "return", "functions"];
+pub const NAMES: &[&str] = &["alias", "unalias", "sh", "source", ".", "which", "type", "exit", "return", "functions", "local"];
 
 pub fn is_builtin(name: &str) -> bool {
     NAMES.contains(&name)
@@ -216,6 +249,25 @@ pub fn builtin(argv: &[String]) -> (Vec<String>, Effect, bool) {
                 f.iter().map(|(n, body)| format!("{}() {{ {}; }}", n, body.join("; "))).collect()
             };
             (lines, Effect::None, true)
+        }
+        "local" => {
+            let mut locals = LOCALS.lock();
+            let Some(frame) = locals.last_mut() else {
+                return (vec![String::from("local: hanya di dalam fungsi atau skrip")], Effect::None, false);
+            };
+            for a in args {
+                let (name, value) = match a.split_once('=') {
+                    Some((n, v)) => (n, v),
+                    None => (a.as_str(), ""),
+                };
+                if !frame.iter().any(|(n, _)| n == name) {
+                    frame.push((String::from(name), crate::shell::var_value(name)));
+                }
+                if !crate::shell::set_var(name, value) {
+                    return (vec![format!("local: '{}' bukan nama variabel", name)], Effect::None, false);
+                }
+            }
+            (Vec::new(), Effect::None, true)
         }
         "exit" | "return" => {
             if FRAMES.lock().is_empty() {
@@ -273,8 +325,19 @@ fn run_stmts(stmts: &[String], frame: Vec<String>) -> (Vec<String>, Effect, bool
         Err(e) => return (vec![format!("sh: {}: {}", frame[0], e)], Effect::None, false),
     };
     FRAMES.lock().push(frame);
+    LOCALS.lock().push(Vec::new());
     let mut cx = Cx { out: Vec::new(), effect: Effect::None, ok: true, stop: None };
     exec_block(&nodes, &mut cx);
+    // `local` variables get their earlier values back (or vanish)
+    let saved = LOCALS.lock().pop().unwrap_or_default();
+    for (name, old) in saved.into_iter().rev() {
+        match old {
+            Some(v) => {
+                crate::shell::set_var(&name, &v);
+            }
+            None => crate::shell::unset_var(&name),
+        }
+    }
     FRAMES.lock().pop();
     let mut exit = EXIT.lock();
     let ok = match exit.take() {
@@ -296,7 +359,14 @@ fn run_stmts(stmts: &[String], frame: Vec<String>) -> (Vec<String>, Effect, bool
 /// comments removed; `then X` / `do X` / `else X` become two statements.
 fn statements(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for raw in text.lines() {
+    let all: Vec<&str> = text.lines().collect();
+    let mut li = 0;
+    while li < all.len() {
+        let raw = all[li];
+        li += 1;
+        let line_start = out.len();
+        // here-documents opened on this line: (delimiter, strip tabs, expand, id slot)
+        let mut docs: Vec<(String, bool, bool)> = Vec::new();
         let mut cur = String::new();
         let mut quote: Option<char> = None;
         let mut prev_space = true;
@@ -333,7 +403,58 @@ fn statements(text: &str) -> Vec<String> {
                         cur.push(c);
                     }
                     '#' if prev_space => break,
-                    ';' if paren == 0 && chars.get(i + 1) != Some(&';') => {
+                    '<' if paren == 0 && chars.get(i + 1) == Some(&'<') && chars.get(i + 2) != Some(&'<') => {
+                        // <<WORD / <<-WORD / <<'WORD': the body is the next lines
+                        let mut k = i + 2;
+                        let strip = chars.get(k) == Some(&'-');
+                        if strip {
+                            k += 1;
+                        }
+                        while chars.get(k).is_some_and(|c| *c == ' ') {
+                            k += 1;
+                        }
+                        let mut delim = String::new();
+                        let mut expand = true;
+                        if let Some(&q @ ('\'' | '"')) = chars.get(k) {
+                            expand = false;
+                            k += 1;
+                            while let Some(&c) = chars.get(k) {
+                                k += 1;
+                                if c == q {
+                                    break;
+                                }
+                                delim.push(c);
+                            }
+                        } else {
+                            while let Some(&c) = chars.get(k) {
+                                if c.is_whitespace() || c == ';' || c == '|' || c == '&' || c == '>' || c == '<' {
+                                    break;
+                                }
+                                delim.push(c);
+                                k += 1;
+                            }
+                        }
+                        if delim.is_empty() {
+                            cur.push_str("<<");
+                            i += 2;
+                            continue;
+                        }
+                        cur.push_str(&format!("<< {}H{{{}}} ", HEREDOC_MARK, docs.len()));
+                        docs.push((delim, strip, expand));
+                        prev_space = true;
+                        i = k;
+                        continue;
+                    }
+                    ';' if paren == 0 && chars.get(i + 1) == Some(&';') => {
+                        // `;;` ends a case item: a statement of its own
+                        push_stmt(&mut out, &cur);
+                        cur.clear();
+                        out.push(String::from(";;"));
+                        prev_space = true;
+                        i += 2;
+                        continue;
+                    }
+                    ';' if paren == 0 => {
                         push_stmt(&mut out, &cur);
                         cur.clear();
                     }
@@ -349,6 +470,28 @@ fn statements(text: &str) -> Vec<String> {
             }
             prev_space = c.is_whitespace();
             i += 1;
+        }
+        // the bodies: following lines up to each delimiter, in order
+        for (n, (delim, strip, expand)) in docs.iter().enumerate() {
+            let mut body = Vec::new();
+            while li < all.len() {
+                let line = all[li];
+                li += 1;
+                let l = if *strip { line.trim_start_matches('\t') } else { line };
+                if l.trim_end() == delim {
+                    break;
+                }
+                body.push(String::from(l));
+            }
+            let id = store_heredoc(body, *expand);
+            let (from, to) = (format!("{}H{{{}}}", HEREDOC_MARK, n), format!("{}H{}", HEREDOC_MARK, id));
+            cur = cur.replace(&from, &to);
+            // statements of this line already pushed (before a ';') too
+            for s in out[line_start..].iter_mut() {
+                if s.contains(&from) {
+                    *s = s.replace(&from, &to);
+                }
+            }
         }
         push_stmt(&mut out, &cur);
     }
@@ -378,6 +521,8 @@ enum Node {
     If(Vec<(String, Vec<Node>)>, Vec<Node>),
     For(String, String, Vec<Node>),
     While(String, Vec<Node>),
+    /// `case WORD in` items: (patterns, body).
+    Case(String, Vec<(Vec<String>, Vec<Node>)>),
     /// A function definition: name, body statements.
     Func(String, Vec<String>),
 }
@@ -549,7 +694,72 @@ fn parse_block(stmts: &[String], pos: &mut usize, ends: &[&str]) -> Result<(Vec<
                 }
                 nodes.push(Node::While(cond, body));
             }
-            "then" | "do" | "fi" | "done" | "elif" | "else" => return Err(format!("'{}' tidak pada tempatnya", w)),
+            "case" => {
+                // case WORD in [first item]
+                let rest = after_word(s);
+                let word = String::from(first_word(rest));
+                let tail = after_word(rest);
+                if word.is_empty() || first_word(tail) != "in" {
+                    return Err(String::from("case: pakai 'case KATA in'"));
+                }
+                let mut pending: Option<String> = Some(String::from(after_word(tail))).filter(|t| !t.is_empty());
+                let mut items = Vec::new();
+                loop {
+                    let st = match pending.take() {
+                        Some(p) => p,
+                        None => {
+                            let x = stmts.get(*pos).ok_or_else(|| String::from("'esac' hilang"))?.clone();
+                            *pos += 1;
+                            x
+                        }
+                    };
+                    if st == "esac" {
+                        break;
+                    }
+                    if st == ";;" {
+                        continue;
+                    }
+                    let Some(close) = pattern_end(&st) else {
+                        return Err(format!("case: pola tanpa ')': {}", st));
+                    };
+                    let pats: Vec<String> = st[..close]
+                        .trim()
+                        .trim_start_matches('(')
+                        .split('|')
+                        .map(|p| String::from(p.trim()))
+                        .filter(|p| !p.is_empty())
+                        .collect();
+                    let mut body = Vec::new();
+                    let first = st[close + 1..].trim();
+                    if !first.is_empty() {
+                        body.push(String::from(first));
+                    }
+                    // the item's statements up to ';;' or 'esac' (nested cases keep theirs)
+                    let mut depth = usize::from(first_word(first) == "case");
+                    loop {
+                        let Some(x) = stmts.get(*pos) else { return Err(String::from("'esac' hilang")) };
+                        if depth == 0 && x == ";;" {
+                            *pos += 1;
+                            break;
+                        }
+                        if depth == 0 && x == "esac" {
+                            break;
+                        }
+                        if first_word(x) == "case" {
+                            depth += 1;
+                        } else if x == "esac" {
+                            depth -= 1;
+                        }
+                        body.push(x.clone());
+                        *pos += 1;
+                    }
+                    let mut p = 0;
+                    let (nodes_in, _) = parse_block(&body, &mut p, &[])?;
+                    items.push((pats, nodes_in));
+                }
+                nodes.push(Node::Case(word, items));
+            }
+            "then" | "do" | "fi" | "done" | "elif" | "else" | "esac" | ";;" => return Err(format!("'{}' tidak pada tempatnya", w)),
             _ => nodes.push(Node::Cmd(s.clone())),
         }
     }
@@ -558,6 +768,32 @@ fn parse_block(stmts: &[String], pos: &mut usize, ends: &[&str]) -> Result<(Vec<
     } else {
         Err(format!("'{}' hilang", ends[ends.len() - 1]))
     }
+}
+
+/// Where a case item's pattern ends: the first ')' outside quotes.
+fn pattern_end(s: &str) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c == ')' => return Some(i),
+            None => {}
+        }
+    }
+    None
+}
+
+/// Whether a case pattern matches: quoted = compared literally, else `$`
+/// expanded and matched with `*` / `?`.
+fn case_matches(p: &str, value: &str) -> bool {
+    let b = p.as_bytes();
+    if b.len() >= 2 && (b[0] == b'\'' || b[0] == b'"') && b[b.len() - 1] == b[0] {
+        return &p[1..p.len() - 1] == value;
+    }
+    let pat = if p.contains('$') { crate::shell::expand_string(p) } else { String::from(p) };
+    crate::coreutils::wildcard(&pat, value)
 }
 
 struct Cx {
@@ -635,6 +871,16 @@ fn exec_block(nodes: &[Node], cx: &mut Cx) {
                     }
                     crate::shell::set_var(var, &v);
                     exec_block(body, cx);
+                }
+            }
+            Node::Case(word, items) => {
+                let value = crate::shell::expand_words(word).unwrap_or_default().join(" ");
+                cx.ok = true;
+                for (pats, body) in items {
+                    if pats.iter().any(|p| case_matches(p, &value)) {
+                        exec_block(body, cx);
+                        break;
+                    }
                 }
             }
             Node::While(cond, body) => {

@@ -41,6 +41,19 @@ dan lainnya. Alias Windows (`dir`, `type`, `cls`) dipetakan ke perilaku setara
 2. Poll `mouse::state()` → `wm::handle_mouse` (move/resize window).
 3. Recompose desktop bila ada perubahan.
 
+**Tombol sistem** bekerja di jendela mana pun yang aktif (programnya tetap
+menerima tombol itu sebagai event):
+
+| Tombol | |
+|---|---|
+| Print Screen | simpan layar ke `/disk/LAYAR/LAYARnnn.BMP` (juga: perintah shell `layar`) |
+| Volume naik / turun | volume kartu suara per 10 %, ditampilkan di panel atas |
+| Mute | senyap; tekan lagi untuk volume sebelumnya |
+
+Laptop mengirim tombol ini dari baris Fn (mis. Fn+F2/F3 di banyak model);
+keyboard USB mode boot tidak punya tombol media. Tangkapan layar disusun oleh
+window manager, jadi tanpa penunjuk tetikus.
+
 ## Verifikasi
 
 `kanopi_demo` men-*script*-nya: menjalankan `ver`/`mounts`/`ls`/`dir`/`cat` di

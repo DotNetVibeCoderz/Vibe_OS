@@ -85,6 +85,33 @@ pub fn expand_words(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// Expand `$` in text the way double quotes do (here-documents, case
+/// patterns): one string, no word splitting or globbing; backslashes stay
+/// except before `$`.
+pub fn expand_string(text: &str) -> String {
+    let mut q = String::from("\"");
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '"' => q.push_str("\\\""),
+            '\\' if chars.get(i + 1) != Some(&'$') => q.push_str("\\\\"),
+            _ => q.push(c),
+        }
+    }
+    q.push('"');
+    match tokenize(&q) {
+        Ok(toks) => toks
+            .into_iter()
+            .filter_map(|t| match t {
+                Tok::Word(w) => Some(w),
+                Tok::Op(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        Err(_) => String::from(text),
+    }
+}
+
 /// Set a variable; false when `name` is not a valid name.
 pub fn set_var(name: &str, value: &str) -> bool {
     let valid = !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -111,7 +138,7 @@ pub fn command_names() -> Vec<&'static str> {
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "lsusb", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
-    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "bg", "saver", "cursor", "anim", "tone",
+    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
 
@@ -543,7 +570,12 @@ fn tokenize(line: &str) -> Result<Vec<Tok>, String> {
             }
             '<' => {
                 flush(&mut toks, &mut cur, &mut has, &mut glob);
-                toks.push(Tok::Op("<"));
+                if chars.get(i + 1) == Some(&'<') {
+                    i += 1;
+                    toks.push(Tok::Op("<<"));
+                } else {
+                    toks.push(Tok::Op("<"));
+                }
             }
             '*' | '?' => {
                 glob = true;
@@ -733,6 +765,10 @@ fn run_pipeline(toks: &[Tok]) -> (Vec<String>, Effect, bool) {
                     };
                     match *op {
                         ">" | ">>" => out_file = Some((target.clone(), *op == ">>")),
+                        "<<" => match crate::bzsh::heredoc(target) {
+                            Some(lines) => stdin = Some(lines),
+                            None => return (vec![String::from("sh: here-document (<<) hanya di skrip")], effect, false),
+                        },
                         "<" => match crate::coreutils::run(&[String::from("cat"), target.clone()], None) {
                             (lines, true) => stdin = Some(lines),
                             (msg, false) => return (msg, effect, false),
@@ -1099,6 +1135,10 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "ps" => (ps_cmd(), Effect::None),
         "free" => (free_cmd(), Effect::None),
         "uptime" => (vec![uptime_line()], Effect::None),
+        "layar" | "screenshot" => match crate::screenshot::save_screen() {
+            Ok(p) => (vec![format!("layar disimpan: {}", p)], Effect::None),
+            Err(e) => (vec![format!("layar: {}", e)], Effect::None),
+        },
         "top" => (top_cmd(), Effect::None),
         "crash" | "crashes" => (crash_cmd(args.first().copied()), Effect::None),
         "dbg" | "debug" => (crate::debug::command(&args), Effect::None),
@@ -1354,6 +1394,7 @@ fn help_lines() -> Vec<String> {
      "  dmesg [kata]      log kernel (40 baris terakhir, opsional disaring)",
      "  lspci             perangkat PCI (kontroler disk/USB/jaringan)",
      "  lsusb             perangkat USB (colok/cabut terdeteksi otomatis)",
+     "  layar             simpan tangkapan layar ke /disk/LAYAR (juga tombol Print Screen)",
      "  pi [tryboot|promote]  Raspberry Pi: coba kernel baru (/disk/KERNTRY.IMG) sekali",
      "  gpu [blit|on|cpu] GPU; blit = uji blitter Intel, on/cpu = tampilkan lewat GPU/CPU",
      "  gpu render        uji render engine Intel (3D, tahap 3a)",
@@ -2468,6 +2509,23 @@ pub fn script_self_test() -> bool {
             crate::println!("[shell] self-test FAILED: {} -> '{}' (want '{}')", line, got, want);
         }
     }
+    // script constructs: case, local, here-documents
+    let scripts: [(&str, &str); 6] = [
+        ("BZT_X=apel\ncase $BZT_X in\n  jeruk|apel) echo buah;;\n  *) echo lain;;\nesac", "buah"),
+        ("case zz in a*) echo a;; 'z?') echo kutip;; z?) echo pola;; *) echo default;; esac", "pola"),
+        ("BZT_X=luar\nbzt_lok() {\n  local BZT_X=dalam BZT_BARU=1\n  echo $BZT_X $BZT_BARU\n}\nbzt_lok\necho $BZT_X [$BZT_BARU]", "dalam 1|luar []"),
+        ("BZT_X=dunia\ncat <<EOF\nhalo $BZT_X\n  baris \"dua\"\nEOF\necho sesudah", "halo dunia|  baris \"dua\"|sesudah"),
+        ("cat <<'X'; echo dan\n$BZT_X tetap\nX", "$BZT_X tetap|dan"),
+        ("grep b <<-E | wc -l\n\ta\n\tb1\n\tb2\n\tE", "2"),
+    ];
+    for (text, want) in scripts {
+        let got = crate::bzsh::run_text(text, vec![String::from("sh")]).0.join("|");
+        if got.trim() != want {
+            failed += 1;
+            crate::println!("[shell] self-test FAILED: {:?} -> '{}' (want '{}')", text, got.trim(), want);
+        }
+    }
+    crate::bzsh::remove_function("bzt_lok");
     // an arithmetic error is reported and fails the command
     let (err, _) = run("echo $((1/0))");
     let err_ok = err.first().is_some_and(|l| l.contains("pembagian dengan nol")) && !last_ok();
@@ -2501,7 +2559,7 @@ pub fn script_self_test() -> bool {
     }
     let _ = run("unset BZT_X");
     if failed == 0 {
-        crate::println!("[kernel] MILESTONE: SHELL SCRIPT OK ($((arithmetic)), $(command) substitution + word splitting, functions + recursion + return, clip/paste, echo -e + ANSI colours, free/uptime/top)");
+        crate::println!("[kernel] MILESTONE: SHELL SCRIPT OK ($((arithmetic)), $(command) substitution + word splitting, functions + recursion + return, case, local, here-documents, clip/paste, echo -e + ANSI colours, free/uptime/top)");
     }
     failed == 0
 }

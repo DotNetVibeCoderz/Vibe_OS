@@ -928,6 +928,93 @@ impl FatVolume {
         Ok(())
     }
 
+    /// Add `data` to the end of a file (created when missing). Nothing already
+    /// written is rewritten: the tail of the last cluster is filled, new
+    /// clusters are written and linked, then the entry's size grows -- the
+    /// same order as `write_file` (data, FAT, entry), so a crash in between
+    /// leaves the old file intact (at worst leaked clusters).
+    pub fn append_file(&self, dev: &mut dyn BlockDevice, name: &str, data: &[u8]) -> Result<(), &'static str> {
+        let (lba, off, e) = match self.lookup(dev, name) {
+            Ok((_, lba, off, e)) => (lba, off, e),
+            Err(_) => return self.write_file(dev, name, data),
+        };
+        if e.is_dir {
+            return Err("a folder with that name exists");
+        }
+        if data.is_empty() {
+            return Ok(());
+        }
+        let size = e.size as u64;
+        let total = size + data.len() as u64;
+        if total > u32::MAX as u64 {
+            return Err("file would exceed 4 GiB");
+        }
+        if size == 0 || e.cluster < 2 {
+            // nothing on disk yet: the plain writer does exactly this
+            return self.write_file(dev, name, data);
+        }
+        self.invalidate_fsinfo(dev)?;
+        let bps = self.bytes_per_sector;
+        let cluster_bytes = self.sectors_per_cluster * bps;
+        // 1. the last cluster of the chain
+        let count = size.div_ceil(cluster_bytes);
+        let mut last = e.cluster;
+        for _ in 1..count {
+            last = self.next_cluster(dev, last)?.ok_or("cluster chain shorter than the file")?;
+        }
+        // 2. fill its unused tail
+        let used = size - (count - 1) * cluster_bytes; // 1..=cluster_bytes
+        let mut done = 0usize;
+        if used < cluster_bytes {
+            let base = self.cluster_to_sector(last);
+            let mut pos = used; // byte offset inside the cluster
+            while pos < cluster_bytes && done < data.len() {
+                let s = pos / bps;
+                let in_sec = (pos % bps) as usize;
+                let mut sector = [0u8; SECTOR_SIZE];
+                if in_sec != 0 {
+                    dev.read_sector(base + s, &mut sector)?;
+                }
+                let n = core::cmp::min(SECTOR_SIZE - in_sec, data.len() - done);
+                sector[in_sec..in_sec + n].copy_from_slice(&data[done..done + n]);
+                dev.write_sector(base + s, &sector)?;
+                done += n;
+                pos += n as u64;
+            }
+        }
+        // 3. the rest into new clusters, linked behind the old chain
+        let rest = &data[done..];
+        if !rest.is_empty() {
+            let chain = self.alloc_clusters(dev, (rest.len() as u64).div_ceil(cluster_bytes))?;
+            for (i, &cluster) in chain.iter().enumerate() {
+                let first = self.cluster_to_sector(cluster);
+                for s in 0..self.sectors_per_cluster {
+                    let mut sector = [0u8; SECTOR_SIZE];
+                    let o = (i as u64 * cluster_bytes + s * bps) as usize;
+                    if o < rest.len() {
+                        let n = core::cmp::min(SECTOR_SIZE, rest.len() - o);
+                        sector[..n].copy_from_slice(&rest[o..o + n]);
+                    }
+                    dev.write_sector(first + s, &sector)?;
+                }
+            }
+            for i in 0..chain.len() {
+                let value = if i + 1 < chain.len() { chain[i + 1] } else { self.eoc() };
+                self.fat_set(dev, chain[i], value)?;
+            }
+            self.fat_set(dev, last, chain[0])?;
+        }
+        // 4. the entry: new size + modification time
+        let mut sector = [0u8; SECTOR_SIZE];
+        dev.read_sector(lba, &mut sector)?;
+        let (time, date) = fat_timestamp();
+        sector[off + 22..off + 24].copy_from_slice(&time.to_le_bytes());
+        sector[off + 24..off + 26].copy_from_slice(&date.to_le_bytes());
+        sector[off + 28..off + 32].copy_from_slice(&(total as u32).to_le_bytes());
+        dev.write_sector(lba, &sector)?;
+        Ok(())
+    }
+
     /// Delete a file, or an empty folder, and free its clusters.
     pub fn delete_file(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<(), &'static str> {
         let (_, lba, off, e) = self.lookup(dev, name).map_err(|_| "file not found")?;

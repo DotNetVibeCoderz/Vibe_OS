@@ -27,6 +27,7 @@ const SYS_STAT: u64 = 12;
 const FS_LIST: u64 = 29;
 const FS_READ: u64 = 30;
 const FS_WRITE: u64 = 32;
+const FS_APPEND: u64 = 68;
 const PROC_SPAWN: u64 = 40;
 const PROC_WAIT: u64 = 41;
 const WIN_EVENT: u64 = 45;
@@ -516,6 +517,38 @@ fn fs_write_text(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> 
     ret_i32(if sys::is_err(n) { 0 } else { n as i64 })
 }
 
+/// `count` bytes of a managed `byte[]` from `offset` (empty when it is not one).
+fn byte_range(i: &mut Interpreter, v: Option<&Value>, offset: usize, count: usize) -> Vec<u8> {
+    match v {
+        Some(Value::Obj(h)) if !h.is_null() => i
+            .heap
+            .with::<ClrArray, _>(*h, |arr| match &arr.storage {
+                ArrayStorage::U8(v) => v.get(offset.min(v.len())..(offset + count).min(v.len())).map(|s| s.to_vec()).unwrap_or_default(),
+                _ => Vec::new(),
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// `FsWriteBytes(string path, byte[] data, int offset, int count)` -> bytes
+/// written (FS_WRITE: the file is replaced; at most 1 MiB).
+fn fs_write_bytes(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    let data = byte_range(i, a.get(1), int(a, 2).max(0) as usize, int(a, 3).max(0) as usize);
+    let n = sys::syscall(FS_WRITE, path.as_ptr() as u64, data.as_ptr() as u64, data.len() as u64);
+    ret_i32(if sys::is_err(n) { 0 } else { n as i64 })
+}
+
+/// `FsAppend(string path, byte[] data, int offset, int count)` -> bytes
+/// appended (FS_APPEND; the file is created when missing; at most 1 MiB).
+fn fs_append(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let path = cstr(&string(i, a, 0));
+    let data = byte_range(i, a.get(1), int(a, 2).max(0) as usize, int(a, 3).max(0) as usize);
+    let n = sys::syscall(FS_APPEND, path.as_ptr() as u64, data.as_ptr() as u64, data.len() as u64);
+    ret_i32(if sys::is_err(n) { 0 } else { n as i64 })
+}
+
 /// `ProcList()` -> one process per line: `pid,state,cpu_ticks,kind,name`.
 fn proc_list(i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
     // bz_abi::ProcInfo: 4 x u64 + a 32-byte name = 8 words.
@@ -783,7 +816,7 @@ fn clipboard_seq(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 53] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 55] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -812,6 +845,8 @@ pub fn install(interp: &mut Interpreter) {
         ("FsReadText", fs_read_text),
         ("FsSize", fs_size),
         ("FsWriteText", fs_write_text),
+        ("FsWriteBytes", fs_write_bytes),
+        ("FsAppend", fs_append),
         ("ProcList", proc_list),
         ("ProcKill", proc_kill),
         ("SysStat", sys_stat),

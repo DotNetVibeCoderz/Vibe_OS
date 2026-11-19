@@ -101,7 +101,7 @@ public sealed class MusikApp
         W.UpdateLayout();
     }
 
-    /// <summary>The WAV and FLAC files of /disk and the scratch folder.</summary>
+    /// <summary>The WAV, FLAC, MP3 and MIDI files of /disk and the scratch folder.</summary>
     public void Scan()
     {
         Tracks.Clear();
@@ -112,7 +112,7 @@ public sealed class MusikApp
             foreach (var f in files)
             {
                 string up = f.Name.ToUpperInvariant();
-                if (!f.IsDirectory && (up.EndsWith(".WAV") || up.EndsWith(".FLA") || up.EndsWith(".FLAC")))
+                if (!f.IsDirectory && (up.EndsWith(".WAV") || up.EndsWith(".FLA") || up.EndsWith(".FLAC") || up.EndsWith(".MP3") || up.EndsWith(".MID")))
                     Tracks.Add(new Track(f.Path, f.Name.LastIndexOf('.') > 0 ? f.Name.Substring(0, f.Name.LastIndexOf('.')) : f.Name));
             }
         }
@@ -124,7 +124,7 @@ public sealed class MusikApp
     {
         if (i < 0 || i >= Tracks.Count) return false;
         var t = Tracks[i];
-        if (!(t.Data != null ? Player.Load(t.Data, t.Title) : Player.Load(t.Path))) { _title.Text = t.Title + ": bukan WAV / FLAC yang bisa diputar"; return false; }
+        if (!(t.Data != null ? Player.Load(t.Data, t.Title) : Player.Load(t.Path))) { _title.Text = t.Title + ": bukan WAV / FLAC / MP3 / MIDI yang bisa diputar"; return false; }
         t.Title = Player.Title;
         t.Seconds = Player.Duration;
         Tracks[i] = t; // the list shows the title and the length now
@@ -220,6 +220,24 @@ public sealed class MusikApp
             bool ok = fp.Load(app.Tracks[fla].Path);
             c.That(ok && fp.Title == "Tetes Embun" && Math.Abs(fp.Duration - 10) < 0.2 && fp.Info!.Rate == 22050,
                 "FLAC decoded: '" + fp.Title + "', " + (int)(fp.Duration * 10) / 10 + "." + (int)(fp.Duration * 10) % 10 + " s");
+        }
+        int mid = -1;
+        for (int i = 0; i < app.Tracks.Count; i++) if (app.Tracks[i].Path.ToUpperInvariant().EndsWith("LAGU5.MID")) mid = i;
+        if (mid >= 0)
+        {
+            var mm = new MediaPlayer();
+            bool ok = mm.Load(app.Tracks[mid].Path);
+            c.That(ok && mm.Title == "Kupu-kupu di Taman" && mm.Duration > 37 && mm.Duration < 41 && mm.Info!.Rate == 22050,
+                "MIDI synthesized: '" + mm.Title + "', " + (int)mm.Duration + " s");
+        }
+        int mp3 = -1;
+        for (int i = 0; i < app.Tracks.Count; i++) if (app.Tracks[i].Path.ToUpperInvariant().EndsWith("LAGU4.MP3")) mp3 = i;
+        if (mp3 >= 0)
+        {
+            var mp = new MediaPlayer();
+            bool ok = mp.Load(app.Tracks[mp3].Path);
+            c.That(ok && mp.Title == "Gerimis" && Math.Abs(mp.Duration - 10) < 0.3 && mp.Info!.Rate == 22050,
+                "MP3 decoded: '" + mp.Title + "', " + (int)(mp.Duration * 10) / 10 + "." + (int)(mp.Duration * 10) % 10 + " s");
         }
         return c;
     }

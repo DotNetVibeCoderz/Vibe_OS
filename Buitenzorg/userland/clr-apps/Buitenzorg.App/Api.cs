@@ -33,6 +33,8 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern long FsSize(string path);
     [DllImport("buitenzorg")] internal static extern int FsReadInto(string path, byte[] buffer);
     [DllImport("buitenzorg")] internal static extern int FsWriteText(string path, string text);
+    [DllImport("buitenzorg")] internal static extern int FsWriteBytes(string path, byte[] data, int offset, int count);
+    [DllImport("buitenzorg")] internal static extern int FsAppend(string path, byte[] data, int offset, int count);
     [DllImport("buitenzorg")] internal static extern int FsOp(int op, string path, string path2);
     [DllImport("buitenzorg")] internal static extern string FsStat(string path);
     [DllImport("buitenzorg")] internal static extern string ProcList();
@@ -303,6 +305,17 @@ public static class Files
     static Dictionary<string, string>? _sim;
     static readonly HashSet<string> _simDirs = new HashSet<string>();
     static readonly Dictionary<string, DateTime> _simTimes = new Dictionary<string, DateTime>();
+    /// <summary>Simulated files holding bytes (one char per byte) rather than text.</summary>
+    static readonly HashSet<string> _simBinary = new HashSet<string>();
+    /// <summary>The most one FS_WRITE / FS_APPEND call takes.</summary>
+    const int WriteChunk = 1 << 20;
+
+    static string Latin1(byte[] b, int offset, int count)
+    {
+        var c = new char[count];
+        for (int i = 0; i < count; i++) c[i] = (char)b[offset + i];
+        return new string(c);
+    }
 
     static bool Sim(Exception e)
     {
@@ -461,7 +474,14 @@ public static class Files
     /// <summary>A file's bytes (null if it cannot be read; up to 16 MiB).</summary>
     public static byte[]? ReadAllBytes(string path)
     {
-        if (_sim != null) return _sim.TryGetValue(path, out var t) ? System.Text.Encoding.UTF8.GetBytes(t) : null;
+        if (_sim != null)
+        {
+            if (!_sim.TryGetValue(path, out var t)) return null;
+            if (!_simBinary.Contains(path)) return System.Text.Encoding.UTF8.GetBytes(t);
+            var b = new byte[t.Length];
+            for (int i = 0; i < b.Length; i++) b[i] = (byte)t[i];
+            return b;
+        }
         long size = Size(path);
         if (size <= 0) return null;
         var buf = new byte[size];
@@ -485,10 +505,58 @@ public static class Files
     /// <summary>Create or replace a file; false when the mount refused it.</summary>
     public static bool WriteAllText(string path, string text)
     {
-        if (_sim != null) { if (_simDirs.Contains(path)) return false; _sim[path] = text; _simTimes[path] = DateTime.Now; return true; }
+        if (_sim != null) { if (_simDirs.Contains(path)) return false; _sim[path] = text; _simBinary.Remove(path); _simTimes[path] = DateTime.Now; return true; }
         try { return Native.FsWriteText(path, text) == System.Text.Encoding.UTF8.GetByteCount(text) || text.Length == 0; }
         catch (Exception e) when (Sim(e)) { return WriteAllText(path, text); }
     }
+
+    /// <summary>Create or replace a file with bytes (any size: past 1 MiB the rest is appended).</summary>
+    public static bool WriteAllBytes(string path, byte[] data)
+    {
+        if (_sim != null) { if (_simDirs.Contains(path)) return false; _sim[path] = Latin1(data, 0, data.Length); _simBinary.Add(path); _simTimes[path] = DateTime.Now; return true; }
+        try
+        {
+            int first = Math.Min(data.Length, WriteChunk);
+            if (Native.FsWriteBytes(path, data, 0, first) != first && first > 0) return false;
+            return first == data.Length || AppendAllBytes(path, data, first, data.Length - first);
+        }
+        catch (Exception e) when (Sim(e)) { return WriteAllBytes(path, data); }
+    }
+
+    /// <summary>Add bytes to the end of a file, creating it when missing (FS_APPEND:
+    /// what is already on disk is not rewritten, so a growing download or log
+    /// costs only the new bytes).</summary>
+    public static bool AppendAllBytes(string path, byte[] data, int offset, int count)
+    {
+        if (offset < 0 || count < 0 || offset + count > data.Length) return false;
+        if (_sim != null)
+        {
+            if (_simDirs.Contains(path)) return false;
+            string old = "";
+            if (_sim.TryGetValue(path, out var t))
+            {
+                if (_simBinary.Contains(path)) old = t;
+                else { var tb = System.Text.Encoding.UTF8.GetBytes(t); old = Latin1(tb, 0, tb.Length); }
+            }
+            _sim[path] = old + Latin1(data, offset, count);
+            _simBinary.Add(path);
+            _simTimes[path] = DateTime.Now;
+            return true;
+        }
+        try
+        {
+            for (int done = 0; done < count;)
+            {
+                int n = Math.Min(WriteChunk, count - done);
+                if (Native.FsAppend(path, data, offset + done, n) != n) return false;
+                done += n;
+            }
+            return true;
+        }
+        catch (Exception e) when (Sim(e)) { return AppendAllBytes(path, data, offset, count); }
+    }
+
+    public static bool AppendAllBytes(string path, byte[] data) => AppendAllBytes(path, data, 0, data.Length);
 }
 
 /// <summary>A process or kernel task (PROC_LIST).</summary>

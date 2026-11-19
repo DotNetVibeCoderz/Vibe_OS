@@ -659,8 +659,8 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > **Tercapai 2026-11-19:** `$(...)` (dipecah jadi kata bila tanpa kutip), `$((...))`,
 > fungsi (`nama() { ...; }`, argumen, `return`, rekursi), `echo -e`, warna ANSI di
 > Terminal, `top`/`free`/`uptime`, papan klip sistem (syscall `CLIPBOARD`, Ctrl+V,
-> `clip`/`paste`) → `MILESTONE: SHELL SCRIPT OK`. Belum: `case`, here-document,
-> `local`, app Terminal mandiri.
+> `clip`/`paste`) → `MILESTONE: SHELL SCRIPT OK`; lalu `case ... esac`, `local`,
+> here-document (`<<EOF`, `<<'EOF'`, `<<-EOF`). Belum: app Terminal mandiri.
 - **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
   (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
 - **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment
@@ -678,8 +678,9 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > `sdk/samples/halo-paket` (`MILESTONE: BZPKG OK`). Dependensi, repo jarak jauh
 > dan rollback menyusul (2026-11-08). **Tanda tangan Ed25519 ✓ 2026-11-19:**
 > `bz keygen`, `bz pack --sign`, `bz inspect`; di perangkat `bz trust add/remove/
-> require on` (`/disk/TRUST.CFG`), tanda tangan rusak selalu ditolak. Belum:
-> sub-folder, izin dari manifest.
+> require on` (`/disk/TRUST.CFG`), tanda tangan rusak selalu ditolak.
+> **Sub-folder ✓ 2026-11-19** (path sampai 4 tingkat, folder kosong dibersihkan).
+> Belum: izin dari manifest.
 - **Format paket `.bzpkg`**: arsip berisi `app.manifest` + ELF/skrip + aset +
   hash SHA-256 (tanda tangan menyusul). `bz install ./app.bzpkg` dari berkas.
 - **Host CLI**: `bz pack` (buat `.bzpkg` dari proyek), `bz publish` (ke repo).
@@ -989,7 +990,8 @@ HTML mini. App ring-3 jalan **satu per satu**.
 
 ### E. Hiburan & UX
 - **Mode game**: fullscreen, tunda notifikasi, prioritas penjadwalan.
-- Media key + OSD volume, hotkey screenshot, perpustakaan media lintas app,
+- Media key + OSD volume, hotkey screenshot (**✓ 2026-11-19**: Print Screen /
+  `layar`, Volume +/−/Mute + OSD, `MEDIA KEYS OK`), perpustakaan media lintas app,
   kategori Game/Media di App Store.
 - **E-book & komik** (TXT/EPUB = zip + HTML; CBZ), emulator klasik sebagai
   showcase (mis. NES/CHIP-8), launcher "big picture" ramah gamepad.

@@ -28,6 +28,35 @@ static DOWN: [core::sync::atomic::AtomicU64; 8] = [const { core::sync::atomic::A
 /// Press / release events: `code | pressed << 16`.
 static EVENTS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
+/// Keys the desktop itself acts on, whoever has the focus.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hotkey {
+    /// Print Screen: save the screen as a picture.
+    Screenshot,
+    VolumeUp,
+    VolumeDown,
+    Mute,
+}
+
+static HOTKEYS: Mutex<VecDeque<Hotkey>> = Mutex::new(VecDeque::new());
+
+/// The hotkey a set-1 code (`| 0x100` for E0 keys) stands for: Print Screen
+/// (E0 37) and the multimedia keys a laptop's Fn row sends (E0 30 / 2E / 20).
+fn hotkey_of(code: u32) -> Option<Hotkey> {
+    match code {
+        0x137 => Some(Hotkey::Screenshot),
+        0x130 => Some(Hotkey::VolumeUp),
+        0x12E => Some(Hotkey::VolumeDown),
+        0x120 => Some(Hotkey::Mute),
+        _ => None,
+    }
+}
+
+/// The next hotkey press, for the desktop loop.
+pub fn take_hotkey() -> Option<Hotkey> {
+    crate::arch::cpu::without_interrupts(|| HOTKEYS.lock().pop_front())
+}
+
 /// Track one raw scancode byte (interrupts off): key state + an event per
 /// change (typematic repeats of a held key are not events).
 fn raw_scancode(byte: u8) {
@@ -52,6 +81,14 @@ fn raw_scancode(byte: u8) {
         DOWN[w].fetch_or(bit, Relaxed);
     } else {
         DOWN[w].fetch_and(!bit, Relaxed);
+    }
+    if pressed && !was {
+        if let Some(h) = hotkey_of(code) {
+            let mut q = HOTKEYS.lock();
+            if q.len() < 16 {
+                q.push_back(h);
+            }
+        }
     }
     if was != pressed {
         let mut q = EVENTS.lock();
@@ -281,9 +318,21 @@ pub fn self_test() -> bool {
         got.push(e);
     }
     let want = [0x1E | 1 << 16, 0x148 | 1 << 16, 0x1E, 0x148];
-    let ok = a_down && up_down && released && got == want;
+    // media keys and Print Screen become hotkeys (once per press)
+    while take_hotkey().is_some() {}
+    feed(&[0xE0, 0x30, 0xE0, 0x30, 0xE0, 0xB0, 0xE0, 0x2A, 0xE0, 0x37, 0xE0, 0xB7, 0xE0, 0xAA, 0xE0, 0x20, 0xE0, 0xA0]);
+    let mut hot = alloc::vec::Vec::new();
+    while let Some(h) = take_hotkey() {
+        hot.push(h);
+    }
+    let hot_ok = hot == [Hotkey::VolumeUp, Hotkey::Screenshot, Hotkey::Mute];
+    clear_events();
+    let ok = a_down && up_down && released && got == want && hot_ok;
+    if !hot_ok {
+        crate::println!("[keyboard] hotkeys: {:?}", hot);
+    }
     if ok {
-        crate::println!("[kernel] MILESTONE: KEY EVENTS OK (press/release + state for A and E0 up-arrow, repeat ignored)");
+        crate::println!("[kernel] MILESTONE: KEY EVENTS OK (press/release + state for A and E0 up-arrow, repeat ignored; volume/mute/Print Screen hotkeys)");
     } else {
         crate::println!("[keyboard] self-test failed: down {} {} released {} events {:x?}", a_down, up_down, released, got);
     }

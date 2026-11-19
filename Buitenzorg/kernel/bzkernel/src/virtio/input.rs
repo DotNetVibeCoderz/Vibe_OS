@@ -216,6 +216,10 @@ fn scancode(code: u16) -> Option<(bool, u8)> {
     match code {
         1..=88 => Some((false, code as u8)),
         96 => Some((true, 0x1C)),  // keypad enter
+        99 => Some((true, 0x37)),  // print screen (sysrq)
+        113 => Some((true, 0x20)), // mute
+        114 => Some((true, 0x2E)), // volume down
+        115 => Some((true, 0x30)), // volume up
         97 => Some((true, 0x1D)),  // right ctrl
         98 => Some((true, 0x35)),  // keypad /
         100 => Some((true, 0x38)), // right alt

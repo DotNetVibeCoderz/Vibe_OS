@@ -44,6 +44,19 @@ equivalent behavior (§14.2). Relative paths resolve against the cwd (default
 2. Poll `mouse::state()` → `wm::handle_mouse` (move/resize a window).
 3. Recompose the desktop when anything changes.
 
+**System keys** work whatever window has the focus (they still reach the
+program as key events too):
+
+| Key | |
+|---|---|
+| Print Screen | save the screen to `/disk/LAYAR/LAYARnnn.BMP` (also: shell `layar`) |
+| Volume up / down | the sound card's volume in steps of 10 %, shown in a display at the top |
+| Mute | silence; press again for the volume before |
+
+Laptops send these from the Fn row (e.g. Fn+F2/F3 on many models); a USB
+boot-protocol keyboard has no media keys. A screenshot is composed by the
+window manager, so it has no pointer in it.
+
 ## Verification
 
 `kanopi_demo` scripts it: it runs `ver`/`mounts`/`ls`/`dir`/`cat` in the terminal

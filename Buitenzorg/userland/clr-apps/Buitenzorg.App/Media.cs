@@ -7,8 +7,8 @@
 // app. The kernel converts the format and mixes it with every other program's
 // sound; Audio.AppVolume sets this program's level in the mix.
 //
-// FLAC files (lossless) are decoded to PCM by the host (`AudioDecode*`
-// natives, clrhost flac.rs) when loaded, then play like a WAV; off the device
+// FLAC and MP3 files are decoded to PCM by the host (`AudioDecode*` natives:
+// clrhost flac.rs, nanomp3) when loaded, then play like a WAV; off the device
 // they cannot be decoded (Load returns false).
 //
 // Off the device (no sound card) the player still runs: Audio.Write takes
@@ -112,11 +112,39 @@ public static class Compressed
 
     public static bool IsFlac(byte[] b) => b.Length > 4 && b[0] == (byte)'f' && b[1] == (byte)'L' && b[2] == (byte)'a' && b[3] == (byte)'C';
 
-    /// <summary>Decode a FLAC file: the PCM and its WavInfo (null when not decodable here).</summary>
+    /// <summary>An MP3: an ID3v2 tag, or an MPEG audio frame sync at the start.</summary>
+    public static bool IsMp3(byte[] b) =>
+        b.Length > 4 && ((b[0] == (byte)'I' && b[1] == (byte)'D' && b[2] == (byte)'3') || (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0));
+
+    /// <summary>A Standard MIDI File (rendered by the host's synthesizer).</summary>
+    public static bool IsMidi(byte[] b) => b.Length > 14 && b[0] == (byte)'M' && b[1] == (byte)'T' && b[2] == (byte)'h' && b[3] == (byte)'d';
+
+    public static bool IsCompressed(byte[] b) => IsFlac(b) || IsMp3(b) || IsMidi(b);
+
+    /// <summary>The first track-name meta event (FF 03) of a MIDI file ("" when none).</summary>
+    public static string MidiTitle(byte[] b)
+    {
+        for (int i = 14; i + 3 < b.Length && i < 4096; i++)
+        {
+            if (b[i] == 0xFF && b[i + 1] == 0x03)
+            {
+                int n = b[i + 2];
+                if (n > 0 && i + 3 + n <= b.Length)
+                {
+                    var sb = new System.Text.StringBuilder();
+                    for (int k = 0; k < n; k++) if (b[i + 3 + k] != 0) sb.Append((char)b[i + 3 + k]);
+                    return sb.ToString().Trim();
+                }
+            }
+        }
+        return "";
+    }
+
+    /// <summary>Decode a FLAC or MP3 file: the PCM and its WavInfo (null when not decodable here).</summary>
     public static WavInfo? Decode(byte[] file, out byte[] pcm)
     {
         pcm = Array.Empty<byte>();
-        if (!IsFlac(file)) return null;
+        if (!IsCompressed(file)) return null;
         long word;
         try { word = AudioDecodeInfo(file); }
         catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { return null; }
@@ -127,7 +155,48 @@ public static class Compressed
         if (bytes <= 0 || bytes > 256L * 1024 * 1024) return null;
         pcm = new byte[bytes];
         if (AudioDecodeInto(file, pcm) <= 0) return null;
-        return new WavInfo { Rate = rate, Channels = channels, Bits = 16, DataOffset = 0, DataLength = pcm.Length, Title = FlacTitle(file) };
+        return new WavInfo { Rate = rate, Channels = channels, Bits = 16, DataOffset = 0, DataLength = pcm.Length, Title = IsFlac(file) ? FlacTitle(file) : IsMidi(file) ? MidiTitle(file) : Id3Title(file) };
+    }
+
+    /// <summary>The TIT2 frame of an ID3v2.3 / 2.4 tag ("" when none).</summary>
+    public static string Id3Title(byte[] b)
+    {
+        if (b.Length < 10 || b[0] != (byte)'I' || b[1] != (byte)'D' || b[2] != (byte)'3') return "";
+        int ver = b[3];
+        int size = (b[6] & 0x7F) << 21 | (b[7] & 0x7F) << 14 | (b[8] & 0x7F) << 7 | (b[9] & 0x7F);
+        int p = 10, end = Math.Min(b.Length, 10 + size);
+        while (p + 10 <= end && b[p] != 0)
+        {
+            int len = ver >= 4
+                ? (b[p + 4] & 0x7F) << 21 | (b[p + 5] & 0x7F) << 14 | (b[p + 6] & 0x7F) << 7 | (b[p + 7] & 0x7F)
+                : b[p + 4] << 24 | b[p + 5] << 16 | b[p + 6] << 8 | b[p + 7];
+            if (len <= 0 || p + 10 + len > end) break;
+            if (b[p] == (byte)'T' && b[p + 1] == (byte)'I' && b[p + 2] == (byte)'T' && b[p + 3] == (byte)'2')
+            {
+                int enc = b[p + 10], q = p + 11, n = len - 1;
+                if (enc == 1 || enc == 2)
+                {
+                    // UTF-16 (with a BOM for 1): little-endian unless the BOM says otherwise
+                    bool be = enc == 2;
+                    if (enc == 1 && n >= 2) { be = b[q] == 0xFE; q += 2; n -= 2; }
+                    var sb = new System.Text.StringBuilder();
+                    for (int i = 0; i + 1 < n; i += 2)
+                    {
+                        int c = be ? b[q + i] << 8 | b[q + i + 1] : b[q + i] | b[q + i + 1] << 8;
+                        if (c == 0) break;
+                        sb.Append((char)c);
+                    }
+                    return sb.ToString();
+                }
+                while (n > 0 && b[q + n - 1] == 0) n--;
+                if (enc == 3) return System.Text.Encoding.UTF8.GetString(b, q, n);
+                var l = new System.Text.StringBuilder();
+                for (int i = 0; i < n; i++) l.Append((char)b[q + i]);
+                return l.ToString();
+            }
+            p += 10 + len;
+        }
+        return "";
     }
 
     /// <summary>TITLE from the VORBIS_COMMENT metadata block ("" when none).</summary>
@@ -200,7 +269,7 @@ public sealed class MediaPlayer
     public bool Load(byte[] bytes, string fallbackTitle)
     {
         var info = Wav.Parse(bytes);
-        if (info == null && Compressed.IsFlac(bytes))
+        if (info == null && Compressed.IsCompressed(bytes))
         {
             info = Compressed.Decode(bytes, out var pcm);
             if (info == null) return false;

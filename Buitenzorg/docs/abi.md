@@ -88,6 +88,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` â†
 | 65 | `DNS_RESOLVE` | NUL-terminated host name | - | IPv4 address big-endian in the low 32 bits (DNS over UDP 53, cached) |
 | 66 | `IDLE_INHIBIT` | 1 = hold off the screensaver / idle sleep, 0 = release | - | 0; released when the process ends (game mode, media playback) |
 | 67 | `CLIPBOARD` | op (`clipboard_op`: 0 GET, 1 SET, 2 SEQ) | GET: buffer, capacity / SET: text, length (<= 64 KiB) | GET: the clipboard's full length (copies at most the capacity); SET: 0; SEQ: a counter that grows with every SET. Shared with the Terminal (Ctrl+V, `clip`, `paste`) |
+| 68 | `FS_APPEND` | NUL-terminated path | data | bytes written (0 = failed). a2 = length, at most 1 MiB per call; the file is created when missing, existing data stays where it is (the last cluster's tail is filled, new clusters linked). For downloads and logs that grow |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.

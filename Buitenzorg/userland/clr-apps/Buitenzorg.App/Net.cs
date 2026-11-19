@@ -382,6 +382,11 @@ public sealed class HttpResponse
     public string Url = "";
     /// <summary>"TLSv1_3 ..." for HTTPS, "" for plain HTTP.</summary>
     public string Tls = "";
+    /// <summary>Download: bytes now in the file, and whether it was stopped early.</summary>
+    public long Saved;
+    public bool Cancelled;
+    /// <summary>Download: the transfer continued an earlier partial file (206).</summary>
+    public bool Resumed;
 
     public string? Header(string name)
     {
@@ -425,8 +430,22 @@ public sealed class HttpClient
 
     HttpResponse Once(string method, Url u, string? contentType, byte[]? body)
     {
+        var s = Open(method, u, contentType, body, "", out string tls);
+        try
+        {
+            var r = ReadResponse(s, method == "HEAD");
+            r.Url = u.ToString();
+            r.Tls = tls;
+            return r;
+        }
+        finally { s.Close(); }
+    }
+
+    /// <summary>Connect and send the request (extra = more header lines, each ending in CRLF).</summary>
+    INetStream Open(string method, Url u, string? contentType, byte[]? body, string extra, out string tls)
+    {
         INetStream s;
-        string tls = "";
+        tls = "";
         if (u.Secure) { var t = TlsConnection.Connect(u.Host, u.Port, TimeoutMs); tls = t.Version; s = t; }
         else s = TcpConnection.Connect(u.Host, u.Port, TimeoutMs);
         s.TimeoutMs = TimeoutMs;
@@ -438,6 +457,7 @@ public sealed class HttpClient
             if ((u.Secure && u.Port != 443) || (!u.Secure && u.Port != 80)) sb.Append(':').Append(u.Port);
             sb.Append("\r\nUser-Agent: ").Append(UserAgent);
             sb.Append("\r\nAccept: text/html,text/plain,image/*;q=0.8,*/*;q=0.5\r\nAccept-Encoding: identity\r\nConnection: close\r\n");
+            sb.Append(extra);
             if (body != null)
             {
                 if (contentType != null) sb.Append("Content-Type: ").Append(contentType).Append("\r\n");
@@ -447,12 +467,92 @@ public sealed class HttpClient
             var head = Encoding.UTF8.GetBytes(sb.ToString());
             s.Write(head, 0, head.Length);
             if (body != null && body.Length > 0) s.Write(body, 0, body.Length);
-            var r = ReadResponse(s, method == "HEAD");
-            r.Url = u.ToString();
-            r.Tls = tls;
-            return r;
+            return s;
         }
-        finally { s.Close(); }
+        catch (Exception) { s.Close(); throw; }
+    }
+
+    /// <summary>Save `url` to the file `path` without holding it in memory: the body
+    /// is appended in 256 KiB pieces as it arrives. With `resume` an existing
+    /// partial file is continued with a Range request (a server that ignores it
+    /// sends everything again, and the file starts over). `progress(saved, total)`
+    /// is called after every piece (total -1 = unknown); `cancel` returning true
+    /// stops the transfer, keeping what arrived (Cancelled = true) -- a later call
+    /// with resume continues it. Redirects are followed.</summary>
+    public HttpResponse Download(string url, string path, Action<long, long>? progress = null, Func<bool>? cancel = null, bool resume = true)
+    {
+        var u = Url.Parse(url) ?? throw new NetException("alamat tidak sah: " + url);
+        long have = resume ? Math.Max(0L, Buitenzorg.App.Files.Size(path)) : 0;
+        for (int hop = 0; ; hop++)
+        {
+            var s = Open("GET", u, null, null, have > 0 ? "Range: bytes=" + have + "-\r\n" : "", out string tls);
+            try
+            {
+                var r = ReadHead(s, out var rest);
+                r.Url = u.ToString();
+                r.Tls = tls;
+                if (r.Status >= 300 && r.Status < 400 && r.Header("Location") is string loc && hop < MaxRedirects)
+                {
+                    u = u.Resolve(loc) ?? throw new NetException("pengalihan ke alamat tidak sah: " + loc);
+                    continue;
+                }
+                if (r.Status == 416 && have > 0) { r.Saved = have; r.Resumed = true; return r; }   // already complete
+                if (!r.Ok) return r;
+                bool append = r.Status == 206 && have > 0;
+                if (!append)
+                {
+                    have = 0;
+                    if (!Buitenzorg.App.Files.WriteAllBytes(path, new byte[0])) throw new NetException("tidak bisa menulis " + path);
+                }
+                r.Resumed = append;
+                long length = long.TryParse(r.Header("Content-Length"), out var cl) ? cl : -1;
+                long total = length >= 0 ? have + length : -1;
+                bool chunked = (r.Header("Transfer-Encoding") ?? "").ToLowerInvariant().Contains("chunked");
+                var buf = new byte[32768];
+                long got = rest.Count;            // body bytes received (raw, before de-chunking)
+                var pending = rest;               // not yet written
+                long saved = have;
+                while (true)
+                {
+                    bool end = (!chunked && length >= 0 && got >= length) || (chunked && pending.EndsWith("0\r\n\r\n"));
+                    if (!chunked && (pending.Count >= 262144 || (end && pending.Count > 0)))
+                    {
+                        int n = (int)Math.Min(pending.Count, length >= 0 ? have + length - saved : pending.Count);
+                        if (!Buitenzorg.App.Files.AppendAllBytes(path, pending.Data, 0, n)) throw new NetException("menulis " + path + " gagal (disk penuh?)");
+                        saved += n;
+                        pending.Count = 0;
+                        progress?.Invoke(saved, total);
+                    }
+                    if (end) break;
+                    if (cancel != null && cancel())
+                    {
+                        if (!chunked && pending.Count > 0 && Buitenzorg.App.Files.AppendAllBytes(path, pending.Data, 0, pending.Count)) saved += pending.Count;
+                        r.Cancelled = true;
+                        break;
+                    }
+                    int k = s.Read(buf, 0, buf.Length);
+                    if (k <= 0)
+                    {
+                        if (!chunked && pending.Count > 0 && Buitenzorg.App.Files.AppendAllBytes(path, pending.Data, 0, pending.Count)) { saved += pending.Count; pending.Count = 0; }
+                        if (length >= 0 && saved < have + length) r.Cancelled = true;   // cut off: resumable
+                        break;
+                    }
+                    pending.Add(buf, 0, k);
+                    got += k;
+                    if (chunked && pending.Count > MaxBody) throw new NetException("jawaban chunked terlalu besar (> " + (MaxBody >> 20) + " MB)");
+                }
+                if (chunked && !r.Cancelled)
+                {
+                    var body = Dechunk(pending.Data, pending.Count);
+                    if (!Buitenzorg.App.Files.AppendAllBytes(path, body, 0, body.Length)) throw new NetException("menulis " + path + " gagal");
+                    saved += body.Length;
+                    progress?.Invoke(saved, saved);
+                }
+                r.Saved = saved;
+                return r;
+            }
+            finally { s.Close(); }
+        }
     }
 
     /// <summary>A growable byte buffer (appends with Array.Copy, not per byte).</summary>
@@ -480,6 +580,36 @@ public sealed class HttpClient
     }
 
     HttpResponse ReadResponse(INetStream s, bool headOnly)
+    {
+        var r = ReadHead(s, out var rest);
+        if (headOnly || r.Status == 204 || r.Status == 304 || (r.Status >= 100 && r.Status < 200)) return r;
+        var buf = new byte[32768];
+
+        bool chunked = (r.Header("Transfer-Encoding") ?? "").ToLowerInvariant().Contains("chunked");
+        long length = long.TryParse(r.Header("Content-Length"), out var cl) ? cl : -1;
+        // we asked for "Connection: close": the body ends at its length, the
+        // final chunk, or when the server closes
+        while (true)
+        {
+            if (!chunked && length >= 0 && rest.Count >= length) break;
+            if (chunked && rest.EndsWith("0\r\n\r\n")) break;
+            int n = s.Read(buf, 0, buf.Length);
+            if (n <= 0) break;
+            rest.Add(buf, 0, n);
+            if (rest.Count > MaxBody) throw new NetException("halaman terlalu besar (> " + (MaxBody >> 20) + " MB)");
+        }
+        if (chunked) r.Body = Dechunk(rest.Data, rest.Count);
+        else
+        {
+            int len = length >= 0 && rest.Count > length ? (int)length : rest.Count;
+            r.Body = new byte[len];
+            Array.Copy(rest.Data, 0, r.Body, 0, len);
+        }
+        return r;
+    }
+
+    /// <summary>The status line and headers; `rest` = body bytes that came with them.</summary>
+    HttpResponse ReadHead(INetStream s, out Bytes rest)
     {
         var data = new Bytes();
         var buf = new byte[32768];
@@ -510,30 +640,8 @@ public sealed class HttpClient
             int c = line.IndexOf(':');
             if (c > 0) r.Headers.Add(new KeyValuePair<string, string>(line.Substring(0, c).Trim(), line.Substring(c + 1).Trim()));
         }
-        var rest = new Bytes();
+        rest = new Bytes();
         rest.Add(data.Data, headEnd + 4, data.Count - headEnd - 4);
-        if (headOnly || r.Status == 204 || r.Status == 304 || (r.Status >= 100 && r.Status < 200)) return r;
-
-        bool chunked = (r.Header("Transfer-Encoding") ?? "").ToLowerInvariant().Contains("chunked");
-        long length = long.TryParse(r.Header("Content-Length"), out var cl) ? cl : -1;
-        // we asked for "Connection: close": the body ends at its length, the
-        // final chunk, or when the server closes
-        while (true)
-        {
-            if (!chunked && length >= 0 && rest.Count >= length) break;
-            if (chunked && rest.EndsWith("0\r\n\r\n")) break;
-            int n = s.Read(buf, 0, buf.Length);
-            if (n <= 0) break;
-            rest.Add(buf, 0, n);
-            if (rest.Count > MaxBody) throw new NetException("halaman terlalu besar (> " + (MaxBody >> 20) + " MB)");
-        }
-        if (chunked) r.Body = Dechunk(rest.Data, rest.Count);
-        else
-        {
-            int len = length >= 0 && rest.Count > length ? (int)length : rest.Count;
-            r.Body = new byte[len];
-            Array.Copy(rest.Data, 0, r.Body, 0, len);
-        }
         return r;
     }
 

@@ -79,7 +79,7 @@ const CATEGORIES: [Category; 6] = [
         name: "Utilitas",
         leaf: gfx::rgb(0x7C, 0xC4, 0xA4),
         // `hellogui` is a managed C# app (/disk/HELLOGUI.DLL, RustCLR).
-        apps: &[("mclock", "Jam"), ("mtasks", "Task Manager"), ("mhwlab", "Lab Perangkat"), ("hellogui", "Jam C#")],
+        apps: &[("mclock", "Jam"), ("mtasks", "Task Manager"), ("mhwlab", "Lab Perangkat"), ("hellogui", "Jam C#"), ("munduh", "Unduhan")],
     },
     Category {
         name: "Pengaturan",
@@ -164,6 +164,7 @@ fn icon_name(name: &str) -> &str {
         "mxox" => "xox",
         "mclock" | "hellogui" => "clock",
         "mtasks" => "taskmgr",
+        "munduh" => "store",
         "mimage" => "imgview",
         "mpiano" => "piano",
         "mpaint" => "paint",
@@ -435,6 +436,9 @@ struct Wm {
     last_icon: (usize, u64),
     /// The open right-click menu's top-left corner.
     ctx_menu: Option<(i32, i32)>,
+    /// The on-screen display (volume, screenshot): text, level 0..=100 or -1
+    /// for none, and the tick it disappears at.
+    osd: Option<(String, i32, u64)>,
 }
 
 static WM: Mutex<Option<Wm>> = Mutex::new(None);
@@ -465,7 +469,48 @@ pub fn init(width: usize, height: usize) {
         closed_owners: Vec::new(),
         last_icon: (usize::MAX, 0),
         ctx_menu: None,
+        osd: None,
     });
+}
+
+/// How long the on-screen display stays (timer ticks, 18.2 per second).
+const OSD_TICKS: u64 = 27;
+
+/// Show the on-screen display: a line of text and, when `level` is 0..=100,
+/// a bar (volume). It goes away by itself (`osd_tick`).
+pub fn show_osd(text: &str, level: i32) {
+    if let Some(wm) = WM.lock().as_mut() {
+        wm.osd = Some((String::from(text), level, crate::interrupts::ticks() + OSD_TICKS));
+    }
+}
+
+/// Hide an expired display; true when one went away (the scene changed).
+pub fn osd_tick(now: u64) -> bool {
+    let mut g = WM.lock();
+    let Some(wm) = g.as_mut() else { return false };
+    if wm.osd.as_ref().is_some_and(|o| now >= o.2) {
+        wm.osd = None;
+        return true;
+    }
+    false
+}
+
+/// The display's text, if one is up (tests).
+pub fn osd_text() -> Option<String> {
+    WM.lock().as_ref().and_then(|w| w.osd.as_ref().map(|o| o.0.clone()))
+}
+
+/// The desktop as it is now, composed into a new buffer (0x00RRGGBB, no
+/// pointer): what a screenshot saves.
+pub fn snapshot() -> Option<(Vec<u32>, usize, usize)> {
+    let (w, h) = {
+        let g = WM.lock();
+        let wm = g.as_ref()?;
+        (wm.width as usize, wm.height as usize)
+    };
+    let mut buf = vec![0u32; w * h];
+    compose_scene(&mut buf, w, h)?;
+    Some((buf, w, h))
 }
 
 /// Drain a pending app-launch requested from the desktop shell (start menu /
@@ -1695,6 +1740,28 @@ impl Wm {
         self.draw_start_menu(canvas, &th);
         self.draw_ctx_menu(canvas, &th);
         self.draw_ripple(canvas, &th);
+        self.draw_osd(canvas, &th);
+    }
+
+    /// The on-screen display: a pill at the top centre, text and a level bar.
+    fn draw_osd(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        let Some((text, level, _)) = &self.osd else { return };
+        let w = 320;
+        let h = if *level >= 0 { 66 } else { 44 };
+        let x = (self.width - w) / 2;
+        let y = 36;
+        blend_rounded(canvas, x + 3, y + 5, w, h, 16, th.shadow, 110);
+        panel(canvas, th, x, y, w, h, 16);
+        outline_rounded(canvas, x, y, w, h, 16, 1, th.win_border);
+        canvas.draw_text_styled(x + 20, y + 12, text, th.text, x + w - 20, gfx::TextStyle::Strong);
+        if *level >= 0 {
+            let (bx, by, bw) = (x + 20, y + 42, w - 40);
+            fill_rounded(canvas, bx, by, bw, 10, 5, shift(th.taskbar_bg, 30));
+            let fill = bw * (*level).clamp(0, 100) / 100;
+            if fill > 0 {
+                fill_rounded(canvas, bx, by, fill.max(10), 10, 5, th.accent);
+            }
+        }
     }
 
     /// The colours of ANSI SGR 30..37 (and 90..97, brighter), tuned to read on
@@ -1799,6 +1866,9 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         // Menus and the click ripple follow the pointer over large areas:
         // while one is up (or was, see `damage`) every frame is a full one.
         let overlay = self.start_open || self.ctx_menu.is_some() || self.ripple.is_some();
+        if let Some((text, level, _)) = &self.osd {
+            global = gfx::mix(gfx::mix_bytes(global, text.as_bytes()), *level as u64 + 1);
+        }
         if overlay {
             global = gfx::mix(global, (self.cursor.0 as u32 as u64) << 32 | self.cursor.1 as u32 as u64);
             global = gfx::mix(global, self.start_cat as u64);
@@ -1851,7 +1921,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
     /// the cursor's own pixels. None = not eligible (a menu is open, a drag
     /// or a ripple is running: the pointer position matters to the scene).
     fn cursor_key(&self) -> Option<u64> {
-        if self.start_open || self.ctx_menu.is_some() || self.ripple.is_some() || !matches!(self.drag, Drag::None) {
+        if self.start_open || self.ctx_menu.is_some() || self.ripple.is_some() || self.osd.is_some() || !matches!(self.drag, Drag::None) {
             return None;
         }
         let th = theme::current();

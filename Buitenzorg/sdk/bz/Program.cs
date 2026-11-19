@@ -149,6 +149,13 @@ static bool Is83(string n)
     return parts.Length switch { 1 => Ok(parts[0], 8), 2 => Ok(parts[0], 8) && Ok(parts[1], 3), _ => false };
 }
 
+/// <summary>A file's place in a package: an 8.3 name, or up to 4 of them joined by '/'.</summary>
+static bool IsPkgPath(string n)
+{
+    var parts = n.Split('/');
+    return parts.Length <= 4 && parts.All(Is83);
+}
+
 static int Pack(string[] args)
 {
     string dir = args[0];
@@ -179,15 +186,17 @@ static int Pack(string[] args)
     var payload = Path.Combine(dir, "package");
     if (!Directory.Exists(payload))
         return Fail($"put the files to ship in {payload} (8.3 names: the ELF/DLL/script and assets)");
-    var files = Directory.GetFiles(payload).OrderBy(f => f, StringComparer.Ordinal).ToList();
+    // every file under package/, sub-folders included (up to 4 levels), as
+    // the path it gets under /disk on the device
+    string PkgName(string f) => Path.GetRelativePath(payload, f).Replace('\\', '/').ToUpperInvariant();
+    var files = Directory.GetFiles(payload, "*", SearchOption.AllDirectories).OrderBy(PkgName, StringComparer.Ordinal).ToList();
     if (files.Count is 0 or > 64)
         return Fail($"{payload} must hold 1-64 files");
     foreach (var f in files)
-        if (!Is83(Path.GetFileName(f).ToUpperInvariant()))
-            return Fail($"{Path.GetFileName(f)} is not an 8.3 name (FAT on the device)");
-    entry ??= files.Select(f => Path.GetFileName(f).ToUpperInvariant())
-                   .FirstOrDefault(f => f.EndsWith(".ELF") || f.EndsWith(".DLL") || f.EndsWith(".SH"));
-    if (entry is not null && !files.Any(f => Path.GetFileName(f).ToUpperInvariant() == entry))
+        if (!IsPkgPath(PkgName(f)))
+            return Fail($"{PkgName(f)} is not an 8.3 name, or a path of at most 4 of them (FAT on the device)");
+    entry ??= files.Select(PkgName).FirstOrDefault(f => f.EndsWith(".ELF") || f.EndsWith(".DLL") || f.EndsWith(".SH"));
+    if (entry is not null && !files.Any(f => PkgName(f) == entry))
         return Fail($"entry {entry} is not in {payload}");
 
     string category = m.Type switch { "game" => "GAME", "widget" => "UTILITAS", "web" => "INTERNET", _ => "LAINNYA" };
@@ -204,7 +213,7 @@ static int Pack(string[] args)
         w.Write(mb);
         foreach (var f in files)
         {
-            var fname = System.Text.Encoding.ASCII.GetBytes(Path.GetFileName(f).ToUpperInvariant());
+            var fname = System.Text.Encoding.ASCII.GetBytes(PkgName(f));
             var data = File.ReadAllBytes(f);
             w.Write((byte)fname.Length);
             w.Write(fname);

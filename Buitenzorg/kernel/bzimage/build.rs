@@ -629,6 +629,18 @@ fn main() {
         if let Ok(bytes) = std::fs::read(&p) {
             add_file(&mut builder, &mut files, "lagu3.fla".into(), bytes);
         }
+        // and an MP3 of it (title "Gerimis"), for the MP3 decoder
+        let p = manifest_dir().join("..").join("..").join("assets").join("music").join("LAGU4.MP3");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "lagu4.mp3".into(), bytes);
+        }
+        // and a MIDI piece for the synthesizer (scripts/make-midi-song.py)
+        let p = manifest_dir().join("..").join("..").join("assets").join("music").join("LAGU5.MID");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "lagu5.mid".into(), bytes);
+        }
     }
 
     // Video: an original 12-second animation with music, MJPEG + PCM in AVI

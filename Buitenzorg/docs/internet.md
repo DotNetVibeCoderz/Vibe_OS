@@ -23,6 +23,22 @@ There is **no CSS and no JavaScript**, so modern sites that build their
 content with scripts show little; text-oriented sites (`text.npr.org`,
 `lite.duckduckgo.com`, Wikipedia's mobile pages, documentation) read well.
 
+## Unduhan (downloads)
+
+`run munduh [address]`, or **Start > Utilitas > Unduhan**. Paste an
+`http://` or `https://` address and press Enter: the file goes to
+`/disk/UNDUHAN` under an 8.3 name made from the address (`laporan-akhir.pdf`
+becomes `LAPORANA.PDF`; a name in use gets a number). Each download shows a
+progress bar, the amount and the speed; **Jeda** pauses it, **Lanjutkan**
+continues where it stopped (the server is asked for the rest with an HTTP
+`Range` request), **Hapus** takes it off the list (an unfinished file is
+deleted, a finished one stays). Downloads run one after another in the
+background, and the list -- with paused ones -- survives a restart
+(`/disk/UNDUHAN/DAFTAR.TXT`).
+
+Files of any size work: the body is written to disk in 256 KiB pieces as it
+arrives through the new **`FS_APPEND`** syscall, so nothing is held in memory.
+
 ## In the Terminal
 
 | Command | |
@@ -53,12 +69,43 @@ var client = server.Accept(waitMs: 1000);       // null when none came
 long ip = Dns.Resolve("example.com");           // -1 when it does not resolve
 ```
 
+**Downloads to a file** (`HttpClient.Download`):
+
+```csharp
+var r = http.Download("https://example.com/big.zip", "/disk/BIG.ZIP",
+    (saved, total) => Console.WriteLine(saved + " / " + total),   // total -1 = unknown
+    () => stopRequested);                                           // true = stop, keep what came
+// r.Saved = bytes in the file, r.Cancelled = stopped early (call again to resume),
+// r.Resumed = continued with Range (206); 416 = the file was already complete
+```
+
+Files: `Files.WriteAllBytes(path, bytes)` and `Files.AppendAllBytes(path, bytes,
+offset, count)` -- the latter is `FS_APPEND` (68): it fills the tail of the
+file's last cluster and links new clusters, so a growing file costs only its
+new bytes.
+
 `TlsConnection.Connect(host, 443)` gives a TLS stream directly;
 `TlsConnection.AddRoot(der)` trusts one more root certificate (for a server
 with a private CA). Calls block the calling thread while they wait -- a UI
 program fetches on a background `Thread` and hands the result to the UI with
 `Dispatcher.Post`, as Peramban does. Off the device (`dotnet X.dll`) the same
 classes run on .NET's sockets, so self-tests work on a PC.
+
+**WebSocket** (RFC 6455, `Buitenzorg.Net.WebSocket`):
+
+```csharp
+var ws = WebSocket.Connect("wss://echo.example.org/chat");   // ws:// or wss:// (TLS)
+ws.Send("halo");                       // text; ws.Send(byte[]) = binary
+var m = ws.Receive();                  // null once the connection closed
+if (m != null && m.IsText) Console.WriteLine(m.Text);   // m.Data = the bytes
+ws.Close();                            // close handshake, code 1000
+```
+
+Pings from the server are answered inside `Receive`, fragmented messages are
+put back together, and frames of any length (7-, 16- and 64-bit) work. A
+server program answers an upgrade with `WebSocket.Accept(connection,
+requestHead)` after reading the HTTP head from a `TcpServer` connection --
+Peramban's self-test runs an echo server that way.
 
 Syscalls: **`TCP_OP` (64)** -- connect, send, receive, state, close, listen,
 accept; handles belong to the process and close when it ends -- and
@@ -103,6 +150,8 @@ thread of its own over TCP on the machine's address and browses them
   `identity`), no proxy.
 - TCP has no window scaling or SACK -- fine for pages, slow for large files.
 - One connection per request (no keep-alive).
+- WebSocket: no extensions (no `permessage-deflate`), no subprotocol choice;
+  `Receive` blocks (use a background thread).
 
 ---
 

@@ -78,6 +78,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod screenshot;
 mod appprof;
 mod crash;
 mod gdbstub;
@@ -332,6 +333,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     if crate::bootmode::selftest() {
         desktop::ensure_session_windows();
         shell::script_self_test();
+        desktop::hotkey_self_test();
         terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows");

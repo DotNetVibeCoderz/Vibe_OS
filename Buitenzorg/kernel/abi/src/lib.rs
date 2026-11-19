@@ -277,8 +277,12 @@ pub mod sysno {
     /// bytes (copies at most `a2`). SET: `a1` = text, `a2` = length (at most
     /// 64 KiB) -> 0. SEQ: -> a counter that grows with every SET.
     pub const CLIPBOARD: u64 = 67;
+    /// Append to a file: `a0` = NUL-terminated path, `a1` = data, `a2` =
+    /// length (at most 1 MiB per call). The file is created when missing;
+    /// existing data is not rewritten. Returns the bytes written (0 = failed).
+    pub const FS_APPEND: u64 = 68;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 68;
+    pub const COUNT: u64 = 69;
 }
 
 /// Operations of [`sysno::CLIPBOARD`].
@@ -1027,7 +1031,8 @@ mod tests {
         assert_eq!(sysno::DNS_RESOLVE, 65);
         assert_eq!(sysno::IDLE_INHIBIT, 66);
         assert_eq!(sysno::CLIPBOARD, 67);
-        assert_eq!(sysno::COUNT, 68);
+        assert_eq!(sysno::FS_APPEND, 68);
+        assert_eq!(sysno::COUNT, 69);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1047,7 +1052,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 68, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 69, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

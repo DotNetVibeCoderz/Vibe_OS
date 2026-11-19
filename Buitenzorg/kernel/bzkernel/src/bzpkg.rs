@@ -8,7 +8,9 @@
 //! "BZPK"  u16 version (1)  u16 file count  u32 manifest length
 //! manifest: UTF-8 "key=value" lines -- name, version, title, kind,
 //!           category, description, entry (the file `run <name>` starts)
-//! per file: u8 name length, 8.3 name (A-Z 0-9 _ - .), u32 size,
+//! per file: u8 name length, 8.3 name (A-Z 0-9 _ - .) -- or a path of
+//!           up to 4 such names separated by '/' (sub-folders, 2026-11-19),
+//!           u32 size,
 //!           32-byte SHA-256 of the data, the data
 //! trailer:  32-byte SHA-256 of every byte before it
 //! ```
@@ -23,7 +25,8 @@
 //!
 //! On a FAT 8.3 volume the file is named `NAME.BZP` (the extension has three
 //! letters); `bz install ./NAME.BZP` (or any path) installs it. Every hash is
-//! checked before anything is written; files go to the root of `/disk`; a
+//! checked before anything is written; files go to `/disk` (a path's
+//! folders are created; folders a remove or upgrade leaves empty go); a
 //! file that already exists is refused unless it belongs to an older version
 //! of the same package (an upgrade). `/disk/PKGS.CFG` lists installed
 //! packages, one per line: `pkg<TAB>name<TAB>version<TAB>title<TAB>entry
@@ -237,6 +240,49 @@ pub fn valid_file_name(n: &str) -> bool {
     ok(base, 8) && ext.map_or(true, |e| ok(e, 3))
 }
 
+/// A file's place in a package: an 8.3 name, or up to 4 of them joined by '/'.
+pub fn valid_file_path(n: &str) -> bool {
+    let parts: Vec<&str> = n.split('/').collect();
+    parts.len() <= 4 && parts.iter().all(|p| valid_file_name(p))
+}
+
+/// Create the folders above `file` (a /disk-relative path) that are missing.
+fn make_parents(file: &str) -> Result<(), String> {
+    let parts: Vec<&str> = file.split('/').collect();
+    let mut dir = String::from("/disk");
+    for p in &parts[..parts.len() - 1] {
+        dir.push('/');
+        dir.push_str(p);
+        match crate::vfs::stat(&dir) {
+            Ok(e) if e.is_dir => {}
+            Ok(_) => return Err(format!("{} adalah berkas, bukan folder", dir)),
+            Err(_) => crate::vfs::mkdir(&dir).map_err(|e| format!("membuat {}: {}", dir, e))?,
+        }
+    }
+    Ok(())
+}
+
+/// Remove the folders of `files` (deepest first) that are empty now.
+fn prune_folders(files: &[String]) {
+    let mut dirs: Vec<String> = Vec::new();
+    for f in files {
+        let mut p = f.as_str();
+        while let Some(i) = p.rfind('/') {
+            p = &p[..i];
+            if !dirs.iter().any(|d| d == p) {
+                dirs.push(String::from(p));
+            }
+        }
+    }
+    dirs.sort_by_key(|d| core::cmp::Reverse(d.matches('/').count()));
+    for d in dirs {
+        let path = format!("/disk/{}", d);
+        if crate::vfs::list_entries(&path).is_ok_and(|e| e.is_empty()) {
+            let _ = crate::vfs::remove(&path);
+        }
+    }
+}
+
 /// Files the system needs: never replaced by a package.
 fn protected(file: &str) -> bool {
     matches!(file, "PKGS.CFG" | "USERS.CFG" | "BZDISK.ID" | "SSHHOST.KEY" | "SSHD.CFG" | "REGION.CFG" | "RANDOM.SEE" | "PROFILE.SH" | "HISTORY.TXT" | "CLRHOST.ELF" | "BZAPP.DLL" | "BZUI.DLL")
@@ -328,8 +374,8 @@ pub fn parse(bytes: &[u8]) -> Result<Archive, &'static str> {
     for _ in 0..count {
         let n = r.u8()? as usize;
         let name = core::str::from_utf8(r.take(n)?).map_err(|_| "nama berkas bukan ASCII")?;
-        if !valid_file_name(name) {
-            return Err("nama berkas bukan 8.3 (A-Z 0-9 _ -)");
+        if !valid_file_path(name) {
+            return Err("nama berkas bukan 8.3 (A-Z 0-9 _ -; folder: maks 4 tingkat dipisah /)");
         }
         let size = r.u32()? as usize;
         let hash: [u8; 32] = r.take(32)?.try_into().unwrap();
@@ -507,14 +553,18 @@ fn install_bytes(bytes: &[u8]) -> Result<(String, String, Option<String>), Strin
             }
         }
         for (f, data) in &a.files {
+            make_parents(f)?;
             crate::vfs::write(&format!("/disk/{}", f), data).map_err(|e| format!("menulis {}: {}", f, e))?;
         }
         // files of the old version that the new one no longer has
+        let mut gone = Vec::new();
         for f in &old_files {
             if !a.files.iter().any(|(n, _)| n == f) {
                 let _ = crate::vfs::remove(&format!("/disk/{}", f));
+                gone.push(f.clone());
             }
         }
+        prune_folders(&gone);
         let rec = Installed {
             name: a.name.clone(),
             version: a.version.clone(),
@@ -546,6 +596,7 @@ pub fn remove(name: &str) -> Result<usize, String> {
                 n += 1;
             }
         }
+        prune_folders(&p.files);
         save(state).map_err(|e| format!("menyimpan {}: {}", STATE_FILE, e))?;
         let stem = history_stem(name);
         let _ = crate::vfs::remove(&format!("{}/{}.BZP", HISTORY_DIR, stem));
@@ -628,6 +679,28 @@ pub fn self_test(dir: &str) -> Result<String, String> {
     let n = remove("bztest")?;
     if n != 1 || crate::vfs::stat("/disk/BZTEST.SH").is_ok() || find("bztest").is_some() {
         return Err(String::from("remove"));
+    }
+    // sub-folders: created on install, an entry inside one runs, the folders
+    // a package leaves empty go (on upgrade and on remove)
+    let d1 = build(
+        "name=bztdir\nversion=1\nentry=BZTDIR/BIN/RUN.SH\n",
+        &[("BZTDIR/BIN/RUN.SH", b"echo dari folder\n"), ("BZTDIR/DATA/A.TXT", b"a"), ("BZTDIR/DATA/LAMA/B.TXT", b"b")],
+    );
+    crate::vfs::write(file, &d1).map_err(|e| format!("write: {}", e))?;
+    install_file(file)?;
+    let dir_ok = crate::vfs::read("/disk/BZTDIR/DATA/LAMA/B.TXT").ok().as_deref() == Some(b"b".as_slice())
+        && crate::vfs::stat("/disk/BZTDIR/BIN").is_ok_and(|e| e.is_dir);
+    let d2 = build("name=bztdir\nversion=2\nentry=BZTDIR/BIN/RUN.SH\n", &[("BZTDIR/BIN/RUN.SH", b"echo v2\n"), ("BZTDIR/DATA/A.TXT", b"a2")]);
+    crate::vfs::write(file, &d2).map_err(|e| format!("write: {}", e))?;
+    install_file(file)?;
+    let upgrade_pruned = crate::vfs::stat("/disk/BZTDIR/DATA/LAMA").is_err() && crate::vfs::stat("/disk/BZTDIR/DATA/A.TXT").is_ok();
+    let n = remove("bztdir")?;
+    let removed = n == 2 && crate::vfs::stat("/disk/BZTDIR").is_err();
+    let bad_path = parse(&build("name=bztbad\nversion=1\n", &[("A/B/C/D/E.TXT", b"x")])).is_err()
+        && parse(&build("name=bztbad\nversion=1\n", &[("../X.TXT", b"x")])).is_err();
+    if !(dir_ok && upgrade_pruned && removed && bad_path) {
+        let _ = remove("bztdir");
+        return Err(format!("sub-folders: install {} upgrade {} remove {} bad paths {}", dir_ok, upgrade_pruned, removed, bad_path));
     }
     // signatures: a signed archive installs as untrusted, a changed byte or a
     // changed signature is refused, `require=on` refuses an untrusted signer

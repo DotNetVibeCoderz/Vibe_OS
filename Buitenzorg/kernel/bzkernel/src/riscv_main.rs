@@ -77,6 +77,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod screenshot;
 mod appprof;
 mod crash;
 mod gdbstub;
@@ -305,6 +306,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     if crate::bootmode::selftest() {
         desktop::ensure_session_windows();
         shell::script_self_test();
+        desktop::hotkey_self_test();
         terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG RISCV READY -- increments 1-6 (boot, traps, memory, address spaces, timer, U-mode, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU + input + net, RTC, SBI power, shared syscalls + window system, JS/TS/Python, interactive desktop, SMP via SBI HSM) -- M4 complete");

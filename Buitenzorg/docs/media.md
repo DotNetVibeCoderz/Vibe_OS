@@ -9,8 +9,8 @@ disk; two original pieces come with every image.
 
 ## Musik
 
-`run mmusik`, or **Start > Multimedia > Musik**. The list shows the WAV and
-FLAC files (`.FLA` on the FAT disk, `.FLAC`) of `/disk` and the scratch folder (`/ram`); click one, or Space to play /
+`run mmusik`, or **Start > Multimedia > Musik**. The list shows the WAV,
+FLAC (`.FLA` on the FAT disk, `.FLAC`) and MP3 files of `/disk` and the scratch folder (`/ram`); click one, or Space to play /
 pause; Sebelumnya / Berikutnya; click the progress bar to jump; the slider
 sets *this program's* volume in the mixer (the master volume stays in
 Pengaturan). The two songs on every image -- *Embun Pagi di Kebun Raya* and
@@ -20,7 +20,18 @@ five-note scale over a slow gong bass); a third, *Tetes Embun* (`LAGU3.FLA`,
 `assets/music`), is lossless FLAC. FLAC is decoded to PCM by the host when a
 song is loaded (`userland/clrhost/src/flac.rs`: fixed and LPC predictors,
 Rice residuals, stereo decorrelation, 8 to 24 bits -- output bit-exact with
-ffmpeg's), the title comes from its `TITLE=` comment.
+ffmpeg's), the title comes from its `TITLE=` comment. MP3 (and MP1 / MP2) goes
+through the `nanomp3` crate, a safe Rust port of minimp3 (within one step of
+ffmpeg's output; ID3 tags skipped, encoder delay and padding trimmed), the
+title from the ID3v2 `TIT2` frame; `LAGU4.MP3` (*Gerimis*) is on every image.
+MIDI files (`.MID`) are played by a small synthesizer in the host
+(`userland/clrhost/src/midi.rs`): format 0 and 1, tempo changes, 48 voices
+with a timbre per General MIDI instrument family (piano, organ, guitar,
+bass, strings, brass / reed, flute, synth) and an envelope, channel 10 as
+drums (kick, snare, hi-hat, toms), rendered at 22 kHz mono; the title is the
+first track name. *Kupu-kupu di Taman* (`LAGU5.MID`, made by
+`scripts/make-midi-song.py`) is on every image -- MIDI is also what games
+can ship as music: a few KB per song.
 
 ## Gambar (pictures)
 
@@ -115,7 +126,9 @@ self-test plays through `AUDIO_WRITE` in the boot's managed suite.
   is false; the Pi still plays one-shot sounds on its jack and HDMI).
 - Pictures: no EXIF rotation, thumbnails or editing; GIF frames are decoded
   up front (fine for small animations).
-- WAV and FLAC: no MP3 or Ogg decoder yet; no microphone; the level meter
+- WAV, FLAC, MP3 and MIDI: no Ogg Vorbis / Opus decoder yet; the MIDI synth
+  has no SoundFont, reverb or stereo panning; a song is decoded
+  whole when it is loaded (a few seconds for a long MP3 under QEMU); no microphone; the level meter
   shows peaks, not a spectrum.
 
 ---

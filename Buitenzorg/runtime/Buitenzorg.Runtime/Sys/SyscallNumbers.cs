@@ -211,8 +211,11 @@ public static class SyscallNumbers
     /// <summary>The system clipboard (UTF-8 text): a0 = op (<see cref="ClipboardOp"/>); GET a1 = buffer, a2 = capacity -> full length; SET a1 = text, a2 = length -> 0; SEQ -> change counter.</summary>
     public const ulong Clipboard = 67;
 
+    /// <summary>Append to a file (created when missing): a0 = NUL-terminated path, a1 = data, a2 = length (at most 1 MiB). Returns the bytes written, 0 = failed.</summary>
+    public const ulong FsAppend = 68;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 68;
+    public const ulong Count = 69;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Clipboard"/> (mirrors <c>bz_abi::clipboard_op</c>).</summary>

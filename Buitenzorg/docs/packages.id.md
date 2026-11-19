@@ -11,7 +11,13 @@ myapp/
   package/              semua yang dikirim, nama 8.3 (/disk perangkat memakai FAT)
     MYAPP.ELF           app C# native (bflat), atau MYAPP.DLL (managed), atau MYAPP.SH
     MYAPP.BMP           aset
+    MYAPP/DATA/LEVEL1.MAP   sub-folder juga bisa (sampai 4 tingkat, tiap nama 8.3)
 ```
+
+Berkas di sub-folder `package/` masuk ke folder yang sama di bawah `/disk`
+(dibuat saat dipasang); entry boleh berada di dalamnya (`--entry
+MYAPP/MYAPP.SH`). Menghapus atau memperbarui paket juga menghapus folder yang
+ditinggalkannya kosong.
 
 ```powershell
 dotnet run --project sdk/bz -- pack myapp -o MYAPP.BZP     # [--entry FILE] [--name NAMA]
@@ -40,7 +46,7 @@ bz remove my-app              # menghapus berkasnya
 Setiap image membawa contoh, `/disk/HALOPKT.BZP` (`sdk/samples/halo-paket`).
 
 **Aturan keamanan:** SHA-256 arsip dan setiap berkas dicek sebelum apa pun
-ditulis; nama harus 8.3; berkas milik paket lain, berkas sistem (`USERS.CFG`,
+ditulis; nama harus 8.3 (path: paling banyak 4 nama, tanpa `..`); berkas milik paket lain, berkas sistem (`USERS.CFG`,
 `PKGS.CFG`, `CLRHOST.ELF`, ...) atau berkas yang sudah ada di `/disk` tapi bukan
 dari paket ini ditolak; paket tidak boleh memakai nama app registry bawaan.
 
@@ -129,7 +135,7 @@ paket tanpa tanda tangan dan paket dengan kunci tak dikenal tetap terpasang
 "BZPK"  u16 versi (1)  u16 jumlah berkas  u32 panjang manifest
 manifest: baris key=value UTF-8 (name, version, title, kind, category,
           description, entry)
-per berkas: u8 panjang nama, nama 8.3, u32 ukuran, SHA-256 32 byte, data
+per berkas: u8 panjang nama, nama 8.3 atau path DIR/.../NAMA (<= 4 bagian), u32 ukuran, SHA-256 32 byte, data
 penutup:  SHA-256 32 byte dari semua byte sebelumnya
 ```
 

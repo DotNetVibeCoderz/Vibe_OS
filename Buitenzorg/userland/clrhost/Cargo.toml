@@ -33,6 +33,8 @@ getrandom = { version = "0.2", features = ["custom"] }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 # the ray-casting renderer (raycast.rs)
 libm = "0.2"
+# MP3 (Musik): a safe no_std port of minimp3
+nanomp3 = { version = "0.2", default-features = false, features = ["alloc"] }
 
 [profile.release]
 panic = "abort"

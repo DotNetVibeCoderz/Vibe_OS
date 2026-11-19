@@ -75,6 +75,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod screenshot;
 mod appprof;
 mod crash;
 mod gdbstub;
@@ -266,6 +267,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // Terminal tabs + jobs through the keys a user types (the session is
     // reset when the desktop starts); before READY: the smoke test stops at it
     shell::script_self_test();
+    desktop::hotkey_self_test();
     terminal::self_test("helloclr", "Hello from managed C#");
     println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 

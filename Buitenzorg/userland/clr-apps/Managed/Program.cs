@@ -36,6 +36,7 @@ public static class Folder
         new AppInfo("mpaint", "Paint", "Menggambar dengan mouse", IconKind.Leaf, 0xE3A6C9),
         new AppInfo("mbuah", "Panen Buah 3D", "Tangkap buah yang jatuh, hindari batu", IconKind.Leaf, 0xE0352B),
         new AppInfo("mweb", "Peramban", "Jelajahi web: HTTP dan HTTPS", IconKind.Search, 0x5FA8D3),
+        new AppInfo("munduh", "Unduhan", "Unduh berkas, jeda dan lanjutkan", IconKind.Save, 0x5FA8D3),
         new AppInfo("mlabirin", "Labirin Kebun", "Labirin 3D: kumpulkan bunga emas", IconKind.Leaf, 0x7CC4A4),
         new AppInfo("mbaca", "Baca", "Pembaca e-book EPUB dan teks", IconKind.File, 0xD9B77E),
         new AppInfo("mchip8", "CHIP-8", "Emulator CHIP-8 + dua program orisinal", IconKind.Grid, 0x9BE0B8),
@@ -201,6 +202,7 @@ public static class Folder
             Report(MBata.BataApp.SelfTest());
             Report(MBalok.BalokApp.SelfTest());
             Report(MKartu.KartuApp.SelfTest());
+            Report(MUnduh.UnduhApp.SelfTest());
         }
         if (failed == 0) Console.WriteLine("MILESTONE: MANAGED APPS OK");
         return failed;

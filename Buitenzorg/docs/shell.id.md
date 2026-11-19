@@ -143,8 +143,23 @@ fakt() {
 fakt 5          # 120
 ```
 
-* **Belum ada:** `case`, here-document, variabel `local` (variabel di dalam
-  fungsi adalah variabel shell).
+* **`local NAMA[=nilai]`** di dalam fungsi (atau skrip) mengembalikan nilai
+  variabel sebelumnya -- atau menghapusnya -- saat fungsi selesai.
+* **`case KATA in pola) ...;; esac`**: pola memakai `*` dan `?`, `a|b`
+  berarti salah satu, pola berkutip dibaca harfiah, `$X` di dalam pola
+  diperluas; yang pertama cocok dijalankan, `*)` menangkap sisanya.
+* **Here-document:** `cat <<EOF` mengirim baris-baris berikutnya, sampai baris
+  `EOF`, ke input perintah; `$X`, `$(cmd)` dan `$((..))` diperluas kecuali
+  pembatasnya berkutip (`<<'EOF'`); `<<-EOF` membuang tab di awal baris. Di
+  skrip (beberapa baris), bukan di satu baris yang diketik.
+
+```sh
+case $1 in
+  start|mulai) echo memulai ;;
+  *.TXT)       cat $1 ;;
+  *)           echo "tidak dikenal: $1" ;;
+esac
+```
 
 **Batas:** skrip berjalan di task kernel milik desktop, jadi satu run paling
 banyak 20.000 pernyataan dan satu `while` paling banyak 5.000 putaran; skrip

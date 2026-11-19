@@ -161,6 +161,19 @@ pub fn run() -> ! {
             }
         }
 
+        // media keys and Print Screen, whoever has the focus
+        while let Some(h) = keyboard::take_hotkey() {
+            if !saver_active {
+                hotkey(h);
+            }
+            input = true;
+            other = true;
+        }
+        if wm::osd_tick(now) {
+            other = true;
+            input = true;
+        }
+
         // jobs of terminal tabs: their output and their end
         terminal::poll();
 
@@ -291,4 +304,96 @@ pub fn run() -> ! {
             }
         }
     }
+}
+
+/// The volume before Mute silenced it (0 = not muted).
+static MUTED_FROM: spin::Mutex<u32> = spin::Mutex::new(0);
+
+/// Act on a hotkey: change the volume (and show it) or save a screenshot.
+pub fn hotkey(h: keyboard::Hotkey) {
+    use keyboard::Hotkey;
+    match h {
+        Hotkey::Screenshot => match crate::screenshot::save_screen() {
+            Ok(path) => {
+                println!("[desktop] screenshot saved: {}", path);
+                wm::show_osd(&alloc::format!("Layar disimpan: {}", path), -1);
+            }
+            Err(e) => {
+                println!("[desktop] screenshot failed: {}", e);
+                wm::show_osd(&alloc::format!("Tangkapan layar gagal: {}", e), -1);
+            }
+        },
+        Hotkey::VolumeUp | Hotkey::VolumeDown | Hotkey::Mute => {
+            let mut muted = MUTED_FROM.lock();
+            let cur = crate::audio::volume();
+            let v = match h {
+                Hotkey::Mute if *muted > 0 => core::mem::replace(&mut *muted, 0),
+                Hotkey::Mute => {
+                    *muted = cur.max(1);
+                    0
+                }
+                Hotkey::VolumeUp => {
+                    *muted = 0;
+                    (cur + 10).min(100)
+                }
+                _ => {
+                    *muted = 0;
+                    cur.saturating_sub(10)
+                }
+            };
+            let ok = crate::audio::set_volume(v);
+            let text = if !ok {
+                alloc::string::String::from("Tidak ada kartu suara")
+            } else if v == 0 {
+                alloc::string::String::from("Volume: senyap")
+            } else {
+                alloc::format!("Volume: {}%", v)
+            };
+            wm::show_osd(&text, if ok { v as i32 } else { -1 });
+        }
+    }
+}
+
+/// Self-test boot: the hotkey path end to end -- volume up/down through the
+/// mixer with the display showing it, mute and back, and a screenshot written,
+/// read back and removed (`MEDIA KEYS OK`). The user's volume is restored.
+pub fn hotkey_self_test() -> bool {
+    use keyboard::Hotkey;
+    let before = crate::audio::volume();
+    let has_card = crate::audio::set_volume(50);
+    let mut ok = true;
+    if has_card {
+        hotkey(Hotkey::VolumeUp);
+        let up = crate::audio::volume() == 60 && wm::osd_text().as_deref() == Some("Volume: 60%");
+        hotkey(Hotkey::VolumeDown);
+        hotkey(Hotkey::VolumeDown);
+        let down = crate::audio::volume() == 40;
+        hotkey(Hotkey::Mute);
+        let muted = crate::audio::volume() == 0 && wm::osd_text().as_deref() == Some("Volume: senyap");
+        hotkey(Hotkey::Mute);
+        let back = crate::audio::volume() == 40;
+        if !(up && down && muted && back) {
+            println!("[desktop] hotkey volume: up {} down {} mute {} unmute {}", up, down, muted, back);
+            ok = false;
+        }
+        crate::audio::set_volume(before);
+    } else {
+        hotkey(Hotkey::VolumeUp);
+        ok &= wm::osd_text().as_deref() == Some("Tidak ada kartu suara");
+    }
+    let shot = crate::screenshot::self_test();
+    if let Err(e) = &shot {
+        println!("[desktop] screenshot self-test: {}", e);
+    }
+    ok &= shot.is_ok();
+    let shot_text = shot.unwrap_or_default();
+    wm::osd_tick(u64::MAX);
+    if ok {
+        println!(
+            "[kernel] MILESTONE: MEDIA KEYS OK (volume +/-/mute with the on-screen display{}, {})",
+            if has_card { "" } else { " -- no sound card" },
+            shot_text
+        );
+    }
+    ok
 }

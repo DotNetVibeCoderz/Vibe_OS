@@ -9,8 +9,8 @@ lagu orisinal ikut di setiap image.
 
 ## Musik
 
-`run mmusik`, atau **Mulai > Multimedia > Musik**. Daftarnya berisi berkas WAV
-dan FLAC (`.FLA` di disk FAT, `.FLAC`) di `/disk` dan folder scratch (`/ram`); klik satu, atau Spasi untuk putar /
+`run mmusik`, atau **Mulai > Multimedia > Musik**. Daftarnya berisi berkas WAV,
+FLAC (`.FLA` di disk FAT, `.FLAC`) dan MP3 di `/disk` dan folder scratch (`/ram`); klik satu, atau Spasi untuk putar /
 jeda; Sebelumnya / Berikutnya; klik bilah progres untuk melompat; slider
 mengatur volume *program ini* di mixer (volume master tetap di Pengaturan).
 Dua lagu di setiap image -- *Embun Pagi di Kebun Raya* dan *Hujan Sore di
@@ -20,7 +20,18 @@ atas bass gong yang lambat); lagu ketiga, *Tetes Embun* (`LAGU3.FLA`,
 `assets/music`), berformat FLAC lossless. FLAC di-decode ke PCM oleh host saat
 lagu dimuat (`userland/clrhost/src/flac.rs`: prediktor fixed dan LPC, residu
 Rice, dekorelasi stereo, 8 sampai 24 bit -- hasilnya bit-exact dengan
-ffmpeg), judulnya dari komentar `TITLE=`.
+ffmpeg), judulnya dari komentar `TITLE=`. MP3 (juga MP1 / MP2) lewat crate
+`nanomp3`, port Rust aman dari minimp3 (selisih paling banyak satu langkah
+dari keluaran ffmpeg; tag ID3 dilewati, jeda dan padding encoder dipangkas),
+judulnya dari frame ID3v2 `TIT2`; `LAGU4.MP3` (*Gerimis*) ada di setiap image.
+Berkas MIDI (`.MID`) dimainkan synthesizer kecil di host
+(`userland/clrhost/src/midi.rs`): format 0 dan 1, perubahan tempo, 48 suara
+dengan warna bunyi per keluarga instrumen General MIDI (piano, organ, gitar,
+bass, string, brass / reed, flute, synth) dan envelope, kanal 10 sebagai drum
+(kick, snare, hi-hat, tom), dirender 22 kHz mono; judulnya nama track
+pertama. *Kupu-kupu di Taman* (`LAGU5.MID`, dibuat
+`scripts/make-midi-song.py`) ada di setiap image -- MIDI juga cocok sebagai
+musik game: beberapa KB per lagu.
 
 ## Gambar
 
@@ -87,7 +98,9 @@ menyalakannya lagi. Cek boot: `MILESTONE: MIXER OK` (semua arsitektur) dan
   tetap memutar bunyi sekali-putar di jack dan HDMI).
 - Gambar: belum ada rotasi EXIF, thumbnail atau penyuntingan; bingkai GIF
   didekode di awal (cukup untuk animasi kecil).
-- WAV dan FLAC: belum ada dekoder MP3 atau Ogg; belum ada mikrofon; meter
+- WAV, FLAC, MP3 dan MIDI: belum ada dekoder Ogg Vorbis / Opus; synth MIDI
+  belum punya SoundFont, reverb atau panning stereo; lagu di-decode
+  utuh saat dimuat (beberapa detik untuk MP3 panjang di QEMU); belum ada mikrofon; meter
   menampilkan puncak, bukan spektrum.
 
 ---

@@ -11,7 +11,12 @@ myapp/
   package/              everything to ship, 8.3 names (the device's /disk is FAT)
     MYAPP.ELF           a native C# app (bflat), or MYAPP.DLL (managed), or MYAPP.SH
     MYAPP.BMP           assets
+    MYAPP/DATA/LEVEL1.MAP   sub-folders work too (up to 4 levels, each name 8.3)
 ```
+
+Files in sub-folders of `package/` go to the same folders under `/disk`
+(created on install); the entry may sit in one (`--entry MYAPP/MYAPP.SH`).
+Removing or upgrading a package also removes the folders it left empty.
 
 ```powershell
 dotnet run --project sdk/bz -- pack myapp -o MYAPP.BZP     # [--entry FILE] [--name NAME]
@@ -39,7 +44,8 @@ bz remove my-app              # deletes its files
 Every image carries a sample, `/disk/HALOPKT.BZP` (`sdk/samples/halo-paket`).
 
 **Safety rules:** the archive's own SHA-256 and every file's SHA-256 are
-checked before anything is written; names must be 8.3; a file another package
+checked before anything is written; names must be 8.3 (a path: at most 4
+of them, no `..`); a file another package
 owns, a system file (`USERS.CFG`, `PKGS.CFG`, `CLRHOST.ELF`, ...) or a file
 already on `/disk` that is not from this package is refused; a package cannot
 take the name of a built-in registry app.
@@ -129,7 +135,7 @@ accepted, also for `bz install NAME` from a repository and `bz rollback`.
 "BZPK"  u16 version (1)  u16 file count  u32 manifest length
 manifest: UTF-8 key=value lines (name, version, title, kind, category,
           description, entry)
-per file: u8 name length, 8.3 name, u32 size, 32-byte SHA-256, data
+per file: u8 name length, 8.3 name or DIR/.../NAME path (<= 4 parts), u32 size, 32-byte SHA-256, data
 trailer:  32-byte SHA-256 of all bytes before it
 ```
 
