@@ -83,7 +83,11 @@ public class AbiContractTests
         Assert.Equal(63ul, SyscallNumbers.AudioAppVolume);
         Assert.Equal(64ul, SyscallNumbers.TcpOp);
         Assert.Equal(65ul, SyscallNumbers.DnsResolve);
-        Assert.Equal(66ul, SyscallNumbers.Count);
+        Assert.Equal(66ul, SyscallNumbers.IdleInhibit);
+        Assert.Equal(67ul, SyscallNumbers.Clipboard);
+        Assert.Equal(68ul, SyscallNumbers.Count);
+        Assert.Equal(2ul, ClipboardOp.Seq);
+        Assert.Equal(65536ul, ClipboardOp.MaxBytes);
         Assert.Equal(6ul, TcpOp.Accept);
         Assert.Equal(3ul, TcpState.Closed);
     }
@@ -98,7 +102,7 @@ public class AbiContractTests
     public void AbiV1IsFrozen()
     {
         Assert.Equal(1ul, Abi.Version);
-        Assert.Equal(66ul, SyscallNumbers.Count);
+        Assert.Equal(68ul, SyscallNumbers.Count);
 
         Assert.Equal(56, Marshal.SizeOf<FramebufferInfo>());
         Assert.Equal(56, Marshal.SizeOf<Gfx3dCmd>());

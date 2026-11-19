@@ -52,6 +52,33 @@ and the bootloader's low PML4 entry has NX). `memory::make_user_path` ORs in USE
 and clears NX on the intermediate entries along the path to each user page. The
 leaves keep their own bits, so kernel memory stays protected and non-executable.
 
+## async / await (native)
+
+Add `bzasync.cs` (with `bzbcl3.cs`) to a program and `async` / `await` work
+under zerolib:
+
+```csharp
+static async Task<int> Fetch(int n) { await Task.Delay(10); return n * 2; }
+
+static int Main()
+{
+    BzAsync.Run(async () =>
+    {
+        int a = await Fetch(1);
+        await Task.WhenAll(Task.Delay(30), Task.Delay(10));
+        BzDebug.WriteLine(a == 2 ? "ok" : "wrong");
+    });
+    return 0;
+}
+```
+
+Everything runs on one thread, on the event loop `BzAsync.Run` pumps (the
+JavaScript model): `Task.Delay` is a timer on it, `Task.Yield` lets other
+work run, `Task.Run` queues work on it, `.Result` / `Wait()` pump it until the
+task is done. No exceptions can be thrown under zerolib, so a task never
+faults. For C# with a real GC, exceptions and threads, use the managed path
+(RustCLR, [managed-apps.md](managed-apps.md)).
+
 ## What's next (v0.8+)
 
 The CoreCLR + JIT path for full C# features (reflection, dynamic loading), GC

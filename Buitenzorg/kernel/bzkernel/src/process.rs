@@ -76,6 +76,7 @@ pub fn app_exit(pid: u64, code: u64) {
     crate::applog::on_exit(pid, code);
     crate::mixer::on_exit(pid);
     crate::appnet::on_exit(pid);
+    set_idle_inhibit(pid, false);
     APPS.lock().retain(|a| a.pid != pid);
     let mut ex = EXITED.lock();
     if ex.len() >= 32 {
@@ -209,4 +210,22 @@ pub fn stat() -> SysStat {
         task_count,
         mem_total_mib: crate::memory::total_usable_mib(),
     }
+}
+
+// ---- game mode: programs that keep the desktop awake -------------------------
+
+static IDLE_INHIBIT: spin::Mutex<alloc::vec::Vec<u64>> = spin::Mutex::new(alloc::vec::Vec::new());
+
+/// IDLE_INHIBIT: `pid` holds off (or releases) the screensaver and idle sleep.
+pub fn set_idle_inhibit(pid: u64, on: bool) {
+    let mut v = IDLE_INHIBIT.lock();
+    v.retain(|&p| p != pid);
+    if on {
+        v.push(pid);
+    }
+}
+
+/// Whether a running program asked the desktop to stay awake.
+pub fn idle_inhibited() -> bool {
+    !IDLE_INHIBIT.lock().is_empty()
 }

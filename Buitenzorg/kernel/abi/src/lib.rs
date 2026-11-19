@@ -268,8 +268,29 @@ pub mod sysno {
     /// Resolve a host name: `a0` = NUL-terminated name. Returns the IPv4
     /// address big-endian in the low 32 bits (a.b.c.d = a << 24 | ...).
     pub const DNS_RESOLVE: u64 = 65;
+    /// Keep the desktop awake (game mode / media playing): `a0` = 1 holds off
+    /// the screensaver and idle sleep while the calling process runs, 0
+    /// releases it. Released automatically when the process ends.
+    pub const IDLE_INHIBIT: u64 = 66;
+    /// The system clipboard (text, UTF-8): `a0` = op ([`clipboard_op`]).
+    /// GET: `a1` = buffer, `a2` = capacity -> the clipboard's full length in
+    /// bytes (copies at most `a2`). SET: `a1` = text, `a2` = length (at most
+    /// 64 KiB) -> 0. SEQ: -> a counter that grows with every SET.
+    pub const CLIPBOARD: u64 = 67;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 66;
+    pub const COUNT: u64 = 68;
+}
+
+/// Operations of [`sysno::CLIPBOARD`].
+pub mod clipboard_op {
+    /// Copy the clipboard into a buffer; returns its full length.
+    pub const GET: u64 = 0;
+    /// Replace the clipboard with the caller's text.
+    pub const SET: u64 = 1;
+    /// The change counter (grows with every SET).
+    pub const SEQ: u64 = 2;
+    /// Largest text SET takes, in bytes.
+    pub const MAX_BYTES: u64 = 64 * 1024;
 }
 
 /// Operations of the [`sysno::GFX3D`] syscall ([`Gfx3dCmd::op`]). Every
@@ -1004,7 +1025,11 @@ mod tests {
         assert_eq!(sysno::AUDIO_APP_VOLUME, 63);
         assert_eq!(sysno::TCP_OP, 64);
         assert_eq!(sysno::DNS_RESOLVE, 65);
-        assert_eq!(sysno::COUNT, 66);
+        assert_eq!(sysno::IDLE_INHIBIT, 66);
+        assert_eq!(sysno::CLIPBOARD, 67);
+        assert_eq!(sysno::COUNT, 68);
+        assert_eq!(clipboard_op::SEQ, 2);
+        assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
         assert_eq!(tcp_state::CLOSED, 3);
     }
@@ -1022,7 +1047,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 66, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 68, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

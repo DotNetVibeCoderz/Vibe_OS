@@ -3,6 +3,7 @@
 // dialog. Notes are CATAT<n>.TXT files in /disk (or /ram). Buitenzorg.UI.
 
 using Files = Buitenzorg.App.Files;
+using Clipboard = Buitenzorg.App.Clipboard;
 using Buitenzorg.UI;
 
 namespace MNotes;
@@ -277,6 +278,20 @@ public static class NotesApp
         c.Equal("Ide kedua", Files.ReadAllText(newPath), "switching notes autosaved the new one");
         w.SimulateKeys("x");
         c.That(vm.Current!.Dirty && vm.SaveDirty() == 1 && !vm.Current.Dirty, "autosave writes the edited note");
+        // selection + the system clipboard (the user's clipboard is put back)
+        string savedClip = Clipboard.GetText();
+        editor.Text = "satu dua tiga";
+        editor.CaretIndex = 13;
+        w.SimulateKeys(new string(Keys.ShiftLeft, 4));
+        c.Equal("tiga", editor.SelectedText, "Shift+Left selects");
+        w.SimulateKeys(Keys.CtrlX.ToString());
+        c.Equal("satu dua ", editor.Text, "Ctrl+X cut the selection");
+        c.Equal("tiga", Clipboard.GetText(), "Ctrl+X put it on the system clipboard");
+        w.SimulateKeys(Keys.Home.ToString() + Keys.CtrlV);
+        c.Equal("tigasatu dua ", editor.Text, "Ctrl+V pasted at the caret");
+        w.SimulateKeys(Keys.CtrlA.ToString() + "Z");
+        c.Equal("Z", editor.Text, "Ctrl+A, then typing replaces everything");
+        Clipboard.SetText(savedClip);
         // the wheel scrolls a long note without moving the caret
         editor.Text = string.Join("\n", Enumerable.Range(1, 80).Select(i => "baris " + i));
         editor.CaretIndex = 0;

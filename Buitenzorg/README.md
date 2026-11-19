@@ -143,6 +143,19 @@ raw key press/release events (`KEY_EVENT`).
 
 ![The 2D games](docs/img/games-2d.png)
 
+**[Reading, a 3D maze, CHIP-8](docs/entertainment.md) and
+[video](docs/media.md):** Baca reads EPUB and text books, Labirin Kebun is a
+first-person maze ray-cast in the host, the CHIP-8 emulator plays two
+original programs, and Video plays MJPEG + PCM AVI files with the picture
+following the sound. Each ships with original content of its own.
+
+| | |
+|---|---|
+| [![Baca](docs/img/baca.png)](docs/img/baca.png) | [![Labirin Kebun](docs/img/labirin.png)](docs/img/labirin.png) |
+| Baca: *Benih dari Kebun Raya* (EPUB) | Labirin Kebun: ray-cast 3D |
+| [![CHIP-8](docs/img/chip8.png)](docs/img/chip8.png) | [![Video](docs/img/video.png)](docs/img/video.png) |
+| CHIP-8: *Tangkap Buah* | Video: *Fajar di Kebun Raya* (MJPEG) |
+
 **[Buitenzorg Studio](docs/studio.md)** is the IDE inside the OS, with 52
 project templates. Apps with a window can be written in JavaScript,
 TypeScript, Python ([guide](docs/script-ui.md)) or C# script

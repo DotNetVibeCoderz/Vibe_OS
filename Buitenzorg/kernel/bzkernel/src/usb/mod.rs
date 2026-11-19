@@ -3,6 +3,11 @@
 //! (`init_pci`); a Raspberry Pi 4 brings up its PCIe root complex and the
 //! VL805 behind it first (`platform::virt::brcm_pcie`), then calls
 //! `add_controller`. The desktop loop calls `poll`.
+//!
+//! Hot-plug: `poll` also attaches devices plugged in after boot and detaches
+//! the ones pulled out -- on root ports (xHCI Port Status Change events) and
+//! behind hubs (each hub's status-change endpoint). A stick plugged in later
+//! is mounted at `/usb0`, `/usb1`, ... and unmounted when it is pulled out.
 
 pub mod hid;
 pub mod xhci;
@@ -106,11 +111,21 @@ pub fn init_pci() -> usize {
     found
 }
 
-/// Process reports from keyboards and mice (the desktop loop calls this).
+/// Hot-plugged disks that are mounted: (controller, device, mount name).
+static HOT_MOUNTS: Mutex<Vec<(usize, usize, String)>> = Mutex::new(Vec::new());
+
+/// Process reports from keyboards and mice and hot-plug changes (the desktop
+/// loop calls this).
 pub fn poll() {
+    let mut new_disks = Vec::new();
+    let mut gone_disks = Vec::new();
     if let Some(mut list) = CONTROLLERS.try_lock() {
-        for c in list.iter_mut() {
+        for (ci, c) in list.iter_mut().enumerate() {
             c.poll();
+            c.service();
+            let (n, g) = c.take_disk_changes();
+            new_disks.extend(n.into_iter().map(|d| (ci, d)));
+            gone_disks.extend(g.into_iter().map(|d| (ci, d)));
         }
         // endpoint states every 5 s, a dozen times, for hardware bring-up
         let now = crate::arch::cpu::timestamp();
@@ -123,8 +138,53 @@ pub fn poll() {
             }
         }
     }
+    // mounts happen with the controller list unlocked: every sector the
+    // FAT driver reads takes it
+    for (controller, device) in gone_disks {
+        let mut mounts = HOT_MOUNTS.lock();
+        if let Some(k) = mounts.iter().position(|m| m.0 == controller && m.1 == device) {
+            let (_, _, name) = mounts.remove(k);
+            drop(mounts);
+            let ok = crate::vfs::unmount(&name);
+            crate::println!("[usb] /{} unmounted (the disk was unplugged){}", name, if ok { "" } else { " -- it was not mounted" });
+        }
+    }
+    for (controller, (device, sectors, name)) in new_disks {
+        let mount = {
+            let mounts = crate::vfs::mounts();
+            (0..16).map(|n| alloc::format!("usb{}", n)).find(|m| !mounts.iter().any(|x| x.trim_start_matches('/') == m)).unwrap_or_else(|| String::from("usb"))
+        };
+        let disk = Box::new(UsbDisk { controller, device, sectors, name });
+        match crate::vfs::mount(&mount, disk, false) {
+            Ok(()) => {
+                crate::println!("[kernel] MILESTONE: USB HOTPLUG DISK OK (a disk plugged in after boot is mounted at /{})", mount);
+                HOT_MOUNTS.lock().push((controller, device, mount));
+            }
+            Err(e) => crate::println!("[usb] hot-plugged disk not mounted: {}", e),
+        }
+    }
     let (k, p) = (hid::KEYS.load(Ordering::Relaxed), hid::POINTER.load(Ordering::Relaxed));
     if k > 0 && p > 0 && !INPUT_REPORTED.swap(true, Ordering::Relaxed) {
         crate::println!("[kernel] MILESTONE: USB INPUT OK (a key and a pointer movement arrived from USB HID devices)");
     }
+}
+
+/// Shell `lsusb`: every USB device the controllers know, and hot-plug counts.
+pub fn describe() -> Vec<String> {
+    let list = CONTROLLERS.lock();
+    let mut out = Vec::new();
+    for c in list.iter() {
+        out.extend(c.describe());
+        out.push(alloc::format!(
+            "{}: {} device(s); after boot {} plugged in, {} unplugged",
+            c.name,
+            c.device_count(),
+            c.attached,
+            c.detached
+        ));
+    }
+    if out.is_empty() {
+        out.push(String::from("no USB controller"));
+    }
+    out
 }

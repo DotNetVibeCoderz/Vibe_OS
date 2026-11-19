@@ -115,6 +115,11 @@ pub fn feed_scancode(byte: u8) {
                 // points (U+F700..), so KEY_READ can deliver navigation.
                 Some(DecodedKey::RawKey(code)) => {
                     if let Some(c) = nav_char(code) {
+                        // with Shift held the arrows / Home / End / PgUp / PgDn /
+                        // Delete arrive 0x20 higher (U+F720..F728): text selection
+                        let n = c as u32 - NAV_FIRST as u32;
+                        let shift = is_down(0x2A) || is_down(0x36);
+                        let c = if shift && n <= 8 { char::from_u32(c as u32 + SHIFT_OFFSET).unwrap_or(c) } else { c };
                         if crate::terminal::is_active() {
                             push(c);
                         }
@@ -130,6 +135,19 @@ pub fn feed_scancode(byte: u8) {
 /// down, F702 left, F703 right, F704 home, F705 end, F706 delete, F707 page
 /// up, F708 page down.
 pub const NAV_FIRST: char = '\u{F700}';
+/// Shift + a navigation key (up .. page down, delete): the same code + 0x20
+/// (U+F720..U+F728), for selecting text.
+pub const SHIFT_OFFSET: u32 = 0x20;
+
+/// A shifted navigation key back to its plain one (the terminal has no selection).
+pub fn unshift_nav(c: char) -> char {
+    let v = c as u32;
+    if (0xF720..=0xF728).contains(&v) {
+        char::from_u32(v - SHIFT_OFFSET).unwrap_or(c)
+    } else {
+        c
+    }
+}
 fn nav_char(code: pc_keyboard::KeyCode) -> Option<char> {
     use pc_keyboard::KeyCode as K;
     let n = match code {

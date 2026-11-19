@@ -1,7 +1,9 @@
 // CodeEditor -- the text area of Buitenzorg Studio: line numbers, syntax
 // colors, the current line, a caret, undo/redo, auto-indent, find/replace and
-// go-to-line. It draws only the visible lines, each as a few colored text
-// runs (kernel draw ops), never per pixel.
+// go-to-line, a selection (Shift + arrows / Home / End / PgUp / PgDn, a mouse
+// drag, Ctrl+A) and the system clipboard (Ctrl+C / X / V; with nothing
+// selected Ctrl+C / X take the whole line). It draws only the visible lines,
+// each as a few colored text runs (kernel draw ops), never per pixel.
 
 using Buitenzorg.UI;
 
@@ -19,6 +21,9 @@ public sealed class CodeEditor : Control
     DispatcherTimer? _blink;
     // find: the current match
     int _matchLine = -1, _matchCol, _matchLen;
+    // the other end of the selection (line -1 = none); a mouse drag in progress
+    int _aLine = -1, _aCol;
+    bool _dragging;
 
     // undo: snapshots (text, line, col); typing is grouped until a word break
     readonly List<(string, int, int)> _undo = new List<(string, int, int)>();
@@ -373,6 +378,80 @@ public sealed class CodeEditor : Control
         _wantCol = keep;
     }
 
+    // ---- selection + clipboard ----------------------------------------------------------
+
+    public bool HasSelection => _aLine >= 0 && (_aLine != _line || _aCol != _col);
+
+    /// <summary>The selection as (first line, first col, last line, end col).</summary>
+    (int, int, int, int) SelRange()
+    {
+        bool anchorFirst = _aLine < _line || (_aLine == _line && _aCol < _col);
+        return anchorFirst ? (_aLine, _aCol, _line, _col) : (_line, _col, _aLine, _aCol);
+    }
+
+    public string SelectedText
+    {
+        get
+        {
+            if (!HasSelection) return "";
+            var (l1, c1, l2, c2) = SelRange();
+            if (l1 == l2) return _lines[l1].Substring(c1, c2 - c1);
+            var parts = new List<string> { _lines[l1].Substring(c1) };
+            for (int i = l1 + 1; i < l2; i++) parts.Add(_lines[i]);
+            parts.Add(_lines[l2].Substring(0, c2));
+            return string.Join("\n", parts);
+        }
+    }
+
+    public void SelectAll()
+    {
+        _aLine = 0;
+        _aCol = 0;
+        MoveTo(_lines.Count - 1, _lines[_lines.Count - 1].Length);
+    }
+
+    public void ClearSelection() { _aLine = -1; InvalidateVisual(); }
+
+    /// <summary>Remove the selected text (one undo step); the caret goes to its start.</summary>
+    public void DeleteSelection()
+    {
+        if (!HasSelection) { _aLine = -1; return; }
+        Snapshot(2, true);
+        var (l1, c1, l2, c2) = SelRange();
+        string head = _lines[l1].Substring(0, c1), tail = _lines[l2].Substring(c2);
+        _lines.RemoveRange(l1 + 1, l2 - l1);
+        _lines[l1] = head + tail;
+        _line = l1;
+        _col = c1;
+        _aLine = -1;
+        _wantCol = -1;
+        Changed();
+    }
+
+    /// <summary>Ctrl+C: the selection (or the whole line) to the system clipboard.</summary>
+    public void Copy()
+    {
+        Buitenzorg.App.Clipboard.SetText(HasSelection ? SelectedText : _lines[_line] + "\n");
+    }
+
+    /// <summary>Ctrl+X: copy, then remove the selection (or the whole line).</summary>
+    public void Cut()
+    {
+        Copy();
+        if (HasSelection) DeleteSelection();
+        else DeleteLine();
+    }
+
+    /// <summary>Ctrl+V: the clipboard replaces the selection.</summary>
+    public void Paste()
+    {
+        string clip = Buitenzorg.App.Clipboard.GetText().Replace("\r\n", "\n");
+        if (clip.Length == 0) return;
+        if (HasSelection) DeleteSelection();
+        _aLine = -1;
+        Insert(clip);
+    }
+
     // ---- input ------------------------------------------------------------------------
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -380,13 +459,31 @@ public sealed class CodeEditor : Control
         _lastKey = Clock.Now;
         _blink?.Start();
         char k = e.Key;
+        if (k == Keys.CtrlA) { SelectAll(); e.Handled = true; return; }
+        if (k == Keys.CtrlC) { Copy(); e.Handled = true; return; }
+        if (k == Keys.CtrlX) { Cut(); e.Handled = true; return; }
+        if (k == Keys.CtrlV) { Paste(); e.Handled = true; return; }
+        // Shift + a navigation key extends the selection; a plain one drops it
+        if (Keys.IsNavigation(k) && k != Keys.Delete && Keys.Unshift(k) != Keys.Delete)
+        {
+            if (Keys.IsShifted(k)) { if (_aLine < 0) { _aLine = _line; _aCol = _col; } }
+            else if (_aLine >= 0) { _aLine = -1; InvalidateVisual(); }
+            k = Keys.Unshift(k);
+        }
+        else if (HasSelection && (k == Keys.Backspace || k == Keys.Delete || k == Keys.Enter || k == Keys.Tab || Keys.IsPrintable(k)))
+        {
+            // typing over a selection replaces it; Backspace / Delete just remove it
+            DeleteSelection();
+            if (k == Keys.Backspace || k == Keys.Delete) { e.Handled = true; return; }
+        }
+        else _aLine = -1;
         if (k == Keys.Left) { if (_col > 0) MoveTo(_line, _col - 1); else if (_line > 0) MoveTo(_line - 1, _lines[_line - 1].Length); }
         else if (k == Keys.Right) { if (_col < _lines[_line].Length) MoveTo(_line, _col + 1); else if (_line + 1 < _lines.Count) MoveTo(_line + 1, 0); }
         else if (k == Keys.Up) Vertical(-1);
         else if (k == Keys.Down) Vertical(1);
         else if (k == Keys.PageUp) { _top = Math.Max(0, _top - VisibleLines); Vertical(-VisibleLines); }
         else if (k == Keys.PageDown) { _top = Math.Min(Math.Max(0, _lines.Count - 1), _top + VisibleLines); Vertical(VisibleLines); }
-        else if (k == Keys.Home || k == (char)1)
+        else if (k == Keys.Home)
         {
             // first non-blank, then column 0
             int ind = Indent(_lines[_line]).Length;
@@ -434,8 +531,35 @@ public sealed class CodeEditor : Control
             return;
         }
         MoveTo(line, col);
+        _aLine = _line;
+        _aCol = _col;
+        _dragging = true;
         e.Handled = true;
         base.OnPointerPressed(e);
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        if (_dragging && e.LeftButton)
+        {
+            var r = Bounds;
+            int line = Math.Max(0, Math.Min(_lines.Count - 1, _top + Math.Max(0, (e.Y - r.Y - 4) / Lh)));
+            int col = _left + Math.Max(0, (e.X - r.X - GutterWidth - 6 + Gw / 2) / Gw);
+            col = Math.Min(col, _lines[line].Length);
+            if (line != _line || col != _col) MoveTo(line, col);
+            e.Handled = true;
+        }
+        base.OnPointerMoved(e);
+    }
+
+    protected override void OnPointerReleased(PointerEventArgs e)
+    {
+        if (_dragging)
+        {
+            _dragging = false;
+            if (!HasSelection) _aLine = -1;
+        }
+        base.OnPointerReleased(e);
     }
 
     protected override void OnPointerWheelChanged(PointerEventArgs e)
@@ -494,6 +618,17 @@ public sealed class CodeEditor : Control
                 dc.FillRect(new Rect(r.X + gutter, y - 1, r.Width - gutter, lh), dark ? Buitenzorg.UI.Color.Lighten(bg, 12) : Buitenzorg.UI.Color.Darken(bg, 10));
             if (i + 1 == _exec)
                 dc.FillRect(new Rect(r.X + gutter, y - 1, r.Width - gutter, lh), dark ? 0x4A4214 : 0xFFF1A8);
+            if (HasSelection)
+            {
+                var (l1, c1, l2, c2) = SelRange();
+                if (i >= l1 && i <= l2)
+                {
+                    int from = i == l1 ? c1 : 0;
+                    int to = i == l2 ? c2 : _lines[i].Length + 1;
+                    int a = Math.Max(from, _left), b = Math.Min(to, _left + cols + 1);
+                    if (b > a) dc.FillRect(new Rect(textX + (a - _left) * gw, y - 1, (b - a) * gw, lh), dark ? 0x264F78 : 0xADD6FF);
+                }
+            }
             if (i == _matchLine)
             {
                 int mx = textX + (_matchCol - _left) * gw;

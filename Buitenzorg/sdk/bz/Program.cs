@@ -20,7 +20,9 @@ return args switch
     ["manifest", "validate", var path] => ValidateManifest(path),
     ["manifest", ..] => Fail("usage: bz manifest validate <path-to-app.manifest>"),
     ["pack", .. var rest] when rest.Length >= 1 => Pack(rest),
-    ["pack"] => Fail("usage: bz pack <project-dir> [--entry FILE] [--name NAME] [-o OUT.bzpkg]"),
+    ["pack"] => Fail("usage: bz pack <project-dir> [--entry FILE] [--name NAME] [--sign] [-o OUT.bzpkg]"),
+    ["keygen"] => Signing.Keygen(false),
+    ["keygen", "--force"] => Signing.Keygen(true),
     ["inspect", var file] => Inspect(file),
     ["repo", .. var rest] => RepoCli.Run(rest),
     ["publish", .. var rest] when rest.Length >= 1 => RepoCli.Run(["publish", .. rest]),
@@ -151,6 +153,7 @@ static int Pack(string[] args)
 {
     string dir = args[0];
     string? entry = null, outPath = null, nameOverride = null, depends = null;
+    bool sign = false;
     for (int i = 1; i < args.Length; i++)
     {
         switch (args[i])
@@ -159,6 +162,7 @@ static int Pack(string[] args)
             case "--name" when i + 1 < args.Length: nameOverride = args[++i]; break;
             case "-o" when i + 1 < args.Length: outPath = args[++i]; break;
             case "--depends" when i + 1 < args.Length: depends = args[++i]; break;
+            case "--sign": sign = true; break;
             default: return Fail($"unknown option '{args[i]}'");
         }
     }
@@ -211,10 +215,16 @@ static int Pack(string[] args)
     }
     var body = ms.ToArray();
     var bytes = body.Concat(System.Security.Cryptography.SHA256.HashData(body)).ToArray();
+    if (sign)
+    {
+        var signed = Signing.Sign(bytes);
+        if (signed is null) return Fail("no signing key: run 'bz keygen' first");
+        bytes = signed;
+    }
     bool hint = outPath is null; // bz deploy passes -o and uploads it itself
     outPath ??= name + ".bzpkg";
     File.WriteAllBytes(outPath, bytes);
-    Console.WriteLine($"wrote {outPath}: {name} {m.Version}, {files.Count} file(s), entry {entry ?? "-"}, {bytes.Length} bytes");
+    Console.WriteLine($"wrote {outPath}: {name} {m.Version}, {files.Count} file(s), entry {entry ?? "-"}, {bytes.Length} bytes{(sign ? ", signed" : "")}");
     if (hint) Console.WriteLine($"on the device: copy it to /disk as an 8.3 name (e.g. {name.ToUpperInvariant()[..Math.Min(8, name.Length)]}.BZP), then 'bz install /disk/<that name>'");
     return 0;
 }
@@ -253,9 +263,12 @@ static int Inspect(string path)
 {
     if (!File.Exists(path))
         return Fail($"file not found: {path}");
-    var b = File.ReadAllBytes(path);
-    if (b.Length < 44 || b[0] != 'B' || b[1] != 'Z' || b[2] != 'P' || b[3] != 'K')
+    var raw = File.ReadAllBytes(path);
+    if (raw.Length < 44 || raw[0] != 'B' || raw[1] != 'Z' || raw[2] != 'P' || raw[3] != 'K')
         return Fail("not a .bzpkg (no BZPK magic)");
+    var (b, signer, sigOk) = Signing.Split(raw);
+    Console.WriteLine(signer is null ? "unsigned" : $"signed by {Signing.Hex(signer)}: signature {(sigOk ? "valid" : "INVALID")}");
+    if (signer is not null && !sigOk) return 1;
     var body = b.AsSpan(0, b.Length - 32);
     bool whole = System.Security.Cryptography.SHA256.HashData(body).AsSpan().SequenceEqual(b.AsSpan(b.Length - 32));
     int p = 4;

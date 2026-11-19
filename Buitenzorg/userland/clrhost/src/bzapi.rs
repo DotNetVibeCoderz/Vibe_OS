@@ -44,6 +44,8 @@ const KEY_EVENT: u64 = 59;
 const KEY_STATE: u64 = 60;
 const SLEEP_UNTIL: u64 = 61;
 const AUDIO_WRITE: u64 = 62;
+const IDLE_INHIBIT: u64 = 66;
+const CLIPBOARD: u64 = 67;
 const AUDIO_APP_VOLUME: u64 = 63;
 const USER_OP: u64 = 55;
 const AUDIO_STAT: u64 = 23;
@@ -127,7 +129,7 @@ fn bytes(interp: &Interpreter, a: &[Value], i: usize) -> Vec<u8> {
 }
 
 /// Copy `data` into the `byte[]` argument `i` (as far as it is long).
-fn store_bytes(interp: &mut Interpreter, a: &[Value], i: usize, data: &[u8]) {
+pub(crate) fn store_bytes(interp: &mut Interpreter, a: &[Value], i: usize, data: &[u8]) {
     let Some(Value::Obj(h)) = a.get(i) else { return };
     if h.is_null() {
         return;
@@ -717,6 +719,11 @@ fn is_interactive(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value
     ret_i32(sys::syscall(IS_INTERACTIVE, 0, 0, 0) as i64)
 }
 
+/// `IdleInhibit(int on)`: game mode -- hold off the screensaver while this program runs.
+fn idle_inhibit(_i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    ret_i32(sys::syscall(IDLE_INHIBIT, (int(a, 0) != 0) as u64, 0, 0) as i64)
+}
+
 /// `Spawn(string path, string args)` -> pid (negative: failed).
 fn spawn(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let (path, args) = (cstr(&string(i, a, 0)), cstr(&string(i, a, 1)));
@@ -751,9 +758,32 @@ fn shell_run(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_string(i, &text)
 }
 
+/// `ClipboardGet()` -> the system clipboard's text ("" when empty).
+fn clipboard_get(i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
+    let mut buf = alloc::vec![0u8; 64 * 1024];
+    let n = sys::syscall(CLIPBOARD, 0, buf.as_mut_ptr() as u64, buf.len() as u64);
+    if sys::is_err(n) {
+        return ret_string(i, "");
+    }
+    let n = (n as usize).min(buf.len());
+    ret_string(i, &String::from_utf8_lossy(&buf[..n]))
+}
+
+/// `ClipboardSet(string text)` -> 0, or -1 when refused (over 64 KiB).
+fn clipboard_set(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let text = string(i, a, 0);
+    let r = sys::syscall(CLIPBOARD, 1, text.as_ptr() as u64, text.len() as u64);
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
+}
+
+/// `ClipboardSeq()` -> the clipboard's change counter.
+fn clipboard_seq(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
+    Ok(Some(Value::I64(sys::syscall(CLIPBOARD, 2, 0, 0) as i64)))
+}
+
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 49] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 53] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -771,6 +801,7 @@ pub fn install(interp: &mut Interpreter) {
         ("ScreenWidth", screen_width),
         ("ScreenHeight", screen_height),
         ("IsInteractive", is_interactive),
+        ("IdleInhibit", idle_inhibit),
         ("Spawn", spawn),
         ("Wait", wait),
         ("WinCreateEx", win_create_ex),
@@ -803,6 +834,9 @@ pub fn install(interp: &mut Interpreter) {
         ("UserOp", user_op),
         ("UserList", user_list),
         ("ShellRun", shell_run),
+        ("ClipboardGet", clipboard_get),
+        ("ClipboardSet", clipboard_set),
+        ("ClipboardSeq", clipboard_seq),
     ];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);

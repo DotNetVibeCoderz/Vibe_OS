@@ -268,9 +268,10 @@ public abstract class GameView : Control
             InvalidateVisual();
         };
         _timer.Start();
+        Buitenzorg.App.Session.KeepAwake(true); // game mode: no screensaver mid-game
     }
 
-    public void Stop() { _timer?.Stop(); _timer = null; }
+    public void Stop() { _timer?.Stop(); _timer = null; Buitenzorg.App.Session.KeepAwake(false); }
 
     /// <summary>Tests: run `n` updates without the clock.</summary>
     public void Step(int n = 1) { for (int i = 0; i < n; i++) Tick(); }

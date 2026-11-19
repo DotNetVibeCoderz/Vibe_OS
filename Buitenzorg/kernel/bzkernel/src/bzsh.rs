@@ -14,7 +14,11 @@
 //!   `#` comments. Conditions are commands (`test` / `[ ]` in coreutils).
 //! * `which`/`type NAME`: alias, built-in, script or program.
 //! * `/disk/PROFILE.SH` runs when the terminal session starts (aliases,
-//!   variables).
+//!   variables, functions).
+//! * Functions: `name() { ...; }` or `function name { ...; }` (one line or
+//!   several); called like a command, with their own `$1`..`$9`, `$#`, `$@`;
+//!   `return [N]` leaves one. A function runs in a script frame, so it nests
+//!   at most [`MAX_DEPTH`] deep (recursion included).
 //!
 //! Scripts run on the desktop's kernel task, so a script has a budget of
 //! [`STEP_BUDGET`] statements and loops at most [`LOOP_LIMIT`] rounds:
@@ -38,6 +42,8 @@ static ALIASES: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 /// Positional parameters, one frame per running script (`$0` first).
 static FRAMES: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
 static STEPS: Mutex<usize> = Mutex::new(0);
+/// Defined functions: name -> body statements.
+static FUNCS: Mutex<BTreeMap<String, Vec<String>>> = Mutex::new(BTreeMap::new());
 
 // ---- aliases ----------------------------------------------------------------
 
@@ -158,6 +164,8 @@ pub fn which(args: &[String]) -> (Vec<String>, bool) {
     for a in args {
         let line = if let Some(v) = alias_of(a) {
             format!("{}: alias untuk '{}'", a, v)
+        } else if is_function(a) {
+            format!("{}: fungsi shell ('functions' menampilkan isinya)", a)
         } else if crate::coreutils::handles(a) || is_builtin(a) {
             format!("{}: perintah bawaan shell", a)
         } else if crate::shell::is_legacy_command(a) {
@@ -178,7 +186,7 @@ pub fn which(args: &[String]) -> (Vec<String>, bool) {
 }
 
 /// Commands this module implements.
-pub const NAMES: &[&str] = &["alias", "unalias", "sh", "source", ".", "which", "type", "exit"];
+pub const NAMES: &[&str] = &["alias", "unalias", "sh", "source", ".", "which", "type", "exit", "return", "functions"];
 
 pub fn is_builtin(name: &str) -> bool {
     NAMES.contains(&name)
@@ -200,7 +208,16 @@ pub fn builtin(argv: &[String]) -> (Vec<String>, Effect, bool) {
             let (o, ok) = which(args);
             (o, Effect::None, ok)
         }
-        "exit" => {
+        "functions" => {
+            let f = FUNCS.lock();
+            let lines: Vec<String> = if f.is_empty() {
+                vec![String::from("(belum ada fungsi -- buat dengan: nama() { perintah; })")]
+            } else {
+                f.iter().map(|(n, body)| format!("{}() {{ {}; }}", n, body.join("; "))).collect()
+            };
+            (lines, Effect::None, true)
+        }
+        "exit" | "return" => {
             if FRAMES.lock().is_empty() {
                 (vec![String::from("exit: hanya berlaku di dalam skrip (tutup jendela Terminal untuk keluar)")], Effect::None, false)
             } else {
@@ -238,16 +255,20 @@ pub fn run_file(path: &str, args: &[String]) -> (Vec<String>, Effect, bool) {
 
 /// Run script text with positional parameters `frame` (`$0` first).
 pub fn run_text(text: &str, frame: Vec<String>) -> (Vec<String>, Effect, bool) {
+    run_stmts(&statements(text), frame)
+}
+
+/// Run parsed statements with positional parameters `frame` (`$0` first).
+fn run_stmts(stmts: &[String], frame: Vec<String>) -> (Vec<String>, Effect, bool) {
     let depth = FRAMES.lock().len();
     if depth >= MAX_DEPTH {
-        return (vec![String::from("sh: skrip bersarang terlalu dalam")], Effect::None, false);
+        return (vec![String::from("sh: skrip / fungsi bersarang terlalu dalam")], Effect::None, false);
     }
     if depth == 0 {
         *STEPS.lock() = 0;
     }
-    let stmts = statements(text);
     let mut pos = 0;
-    let nodes = match parse_block(&stmts, &mut pos, &[]) {
+    let nodes = match parse_block(stmts, &mut pos, &[]) {
         Ok((n, _)) => n,
         Err(e) => return (vec![format!("sh: {}: {}", frame[0], e)], Effect::None, false),
     };
@@ -280,9 +301,25 @@ fn statements(text: &str) -> Vec<String> {
         let mut quote: Option<char> = None;
         let mut prev_space = true;
         let chars: Vec<char> = raw.chars().collect();
+        let mut paren = 0usize; // inside $( ... ): ';' belongs to the inner line
         let mut i = 0;
         while i < chars.len() {
             let c = chars[i];
+            if quote.is_none() {
+                if c == '$' && chars.get(i + 1) == Some(&'(') {
+                    paren += 1;
+                    cur.push(c);
+                    cur.push('(');
+                    i += 2;
+                    prev_space = false;
+                    continue;
+                }
+                if paren > 0 && c == '(' {
+                    paren += 1;
+                } else if paren > 0 && c == ')' {
+                    paren -= 1;
+                }
+            }
             match quote {
                 Some(q) => {
                     if c == q {
@@ -296,7 +333,7 @@ fn statements(text: &str) -> Vec<String> {
                         cur.push(c);
                     }
                     '#' if prev_space => break,
-                    ';' if chars.get(i + 1) != Some(&';') => {
+                    ';' if paren == 0 && chars.get(i + 1) != Some(&';') => {
                         push_stmt(&mut out, &cur);
                         cur.clear();
                     }
@@ -341,6 +378,62 @@ enum Node {
     If(Vec<(String, Vec<Node>)>, Vec<Node>),
     For(String, String, Vec<Node>),
     While(String, Vec<Node>),
+    /// A function definition: name, body statements.
+    Func(String, Vec<String>),
+}
+
+/// `name() { rest` / `name () {` / `function name {`: (name, what follows `{`).
+fn function_head(s: &str) -> Option<(String, String)> {
+    let t = s.trim();
+    let (name, after) = if let Some(rest) = t.strip_prefix("function ") {
+        let rest = rest.trim_start();
+        let end = rest.find(|c: char| c.is_whitespace() || c == '(' || c == '{').unwrap_or(rest.len());
+        let name = &rest[..end];
+        let mut after = rest[end..].trim_start();
+        if let Some(a) = after.strip_prefix("()") {
+            after = a.trim_start();
+        }
+        (name, after)
+    } else {
+        let open = t.find('(')?;
+        let name = t[..open].trim();
+        let after = t[open..].strip_prefix("()")?.trim_start();
+        (name, after)
+    };
+    if !valid_name(name) {
+        return None;
+    }
+    let body = after.strip_prefix('{')?;
+    Some((String::from(name), String::from(body.trim())))
+}
+
+/// Whether a whole command line defines a function (the shell routes it here).
+pub fn defines_function(line: &str) -> bool {
+    function_head(line).is_some()
+}
+
+pub fn is_function(name: &str) -> bool {
+    FUNCS.lock().contains_key(name)
+}
+
+/// Call a defined function with arguments.
+pub fn call_function(name: &str, args: &[String]) -> (Vec<String>, Effect, bool) {
+    let Some(body) = FUNCS.lock().get(name).cloned() else {
+        return (vec![format!("{}: bukan fungsi", name)], Effect::None, false);
+    };
+    let mut frame = vec![String::from(name)];
+    frame.extend(args.iter().cloned());
+    run_stmts(&body, frame)
+}
+
+/// Defined function names (tab completion).
+pub fn function_names() -> Vec<String> {
+    FUNCS.lock().keys().cloned().collect()
+}
+
+/// Forget a function (`unset -f NAME`); false when there was none.
+pub fn remove_function(name: &str) -> bool {
+    FUNCS.lock().remove(name).is_some()
 }
 
 fn first_word(s: &str) -> &str {
@@ -377,6 +470,36 @@ fn parse_block(stmts: &[String], pos: &mut usize, ends: &[&str]) -> Result<(Vec<
             return Ok((nodes, Some(s.clone())));
         }
         *pos += 1;
+        if let Some((name, first)) = function_head(s) {
+            // the body runs to a statement "}" (or one ending in " }")
+            let mut body = Vec::new();
+            let mut rest = first;
+            loop {
+                let r = String::from(rest.trim());
+                if r == "}" {
+                    break;
+                }
+                if let Some(head) = r.strip_suffix('}').filter(|h| h.ends_with(char::is_whitespace) || h.ends_with(';')) {
+                    let h = head.trim().trim_end_matches(';').trim();
+                    if !h.is_empty() {
+                        body.push(String::from(h));
+                    }
+                    break;
+                }
+                if !r.is_empty() {
+                    body.push(r);
+                }
+                match stmts.get(*pos) {
+                    Some(next) => {
+                        rest = next.clone();
+                        *pos += 1;
+                    }
+                    None => return Err(format!("fungsi {}: '}}' hilang", name)),
+                }
+            }
+            nodes.push(Node::Func(name, body));
+            continue;
+        }
         match w {
             "if" => {
                 let mut arms = Vec::new();
@@ -482,6 +605,10 @@ fn exec_block(nodes: &[Node], cx: &mut Cx) {
         match n {
             Node::Cmd(line) => {
                 step(line, cx);
+            }
+            Node::Func(name, body) => {
+                FUNCS.lock().insert(name.clone(), body.clone());
+                cx.ok = true;
             }
             Node::If(arms, else_body) => {
                 let mut taken = false;

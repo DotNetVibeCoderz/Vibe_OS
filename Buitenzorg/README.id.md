@@ -128,6 +128,19 @@ fixed-timestep di atas Buitenzorg.UI dengan event tekan/lepas tombol
 
 ![Game 2D](docs/img/games-2d.png)
 
+**[Membaca, labirin 3D, CHIP-8](docs/entertainment.id.md) dan
+[video](docs/media.id.md):** Baca membaca buku EPUB dan teks, Labirin Kebun
+adalah labirin sudut pandang orang pertama yang di-ray-cast di host, emulator
+CHIP-8 memainkan dua program orisinal, dan Video memutar AVI MJPEG + PCM
+dengan gambar mengikuti suara. Masing-masing membawa konten orisinalnya.
+
+| | |
+|---|---|
+| [![Baca](docs/img/baca.png)](docs/img/baca.png) | [![Labirin Kebun](docs/img/labirin.png)](docs/img/labirin.png) |
+| Baca: *Benih dari Kebun Raya* (EPUB) | Labirin Kebun: 3D ray-cast |
+| [![CHIP-8](docs/img/chip8.png)](docs/img/chip8.png) | [![Video](docs/img/video.png)](docs/img/video.png) |
+| CHIP-8: *Tangkap Buah* | Video: *Fajar di Kebun Raya* (MJPEG) |
+
 **[Buitenzorg Studio](docs/studio.id.md)** adalah IDE di dalam OS, dengan 52
 template proyek. Aplikasi berjendela bisa ditulis dalam JavaScript,
 TypeScript, Python ([panduan](docs/script-ui.id.md)) atau C# script

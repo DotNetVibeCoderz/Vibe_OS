@@ -547,6 +547,9 @@ pub fn register(interp: &mut Interpreter) {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);
     }
     crate::htmlpage::register(interp);
+    crate::zipapi::register(interp);
+    crate::raycast::register(interp);
+    crate::audiodec::register(interp);
 }
 
 /// `TlsVersion(long id)` -> "TLSv1_3 TLS13_AES_128_GCM_SHA256" once open.

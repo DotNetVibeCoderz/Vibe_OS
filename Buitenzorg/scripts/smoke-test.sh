@@ -125,7 +125,7 @@ require() { # require <log> <marker>...
   done
 }
 
-basic=("MILESTONE: HELLO KERNEL OK" "MILESTONE: SCHEDULER OK" "MILESTONE: IPC OK" "MILESTONE: WINDOWS OK" "MILESTONE: THEMES OK" "MILESTONE: BUAH OK" "MILESTONE: COMPUTE OK" "MILESTONE: WINDOWCTL OK" "MILESTONE: SAVER OK" "MILESTONE: CAHAYA OK" "MILESTONE: AI OK" "MILESTONE: POWER OK" "MILESTONE: NALAR OK" "MILESTONE: VMX OK" "MILESTONE: VM OK" "MILESTONE: VIRTIO OK" "MILESTONE: SNAPSHOT OK" "MILESTONE: LAPIS OK" "MILESTONE: SCRIPT JS OK" "MILESTONE: SCRIPT TS OK" "MILESTONE: SCRIPT PY OK" "MILESTONE: POLYGLOT OK" "MILESTONE: BABEL OK" "MILESTONE: PAL MEM OK" "MILESTONE: THREADS OK" "MILESTONE: SYNC PAL OK" "MILESTONE: HEAP PAL OK" "MILESTONE: GCMEM PAL OK" "MILESTONE: BCL PAL OK" "MILESTONE: BCL2 PAL OK" "MILESTONE: DRAWING2 OK" "MILESTONE: UI TOOLKIT OK" "MILESTONE: AUDIO OK" "MILESTONE: AUDIO STREAM OK" "MILESTONE: AUDIO PANEL OK" "MILESTONE: SUITE OK" "MILESTONE: DESKTOP SHELL OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: PROFILER OK" "MILESTONE: IOAPIC OK" "MILESTONE: DTB OK" "BUITENZORG READY")
+basic=("MILESTONE: HELLO KERNEL OK" "MILESTONE: SCHEDULER OK" "MILESTONE: IPC OK" "MILESTONE: WINDOWS OK" "MILESTONE: THEMES OK" "MILESTONE: BUAH OK" "MILESTONE: COMPUTE OK" "MILESTONE: WINDOWCTL OK" "MILESTONE: SAVER OK" "MILESTONE: CAHAYA OK" "MILESTONE: AI OK" "MILESTONE: POWER OK" "MILESTONE: NALAR OK" "MILESTONE: VMX OK" "MILESTONE: VM OK" "MILESTONE: VIRTIO OK" "MILESTONE: SNAPSHOT OK" "MILESTONE: LAPIS OK" "MILESTONE: SCRIPT JS OK" "MILESTONE: SHELL SCRIPT OK" "MILESTONE: SCRIPT TS OK" "MILESTONE: SCRIPT PY OK" "MILESTONE: POLYGLOT OK" "MILESTONE: BABEL OK" "MILESTONE: PAL MEM OK" "MILESTONE: THREADS OK" "MILESTONE: SYNC PAL OK" "MILESTONE: HEAP PAL OK" "MILESTONE: GCMEM PAL OK" "MILESTONE: BCL PAL OK" "MILESTONE: BCL2 PAL OK" "MILESTONE: DRAWING2 OK" "MILESTONE: UI TOOLKIT OK" "MILESTONE: AUDIO OK" "MILESTONE: AUDIO STREAM OK" "MILESTONE: AUDIO PANEL OK" "MILESTONE: SUITE OK" "MILESTONE: DESKTOP SHELL OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: PROFILER OK" "MILESTONE: IOAPIC OK" "MILESTONE: DTB OK" "BUITENZORG READY")
 
 if want x86_64; then
 [ -f "$img" ] || skip "smoke [x86_64]: skipped ($img not built)"
@@ -161,6 +161,44 @@ if [ "$frame_ms" -gt 8000 ]; then
   echo "SMOKE TEST FAILED (boot-fast.log): first desktop frame $frame_ms ms after kernel start (budget 8000 ms)" >&2; exit 1
 fi
 echo "smoke [fastboot]: normal boot -- desktop on screen $frame_ms ms after kernel start, $wall ms after QEMU start (BIOS + loader included)"
+
+# USB hot-plug: a normal boot with an xHCI and an empty hub, then -- through
+# the QEMU monitor -- a keyboard on a root port, a mouse behind the hub and a
+# stick are plugged in (the stick must be mounted at /usb0), then all three
+# pulled out again (released, /usb0 unmounted) while the desktop keeps running.
+hplog="$root/dist/boot-hotplug.log"
+rm -f "$hplog"
+cp "$img" "$root/dist/hotplug-test.img"
+cp "$img" "$root/dist/hotplug-stick.img"
+stick="$root/dist/hotplug-stick.img"
+if command -v cygpath >/dev/null 2>&1; then stick=$(cygpath -m "$stick"); fi
+timeout --foreground 600 "$qemu" -smp 2 -drive "format=raw,file=$root/dist/hotplug-test.img" -m 512M \
+  -audiodev none,id=snd0 -device AC97,audiodev=snd0 -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1 \
+  -monitor tcp:127.0.0.1:4485,server,nowait -display none -serial "file:$hplog" -no-reboot &
+hpid=$!
+hp_wait() { # hp_wait <regex> <seconds>
+  for _ in $(seq $(( $2 * 2 ))); do
+    sleep 0.5
+    grep -qE "$1" "$hplog" 2>/dev/null && return 0
+  done
+  return 1
+}
+if hp_wait "background start-up done" 300 && exec 4<>/dev/tcp/127.0.0.1/4485; then
+  printf 'device_add usb-kbd,bus=xhci.0,port=2,id=hk\n' >&4; hp_wait "port 2: .*keyboard" 30 || true
+  printf 'device_add usb-mouse,bus=xhci.0,port=1.2,id=hm\n' >&4; hp_wait "port 1\.2: .*mouse" 30 || true
+  printf 'drive_add 0 if=none,id=stick,format=raw,file=%s\n' "$stick" >&4; sleep 1
+  printf 'device_add usb-storage,bus=xhci.0,port=3,id=hs,drive=stick\n' >&4; hp_wait "USB HOTPLUG DISK OK" 60 || true
+  for d in hk hm hs; do printf 'device_del %s\n' "$d" >&4; sleep 3; done
+  hp_wait "usb0 unmounted" 30 || true
+  exec 4>&-
+fi
+kill "$hpid" 2>/dev/null || true
+wait "$hpid" 2>/dev/null || true
+rm -f "$root/dist/hotplug-test.img" "$root/dist/hotplug-stick.img"
+require "$hplog" "hub slot" "watching its ports" "keyboard (HID boot protocol)" "mouse (HID boot protocol)" \
+  "MILESTONE: USB HOTPLUG DISK OK" "keyboard unplugged" "mouse unplugged" "MiB unplugged" "/usb0 unmounted"
+if grep -qF "] PANIC:" "$hplog"; then echo "SMOKE TEST FAILED (boot-hotplug.log): kernel panic" >&2; exit 1; fi
+echo "smoke [hotplug]: keyboard (root port), mouse (behind a hub) and a stick plugged in after boot, the stick mounted at /usb0; all three unplugged and released"
 
 # bz-link: the host CLI (sdk/bz) talks to a running device over BZDP (UDP
 # 7070): the service starts at boot from a fw_cfg pairing code, `bz` runs a
@@ -249,14 +287,14 @@ require "$root/dist/boot-ide.log" "${basic[@]}" \
   "MILESTONE: STORAGE OK" "MILESTONE: MOUSE OK" "MILESTONE: PIXELS OK" \
   "MILESTONE: VFS OK" "MILESTONE: SERVICES OK" "MILESTONE: ASYNC IO OK" \
   "MILESTONE: NETWORK OK" "MILESTONE: TERMINAL OK" "MILESTONE: THEME OK" \
-  "MILESTONE: WORKSPACE OK" "MILESTONE: KANOPI OK"   "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
+  "MILESTONE: WORKSPACE OK" "MILESTONE: KANOPI OK"   "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 35 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
 # C# ring-3 milestones only when the ELFs were embedded (bflat present).
 if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
   require "$root/dist/boot-ide.log" "MILESTONE: TUNAS OK" "MILESTONE: DAHAN OK" \
     "MILESTONE: KEMBANG OK" "MILESTONE: DRAWING OK" "MILESTONE: TASKMGR OK" \
     "MILESTONE: APPVARIANTS OK" "MILESTONE: SERBUK OK" "MILESTONE: PACKAGE OK" \
     "MILESTONE: PERSONALIZE OK" "MILESTONE: MMAP OK" "MILESTONE: MATANG OK" \
-    "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" \
+    "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" "MILESTONE: ASYNC OK" \
     "MILESTONE: GCMEM OK" "MILESTONE: BCL OK" "MILESTONE: BCL2 OK" "MILESTONE: DRAW OK" \
     "MILESTONE: UI OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: CLOCK OK" "MILESTONE: PIANO OK" "MILESTONE: STORE OK" "MILESTONE: FILES OK" "MILESTONE: EDITOR OK" "MILESTONE: IMGVIEW OK" "MILESTONE: JPEG OK" \
     "MILESTONE: MULTIPROC OK" "MILESTONE: DISK WRITE OK" "MILESTONE: PROCCTL OK" "MILESTONE: WALLPAPERS OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: DNS OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: KEY EVENTS OK" "MILESTONE: MIXER OK" "MILESTONE: ICONS OK" \
@@ -455,9 +493,9 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" \
     "MILESTONE: ARM64 MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "MILESTONE: ARM64 EL0 OK" "Hello from EL0" "MILESTONE: ARM64 RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: ARM64 DISK OK" "MILESTONE: VIRTIO GPU OK" "MILESTONE: DHCP OK"     "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: ARM64 PSCI OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" \
-    "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: DNS OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: KEY EVENTS OK" "MILESTONE: MIXER OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: ARM64 SMP OK (2 CPUs" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
+    "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: DNS OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: KEY EVENTS OK" "MILESTONE: MIXER OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: ARM64 SMP OK (2 CPUs" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 BOOT OK" "BUITENZORG ARM64 READY" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 35 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "MILESTONE: SHELL SCRIPT OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0"
   if grep -qF "program 'hello'" "$log"; then
-    require "$log" "Hello from C#!" "MILESTONE: ARM64 CSHARP OK" "MILESTONE: MATANG OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" "MILESTONE: GCMEM OK" "MILESTONE: ARM64 MULTIPROC OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "frames leaked: 0" "from /disk"       "MILESTONE: BCL OK" "MILESTONE: PROCCTL OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: UI OK"       "MILESTONE: DRAW OK" "MILESTONE: ARM64 DESKTOP FRAME OK" "MILESTONE: ARM64 SMP SCHED OK"
+    require "$log" "Hello from C#!" "MILESTONE: ARM64 CSHARP OK" "MILESTONE: MATANG OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" "MILESTONE: ASYNC OK" "MILESTONE: GCMEM OK" "MILESTONE: ARM64 MULTIPROC OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "frames leaked: 0" "from /disk"       "MILESTONE: BCL OK" "MILESTONE: PROCCTL OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: UI OK"       "MILESTONE: DRAW OK" "MILESTONE: ARM64 DESKTOP FRAME OK" "MILESTONE: ARM64 SMP SCHED OK"
   fi
   echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + interactive desktop, 2 CPUs (PSCI)"
 else
@@ -486,7 +524,7 @@ if [ -n "$qemu_arm" ] && [ -f "$kernel8" ] && "$qemu_arm" -M help | grep -q '^ra
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "BREM" "framebuffer 1280x720" "ARM64 SMP OK (4 CPUs: spin tables" "window system: 1280x720" "MILESTONE: HELLO KERNEL OK" "loader=rpi-direct" "MILESTONE: DTB OK" "MILESTONE: ARM64 MEMORY OK" "MILESTONE: ARM64 ASPACE OK" "MILESTONE: ARM64 CONTEXT OK" "GICv2 at 0xff841000/0xff842000" "MILESTONE: ARM64 TIMER OK" "MILESTONE: ARM64 EL0 OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RPI4 BOOT OK" "BUITENZORG ARM64 READY"
   if [ ${#sdargs[@]} -gt 0 ]; then
-    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "Lab Perangkat: 10 checks, 0 failed"
+    require "$log" "MILESTONE: SD CARD OK" "MILESTONE: ARM64 DISK OK (SD card" "wallpaper 'nature' loaded: true" "MILESTONE: MANAGED APPS OK" "Studio: 35 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "Lab Perangkat: 10 checks, 0 failed"
   fi
   # Board I/O for applications (GPIO, I2C, SPI, UART, LEDs, sensors), and the
   # native sample when the C# programs were built.
@@ -530,7 +568,7 @@ if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64
   sleep 3
   virtio_input "$log" 4484
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
-  require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" "MILESTONE: RISCV MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: RISCV ASPACE OK" "MILESTONE: RISCV CONTEXT OK" "MILESTONE: RISCV TIMER OK" "Hello from U-mode" "MILESTONE: RISCV UMODE OK" "Hello from Rust on RISC-V" "MILESTONE: RISCV ELF OK" "MILESTONE: RISCV USERMEM OK" "MILESTONE: RISCV MULTIPROC OK" "MILESTONE: RISCV THREAD OK" "MILESTONE: RISCV SYNC OK" "MILESTONE: RISCV PROCESSES OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 32 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0" "MILESTONE: RISCV SMP OK (2 harts" "MILESTONE: RISCV SMP SCHED OK" "MILESTONE: RISCV RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: RISCV DISK OK" "MILESTONE: RISCV PLIC OK" "user programs from /disk" "MILESTONE: VIRTIO GPU OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RISCV POWER OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: RISCV POLYGLOT OK" "MILESTONE: RISCV PROCCTL OK" "MILESTONE: RISCV GUI OK" "MILESTONE: RISCV DESKTOP FRAME OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: DNS OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: KEY EVENTS OK" "MILESTONE: MIXER OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: RISCV BOOT OK" "BUITENZORG RISCV READY"
+  require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" "MILESTONE: RISCV MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: RISCV ASPACE OK" "MILESTONE: RISCV CONTEXT OK" "MILESTONE: RISCV TIMER OK" "Hello from U-mode" "MILESTONE: RISCV UMODE OK" "Hello from Rust on RISC-V" "MILESTONE: RISCV ELF OK" "MILESTONE: RISCV USERMEM OK" "MILESTONE: RISCV MULTIPROC OK" "MILESTONE: RISCV THREAD OK" "MILESTONE: RISCV SYNC OK" "MILESTONE: RISCV PROCESSES OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 35 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "MILESTONE: SHELL SCRIPT OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0" "MILESTONE: RISCV SMP OK (2 harts" "MILESTONE: RISCV SMP SCHED OK" "MILESTONE: RISCV RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: RISCV DISK OK" "MILESTONE: RISCV PLIC OK" "user programs from /disk" "MILESTONE: VIRTIO GPU OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RISCV POWER OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: RISCV POLYGLOT OK" "MILESTONE: RISCV PROCCTL OK" "MILESTONE: RISCV GUI OK" "MILESTONE: RISCV DESKTOP FRAME OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: DNS OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: REPO OK" "MILESTONE: KEY EVENTS OK" "MILESTONE: MIXER OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: RISCV BOOT OK" "BUITENZORG RISCV READY"
   echo "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
   needle="$(grep -a -o 'RISCV.TXT = BZRISCV[^[:cntrl:]]*' "$log" | head -1 | sed 's/^RISCV.TXT = //')"
   if [ -z "$needle" ] || ! grep -a -q -F "$needle" "$root/dist/buitenzorg-riscv64.img"; then

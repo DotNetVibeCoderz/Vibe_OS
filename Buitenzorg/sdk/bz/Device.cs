@@ -60,6 +60,10 @@ static class Device
         return new(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(2), Attempts = 8 };
     }
 
+    /// <summary>A client that waits up to a minute for an answer.</summary>
+    static BzdpClient PatientClient(Target t) =>
+        t.Host.Contains("://") ? Client(t) : new BzdpClient(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(2), Attempts = 30 };
+
     static int Fail(string m) { Console.Error.WriteLine("bz: " + m); return 1; }
 
     /// <summary>Entry for every device command; false = not one of them.</summary>
@@ -85,10 +89,13 @@ static class Device
                 ["logs", var app] => WithDevice(t => AppLogs(t, app, follow: false)),
                 ["logs", var app, "-f" or "--follow"] => WithDevice(t => AppLogs(t, app, follow: true)),
                 ["logs", "-f" or "--follow", var fapp] => WithDevice(t => AppLogs(t, fapp, follow: true)),
+                ["pi", "update", var kernel, .. var rest] => WithDevice(t => PiUpdate(t, kernel, rest)),
+                ["pi", ..] => Fail("usage: bz pi update <kernel8.img> [--expect TEXT]... [--run CMD]... [--no-promote] [--wait SECONDS]"),
                 ["kill", var pid] when uint.TryParse(pid, out var p) => WithDevice(t => Kill(t, p)),
                 ["prof", .. var rest] when rest.Length > 0 => WithDevice(t => Prof(t, rest)),
                 ["gdb-check", .. var rest] => WithDevice(t => GdbCheck.Check(new BzdpDebugDevice(Client(t)), rest)),
-                ["build-server", "--check", .. var rest] => WithDevice(t => BuildServer.Check(new BzdpDebugDevice(Client(t)), rest)),
+                // `bz build` holds the device's shell until the PC has compiled (20 s+ on a busy machine)
+                ["build-server", "--check", .. var rest] => WithDevice(t => BuildServer.Check(new BzdpDebugDevice(PatientClient(t)), rest)),
                 ["repo", "--check", .. var rest] => WithDevice(t => RepoCli.Check(new BzdpDebugDevice(Client(t)), rest)),
                 ["dap", .. var rest] => DapCli.Run(rest, () => Load() is Target t ? new BzdpDebugDevice(Client(t)) : null),
                 _ => null,
@@ -298,6 +305,108 @@ static class Device
                 if (!follow) return 0;
                 Thread.Sleep(300);
             }
+        }
+    }
+
+    /// <summary>
+    /// `bz pi update KERNEL`: try a new kernel on a Raspberry Pi without
+    /// touching its SD card. Upload it as /disk/KERNTRY.IMG, `pi tryboot` (one
+    /// boot with it, guarded by the PM watchdog), wait until the board answers
+    /// again, check it (`--expect` text in its log, `--run` commands that must
+    /// succeed) and `pi promote` it. A kernel that fails a check is not kept:
+    /// the board is restarted into the old one. A kernel that hangs is reset by
+    /// the watchdog into the old one.
+    /// </summary>
+    static int PiUpdate(Target t, string kernel, string[] args)
+    {
+        if (!File.Exists(kernel)) return Fail($"file not found: {kernel}");
+        var expects = new List<string>();
+        var runs = new List<string>();
+        bool promote = true;
+        int waitS = 180;
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--expect" when i + 1 < args.Length: expects.Add(args[++i]); break;
+                case "--run" when i + 1 < args.Length: runs.Add(args[++i]); break;
+                case "--no-promote": promote = false; break;
+                case "--wait" when i + 1 < args.Length && int.TryParse(args[i + 1], out var w): waitS = w; i++; break;
+                default: return Fail($"pi update: unknown option {args[i]}");
+            }
+        }
+        string Pi(BzdpClient c) => c.ExecAsync("pi").GetAwaiter().GetResult().Output;
+        using (var c = Client(t))
+        {
+            var before = Pi(c);
+            if (!before.Contains("boot:")) return Fail("the device has no 'pi' command (not a Raspberry Pi kernel?):\n" + before);
+            Console.WriteLine("device: " + before.Split('\n')[0]);
+        }
+        Upload(t, kernel, "/disk/KERNTRY.IMG");
+        // `pi tryboot` restarts the board before it can answer: send it once,
+        // never resend (a resent request would reach the trial kernel)
+        using (var once = new BzdpClient(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(3), Attempts = 1 })
+        {
+            try
+            {
+                var (failed, output) = once.ExecAsync("pi tryboot").GetAwaiter().GetResult();
+                if (failed || output.Contains("pi tryboot:")) return Fail(output.Trim());
+            }
+            catch (BzdpTimeoutException) { /* restarting */ }
+        }
+        Console.WriteLine($"restarting into the trial kernel; waiting up to {waitS} s for the board ...");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Thread.Sleep(5000);
+        string state = "";
+        while (sw.Elapsed.TotalSeconds < waitS)
+        {
+            try
+            {
+                using var c = new BzdpClient(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(2), Attempts = 1 };
+                state = Pi(c);
+                if (state.Contains("boot:")) break;
+            }
+            catch (Exception e) when (e is BzdpException or BzdpTimeoutException or System.Net.Sockets.SocketException) { }
+            Thread.Sleep(3000);
+        }
+        if (!state.Contains("boot:")) return Fail($"the board did not answer within {waitS} s (the watchdog returns it to the old kernel)");
+        if (!state.Contains("TRIAL"))
+            return Fail("the board came back with the OLD kernel: the trial kernel hung or was reset by the watchdog\n" + state);
+        Console.WriteLine($"trial kernel up after {sw.Elapsed.TotalSeconds:F0} s");
+        int failedChecks = 0;
+        using (var c = Client(t))
+        {
+            var log = new System.Text.StringBuilder();
+            uint cursor = 0;
+            while (true)
+            {
+                var (next, text) = c.LogAsync(cursor).GetAwaiter().GetResult();
+                log.Append(text);
+                if (next == cursor || text.Length == 0) break;
+                cursor = next;
+            }
+            foreach (var e in expects)
+            {
+                bool ok = log.ToString().Contains(e);
+                if (!ok) failedChecks++;
+                Console.WriteLine((ok ? "  ok   log has: " : "  FAIL log lacks: ") + e);
+            }
+            foreach (var r in runs)
+            {
+                var (failed, output) = c.ExecAsync(r).GetAwaiter().GetResult();
+                if (failed) failedChecks++;
+                Console.WriteLine((failed ? "  FAIL " : "  ok   ") + r + (failed ? "\n         " + output.Trim().Replace("\n", "\n         ") : ""));
+            }
+            if (failedChecks > 0 || !promote)
+            {
+                Console.WriteLine(failedChecks > 0 ? $"{failedChecks} check(s) failed: restarting into the old kernel" : "--no-promote: restarting into the old kernel");
+                using var once = new BzdpClient(t.Host, t.Port, t.Code) { ReplyTimeout = TimeSpan.FromSeconds(3), Attempts = 1 };
+                try { once.ExecAsync("restart").GetAwaiter().GetResult(); } catch (Exception e) when (e is BzdpException or BzdpTimeoutException) { }
+                return failedChecks > 0 ? 1 : 0;
+            }
+            var (pf, po) = c.ExecAsync("pi promote").GetAwaiter().GetResult();
+            Console.Write(po);
+            return pf || !po.Contains("KERNEL8.IMG is now") ? 1 : 0;
         }
     }
 

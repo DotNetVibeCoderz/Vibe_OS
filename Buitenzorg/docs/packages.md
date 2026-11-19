@@ -98,6 +98,31 @@ remote server). Tests: `MILESTONE: REPO OK`
 `bz repo --selftest` (CI) and `bz repo --check` (smoke `[bzlink]`: update,
 install with a dependency, upgrade 1.0 -> 1.1, a tampered package refused).
 
+## Signed packages
+
+```
+bz keygen                                   # once, on the PC: ~/.bz/signing.key + the public key
+bz pack sdk/samples/halo-paket --sign       # the archive + an Ed25519 signature
+bz inspect halo-paket.bzpkg                 # "signed by <key>: signature valid"
+```
+
+On the device:
+
+```
+bz trust add 8ba331ac...94ae budi           # trust a public key under a name
+bz trust                                    # the trusted keys and the policy
+bz trust require on                         # refuse unsigned / untrusted packages
+bz install /disk/HALO.BZP                   # "ditandatangani 'budi' (terpercaya)"
+```
+
+A signature covers every byte of the archive, so a changed file, manifest or
+signature is refused -- always, whatever the policy. Without `require on`,
+unsigned packages and packages signed by an unknown key still install (`bz
+install` says which it is); with it, only keys in `/disk/TRUST.CFG` are
+accepted, also for `bz install NAME` from a repository and `bz rollback`.
+`bz info FILE` shows the signer. Keep `signing.key` private
+(`BZ_SIGNING_KEY` points `bz` at another file).
+
 ## Format, version 1
 
 ```text

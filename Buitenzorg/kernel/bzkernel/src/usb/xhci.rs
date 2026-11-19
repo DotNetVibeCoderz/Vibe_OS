@@ -27,6 +27,7 @@ const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
 const TRB_LINK: u32 = 6;
 const TRB_ENABLE_SLOT: u32 = 9;
+const TRB_DISABLE_SLOT: u32 = 10;
 const TRB_ADDRESS_DEVICE: u32 = 11;
 const TRB_CONFIGURE_EP: u32 = 12;
 const TRB_EVALUATE_CTX: u32 = 13;
@@ -34,6 +35,7 @@ const TRB_RESET_EP: u32 = 14;
 const TRB_SET_DEQUEUE: u32 = 16;
 const EV_TRANSFER: u32 = 32;
 const EV_COMMAND: u32 = 33;
+const EV_PORT_STATUS: u32 = 34;
 
 const IOC: u32 = 1 << 5;
 const IDT: u32 = 1 << 6;
@@ -147,6 +149,13 @@ impl Page {
     }
 }
 
+/// A device that is unplugged gives its rings, contexts and buffers back.
+impl Drop for Page {
+    fn drop(&mut self) {
+        crate::memory::free_frame(self.phys);
+    }
+}
+
 /// A producer ring (command or transfer): 255 TRBs + a link TRB back to the
 /// start that toggles the cycle bit.
 struct Ring {
@@ -229,6 +238,8 @@ fn completion(ev: &[u32; 4]) -> u32 {
 pub enum HidKind {
     Keyboard,
     Mouse,
+    /// A hub's status-change endpoint: a bitmap of ports that changed.
+    Hub,
 }
 
 struct Interrupt {
@@ -281,6 +292,44 @@ struct Device {
     ep0: Ring,
     intr: Option<Interrupt>,
     msd: Option<Msd>,
+    /// Port path ("3", "1.2") and what it is ("046d:c52b keyboard"), for logs.
+    label: alloc::string::String,
+    what: alloc::string::String,
+    /// Hubs: port count and protocol (2 = multi-TT).
+    hub_ports: u32,
+    hub_protocol: u8,
+}
+
+/// The controller's devices by index. An unplugged device leaves an empty
+/// entry, so the indices `UsbDisk`s hold never point at another device.
+struct Devices(Vec<Option<Device>>);
+
+impl core::ops::Index<usize> for Devices {
+    type Output = Device;
+    fn index(&self, i: usize) -> &Device {
+        self.0[i].as_ref().expect("xhci: device was unplugged")
+    }
+}
+
+impl core::ops::IndexMut<usize> for Devices {
+    fn index_mut(&mut self, i: usize) -> &mut Device {
+        self.0[i].as_mut().expect("xhci: device was unplugged")
+    }
+}
+
+impl Devices {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn push(&mut self, d: Device) {
+        self.0.push(Some(d));
+    }
+    fn alive(&self, i: usize) -> bool {
+        self.0.get(i).is_some_and(|d| d.is_some())
+    }
+    fn live(&self) -> impl Iterator<Item = (usize, &Device)> {
+        self.0.iter().enumerate().filter_map(|(i, d)| d.as_ref().map(|d| (i, d)))
+    }
 }
 
 pub struct Xhci {
@@ -296,11 +345,21 @@ pub struct Xhci {
     cmd: Ring,
     ev: EventRing,
     buf: Page,
-    devices: Vec<Device>,
+    devices: Devices,
     pub keyboards: usize,
     pub mice: usize,
     pub hubs: usize,
     pub disks: usize,
+    /// Hot-plug work found while handling events, done by `service`: root
+    /// ports with a Port Status Change event, (hub device, changed-port bitmap).
+    root_changes: Vec<u32>,
+    hub_changes: Vec<(usize, u32)>,
+    /// Disks that appeared / disappeared since `take_disk_changes`.
+    new_disks: Vec<(usize, u64, alloc::string::String)>,
+    gone_disks: Vec<usize>,
+    /// Devices attached / detached after boot (`lsusb`, smoke test).
+    pub attached: usize,
+    pub detached: usize,
 }
 
 pub fn speed_name(s: u32) -> &'static str {
@@ -404,11 +463,17 @@ impl Xhci {
             cmd,
             ev: EventRing { page: evp, _erst: erst, idx: 0, cycle: 1 },
             buf,
-            devices: Vec::new(),
+            devices: Devices(Vec::new()),
             keyboards: 0,
             mice: 0,
             hubs: 0,
             disks: 0,
+            root_changes: Vec::new(),
+            hub_changes: Vec::new(),
+            new_disks: Vec::new(),
+            gone_disks: Vec::new(),
+            attached: 0,
+            detached: 0,
         })
     }
 
@@ -417,7 +482,7 @@ impl Xhci {
     }
 
     pub fn device_count(&self) -> usize {
-        self.devices.len()
+        self.devices.live().count()
     }
 
     fn doorbell(&self, slot: u32, target: u32) {
@@ -533,33 +598,49 @@ impl Xhci {
         let connected = self.settle();
         crate::println!("[usb] {}: {} of {} ports connected", self.name, connected, self.max_ports);
         for port in 1..=self.max_ports {
-            let a = self.op + 0x400 + 0x10 * (port as u64 - 1);
-            let mut sc = rd(a);
+            let a = self.portsc(port);
+            let sc = rd(a);
             if sc & PORT_PP == 0 {
                 wr(a, (sc & PORT_PRESERVE) | PORT_PP);
                 delay_ms(20);
-                sc = rd(a);
             }
-            if sc & PORT_CCS == 0 {
-                continue;
-            }
-            if sc & PORT_PED == 0 {
-                // USB 2 ports need a reset to be enabled (USB 3 ones train themselves)
-                wr(a, (sc & PORT_PRESERVE) | PORT_PR);
-                wait(500, || rd(a) & PORT_PRC != 0);
-                delay_ms(10);
-                sc = rd(a);
-            }
+            self.attach_root(port);
+        }
+        // events the scan itself caused (connect changes) are handled already,
+        // and the boot's disks are reported by `disks_found`
+        self.root_changes.clear();
+        self.hub_changes.clear();
+        self.new_disks.clear();
+    }
+
+    fn portsc(&self, port: u32) -> u64 {
+        self.op + 0x400 + 0x10 * (port as u64 - 1)
+    }
+
+    /// Reset (if needed) and enumerate the device on root port `port`.
+    fn attach_root(&mut self, port: u32) {
+        let a = self.portsc(port);
+        let mut sc = rd(a);
+        if sc & PORT_CCS == 0 {
             wr(a, (sc & PORT_PRESERVE) | PORT_CHANGES);
-            if sc & PORT_PED == 0 {
-                crate::println!("[usb] {} port {}: device did not enable", self.name, port);
-                continue;
-            }
-            let speed = (sc >> 10) & 0xF;
-            let label = alloc::format!("{}", port);
-            if let Err(e) = self.enumerate(&label, speed, 0, port, 0, 0, 0, false) {
-                crate::println!("[usb] {} port {}: {}", self.name, port, e);
-            }
+            return;
+        }
+        if sc & PORT_PED == 0 {
+            // USB 2 ports need a reset to be enabled (USB 3 ones train themselves)
+            wr(a, (sc & PORT_PRESERVE) | PORT_PR);
+            wait(500, || rd(a) & PORT_PRC != 0);
+            delay_ms(10);
+            sc = rd(a);
+        }
+        wr(a, (sc & PORT_PRESERVE) | PORT_CHANGES);
+        if sc & PORT_PED == 0 {
+            crate::println!("[usb] {} port {}: device did not enable", self.name, port);
+            return;
+        }
+        let speed = (sc >> 10) & 0xF;
+        let label = alloc::format!("{}", port);
+        if let Err(e) = self.enumerate(&label, speed, 0, port, 0, 0, 0, false) {
+            crate::println!("[usb] {} port {}: {}", self.name, port, e);
         }
     }
 
@@ -590,7 +671,25 @@ impl Xhci {
         self.command(inp.phys, (TRB_ADDRESS_DEVICE << 10) | (slot << 24))?;
         delay_ms(5);
         let di = self.devices.len();
-        self.devices.push(Device { slot, speed, route, root_port, depth, tt_slot, tt_port, mtt, out, inp, ep0, intr: None, msd: None });
+        self.devices.push(Device {
+            slot,
+            speed,
+            route,
+            root_port,
+            depth,
+            tt_slot,
+            tt_port,
+            mtt,
+            out,
+            inp,
+            ep0,
+            intr: None,
+            msd: None,
+            label: alloc::string::String::from(label),
+            what: alloc::string::String::from("device"),
+            hub_ports: 0,
+            hub_protocol: 0,
+        });
 
         // Device descriptor: the first 8 bytes give EP0's real packet size.
         self.control(di, 0x80, 6, 0x0100, 0, 8)?;
@@ -617,11 +716,23 @@ impl Xhci {
         self.control(di, 0x80, 6, 0x0200, 0, total as u16)?;
         let cfg = self.bytes(total);
         self.control(di, 0x00, 9, cfg[5] as u16, 0, 0)?; // SET_CONFIGURATION
+        self.devices[di].what = alloc::format!("{:04x}:{:04x} {}", vid, pid, speed_name(speed));
 
         if class == 9 {
             crate::println!("[usb] {} port {}: {:04x}:{:04x} {} hub", self.name, label, vid, pid, speed_name(speed));
             self.hubs += 1;
-            return self.setup_hub(di, label, protocol);
+            self.devices[di].what = alloc::format!("{:04x}:{:04x} hub", vid, pid);
+            // the status-change endpoint: the first interrupt-IN endpoint
+            let mut status_ep = None;
+            let mut i = 0;
+            while i + 2 <= cfg.len() && cfg[i] >= 2 && i + cfg[i] as usize <= cfg.len() {
+                if cfg[i + 1] == 5 && cfg[i] >= 7 && cfg[i + 2] & 0x80 != 0 && cfg[i + 3] & 3 == 3 {
+                    status_ep = Some((cfg[i + 2], u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]) as u32 & 0x7FF, cfg[i + 6]));
+                    break;
+                }
+                i += cfg[i] as usize;
+            }
+            return self.setup_hub(di, label, protocol, status_ep);
         }
         // the first HID boot-protocol interface with an interrupt-IN endpoint,
         // or a mass-storage one (SCSI over Bulk-Only Transport) with two bulk ones
@@ -670,6 +781,8 @@ impl Xhci {
                                 speed_name(speed),
                                 if kind == HidKind::Keyboard { "keyboard (HID boot protocol)" } else { "mouse (HID boot protocol)" }
                             );
+                            self.devices[di].what =
+                                alloc::format!("{:04x}:{:04x} {}", vid, pid, if kind == HidKind::Keyboard { "keyboard" } else { "mouse" });
                             return self.setup_hid(di, num, kind, addr, mps, cfg[i + 6]);
                         }
                     }
@@ -680,6 +793,7 @@ impl Xhci {
         }
         if let (Some(iface), Some(in_ep), Some(out_ep)) = (storage, bulk_in, bulk_out) {
             crate::println!("[usb] {} port {}: {:04x}:{:04x} {} mass storage", self.name, label, vid, pid, speed_name(speed));
+            self.devices[di].what = alloc::format!("{:04x}:{:04x} disk", vid, pid);
             return self.setup_msd(di, label, BulkEndpoints { iface, in_ep, out_ep });
         }
         crate::println!("[usb] {} port {}: {:04x}:{:04x} {} class {:#04x} (no driver)", self.name, label, vid, pid, speed_name(speed), class);
@@ -737,6 +851,8 @@ impl Xhci {
             Ok(sectors) => {
                 crate::println!("[usb] {} port {}: disk of {} MiB", self.name, label, sectors / 2048);
                 self.disks += 1;
+                self.devices[di].what = alloc::format!("{} of {} MiB", self.devices[di].what, sectors / 2048);
+                self.new_disks.push((di, sectors, alloc::format!("usb{}", label)));
                 Ok(())
             }
             Err(e) => {
@@ -879,11 +995,14 @@ impl Xhci {
 
     /// (device index, sectors, name) of every mass-storage device.
     pub fn disks_found(&self) -> Vec<(usize, u64, alloc::string::String)> {
-        self.devices.iter().enumerate().filter_map(|(i, d)| d.msd.as_ref().map(|m| (i, m.sectors, m.label.clone()))).collect()
+        self.devices.live().filter_map(|(i, d)| d.msd.as_ref().map(|m| (i, m.sectors, m.label.clone()))).collect()
     }
 
     /// Read whole sectors from device `di`.
     pub fn msd_read(&mut self, di: usize, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+        if !self.devices.alive(di) {
+            return Err("USB disk was unplugged");
+        }
         let total = buf.len() / 512;
         let mut done = 0;
         while done < total {
@@ -902,6 +1021,9 @@ impl Xhci {
 
     /// Write one sector to device `di` and flush it to the medium.
     pub fn msd_write(&mut self, di: usize, lba: u64, buf: &[u8]) -> Result<(), &'static str> {
+        if !self.devices.alive(di) {
+            return Err("USB disk was unplugged");
+        }
         let m = self.devices[di].msd.as_ref().ok_or("mass storage: gone")?;
         unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), m.pages[0].va, 512) };
         let a = (lba as u32).to_be_bytes();
@@ -968,6 +1090,7 @@ impl Xhci {
         match kind {
             HidKind::Keyboard => self.keyboards += 1,
             HidKind::Mouse => self.mice += 1,
+            HidKind::Hub => {}
         }
         self.queue_report(di);
         Ok(())
@@ -984,7 +1107,7 @@ impl Xhci {
         }
     }
 
-    fn setup_hub(&mut self, di: usize, label: &str, protocol: u8) -> Result<(), &'static str> {
+    fn setup_hub(&mut self, di: usize, label: &str, protocol: u8, status_ep: Option<(u8, u32, u8)>) -> Result<(), &'static str> {
         if self.devices[di].depth >= 4 {
             return Err("hubs nested too deep");
         }
@@ -993,6 +1116,9 @@ impl Xhci {
         let ports = hd[2] as u32;
         let chars = u16::from_le_bytes([hd[3], hd[4]]) as u32;
         let power_ms = (hd[5] as u64 * 2).max(100);
+        let mtt = self.devices[di].speed == 3 && protocol == 2;
+        self.devices[di].hub_ports = ports;
+        self.devices[di].hub_protocol = protocol;
         // Tell the controller this slot is a hub (and its TT), so it can
         // schedule split transactions for the LS/FS devices behind it.
         {
@@ -1002,7 +1128,6 @@ impl Xhci {
             let s = self.csz;
             dev.inp.zero(0, 4096);
             dev.inp.w32(4, 1);
-            let mtt = dev.speed == 3 && protocol == 2;
             dev.inp.w32(s, (entries << 27) | (1 << 26) | if mtt { 1 << 25 } else { 0 } | (dev.speed << 20) | dev.route);
             dev.inp.w32(s + 4, (ports << 24) | (dev.root_port << 16));
             dev.inp.w32(s + 8, (((chars >> 5) & 3) << 16) | (dev.tt_port << 8) | dev.tt_slot);
@@ -1034,54 +1159,109 @@ impl Xhci {
             if self.buf.byte(0) & 1 == 0 {
                 continue; // nothing connected
             }
-            self.control(di, 0x23, 3, 4, port as u16, 0)?; // SET_FEATURE(PORT_RESET)
-            let mut status = 0u16;
-            let t0 = now();
-            while now() - t0 < ms_ticks(500) {
-                delay_ms(10);
-                self.control(di, 0xA3, 0, 0, port as u16, 4)?;
-                status = u16::from_le_bytes([self.buf.byte(0), self.buf.byte(1)]);
-                if self.buf.byte(2) & (1 << 4) != 0 {
-                    break; // C_PORT_RESET
-                }
-            }
-            let _ = self.control(di, 0x23, 1, 20, port as u16, 0); // clear C_PORT_RESET
-            let _ = self.control(di, 0x23, 1, 16, port as u16, 0); // clear C_PORT_CONNECTION
-            if status & 2 == 0 {
-                crate::println!("[usb] {} port {}.{}: device did not enable", self.name, label, port);
-                continue;
-            }
-            let speed = if status & (1 << 9) != 0 {
-                2
-            } else if status & (1 << 10) != 0 {
-                3
-            } else {
-                1
-            };
-            delay_ms(10);
-            let hub = &self.devices[di];
-            let (tt_slot, tt_port, mtt) = if hub.speed == 3 && speed <= 2 {
-                (hub.slot, port, protocol == 2)
-            } else {
-                (hub.tt_slot, hub.tt_port, hub.mtt)
-            };
-            let route = hub.route | (port.min(15) << (4 * hub.depth));
-            let (root_port, depth) = (hub.root_port, hub.depth + 1);
-            let child = alloc::format!("{}.{}", label, port);
-            if let Err(e) = self.enumerate(&child, speed, route, root_port, depth, tt_slot, tt_port, mtt) {
-                crate::println!("[usb] {} port {}: {}", self.name, child, e);
+            self.hub_attach(di, label, port);
+        }
+        // Hot-plug: the hub reports port changes on its status-change
+        // endpoint (a bitmap: bit n = port n), like a keyboard reports keys.
+        if let Some((addr, mps, b_interval)) = status_ep {
+            match self.setup_hub_status(di, addr, mps, b_interval, ports, ((chars >> 5) & 3, mtt)) {
+                Ok(()) => crate::println!("[usb] {}: hub {}: watching its ports (status endpoint {:#04x})", self.name, label, addr),
+                Err(e) => crate::println!("[usb] {}: hub {}: no hot-plug ({})", self.name, label, e),
             }
         }
         Ok(())
     }
 
+    /// Reset and enumerate whatever is on port `port` of hub `di`.
+    fn hub_attach(&mut self, di: usize, label: &str, port: u32) {
+        if self.control(di, 0x23, 3, 4, port as u16, 0).is_err() {
+            return; // SET_FEATURE(PORT_RESET) refused
+        }
+        let mut status = 0u16;
+        let t0 = now();
+        while now() - t0 < ms_ticks(500) {
+            delay_ms(10);
+            if self.control(di, 0xA3, 0, 0, port as u16, 4).is_err() {
+                return;
+            }
+            status = u16::from_le_bytes([self.buf.byte(0), self.buf.byte(1)]);
+            if self.buf.byte(2) & (1 << 4) != 0 {
+                break; // C_PORT_RESET
+            }
+        }
+        let _ = self.control(di, 0x23, 1, 20, port as u16, 0); // clear C_PORT_RESET
+        let _ = self.control(di, 0x23, 1, 16, port as u16, 0); // clear C_PORT_CONNECTION
+        if status & 2 == 0 {
+            crate::println!("[usb] {} port {}.{}: device did not enable", self.name, label, port);
+            return;
+        }
+        let speed = if status & (1 << 9) != 0 {
+            2
+        } else if status & (1 << 10) != 0 {
+            3
+        } else {
+            1
+        };
+        delay_ms(10);
+        let hub = &self.devices[di];
+        let protocol = hub.hub_protocol;
+        let (tt_slot, tt_port, mtt) = if hub.speed == 3 && speed <= 2 {
+            (hub.slot, port, protocol == 2)
+        } else {
+            (hub.tt_slot, hub.tt_port, hub.mtt)
+        };
+        let route = hub.route | (port.min(15) << (4 * hub.depth));
+        let (root_port, depth) = (hub.root_port, hub.depth + 1);
+        let child = alloc::format!("{}.{}", label, port);
+        if let Err(e) = self.enumerate(&child, speed, route, root_port, depth, tt_slot, tt_port, mtt) {
+            crate::println!("[usb] {} port {}: {}", self.name, child, e);
+        }
+    }
+
+    /// Configure a hub's status-change endpoint (interrupt IN) with the hub
+    /// fields kept in the slot context.
+    fn setup_hub_status(&mut self, di: usize, addr: u8, mps: u32, b_interval: u8, ports: u32, (ttt, mtt): (u32, bool)) -> Result<(), &'static str> {
+        let dci = (addr as u32 & 0xF) * 2 + 1;
+        let ring = Ring::new(self.limit)?;
+        let buf = Page::new(self.limit)?;
+        let dev = &self.devices[di];
+        let interval = if dev.speed >= 3 { (b_interval.max(1) as u32 - 1).min(15) } else { (31 - ((b_interval.max(1) as u32) * 8).leading_zeros()).clamp(3, 10) };
+        let s = self.csz;
+        let e = (dci as usize + 1) * s;
+        dev.inp.zero(0, 4096);
+        dev.inp.w32(4, 1 | (1 << dci));
+        dev.inp.w32(s, (dci << 27) | (1 << 26) | if mtt { 1 << 25 } else { 0 } | (dev.speed << 20) | dev.route);
+        dev.inp.w32(s + 4, (ports << 24) | (dev.root_port << 16));
+        dev.inp.w32(s + 8, (ttt << 16) | (dev.tt_port << 8) | dev.tt_slot);
+        dev.inp.w32(e, interval << 16);
+        dev.inp.w32(e + 4, (mps.max(1) << 16) | (7 << 3) | (3 << 1));
+        dev.inp.w64(e + 8, ring.page.phys | 1);
+        dev.inp.w32(e + 16, (mps << 16) | mps);
+        dev.inp.sync(0, 4096);
+        let (p, slot) = (dev.inp.phys, dev.slot);
+        self.command(p, (TRB_CONFIGURE_EP << 10) | (slot << 24))?;
+        let len = mps.clamp(1, 8);
+        self.devices[di].intr = Some(Interrupt { dci, ring, buf, len, kind: HidKind::Hub, last: [0; 8], broken: false, reports: 0, state: 0 });
+        self.queue_report(di);
+        Ok(())
+    }
+
     fn dispatch(&mut self, ev: [u32; 4]) {
+        if trb_type(&ev) == EV_PORT_STATUS {
+            // a root port changed (connect, disconnect, reset done): handled
+            // by `service`, never inside a command or transfer wait
+            let port = ev[0] >> 24;
+            if port >= 1 && port <= self.max_ports && !self.root_changes.contains(&port) {
+                self.root_changes.push(port);
+            }
+            return;
+        }
         if trb_type(&ev) != EV_TRANSFER {
             return;
         }
         let slot = ev[3] >> 24;
         let dci = (ev[3] >> 16) & 0x1F;
-        let Some(di) = self.devices.iter().position(|d| d.slot == slot && d.intr.as_ref().map_or(false, |i| i.dci == dci)) else { return };
+        let Some(di) = self.devices.live().find(|(_, d)| d.slot == slot && d.intr.as_ref().is_some_and(|i| i.dci == dci)).map(|(i, _)| i) else { return };
         let cc = completion(&ev);
         let i = self.devices[di].intr.as_mut().unwrap();
         if cc != CC_SUCCESS && cc != CC_SHORT {
@@ -1100,7 +1280,14 @@ impl Xhci {
         match i.kind {
             HidKind::Keyboard => super::hid::keyboard(&i.last, &report),
             HidKind::Mouse => super::hid::mouse(&report[..got]),
+            HidKind::Hub => {
+                let bits = report[..got.min(4)].iter().enumerate().fold(0u32, |a, (k, b)| a | (*b as u32) << (8 * k));
+                if bits & !1 != 0 {
+                    self.hub_changes.push((di, bits & !1));
+                }
+            }
         }
+        let i = self.devices[di].intr.as_mut().unwrap();
         i.last = report;
         i.reports += 1;
         self.queue_report(di);
@@ -1114,14 +1301,163 @@ impl Xhci {
         }
     }
 
+    /// Hot-plug: attach what was plugged in and detach what was pulled out,
+    /// on root ports (Port Status Change events) and behind hubs (their
+    /// status-change endpoints). Called by `usb::poll` after `poll`.
+    pub fn service(&mut self) {
+        while let Some(port) = self.root_changes.pop() {
+            let a = self.portsc(port);
+            let sc = rd(a);
+            wr(a, (sc & PORT_PRESERVE) | PORT_CHANGES);
+            let child = self.devices.live().find(|(_, d)| d.root_port == port && d.depth == 0).map(|(i, _)| i);
+            // a connect change while something is attached = unplugged (and
+            // maybe plugged again); without a connection there is nothing
+            if let Some(di) = child {
+                if sc & PORT_CCS == 0 || sc & (1 << 17) != 0 {
+                    self.detach_tree(di);
+                } else {
+                    continue;
+                }
+            }
+            if sc & PORT_CCS != 0 {
+                delay_ms(100); // debounce: contacts settle (USB 2.0 7.1.7.3)
+                if rd(a) & PORT_CCS != 0 {
+                    let before = self.devices.live().count();
+                    self.attach_root(port);
+                    self.attached += self.devices.live().count().saturating_sub(before);
+                }
+            }
+        }
+        while let Some((hub, bits)) = self.hub_changes.pop() {
+            if !self.devices.alive(hub) {
+                continue;
+            }
+            let ports = self.devices[hub].hub_ports;
+            for port in 1..=ports.min(31) {
+                if bits & (1 << port) != 0 {
+                    self.hub_port_changed(hub, port);
+                }
+            }
+        }
+    }
+
+    fn hub_port_changed(&mut self, hub: usize, port: u32) {
+        if self.control(hub, 0xA3, 0, 0, port as u16, 4).is_err() {
+            return;
+        }
+        let status = u16::from_le_bytes([self.buf.byte(0), self.buf.byte(1)]);
+        let change = u16::from_le_bytes([self.buf.byte(2), self.buf.byte(3)]);
+        // clear every change bit that is set (C_PORT_CONNECTION .. C_PORT_RESET)
+        for bit in 0..5u16 {
+            if change & (1 << bit) != 0 {
+                let _ = self.control(hub, 0x23, 1, 16 + bit, port as u16, 0);
+            }
+        }
+        let h = &self.devices[hub];
+        let route = h.route | (port.min(15) << (4 * h.depth));
+        let (root_port, depth, label) = (h.root_port, h.depth + 1, h.label.clone());
+        let child = self.devices.live().find(|(_, d)| d.root_port == root_port && d.depth == depth && d.route == route).map(|(i, _)| i);
+        if let Some(di) = child {
+            if status & 1 == 0 || change & 1 != 0 {
+                self.detach_tree(di);
+            } else {
+                return;
+            }
+        }
+        if status & 1 != 0 {
+            delay_ms(100);
+            if self.control(hub, 0xA3, 0, 0, port as u16, 4).is_ok() && self.buf.byte(0) & 1 != 0 {
+                let before = self.devices.live().count();
+                self.hub_attach(hub, &label, port);
+                self.attached += self.devices.live().count().saturating_sub(before);
+            }
+        }
+    }
+
+    /// Detach device `di` and everything behind it (a hub's children first).
+    fn detach_tree(&mut self, di: usize) {
+        let (root_port, depth, route) = {
+            let d = &self.devices[di];
+            (d.root_port, d.depth, d.route)
+        };
+        let mask = if depth == 0 { 0 } else { (1u32 << (4 * depth)) - 1 };
+        let mut below: Vec<(usize, u32)> = self
+            .devices
+            .live()
+            .filter(|(i, d)| *i != di && d.root_port == root_port && d.depth > depth && d.route & mask == route)
+            .map(|(i, d)| (i, d.depth))
+            .collect();
+        below.sort_by(|a, b| b.1.cmp(&a.1)); // deepest first
+        for (i, _) in below {
+            self.detach(i);
+        }
+        self.detach(di);
+    }
+
+    /// Forget one device: release held keys / buttons, give its slot back to
+    /// the controller, free its memory, report a disk as gone.
+    fn detach(&mut self, di: usize) {
+        let Some(dev) = self.devices.0[di].take() else { return };
+        if let Some(i) = dev.intr.as_ref() {
+            match i.kind {
+                HidKind::Keyboard => {
+                    super::hid::keyboard(&i.last, &[0; 8]);
+                    self.keyboards = self.keyboards.saturating_sub(1);
+                }
+                HidKind::Mouse => {
+                    crate::mouse::inject_relative(0, 0, 0);
+                    self.mice = self.mice.saturating_sub(1);
+                }
+                HidKind::Hub => {}
+            }
+        }
+        if dev.hub_ports > 0 {
+            self.hubs = self.hubs.saturating_sub(1);
+        }
+        if dev.msd.is_some() {
+            self.disks = self.disks.saturating_sub(1);
+            self.gone_disks.push(di);
+        }
+        let ok = self.command(0, (TRB_DISABLE_SLOT << 10) | (dev.slot << 24)).is_ok();
+        self.dcbaa.w64(dev.slot as usize * 8, 0);
+        self.dcbaa.sync(dev.slot as usize * 8, 8);
+        self.detached += 1;
+        crate::println!(
+            "[usb] {} port {}: {} unplugged (slot {} {})",
+            self.name,
+            dev.label,
+            dev.what,
+            dev.slot,
+            if ok { "released" } else { "release refused" }
+        );
+        // `dev` drops here: rings, contexts and buffers go back to the allocator
+    }
+
+    /// Disks plugged in / unplugged since the last call:
+    /// (new: (device, sectors, name), gone: device indices).
+    pub fn take_disk_changes(&mut self) -> (Vec<(usize, u64, alloc::string::String)>, Vec<usize>) {
+        (core::mem::take(&mut self.new_disks), core::mem::take(&mut self.gone_disks))
+    }
+
+    /// One line per device (shell `lsusb`).
+    pub fn describe(&self) -> Vec<alloc::string::String> {
+        self.devices
+            .live()
+            .map(|(_, d)| alloc::format!("{} port {:<7} slot {:>2}  {}", self.name, d.label, d.slot, d.what))
+            .collect()
+    }
+
     /// Log each HID endpoint's state (from the output device context) and
     /// report count when the state changed -- for bring-up on new hardware.
     pub fn report_endpoints(&mut self) {
         let csz = self.csz;
         let name = self.name;
-        for d in self.devices.iter_mut() {
+        for d in self.devices.0.iter_mut().flatten() {
             let slot = d.slot;
             let Some(i) = d.intr.as_mut() else { continue };
+            if i.kind == HidKind::Hub {
+                continue;
+            }
             let off = i.dci as usize * csz;
             d.out.sync(off, 32);
             let state = d.out.r32(off) & 7;

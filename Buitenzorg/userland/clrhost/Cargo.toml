@@ -29,6 +29,10 @@ rustls = { version = "0.23", default-features = false, features = ["tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12"] }
 webpki-roots = "1"
 getrandom = { version = "0.2", features = ["custom"] }
+# EPUB books (zipapi.rs): ZIP inflate without std
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+# the ray-casting renderer (raycast.rs)
+libm = "0.2"
 
 [profile.release]
 panic = "abort"

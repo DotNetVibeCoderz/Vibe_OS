@@ -54,6 +54,27 @@ mod fw {
         w(PM_WDOG, PM_PASSWORD | 10); // ~150 us
         w(PM_RSTC, PM_PASSWORD | (r(PM_RSTC) & 0x00FF_FFCF) | 0x20); // full reset
     }
+    /// Start (or feed) the PM watchdog: a full reset after `seconds` (at
+    /// most ~16) unless it is fed again or stopped -- Linux's bcm2835_wdt.
+    pub fn pm_watchdog_arm(seconds: u32) -> bool {
+        let pm = PM.load(Ordering::SeqCst);
+        if pm == 0 {
+            return false;
+        }
+        let r = |o: u64| unsafe { ((pm + o) as *const u32).read_volatile() };
+        let w = |o: u64, v: u32| unsafe { ((pm + o) as *mut u32).write_volatile(v) };
+        let ticks = (seconds.min(15) << 16) & 0x000F_FFFF; // 1/65536 s units
+        w(PM_WDOG, PM_PASSWORD | ticks);
+        w(PM_RSTC, PM_PASSWORD | (r(PM_RSTC) & 0x00FF_FFCF) | 0x20);
+        true
+    }
+    /// Stop the PM watchdog (PM_RSTC_RESET).
+    pub fn pm_watchdog_stop() {
+        let pm = PM.load(Ordering::SeqCst);
+        if pm != 0 {
+            unsafe { ((pm + PM_RSTC) as *mut u32).write_volatile(PM_PASSWORD | 0x102) };
+        }
+    }
     pub fn off() {
         if psci::available() {
             psci::call(psci::SYSTEM_OFF, 0, 0, 0);
@@ -110,6 +131,18 @@ pub fn firmware() -> &'static str {
 #[cfg(target_arch = "aarch64")]
 pub fn use_pm_watchdog(va: u64) {
     fw::set_pm_watchdog(va);
+}
+
+/// Raspberry Pi: arm / feed the PM watchdog (reset after `seconds`, <= 15).
+#[cfg(target_arch = "aarch64")]
+pub fn watchdog_arm(seconds: u32) -> bool {
+    fw::pm_watchdog_arm(seconds)
+}
+
+/// Raspberry Pi: stop the PM watchdog.
+#[cfg(target_arch = "aarch64")]
+pub fn watchdog_stop() {
+    fw::pm_watchdog_stop()
 }
 
 /// No ACPI on these boards.

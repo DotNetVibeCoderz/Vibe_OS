@@ -166,6 +166,19 @@ pub fn rename(from: &str, to: &str) -> Result<(), &'static str> {
 }
 
 /// Names of all current mounts, e.g. `["disk", "ram"]`.
+/// Remove the mount `/name` (a USB stick that was pulled out). The device
+/// goes with it. Returns false when there was no such mount.
+pub fn unmount(name: &str) -> bool {
+    let mut mounts = MOUNTS.lock();
+    match mounts.iter().position(|m| m.name == name) {
+        Some(i) => {
+            mounts.remove(i);
+            true
+        }
+        None => false,
+    }
+}
+
 pub fn mounts() -> Vec<String> {
     MOUNTS.lock().iter().map(|m| format!("/{}", m.name)).collect()
 }

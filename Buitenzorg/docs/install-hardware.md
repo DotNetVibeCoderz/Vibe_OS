@@ -134,7 +134,7 @@ take a photo of it: the panic is not in that file.
 | Firmware | UEFI **and** legacy BIOS | Secure Boot must be OFF (unsigned) |
 | CPU | x86-64, up to 16 cores used | ARM64: [Raspberry Pi 4](install-raspberry-pi.md); RISC-V under QEMU |
 | Graphics | the firmware's framebuffer | no GPU driver on PCs: drawn by the CPU. Tested up to 2560x1440; BIOS image 1280x720 |
-| Keyboard/mouse | USB (xHCI: HID boot protocol) and PS/2 | no USB 2.0-only (EHCI) controllers; **no hot-plug**: plug in before booting |
+| Keyboard/mouse | USB (xHCI: HID boot protocol) and PS/2 | no USB 2.0-only (EHCI) controllers; **hot-plug** works on root ports and behind USB 2.0 hubs (a stick plugged in later is mounted at `/usb0`; `lsusb` lists what is attached) |
 | Storage | IDE, SATA (AHCI), NVMe, USB sticks on xHCI | 512-byte sectors; no RAID/Intel RST mode (set SATA to AHCI); a USB 3 hub is not supported |
 | Network | Intel e1000 family (82540, 82545, 82574, ...), on-board Intel I217/I218/I219 (verified: I219-LM, Latitude 7290), virtio-net | **no** Realtek or Wi-Fi yet; `ipconfig` says why the network is off, `netup` retries |
 | Sound | Intel HD Audio, AC'97, virtio-sound | HD Audio: output only (speaker/headphone/line out), first codec found |

@@ -19,4 +19,8 @@ bootloader-boot-config = "0.11"
 jpeg-decoder = { version = "0.3", default-features = false }
 # Writes the FAT partition of the Limine image (multi-arch M1).
 fatfs = "0.3"
+# Deflates the sample EPUB book (assets/books) at image-build time.
+miniz_oxide = "0.8"
+# Encodes the frames of the sample video (MJPEG in AVI) at image-build time.
+jpeg-encoder = "0.6"
 bzkernel = { path = "../bzkernel", artifact = "bin", target = "x86_64-unknown-none" }

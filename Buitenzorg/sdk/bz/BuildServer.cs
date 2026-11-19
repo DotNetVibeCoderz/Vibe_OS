@@ -301,6 +301,11 @@ static class BuildServer
         try
         {
             using var server = new Server(port, true, refs) { Log = l => Console.WriteLine("  [server] " + l) };
+            // Warm the .NET SDK first (restore, MSBuild nodes): the device's
+            // `bz build` blocks its shell until the PC answers, and a cold first
+            // build on a busy machine outlasted the BZDP client's retries.
+            var warm = Build("WARMUP", new List<(string, byte[])> { ("PROGRAM.CS", Encoding.UTF8.GetBytes(GoodProgram)) }, refs);
+            Console.WriteLine("  [server] warm-up build " + (warm.Ok ? "ok" : "failed"));
             Run("mkdir /disk/RBTEST");
             Run("mkdir /disk/RBBAD");
             dev.Upload("/disk/RBTEST/PROGRAM.CS", Encoding.UTF8.GetBytes(GoodProgram));

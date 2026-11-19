@@ -98,4 +98,11 @@ switch new contexts between software and GPU. `smoke-test.ps1` runs the
 * All 3D resources of all processes together are capped at 8 MiB of kernel
   memory (`gfx3d::BUDGET`).
 * Raspberry Pi 4: V3D is powered on and identified (`MILESTONE: RPI4 V3D OK`
-  on a board), rendering stays in software.
+  on a board), rendering stays in software. `gpu v3d` in the Terminal runs
+  the first GPU jobs (step 2a, verified on a Pi 4: 256x128 cleared in 23 us,
+  every pixel right): V3D is powered through the SoC power manager, then its own MMU
+  with a 4 MiB page table, then two render-only jobs on the control list
+  executor -- a render control list that clears a 256x128 image and stores
+  it to memory, read back pixel by pixel by the CPU and shown at the top
+  right of the screen for 4 s (`MILESTONE: V3D RENDER OK`). Triangles need a
+  binning job and QPU shaders (next steps).

@@ -52,6 +52,33 @@ low milik bootloader punya NX). `memory::make_user_path` meng-OR USER dan
 meng-clear NX pada entri induk sepanjang jalur ke tiap halaman user. Leaf tetap
 memakai bit-nya sendiri, jadi memori kernel tetap terlindungi & non-executable.
 
+## async / await (native)
+
+Tambahkan `bzasync.cs` (bersama `bzbcl3.cs`) ke program, dan `async` / `await`
+berjalan di zerolib:
+
+```csharp
+static async Task<int> Ambil(int n) { await Task.Delay(10); return n * 2; }
+
+static int Main()
+{
+    BzAsync.Run(async () =>
+    {
+        int a = await Ambil(1);
+        await Task.WhenAll(Task.Delay(30), Task.Delay(10));
+        BzDebug.WriteLine(a == 2 ? "ok" : "salah");
+    });
+    return 0;
+}
+```
+
+Semuanya berjalan di satu thread, di event loop yang dipompa `BzAsync.Run`
+(model JavaScript): `Task.Delay` adalah timer di loop itu, `Task.Yield`
+memberi giliran ke pekerjaan lain, `Task.Run` mengantrekan pekerjaan,
+`.Result` / `Wait()` memompa loop sampai task selesai. Di zerolib tidak ada
+exception yang bisa dilempar, jadi task tidak pernah gagal. Untuk C# dengan GC
+sungguhan, exception dan thread, pakai jalur managed (RustCLR).
+
 ## Berikutnya (v0.8+)
 
 Jalur CoreCLR + JIT untuk fitur C# lengkap (reflection, dynamic loading),

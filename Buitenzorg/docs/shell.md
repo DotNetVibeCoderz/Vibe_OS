@@ -15,6 +15,7 @@ over the OS's own commands plus a set of coreutils.
 | ↑ / ↓ | command history (kept in `/disk/HISTORY.TXT`, 200 lines) |
 | Tab | complete a command or a file name |
 | Ctrl+L / Ctrl+C | clear the screen / drop the line |
+| Ctrl+V | paste the system clipboard (line breaks become `; `) |
 | PageUp / PageDown, mouse wheel | scroll back |
 
 ## Command lines
@@ -25,7 +26,21 @@ echo halo > /ram/A.TXT; cat < /ram/A.TXT >> /ram/B.TXT   # redirection
 mkdir /ram/X && cp /ram/A.TXT /ram/X || echo gagal       # ; && ||
 X=kebun; echo "nama: $X, status $?"                      # variables, $?
 ls /disk/H*.ELF                                          # globs * ?
+echo "$(ls /disk | wc -l) berkas, $(( 6 * 7 )) jawaban"  # $(cmd), $((math))
+for f in $(ls /ram); do echo "- $f"; done                # $(...) splits into words
+ls /disk | clip; paste                                   # the system clipboard
 ```
+
+`$(command)` runs a command line and puts its output there (unquoted it splits
+into words, quoted it stays one string; nesting works). `$((expr))` is integer
+arithmetic: `+ - * / %`, comparisons `< <= > >= == !=` (1 or 0), `&& || !`,
+parentheses, numbers and variables (`$X` or just `X`; unset = 0); dividing by
+zero fails the command.
+
+**Colours:** the Terminal draws ANSI colour codes (`ESC[31m` ... `ESC[0m`:
+foreground 30-37 / 90-97, background 40-47, bold = bright) that programs print;
+`echo -e '\e[32mhijau\e[0m biasa'` tries them (single quotes keep the
+backslashes; `-e` also knows `\n` and `\t`).
 
 Quotes: `'...'` is literal, `"..."` expands `$NAME`, `${NAME}`, `$?`; `\`
 escapes one character. `PATH` (default `/disk:/ram`), `PWD`, `HOME`, `USER` and
@@ -33,8 +48,14 @@ escapes one character. `PATH` (default `/disk:/ram`), `PWD`, `HOME`, `USER` and
 
 **Coreutils:** `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch
 find hexdump/xxd seq basename dirname true false env set export unset history
-test [`. Everything else (`ls`, `rm`, `ps`, `kill`, `run`, `bz`, `ipconfig`,
-`ping`, `theme`, ...) is listed by `help`.
+test [ clip paste`. **System:** `ps`, `top` (processes by CPU time, memory,
+uptime), `free` (RAM, frames, kernel heap), `uptime`, `dmesg`, `df`, `lsusb`.
+Everything else (`ls`, `rm`, `kill`, `run`, `bz`, `ipconfig`, `ping`,
+`theme`, ...) is listed by `help`.
+
+**Clipboard:** one text shared by the Terminal and every app (Ctrl+C / X / V
+in text boxes and in Studio). `clip TEXT` or `... | clip` copies, `paste`
+prints it, Ctrl+V pastes it on the command line.
 
 ## Tabs and jobs
 
@@ -107,8 +128,22 @@ done
   are separated by `;`.
 * Conditions are commands; `test` / `[ ]` knows `-e -f -d PATH`, `-z -n STR`,
   `A = B`, `A != B`, `N -eq -ne -lt -le -gt -ge M`, `!`, `-a`, `-o`.
-* **Not yet:** `$(...)` command substitution and `$((...))` arithmetic, functions,
-  `case`, here-documents, background jobs (`&`).
+* **Functions:** `name() { ...; }` or `function name { ...; }`, on one
+  line or several; called like a command with their own `$1`..`$9`, `$#`,
+  `$@`; `return [N]` leaves one; recursion works (8 levels: functions and
+  scripts share the nesting limit). `functions` lists them; `type NAME` tells
+  a function from a command. Define your own in `/disk/PROFILE.SH`.
+
+```sh
+fakt() {
+    if [ $1 -le 1 ]; then echo 1; return 0; fi
+    echo $(( $1 * $(fakt $(( $1 - 1 ))) ))
+}
+fakt 5          # 120
+```
+
+* **Not yet:** `case`, here-documents, `local` variables (a function's
+  variables are the shell's).
 
 **Limits:** scripts run on the desktop's kernel task, so one run executes at
 most 20,000 statements and a `while` loop at most 5,000 rounds; a runaway

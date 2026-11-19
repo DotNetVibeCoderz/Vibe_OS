@@ -517,6 +517,7 @@ fn main() {
         ("statics.elf", "statics.elf"),
         ("crashme.elf", "crashme.elf"),
         ("bcl3.elf", "bcl3.elf"),
+        ("async.elf", "async.elf"),
         ("gcmem.elf", "gcmem.elf"),
         ("bcl.elf", "bcl.elf"),
         ("bcl2.elf", "bcl2.elf"),
@@ -619,6 +620,45 @@ fn main() {
     // something to play on every image (WAV, 16 kHz mono, with a title).
     for (name, title, seed, bpm) in [("lagu1.wav", "Embun Pagi di Kebun Raya", 7u32, 96u32), ("lagu2.wav", "Hujan Sore di Bogor", 23, 72)] {
         add_file(&mut builder, &mut files, name.into(), synth_song(title, seed, bpm));
+    }
+    // ... and one lossless FLAC (an original melody made with ffmpeg, title
+    // "Tetes Embun"; the host decodes it: userland/clrhost/src/flac.rs)
+    {
+        let p = manifest_dir().join("..").join("..").join("assets").join("music").join("LAGU3.FLA");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "lagu3.fla".into(), bytes);
+        }
+    }
+
+    // Video: an original 12-second animation with music, MJPEG + PCM in AVI
+    add_file(&mut builder, &mut files, "fajar.avi".into(), synth_video());
+
+    // Baca: an original short story as an EPUB (assets/books/benih, zipped
+    // here with deflate -- the reader inflates it in the managed host)
+    {
+        let dir = manifest_dir().join("..").join("..").join("assets").join("books").join("benih");
+        let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+        for rel in ["mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/bab1.xhtml", "OEBPS/bab2.xhtml", "OEBPS/bab3.xhtml", "OEBPS/bab4.xhtml"] {
+            let p = rel.split('/').fold(dir.clone(), |d, s| d.join(s));
+            println!("cargo:rerun-if-changed={}", p.display());
+            if let Ok(b) = std::fs::read(&p) {
+                parts.push((rel.to_string(), b));
+            }
+        }
+        if parts.len() == 7 {
+            add_file(&mut builder, &mut files, "benih.epu".into(), zip_epub(&parts));
+        }
+    }
+
+    // CHIP-8: the emulator's two original programs (assets/chip8: sources +
+    // the bytes scripts/chip8asm.py assembled from them)
+    for name in ["TANGKAP.CH8", "DAUN.CH8"] {
+        let p = manifest_dir().join("..").join("..").join("assets").join("chip8").join(name);
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, name.to_ascii_lowercase(), bytes);
+        }
     }
 
     // Gambar: sample photos in the formats the viewer decodes besides BMP
@@ -801,7 +841,7 @@ fn synth_song(title: &str, seed: u32, bpm: u32) -> Vec<u8> {
         rng
     };
     // a bell: inharmonic partials, each decaying at its own rate
-    let mut bell = |buf: &mut [f32], at: usize, hz: f32, amp: f32, len: f32| {
+    let bell = |buf: &mut [f32], at: usize, hz: f32, amp: f32, len: f32| {
         let partials = [(1.0f32, 1.0f32, 3.0f32), (2.76, 0.45, 6.0), (5.40, 0.18, 10.0), (0.5, 0.25, 2.0)];
         let end = (at + (len * RATE as f32) as usize).min(buf.len());
         for (i, s) in buf[at..end].iter_mut().enumerate() {
@@ -894,5 +934,229 @@ fn clr_assemblies() -> Vec<(String, Vec<u8>)> {
             }
         }
     }
+    out
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in data {
+        c ^= b as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+    }
+    !c
+}
+
+/// A ZIP archive for an EPUB: `mimetype` first and stored (the EPUB rule),
+/// everything else deflated.
+fn zip_epub(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (k, (name, data)) in parts.iter().enumerate() {
+        let stored = k == 0;
+        let body = if stored { data.clone() } else { miniz_oxide::deflate::compress_to_vec(data, 9) };
+        let crc = crc32(data);
+        let offset = out.len() as u32;
+        let method: u16 = if stored { 0 } else { 8 };
+        let mut head = Vec::new();
+        head.extend_from_slice(&[0x50, 0x4B, 0x03, 0x04, 20, 0, 0, 0]);
+        head.extend_from_slice(&method.to_le_bytes());
+        head.extend_from_slice(&[0, 0, 0x21, 0]); // time 0, date 1980-01-01
+        head.extend_from_slice(&crc.to_le_bytes());
+        head.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        head.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        head.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        head.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(&head);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&body);
+        central.extend_from_slice(&[0x50, 0x4B, 0x01, 0x02, 20, 0, 20, 0, 0, 0]);
+        central.extend_from_slice(&method.to_le_bytes());
+        central.extend_from_slice(&[0, 0, 0x21, 0]);
+        central.extend_from_slice(&crc.to_le_bytes());
+        central.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        central.extend_from_slice(&[0; 12]); // extra, comment, disk, internal attrs, external attrs (4)
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let cd_offset = out.len() as u32;
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0]);
+    out.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    out.extend_from_slice(&cd_offset.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// "Fajar di Kebun Raya": the sun rises over rolling hills, a leaf drifts
+/// down; 320x180, 10 frames per second, 12 s, with the first 12 s of a
+/// synthesized piece as 16 kHz mono PCM. MJPEG frames + PCM chunks in AVI.
+fn synth_video() -> Vec<u8> {
+    const W: usize = 320;
+    const H: usize = 180;
+    const FPS: usize = 10;
+    const FRAMES: usize = 120;
+    const RATE: usize = 16_000;
+    // the audio: the PCM data of a synthesized song
+    let song = synth_song("Fajar", 41, 84);
+    let data_at = song.windows(4).position(|w| w == b"data").map(|p| p + 8).unwrap_or(44);
+    let pcm = &song[data_at..];
+    let per_frame = RATE / FPS * 2;
+    let mut chunks: Vec<(&[u8; 4], Vec<u8>)> = Vec::new();
+    let mut max_frame = 0usize;
+    for f in 0..FRAMES {
+        let t = f as f32 / FPS as f32;
+        let p = t / (FRAMES as f32 / FPS as f32); // 0..1 over the clip
+        let mut rgb = vec![0u8; W * H * 3];
+        let sun_x = 40.0 + p * 240.0;
+        let sun_y = 150.0 - (p * core::f32::consts::PI).sin() * 110.0;
+        let leaf_x = 250.0 - p * 160.0 + (t * 2.2).sin() * 18.0;
+        let leaf_y = -10.0 + p * 170.0;
+        for y in 0..H {
+            for x in 0..W {
+                let (fx, fy) = (x as f32, y as f32);
+                // sky: dawn (rose) to morning (blue)
+                let k = fy / H as f32;
+                let (mut r, mut g, mut b) = (
+                    (235.0 - p * 120.0) * (1.0 - k) + 250.0 * k,
+                    (150.0 + p * 40.0) * (1.0 - k) + (200.0 + p * 30.0) * k,
+                    (160.0 + p * 70.0) * (1.0 - k) + 170.0 * k,
+                );
+                // the sun with a glow
+                let d = ((fx - sun_x).powi(2) + (fy - sun_y).powi(2)).sqrt();
+                if d < 18.0 {
+                    r = 255.0;
+                    g = 230.0;
+                    b = 140.0;
+                } else if d < 60.0 {
+                    let a = (60.0 - d) / 42.0 * 0.5;
+                    r += (255.0 - r) * a;
+                    g += (220.0 - g) * a;
+                    b += (150.0 - b) * a;
+                }
+                // two rows of hills
+                let far = 120.0 + (fx * 0.02 + 1.0).sin() * 12.0 + (fx * 0.05).sin() * 5.0;
+                let near = 140.0 + (fx * 0.013 + 2.5).sin() * 16.0;
+                if fy > near {
+                    let s = 0.7 + 0.3 * (1.0 - (fy - near) / 60.0).max(0.0);
+                    r = 50.0 * s;
+                    g = (110.0 + p * 30.0) * s;
+                    b = 55.0 * s;
+                } else if fy > far {
+                    r = 80.0;
+                    g = 120.0 + p * 20.0;
+                    b = 95.0;
+                }
+                // the leaf: a tilted ellipse
+                let (lx, ly) = (fx - leaf_x, fy - leaf_y);
+                let a = (t * 1.7).sin() * 0.8;
+                let (u, v) = (lx * a.cos() + ly * a.sin(), -lx * a.sin() + ly * a.cos());
+                if (u / 9.0).powi(2) + (v / 4.0).powi(2) < 1.0 {
+                    r = 120.0;
+                    g = 170.0;
+                    b = 60.0;
+                }
+                let i = (y * W + x) * 3;
+                rgb[i] = r.clamp(0.0, 255.0) as u8;
+                rgb[i + 1] = g.clamp(0.0, 255.0) as u8;
+                rgb[i + 2] = b.clamp(0.0, 255.0) as u8;
+            }
+        }
+        let mut jpeg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpeg, 80).encode(&rgb, W as u16, H as u16, jpeg_encoder::ColorType::Rgb).expect("jpeg encode");
+        max_frame = max_frame.max(jpeg.len());
+        chunks.push((b"00dc", jpeg));
+        let a0 = (f * per_frame).min(pcm.len());
+        let a1 = ((f + 1) * per_frame).min(pcm.len());
+        chunks.push((b"01wb", pcm[a0..a1].to_vec()));
+    }
+    fn le16(v: u16) -> [u8; 2] {
+        v.to_le_bytes()
+    }
+    fn le32(v: u32) -> [u8; 4] {
+        v.to_le_bytes()
+    }
+    fn list(kind: &[u8; 4], body: Vec<u8>) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(b"LIST");
+        o.extend_from_slice(&le32(body.len() as u32 + 4));
+        o.extend_from_slice(kind);
+        o.extend_from_slice(&body);
+        o
+    }
+    fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(id);
+        o.extend_from_slice(&le32(body.len() as u32));
+        o.extend_from_slice(body);
+        if body.len() % 2 == 1 {
+            o.push(0);
+        }
+        o
+    }
+    fn strh(kind: &[u8; 4], handler: &[u8; 4], scale: u32, rate: u32, length: u32, buf: u32, sample: u32) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(kind);
+        o.extend_from_slice(handler);
+        for v in [0u32, 0, 0, scale, rate, 0, length, buf, u32::MAX, sample] {
+            o.extend_from_slice(&le32(v));
+        }
+        o.extend_from_slice(&[0u8; 8]); // rcFrame
+        o
+    }
+    let mut avih = Vec::new();
+    for v in [1_000_000 / FPS as u32, 200_000, 0, 0x10, FRAMES as u32, 0, 2, max_frame as u32, W as u32, H as u32, 0, 0, 0, 0] {
+        avih.extend_from_slice(&le32(v));
+    }
+    let mut vf = Vec::new(); // BITMAPINFOHEADER
+    vf.extend_from_slice(&le32(40));
+    vf.extend_from_slice(&le32(W as u32));
+    vf.extend_from_slice(&le32(H as u32));
+    vf.extend_from_slice(&le16(1));
+    vf.extend_from_slice(&le16(24));
+    vf.extend_from_slice(b"MJPG");
+    vf.extend_from_slice(&le32((W * H * 3) as u32));
+    vf.extend_from_slice(&[0u8; 16]);
+    let mut af = Vec::new(); // WAVEFORMATEX (PCM)
+    af.extend_from_slice(&le16(1));
+    af.extend_from_slice(&le16(1));
+    af.extend_from_slice(&le32(RATE as u32));
+    af.extend_from_slice(&le32(RATE as u32 * 2));
+    af.extend_from_slice(&le16(2));
+    af.extend_from_slice(&le16(16));
+    let mut strl_v = chunk(b"strh", &strh(b"vids", b"MJPG", 1, FPS as u32, FRAMES as u32, max_frame as u32, 0));
+    strl_v.extend_from_slice(&chunk(b"strf", &vf));
+    let mut strl_a = chunk(b"strh", &strh(b"auds", &[0; 4], 1, RATE as u32, (FRAMES * RATE / FPS) as u32, per_frame as u32, 2));
+    strl_a.extend_from_slice(&chunk(b"strf", &af));
+    let mut hdrl = chunk(b"avih", &avih);
+    hdrl.extend_from_slice(&list(b"strl", strl_v));
+    hdrl.extend_from_slice(&list(b"strl", strl_a));
+    // movi + idx1 (offsets from the 'movi' fourcc)
+    let mut movi = Vec::new();
+    let mut idx = Vec::new();
+    for (id, body) in &chunks {
+        let off = movi.len() as u32 + 4;
+        idx.extend_from_slice(*id);
+        idx.extend_from_slice(&le32(if &id[..] == b"00dc" { 0x10 } else { 0 }));
+        idx.extend_from_slice(&le32(off));
+        idx.extend_from_slice(&le32(body.len() as u32));
+        movi.extend_from_slice(&chunk(id, body));
+    }
+    let mut body = Vec::new();
+    body.extend_from_slice(b"AVI ");
+    body.extend_from_slice(&list(b"hdrl", hdrl));
+    let info = chunk(b"INAM", b"Fajar di Kebun Raya\0");
+    body.extend_from_slice(&list(b"INFO", info));
+    body.extend_from_slice(&list(b"movi", movi));
+    body.extend_from_slice(&chunk(b"idx1", &idx));
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&le32(body.len() as u32));
+    out.extend_from_slice(&body);
     out
 }

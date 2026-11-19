@@ -155,6 +155,8 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::AUDIO_APP_VOLUME
             | sysno::TCP_OP
             | sysno::DNS_RESOLVE
+            | sysno::IDLE_INHIBIT
+            | sysno::CLIPBOARD
     )
 }
 
@@ -331,6 +333,11 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::AUDIO_STAT => sys_audio_stat(a0),
         sysno::AUDIO_WRITE => sys_audio_write(a0, a1, a2),
         sysno::TCP_OP => sys_tcp_op(a0, a1, a2),
+        sysno::CLIPBOARD => sys_clipboard(a0, a1, a2),
+        sysno::IDLE_INHIBIT => {
+            crate::process::set_idle_inhibit(crate::aspace::current_id(), a0 != 0);
+            0
+        }
         sysno::DNS_RESOLVE => match read_user_path_checked(a0) {
             Some(name) => match crate::dns::resolve(&name) {
                 Ok(ip) => u32::from_be_bytes(ip) as u64,
@@ -640,6 +647,38 @@ fn sys_fs_read(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
         unsafe { core::ptr::write_volatile(dst.add(i), data[i]) };
     }
     n as u64
+}
+
+/// CLIPBOARD: GET copies the text into the caller's buffer (returns its full
+/// length), SET takes the caller's text, SEQ = the change counter.
+fn sys_clipboard(op: u64, ptr: u64, len: u64) -> u64 {
+    use bz_abi::clipboard_op;
+    match op {
+        clipboard_op::GET => {
+            let text = crate::clipboard::get();
+            let n = (text.len() as u64).min(len);
+            if n > 0 {
+                if !user_write(ptr, n) {
+                    return syserr::INVAL;
+                }
+                let dst = ptr as *mut u8;
+                for (i, b) in text.as_bytes()[..n as usize].iter().enumerate() {
+                    unsafe { core::ptr::write_volatile(dst.add(i), *b) };
+                }
+            }
+            text.len() as u64
+        }
+        clipboard_op::SET => {
+            if len > clipboard_op::MAX_BYTES || (len > 0 && !user_read(ptr, len)) {
+                return syserr::INVAL;
+            }
+            let bytes = copy_user_bytes(ptr, len as usize);
+            crate::clipboard::set(&alloc::string::String::from_utf8_lossy(&bytes));
+            0
+        }
+        clipboard_op::SEQ => crate::clipboard::seq(),
+        _ => syserr::INVAL,
+    }
 }
 
 /// SHELL_RUN: one command line through the built-in shell; its output goes to

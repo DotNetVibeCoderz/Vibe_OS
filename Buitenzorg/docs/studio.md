@@ -31,6 +31,8 @@ read its output and its errors — without leaving the desktop. Open it from the
 | Ctrl+S / Ctrl+W | save / close the tab |
 | Ctrl+N | new project (template picker) |
 | Ctrl+Z / Ctrl+Y | undo / redo (typing is grouped per word) |
+| Shift + arrows / Home / End / PgUp / PgDn, a mouse drag, Ctrl+A | select text |
+| Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste through the system clipboard (shared with every app and the Terminal); with nothing selected Ctrl+C / X take the whole line |
 | Ctrl+D / Ctrl+K | duplicate / delete the line |
 | Ctrl+F / Ctrl+R | find / replace (bar above the editor; Enter = next) |
 | Ctrl+G | go to line |
@@ -113,15 +115,14 @@ starts `CLRHOST.ELF FILE --bzdebug LINES REPORT`; Studio polls
 - C# is not compiled inside the OS: the C# templates explain the build on a PC
   (bflat / `dotnet build`, `bz pack`, deploy).
 - The debugger replays a recorded run (no changing values mid-run); a UI
-  script's stops are shown after its window closes. No mouse selection or
-  clipboard in the editor.
+  script's stops are shown after its window closes.
 - Large files: the editor keeps lines in memory and draws only the visible
   ones, but it runs in the RustCLR interpreter — files of a few thousand lines
   stay usable.
 
 Implementation: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
 `Syntax.cs`, `Templates.cs`, `Debugger.cs`); runs through syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 32 checks on the device (it runs every runnable template, the UI ones as headless processes, and debugs a UI script), part of
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 35 checks on the device (it runs every runnable template, the UI ones as headless processes, and debugs a UI script), part of
 `Managed --selftest` at boot.
 
 ---

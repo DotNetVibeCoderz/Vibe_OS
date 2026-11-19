@@ -110,8 +110,8 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
-    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "bg", "saver", "cursor", "anim", "tone",
+    "dmesg", "lspci", "lsusb", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "bg", "saver", "cursor", "anim", "tone",
     "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
 ];
 
@@ -136,6 +136,38 @@ enum Tok {
 /// Expand `$...` at `chars[i]` (a '$') into `out`; returns the index after it.
 fn expand_var(chars: &[char], i: usize, out: &mut String) -> usize {
     let mut j = i + 1;
+    // $((expr)) arithmetic, $(command) substitution
+    if j < chars.len() && chars[j] == '(' {
+        let Some(close) = find_close(chars, j) else {
+            out.push('$');
+            return i + 1;
+        };
+        let inner: String = chars[j + 1..close].iter().collect();
+        if inner.starts_with('(') {
+            // $1, $X, $(cmd) inside the expression first; bare names stay for arith
+            let ichars: Vec<char> = inner.chars().collect();
+            let mut expanded = String::new();
+            let mut k = 0;
+            while k < ichars.len() {
+                if ichars[k] == '$' {
+                    k = expand_var(&ichars, k, &mut expanded);
+                } else {
+                    expanded.push(ichars[k]);
+                    k += 1;
+                }
+            }
+            match arith(&expanded) {
+                Ok(v) => out.push_str(&v.to_string()),
+                Err(e) => {
+                    out.push_str("0");
+                    ARITH_ERROR.lock().get_or_insert(e);
+                }
+            }
+        } else {
+            out.push_str(&command_subst(&inner));
+        }
+        return close + 1;
+    }
     if j < chars.len() && chars[j] == '?' {
         out.push(if STATE.lock().ok { '0' } else { '1' });
         return j + 1;
@@ -172,6 +204,194 @@ fn expand_var(chars: &[char], i: usize, out: &mut String) -> usize {
     }
     out.push_str(&var(&name).unwrap_or_default());
     j
+}
+
+/// An arithmetic error inside `$((...))` (expansion cannot fail; `run`
+/// reports it after tokenizing).
+static ARITH_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// Nesting of `$(...)` (a substitution runs a whole command line).
+static SUBST_DEPTH: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Index of the `)` matching the `(` at `open`, skipping quotes and nested parentheses.
+fn find_close(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut quote: Option<char> = None;
+    let mut i = open;
+    while i < chars.len() {
+        let c = chars[i];
+        match quote {
+            Some(q) => {
+                if c == '\\' && q == '"' {
+                    i += 1;
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '\\' => i += 1,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `$(command)`: run the line and take its output (lines joined by newlines,
+/// trailing ones dropped). Nested at most 8 deep.
+fn command_subst(line: &str) -> String {
+    use core::sync::atomic::Ordering;
+    if SUBST_DEPTH.fetch_add(1, Ordering::SeqCst) >= 8 {
+        SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst);
+        return String::new();
+    }
+    let (lines, _) = run(line);
+    SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    let mut s = lines.join("\n");
+    while s.ends_with('\n') {
+        s.pop();
+    }
+    s
+}
+
+/// `$((expr))`: integer arithmetic with `+ - * / %`, comparisons
+/// (`< <= > >= == !=` give 1 or 0), `&&` `||` `!`, parentheses, numbers and
+/// variables (`$X` or a bare `X`; unset = 0).
+pub fn arith(expr: &str) -> Result<i64, String> {
+    struct P<'a> {
+        s: &'a [u8],
+        i: usize,
+    }
+    impl P<'_> {
+        fn ws(&mut self) {
+            while self.i < self.s.len() && (self.s[self.i] as char).is_whitespace() {
+                self.i += 1;
+            }
+        }
+        fn eat(&mut self, t: &str) -> bool {
+            self.ws();
+            if self.s[self.i..].starts_with(t.as_bytes()) {
+                self.i += t.len();
+                true
+            } else {
+                false
+            }
+        }
+        fn or(&mut self) -> Result<i64, String> {
+            let mut v = self.and()?;
+            while self.eat("||") {
+                let r = self.and()?;
+                v = (v != 0 || r != 0) as i64;
+            }
+            Ok(v)
+        }
+        fn and(&mut self) -> Result<i64, String> {
+            let mut v = self.cmp()?;
+            while self.eat("&&") {
+                let r = self.cmp()?;
+                v = (v != 0 && r != 0) as i64;
+            }
+            Ok(v)
+        }
+        fn cmp(&mut self) -> Result<i64, String> {
+            let v = self.sum()?;
+            for op in ["<=", ">=", "==", "!=", "<", ">"] {
+                if self.eat(op) {
+                    let r = self.sum()?;
+                    return Ok(match op {
+                        "<=" => v <= r,
+                        ">=" => v >= r,
+                        "==" => v == r,
+                        "!=" => v != r,
+                        "<" => v < r,
+                        _ => v > r,
+                    } as i64);
+                }
+            }
+            Ok(v)
+        }
+        fn sum(&mut self) -> Result<i64, String> {
+            let mut v = self.term()?;
+            loop {
+                if self.eat("+") {
+                    v = v.wrapping_add(self.term()?);
+                } else if self.eat("-") {
+                    v = v.wrapping_sub(self.term()?);
+                } else {
+                    return Ok(v);
+                }
+            }
+        }
+        fn term(&mut self) -> Result<i64, String> {
+            let mut v = self.unary()?;
+            loop {
+                let op = if self.eat("*") {
+                    '*'
+                } else if self.eat("/") {
+                    '/'
+                } else if self.eat("%") {
+                    '%'
+                } else {
+                    return Ok(v);
+                };
+                let r = self.unary()?;
+                v = match op {
+                    '*' => v.wrapping_mul(r),
+                    _ if r == 0 => return Err(String::from("pembagian dengan nol")),
+                    '/' => v.wrapping_div(r),
+                    _ => v.wrapping_rem(r),
+                };
+            }
+        }
+        fn unary(&mut self) -> Result<i64, String> {
+            if self.eat("-") {
+                return Ok(self.unary()?.wrapping_neg());
+            }
+            if self.eat("+") {
+                return self.unary();
+            }
+            if self.eat("!") {
+                return Ok((self.unary()? == 0) as i64);
+            }
+            if self.eat("(") {
+                let v = self.or()?;
+                if !self.eat(")") {
+                    return Err(String::from("')' hilang"));
+                }
+                return Ok(v);
+            }
+            self.ws();
+            let start = self.i;
+            let _ = self.eat("$");
+            let name_start = self.i;
+            while self.i < self.s.len() && ((self.s[self.i] as char).is_ascii_alphanumeric() || self.s[self.i] == b'_') {
+                self.i += 1;
+            }
+            let word = core::str::from_utf8(&self.s[name_start..self.i]).unwrap_or("");
+            if word.is_empty() {
+                return Err(format!("angka diharapkan di '{}'", core::str::from_utf8(&self.s[start..]).unwrap_or("")));
+            }
+            if word.as_bytes()[0].is_ascii_digit() {
+                return word.parse::<i64>().map_err(|_| format!("bukan angka: {}", word));
+            }
+            Ok(var(word).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0))
+        }
+    }
+    let mut p = P { s: expr.as_bytes(), i: 0 };
+    let v = p.or()?;
+    p.ws();
+    if p.i != p.s.len() {
+        return Err(format!("sisa tak terbaca: '{}'", &expr[p.i..]));
+    }
+    Ok(v)
 }
 
 /// Expand a glob word against its folder; the word itself when nothing matches.
@@ -276,6 +496,19 @@ fn tokenize(line: &str) -> Result<Vec<Tok>, String> {
                 i += 2;
                 continue;
             }
+            // unquoted $(command): its output splits into words (`for f in $(ls)`)
+            '$' if next == Some('(') && chars.get(i + 2) != Some(&'(') => {
+                let mut sub = String::new();
+                i = expand_var(&chars, i, &mut sub);
+                for (k, w) in sub.split_whitespace().enumerate() {
+                    if k > 0 {
+                        flush(&mut toks, &mut cur, &mut has, &mut glob);
+                    }
+                    cur.push_str(w);
+                    has = true;
+                }
+                continue;
+            }
             '$' => {
                 has = true;
                 i = expand_var(&chars, i, &mut cur);
@@ -337,10 +570,39 @@ fn split_commands(line: &str) -> Result<Vec<(String, &'static str)>, String> {
     let mut cur = String::new();
     let mut connector = ";";
     let mut quote: Option<char> = None;
+    // inside $( ... ): its ; && || belong to the inner command line
+    let mut depth = 0usize;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
+        if quote.is_none() && depth > 0 {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                '\\' => {
+                    cur.push(c);
+                    if let Some(n) = next {
+                        cur.push(n);
+                        i += 1;
+                    }
+                    i += 1;
+                    continue;
+                }
+                '\'' | '"' => quote = Some(c),
+                _ => {}
+            }
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if quote.is_none() && c == '$' && next == Some('(') {
+            depth = 1;
+            cur.push(c);
+            cur.push('(');
+            i += 2;
+            continue;
+        }
         match quote {
             Some(q) => {
                 if c == '\\' && q == '"' && next.is_some() {
@@ -394,6 +656,12 @@ fn split_commands(line: &str) -> Result<Vec<(String, &'static str)>, String> {
 
 /// Run one command line; returns (output lines, effect).
 pub fn run(line: &str) -> (Vec<String>, Effect) {
+    // `name() { ...; }` (and whatever follows it): the script engine parses it
+    if crate::bzsh::defines_function(line) {
+        let (out, effect, ok) = crate::bzsh::run_text(line, vec![String::from("sh")]);
+        STATE.lock().ok = ok;
+        return (out, effect);
+    }
     let commands = match split_commands(line) {
         Ok(c) => c,
         Err(e) => {
@@ -425,6 +693,12 @@ pub fn run(line: &str) -> (Vec<String>, Effect) {
                 continue;
             }
         };
+        if let Some(e) = ARITH_ERROR.lock().take() {
+            out.push(format!("sh: $((...)): {}", e));
+            ok = false;
+            STATE.lock().ok = false;
+            continue;
+        }
         if toks.is_empty() {
             continue;
         }
@@ -522,6 +796,10 @@ fn run_pipeline(toks: &[Tok]) -> (Vec<String>, Effect, bool) {
 /// Run one command with its arguments (and the pipe's input, if any).
 fn exec(argv: &[String], stdin: Option<&[String]>) -> (Vec<String>, Effect, bool) {
     let Some(name) = argv.first() else { return (Vec::new(), Effect::None, true) };
+    // shell functions come first, like in other shells
+    if crate::bzsh::is_function(name) {
+        return crate::bzsh::call_function(name, &argv[1..]);
+    }
     if crate::coreutils::handles(name) {
         let (lines, ok) = crate::coreutils::run(argv, stdin);
         return (lines, Effect::None, ok);
@@ -811,11 +1089,17 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "mounts" => (vfs::mounts(), Effect::None),
         "dmesg" | "log" => (dmesg(args.first().copied()), Effect::None),
         "lspci" => (lspci(), Effect::None),
+        "lsusb" => (crate::usb::describe(), Effect::None),
+        #[cfg(target_arch = "aarch64")]
+        "pi" => (crate::platform::virt::tryboot::command(&args), Effect::None),
         "gpu" => (gpu_cmd(args.first().copied()), Effect::None),
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
         "ps" => (ps_cmd(), Effect::None),
+        "free" => (free_cmd(), Effect::None),
+        "uptime" => (vec![uptime_line()], Effect::None),
+        "top" => (top_cmd(), Effect::None),
         "crash" | "crashes" => (crash_cmd(args.first().copied()), Effect::None),
         "dbg" | "debug" => (crate::debug::command(&args), Effect::None),
         "gdbserver" => (crate::gdbstub::command(&args), Effect::None),
@@ -926,7 +1210,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             {
                 let v = crate::platform::virt::v3d::version();
                 if v != 0 {
-                    out.push(format!("GPU Raspberry Pi: V3D {}.{} terdeteksi (render lewat V3D belum ada -- rasterizer software)", v / 10, v % 10));
+                    out.push(format!("GPU Raspberry Pi: V3D {}.{} terdeteksi (3D tetap rasterizer software; uji job GPU: gpu v3d)", v / 10, v % 10));
                 }
             }
             let (c, m, t, used, draws, tris, px) = crate::gfx3d::summary();
@@ -976,7 +1260,14 @@ fn gpu_info() -> Vec<String> {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        vec![String::from("gpu: PCs only (Raspberry Pi: V3D, see the boot log)")]
+        #[cfg(target_arch = "aarch64")]
+        {
+            let v = crate::platform::virt::v3d::version();
+            if v != 0 {
+                return vec![format!("gpu: V3D {}.{} (Raspberry Pi 4) -- 'gpu v3d' runs GPU jobs (MMU + render control list)", v / 10, v % 10)];
+            }
+        }
+        vec![String::from("gpu: no GPU driver here (Intel graphics on PCs, V3D on a Raspberry Pi 4)")]
     }
 }
 
@@ -1003,7 +1294,9 @@ fn gpu_cmd(arg: Option<&str>) -> Vec<String> {
     {
         match arg {
             None => gpu_info(),
-            Some(_) => vec![String::from("gpu blit/on/cpu: PCs with Intel graphics only")],
+            #[cfg(target_arch = "aarch64")]
+            Some("v3d") => crate::platform::virt::v3d::self_test(),
+            Some(_) => vec![String::from("gpu blit/render/on/cpu: PCs with Intel graphics; 'gpu v3d' on a Raspberry Pi 4")],
         }
     }
 }
@@ -1060,6 +1353,8 @@ fn help_lines() -> Vec<String> {
      "  pwd               direktori sekarang",
      "  dmesg [kata]      log kernel (40 baris terakhir, opsional disaring)",
      "  lspci             perangkat PCI (kontroler disk/USB/jaringan)",
+     "  lsusb             perangkat USB (colok/cabut terdeteksi otomatis)",
+     "  pi [tryboot|promote]  Raspberry Pi: coba kernel baru (/disk/KERNTRY.IMG) sekali",
      "  gpu [blit|on|cpu] GPU; blit = uji blitter Intel, on/cpu = tampilkan lewat GPU/CPU",
      "  gpu render        uji render engine Intel (3D, tahap 3a)",
      "  netup             coba lagi menyalakan jaringan (DHCP)",
@@ -1077,6 +1372,8 @@ fn help_lines() -> Vec<String> {
      "  run <app> [arg..] jalankan app sebagai proses (xox, paint, taskmgr)",
      "  run <app>.dll     app C# managed (RustCLR), mis. 'run hellogui'",
      "  ps                daftar proses (task kernel + app)",
+     "  top               proses menurut waktu CPU + memori + uptime",
+     "  free / uptime     memori (RAM, frame, heap kernel) / lama menyala",
      "  cpu [on|off]      daftar CPU; on/off = proses ring-3 boleh jalan di AP",
      "  echo <teks> > f   tulis teks ke file (>> = tambahkan); /disk persisten",
      "  rm <file>         hapus file",
@@ -1137,7 +1434,41 @@ pub fn resolve(arg: Option<&str>) -> String {
 /// `echo text`, `echo text > FILE` (create/overwrite) and `echo text >> FILE`
 /// (append). Only echo redirects for now; general pipes/redirection are on the
 /// Developer Workstation roadmap.
+/// `echo -e`: backslash escapes -- \n \t \\ and \e / \033 (ANSI colours).
+fn echo_escapes(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push_str("    "),
+            Some('e') => out.push('\u{1b}'),
+            Some('0') if it.peek() == Some(&'3') => {
+                it.next();
+                if it.peek() == Some(&'3') {
+                    it.next();
+                }
+                out.push('\u{1b}');
+            }
+            Some('\\') => out.push('\\'),
+            Some(o) => {
+                out.push('\\');
+                out.push(o);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 fn echo(args: &[&str]) -> Vec<String> {
+    if args.first() == Some(&"-e") {
+        return echo_escapes(&args[1..].join(" ")).split('\n').map(String::from).collect();
+    }
     let pos = args.iter().position(|a| *a == ">" || *a == ">>");
     let Some(pos) = pos else {
         return vec![args.join(" ")];
@@ -1329,6 +1660,72 @@ fn ps_cmd() -> Vec<String> {
         let kind = if p.kind == 1 { "app" } else { "kernel" };
         out.push(format!("{:>5}  {:<6} {:>5}  {}", p.pid, kind, p.cpu_ticks, name));
     }
+    out
+}
+
+/// Processes as `ps` sees them: (pid, kind, cpu ticks, state, name).
+fn processes() -> Vec<(u64, u64, u64, u64, String)> {
+    let mut buf: Vec<bz_abi::ProcInfo> = Vec::new();
+    buf.resize_with(64, || unsafe { core::mem::zeroed() });
+    let n = crate::process::list(&mut buf);
+    buf[..n]
+        .iter()
+        .map(|p| {
+            let len = p.name.iter().position(|&b| b == 0).unwrap_or(p.name.len());
+            (p.pid, p.kind, p.cpu_ticks, p.state, String::from(core::str::from_utf8(&p.name[..len]).unwrap_or("?")))
+        })
+        .collect()
+}
+
+/// `uptime`: how long the system has run, how many processes, CPUs.
+fn uptime_line() -> String {
+    let s = crate::arch::cpu::nanos() / 1_000_000_000;
+    let procs = processes();
+    let apps = procs.iter().filter(|p| p.1 == 1).count();
+    format!(
+        "menyala {}:{:02}:{:02}, {} task kernel + {} app, {} CPU",
+        s / 3600,
+        s / 60 % 60,
+        s % 60,
+        procs.len() - apps,
+        apps,
+        crate::smp::cpus_online().max(1)
+    )
+}
+
+/// `free`: physical memory, frames in use, the kernel heap.
+fn free_cmd() -> Vec<String> {
+    let total_mib = crate::memory::total_usable_mib();
+    let frames = crate::memory::frames_in_use();
+    let used_mib = frames * 4096 / (1024 * 1024);
+    let (heap_used, heap_total) = crate::allocator::stats();
+    vec![
+        String::from("               total        dipakai      bebas"),
+        format!("RAM (MiB)  {:>9}    {:>9}  {:>9}   ({} frame 4 KiB dipakai program + DMA)", total_mib, used_mib, total_mib.saturating_sub(used_mib), frames),
+        format!("heap (KiB) {:>9}    {:>9}  {:>9}   (heap kernel)", heap_total / 1024, heap_used / 1024, (heap_total - heap_used) / 1024),
+    ]
+}
+
+/// `top`: one snapshot -- uptime, memory, and processes by CPU time used.
+fn top_cmd() -> Vec<String> {
+    let mut out = vec![uptime_line()];
+    out.extend(free_cmd().into_iter().skip(1));
+    let mut procs = processes();
+    let total: u64 = procs.iter().map(|p| p.2).sum::<u64>().max(1);
+    procs.sort_by(|a, b| b.2.cmp(&a.2));
+    out.push(String::from("  PID  JENIS    CPU%   CPU   NAMA"));
+    for (pid, kind, cpu, _state, name) in procs.iter().take(20) {
+        out.push(format!(
+            "{:>5}  {:<6} {:>4}.{}  {:>5}   {}",
+            pid,
+            if *kind == 1 { "app" } else { "kernel" },
+            cpu * 100 / total,
+            cpu * 1000 / total % 10,
+            cpu,
+            name
+        ));
+    }
+    out.push(String::from("(CPU% = bagian waktu CPU sejak boot; 'kill PID' menghentikan app)"));
     out
 }
 
@@ -1922,6 +2319,7 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
         }
         Some("repo") | Some("update") | Some("upgrade") => (crate::repo::command(args), Effect::None),
         Some("buildsrv") => (crate::rbuild::command(args), Effect::None),
+        Some("trust") => (crate::bzpkg::trust_command(&args[1..]), Effect::None),
         Some("rollback") => (
             match args.get(1) {
                 Some(n) => match crate::bzpkg::rollback(n) {
@@ -2011,8 +2409,8 @@ fn pkg_install(name: Option<&str>) -> Vec<String> {
     };
     if is_package_file(name) {
         return match crate::bzpkg::install_file(&resolve(Some(name))) {
-            Ok((n, v, Some(old))) => vec![format!("diperbarui: {} {} -> {}", n, old, v)],
-            Ok((n, v, None)) => vec![format!("terpasang: {} v{} (dari berkas; jalankan '{}')", n, v, n)],
+            Ok((n, v, Some(old))) => vec![format!("diperbarui: {} {} -> {}", n, old, v), format!("  {}", crate::bzpkg::last_signer())],
+            Ok((n, v, None)) => vec![format!("terpasang: {} v{} (dari berkas; jalankan '{}')", n, v, n), format!("  {}", crate::bzpkg::last_signer())],
             Err(e) => vec![format!("bz install: {}", e)],
         };
     }
@@ -2040,4 +2438,70 @@ fn pkg_remove(name: Option<&str>) -> Vec<String> {
         Ok(()) => vec![format!("dihapus: {}", name)],
         Err(e) => vec![format!("bz remove: {}: {}", name, e)],
     }
+}
+
+/// Shell language self-test (self-test boot, every kernel): `$((...))`,
+/// `$(...)` with word splitting, functions with arguments, recursion through
+/// substitution, `return`, an arithmetic error, `free` / `uptime` / `top`.
+pub fn script_self_test() -> bool {
+    let cases: [(&str, &str); 9] = [
+        ("echo $((2+3*4))", "14"),
+        ("echo $(( (7 - 1) / 4 % 5 ))", "1"),
+        ("BZT_X=5; echo $((BZT_X * BZT_X + $BZT_X)) $((BZT_X > 3 && 2 != 2))", "30 0"),
+        ("echo hasil:$(echo dalam)", "hasil:dalam"),
+        ("bzt_kuadrat() { echo $(( $1 * $1 )); }; bzt_kuadrat 7", "49"),
+        ("bzt_fakt() { if [ $1 -le 1 ]; then echo 1; return 0; fi; echo $(( $1 * $(bzt_fakt $(( $1 - 1 ))) )); }; bzt_fakt 5", "120"),
+        ("bzt_salam() { echo halo $1 dari $0 ($# argumen); }; bzt_salam dunia", "halo dunia dari bzt_salam (1 argumen)"),
+        ("echo $(echo a; echo b) | wc -w", "2"),
+        ("for w in $(echo x y z); do echo -$w-; done", "-x-|-y-|-z-"),
+    ];
+    let mut failed = 0;
+    for (line, want) in cases {
+        let got = if line.starts_with("for ") {
+            crate::bzsh::run_text(line, vec![String::from("sh")]).0.join("|")
+        } else {
+            run(line).0.join("|")
+        };
+        let got = String::from(got.trim());
+        if got != want {
+            failed += 1;
+            crate::println!("[shell] self-test FAILED: {} -> '{}' (want '{}')", line, got, want);
+        }
+    }
+    // an arithmetic error is reported and fails the command
+    let (err, _) = run("echo $((1/0))");
+    let err_ok = err.first().is_some_and(|l| l.contains("pembagian dengan nol")) && !last_ok();
+    if !err_ok {
+        failed += 1;
+        crate::println!("[shell] self-test FAILED: $((1/0)) -> {:?}", err);
+    }
+    let sys_ok = run("uptime").0.first().is_some_and(|l| l.starts_with("menyala"))
+        && run("free").0.len() == 3
+        && run("top").0.iter().any(|l| l.contains("PID"));
+    if !sys_ok {
+        failed += 1;
+        crate::println!("[shell] self-test FAILED: free / uptime / top");
+    }
+    // echo -e: escapes, an ANSI colour code survives for the terminal to draw
+    if run("echo -e 'a\\tb\\e[31mc'").0.join("|") != "a    b\u{1b}[31mc" {
+        failed += 1;
+        crate::println!("[shell] self-test FAILED: echo -e");
+    }
+    // the clipboard through a pipe and back (the user's clipboard is restored)
+    let saved = crate::clipboard::get();
+    let _ = run("echo baris-klip | clip");
+    let clip_ok = run("paste").0.join("|") == "baris-klip" && run("echo [$(paste)]").0.join("|") == "[baris-klip]";
+    crate::clipboard::set(&saved);
+    if !clip_ok {
+        failed += 1;
+        crate::println!("[shell] self-test FAILED: clip / paste");
+    }
+    for f in ["bzt_kuadrat", "bzt_fakt", "bzt_salam"] {
+        crate::bzsh::remove_function(f);
+    }
+    let _ = run("unset BZT_X");
+    if failed == 0 {
+        crate::println!("[kernel] MILESTONE: SHELL SCRIPT OK ($((arithmetic)), $(command) substitution + word splitting, functions + recursion + return, clip/paste, echo -e + ANSI colours, free/uptime/top)");
+    }
+    failed == 0
 }

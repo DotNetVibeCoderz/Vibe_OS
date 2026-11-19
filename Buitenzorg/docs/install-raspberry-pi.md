@@ -23,7 +23,8 @@ all four cores.
 | CPU cores | All four, started through the spin tables |
 | SD card as `/disk`: wallpaper, icons, apps | Yes: read and write, through the EMMC2 slot |
 | Typing from a PC over the serial cable | Yes: into the desktop terminal or the focused app |
-| USB keyboard and mouse | Yes: full-speed and high-speed devices; plug them in before power-on |
+| USB keyboard, mouse, USB sticks | Yes: full-speed and high-speed devices, also plugged in or pulled out while running (a stick is mounted at `/usb0`; `lsusb` lists them) -- hot-plug is verified under QEMU, a board test is pending |
+| GPU (V3D) | Powered and running GPU jobs: `gpu v3d` (MMU + render control list, verified on the board); 3D still draws in software |
 | Ethernet | Yes: an address from your router by DHCP |
 | Restart, shut down, sleep | Yes (shut down halts; the red LED stays on) |
 | Sound | Yes: the 3.5 mm jack and HDMI0 (a display that takes audio) |
@@ -149,8 +150,9 @@ The card holds both, and `config.txt` picks one.
 
 ## Limits
 
-- USB devices are found once, at power-on: a keyboard or mouse plugged in
-  later isn't seen until the next boot.
+- Hot-plug is checked every desktop-loop turn; a device plugged in takes a
+  moment (debounce + enumeration) before it works. A USB stick that is still
+  being written to when it is pulled out loses that write.
 - **Low-speed USB devices don't work yet.** Most keyboards and mice are
   full-speed and work; some cheap keyboards are low-speed, and behind the Pi's
   built-in USB hub those never send a key (the log shows `0 report(s)`). Use

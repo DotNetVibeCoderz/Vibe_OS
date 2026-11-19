@@ -31,6 +31,8 @@ desktop **Studio**, menu Mulai → Kantor → Studio, atau `run mstudio`.
 | Ctrl+S / Ctrl+W | simpan / tutup tab |
 | Ctrl+N | proyek baru (pilih template) |
 | Ctrl+Z / Ctrl+Y | urungkan / ulangi (ketikan dikelompokkan per kata) |
+| Shift + panah / Home / End / PgUp / PgDn, seret mouse, Ctrl+A | memilih teks |
+| Ctrl+C / Ctrl+X / Ctrl+V | salin / potong / tempel lewat papan klip sistem (dipakai bersama semua app dan Terminal); tanpa pilihan, Ctrl+C / X mengambil seluruh baris |
 | Ctrl+D / Ctrl+K | duplikat / hapus baris |
 | Ctrl+F / Ctrl+R | cari / ganti (bar di atas editor; Enter = berikutnya) |
 | Ctrl+G | ke baris |
@@ -115,14 +117,13 @@ laporannya ada.
 - C# belum dikompilasi di dalam OS: template C# menjelaskan build di PC
   (bflat / `dotnet build`, `bz pack`, deploy).
 - Debugger memutar ulang eksekusi yang direkam (tidak bisa mengubah nilai di
-  tengah jalan); henti skrip UI baru tampil setelah jendelanya ditutup. Belum
-  ada seleksi mouse atau clipboard di editor.
+  tengah jalan); henti skrip UI baru tampil setelah jendelanya ditutup.
 - Berkas besar: editor hanya menggambar baris yang terlihat, tetapi berjalan di
   interpreter RustCLR — berkas beberapa ribu baris masih nyaman.
 
 Implementasi: `userland/clr-apps/MStudio` (`Studio.cs`, `CodeEditor.cs`,
 `Syntax.cs`, `Templates.cs`, `Debugger.cs`); menjalankan lewat syscall **`SHELL_RUN` (58)** —
-`Buitenzorg.App.Shell.Run(line)`. Self-test: 32 pemeriksaan di perangkat (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless, dan men-debug satu skrip UI), bagian dari
+`Buitenzorg.App.Shell.Run(line)`. Self-test: 35 pemeriksaan di perangkat (menjalankan setiap template yang bisa dijalankan, yang ber-UI sebagai proses headless, dan men-debug satu skrip UI), bagian dari
 `Managed --selftest` saat boot.
 
 ---

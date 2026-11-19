@@ -602,6 +602,18 @@ public sealed partial class Studio
         st.W.SimulateKeys(Keys.Home.ToString() + Keys.Home.ToString() + "\t");
         c.That(ed.LineAt(0).StartsWith("    //"), "Tab inserts spaces (Tab reaches the editor)");
         st.W.SimulateKeys(((char)26).ToString());
+        // selection + the system clipboard (the user's clipboard is put back)
+        string savedClip = Buitenzorg.App.Clipboard.GetText();
+        ed.GoToLine(1);
+        string first = ed.LineAt(0);
+        st.W.SimulateKeys(Keys.End.ToString() + new string(Keys.ShiftLeft, 3));
+        c.Equal(first.Substring(first.Length - 3), ed.SelectedText, "Shift+Left selects in the editor");
+        st.W.SimulateKeys(Keys.CtrlC.ToString() + Keys.End + Keys.CtrlV);
+        c.Equal(first + first.Substring(first.Length - 3), ed.LineAt(0), "Ctrl+C / Ctrl+V copied the selection");
+        st.W.SimulateKeys(Keys.CtrlZ.ToString() + Keys.CtrlA + Keys.CtrlX);
+        c.That(ed.LineCount == 1 && ed.LineAt(0) == "" && Buitenzorg.App.Clipboard.GetText().StartsWith(first), "Ctrl+A, Ctrl+X cut everything to the clipboard");
+        st.W.SimulateKeys(Keys.CtrlZ.ToString());
+        Buitenzorg.App.Clipboard.SetText(savedClip);
         c.That(st.Current!.Dirty, "edits mark the tab unsaved");
         st.W.SimulateKeys(((char)19).ToString());   // Ctrl+S
         c.That(!st.Current.Dirty && Files.ReadAllText(dir + "/MAIN.JS") == ed.Text, "Ctrl+S saved the file");

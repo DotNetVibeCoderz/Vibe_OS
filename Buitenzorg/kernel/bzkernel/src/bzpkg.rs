@@ -13,6 +13,14 @@
 //! trailer:  32-byte SHA-256 of every byte before it
 //! ```
 //!
+//! **Signatures** (optional, 2026-11-19): a signed archive is the archive
+//! above followed by `"BZSG"`, the signer's 32-byte Ed25519 public key and a
+//! 64-byte Ed25519 signature over every byte of the archive (`bz pack
+//! --sign` on the host, key from `bz keygen`). An archive whose signature
+//! does not verify is always refused. `/disk/TRUST.CFG` lists trusted keys
+//! (`HEX NAME` lines) and `require=on` makes unsigned and untrusted packages
+//! refused (`bz trust ...`); without it they install with a note.
+//!
 //! On a FAT 8.3 volume the file is named `NAME.BZP` (the extension has three
 //! letters); `bz install ./NAME.BZP` (or any path) installs it. Every hash is
 //! checked before anything is written; files go to the root of `/disk`; a
@@ -53,6 +61,165 @@ pub struct Archive {
 }
 
 static STATE: Mutex<Option<Vec<Installed>>> = Mutex::new(None);
+
+// ---- signatures ---------------------------------------------------------------
+
+pub const TRUST_FILE: &str = "/disk/TRUST.CFG";
+const SIG_MAGIC: &[u8; 4] = b"BZSG";
+const SIG_LEN: usize = 4 + 32 + 64;
+/// Who signed the archive installed last (shown by `bz install`).
+static LAST_SIGNER: Mutex<String> = Mutex::new(String::new());
+
+/// Who signed a package.
+pub enum Signer {
+    Unsigned,
+    Trusted(String),
+    Untrusted([u8; 32]),
+}
+
+impl Signer {
+    pub fn describe(&self) -> String {
+        match self {
+            Signer::Unsigned => String::from("tidak bertanda tangan"),
+            Signer::Trusted(n) => format!("ditandatangani '{}' (terpercaya)", n),
+            Signer::Untrusted(k) => format!("ditandatangani kunci tak dikenal {} ('bz trust add' untuk mempercayainya)", hex(&k[..8])),
+        }
+    }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut k = [0u8; 32];
+    for (i, b) in k.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(k)
+}
+
+/// (trusted keys with their names, require signatures)
+fn trust() -> (Vec<([u8; 32], String)>, bool) {
+    let mut keys = Vec::new();
+    let mut require = false;
+    if let Ok(b) = crate::vfs::read(TRUST_FILE) {
+        for line in String::from_utf8_lossy(&b).lines() {
+            let line = line.trim();
+            if line == "require=on" {
+                require = true;
+            } else if let Some((k, n)) = line.split_once(' ') {
+                if let Some(key) = unhex32(k) {
+                    keys.push((key, String::from(n.trim())));
+                }
+            }
+        }
+    }
+    (keys, require)
+}
+
+fn save_trust(keys: &[([u8; 32], String)], require: bool) -> Result<(), &'static str> {
+    let mut t = String::new();
+    if require {
+        t.push_str("require=on\n");
+    }
+    for (k, n) in keys {
+        t.push_str(&format!("{} {}\n", hex(k), n));
+    }
+    crate::vfs::write(TRUST_FILE, t.as_bytes())
+}
+
+/// Parse and verify an archive, signed or not: every hash, and the signature
+/// when there is one.
+pub fn verify(bytes: &[u8]) -> Result<(Archive, Signer), &'static str> {
+    let n = bytes.len();
+    if n > SIG_LEN + 44 && &bytes[n - SIG_LEN..n - SIG_LEN + 4] == SIG_MAGIC {
+        let body = &bytes[..n - SIG_LEN];
+        let key: [u8; 32] = bytes[n - 96..n - 64].try_into().unwrap();
+        let sig: [u8; 64] = bytes[n - 64..].try_into().unwrap();
+        let ok = ed25519_dalek::VerifyingKey::from_bytes(&key)
+            .is_ok_and(|vk| vk.verify_strict(body, &ed25519_dalek::Signature::from_bytes(&sig)).is_ok());
+        if ok {
+            let a = parse(body)?;
+            let (keys, _) = trust();
+            let signer = match keys.iter().find(|(k, _)| *k == key) {
+                Some((_, name)) => Signer::Trusted(name.clone()),
+                None => Signer::Untrusted(key),
+            };
+            return Ok((a, signer));
+        }
+        // the marker can only be there by chance in an unsigned archive
+        return match parse(bytes) {
+            Ok(a) => Ok((a, Signer::Unsigned)),
+            Err(_) => Err("tanda tangan paket tidak sah (berkas diubah setelah ditandatangani?)"),
+        };
+    }
+    Ok((parse(bytes)?, Signer::Unsigned))
+}
+
+/// Sign an archive (the self-test; `bz pack --sign` does the same on the host).
+pub fn sign(archive: &[u8], key: &ed25519_dalek::SigningKey) -> Vec<u8> {
+    use ed25519_dalek::Signer as _;
+    let sig = key.sign(archive);
+    let mut v = archive.to_vec();
+    v.extend_from_slice(SIG_MAGIC);
+    v.extend_from_slice(key.verifying_key().as_bytes());
+    v.extend_from_slice(&sig.to_bytes());
+    v
+}
+
+/// The signer of the package installed last.
+pub fn last_signer() -> String {
+    LAST_SIGNER.lock().clone()
+}
+
+/// `bz trust [add HEX NAME | remove NAME|HEX | require on|off]`.
+pub fn trust_command(args: &[&str]) -> Vec<String> {
+    let (mut keys, mut require) = trust();
+    let changed = match args {
+        ["add", k, name @ ..] if !name.is_empty() => match unhex32(k) {
+            Some(key) => {
+                keys.retain(|(x, _)| *x != key);
+                keys.push((key, name.join(" ")));
+                true
+            }
+            None => return alloc::vec![String::from("bz trust add: kunci = 64 digit hex (dari 'bz keygen' di PC)")],
+        },
+        ["remove", who] => {
+            let before = keys.len();
+            keys.retain(|(k, n)| n != who && hex(k) != *who);
+            if keys.len() == before {
+                return alloc::vec![format!("bz trust: '{}' tidak ada", who)];
+            }
+            true
+        }
+        ["require", v] => {
+            require = *v == "on";
+            true
+        }
+        [] => false,
+        _ => return alloc::vec![String::from("bz trust [add HEX NAMA | remove NAMA | require on|off]")],
+    };
+    if changed {
+        if let Err(e) = save_trust(&keys, require) {
+            return alloc::vec![format!("bz trust: {}", e)];
+        }
+    }
+    let mut out = alloc::vec![format!(
+        "tanda tangan paket: {}",
+        if require { "WAJIB (paket tanpa tanda tangan terpercaya ditolak)" } else { "opsional ('bz trust require on' untuk mewajibkan)" }
+    )];
+    if keys.is_empty() {
+        out.push(String::from("  belum ada kunci terpercaya"));
+    }
+    for (k, n) in &keys {
+        out.push(format!("  {:<16} {}", n, hex(k)));
+    }
+    out
+}
 /// Registry packages the user installed or removed (persisted with the rest).
 static REGISTRY_INSTALLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -315,7 +482,11 @@ pub fn rollback(name: &str) -> Result<(String, String), String> {
 }
 
 fn install_bytes(bytes: &[u8]) -> Result<(String, String, Option<String>), String> {
-    let a = parse(bytes).map_err(String::from)?;
+    let (a, signer) = verify(bytes).map_err(String::from)?;
+    if trust().1 && !matches!(signer, Signer::Trusted(_)) {
+        return Err(format!("{} -- ditolak: tanda tangan terpercaya diwajibkan ('bz trust')", signer.describe()));
+    }
+    *LAST_SIGNER.lock() = signer.describe();
     if crate::pkg::find(&a.name).is_some() {
         return Err(format!("'{}' adalah paket bawaan sistem", a.name));
     }
@@ -386,7 +557,7 @@ pub fn remove(name: &str) -> Result<usize, String> {
 /// Describe a package file without installing it (`bz info FILE`).
 pub fn info_file(path: &str) -> Result<Vec<String>, String> {
     let bytes = crate::vfs::read(path).map_err(|e| format!("{}: {}", path, e))?;
-    let a = parse(&bytes).map_err(String::from)?;
+    let (a, signer) = verify(&bytes).map_err(String::from)?;
     let mut out = alloc::vec![
         format!("{} {} - {}", a.name, a.version, a.title),
         format!("  jenis {}, kategori {}, entry {}", a.kind, a.category, if a.entry.is_empty() { "-" } else { &a.entry }),
@@ -398,6 +569,7 @@ pub fn info_file(path: &str) -> Result<Vec<String>, String> {
         out.push(format!("  {:<12} {:>8} B", f, d.len()));
     }
     out.push(String::from("  semua SHA-256 cocok"));
+    out.push(format!("  {}", signer.describe()));
     Ok(out)
 }
 
@@ -454,9 +626,44 @@ pub fn self_test(dir: &str) -> Result<String, String> {
         return Err(String::from("file of another package overwritten"));
     }
     let n = remove("bztest")?;
-    let _ = crate::vfs::remove(file);
     if n != 1 || crate::vfs::stat("/disk/BZTEST.SH").is_ok() || find("bztest").is_some() {
         return Err(String::from("remove"));
     }
-    Ok(String::from("build, verify, install, upgrade 1.0 -> 2.0, corrupted archive refused, file clash refused, remove"))
+    // signatures: a signed archive installs as untrusted, a changed byte or a
+    // changed signature is refused, `require=on` refuses an untrusted signer
+    // until its key is trusted (the user's TRUST.CFG is restored afterwards)
+    let saved_trust = crate::vfs::read(TRUST_FILE).ok();
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let signed = sign(&v1, &key);
+    let _ = crate::vfs::remove(TRUST_FILE);
+    let untrusted_ok = matches!(verify(&signed), Ok((_, Signer::Untrusted(_))));
+    let mut tampered = signed.clone();
+    tampered[20] ^= 1;
+    let mut bad_sig = signed.clone();
+    let last = bad_sig.len() - 1;
+    bad_sig[last] ^= 1;
+    let refused = verify(&tampered).is_err() && verify(&bad_sig).is_err();
+    let _ = trust_command(&["require", "on"]);
+    crate::vfs::write(file, &signed).map_err(|e| format!("write: {}", e))?;
+    let blocked = install_file(file).is_err();
+    let k = hex(key.verifying_key().as_bytes());
+    let _ = trust_command(&["add", &k, "uji-kunci"]);
+    let trusted_ok = install_file(file).is_ok() && last_signer().contains("uji-kunci");
+    let _ = remove("bztest");
+    match saved_trust {
+        Some(t) => {
+            let _ = crate::vfs::write(TRUST_FILE, &t);
+        }
+        None => {
+            let _ = crate::vfs::remove(TRUST_FILE);
+        }
+    }
+    let _ = crate::vfs::remove(file);
+    if !(untrusted_ok && refused && blocked && trusted_ok) {
+        return Err(format!(
+            "signatures (untrusted {} refused {} blocked {} trusted {})",
+            untrusted_ok, refused, blocked, trusted_ok
+        ));
+    }
+    Ok(String::from("build, verify, install, upgrade 1.0 -> 2.0, corrupted archive refused, file clash refused, remove, Ed25519 signature verified / tampering refused / require=on enforced"))
 }

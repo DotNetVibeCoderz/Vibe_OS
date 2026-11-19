@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Baca (e-book reader, managed): /disk/MBACA.DLL, `run mbaca`. Uses Peramban's page engine (MWeb). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MBaca</AssemblyName>
+    <RootNamespace>MBaca</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MWeb\MWeb.csproj" />
+  </ItemGroup>
+</Project>

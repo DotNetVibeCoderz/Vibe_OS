@@ -15,6 +15,26 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ### Fixed
 
+- **Native C#: interface calls on types with references read the wrong
+  table:** the startup shim took MethodTable flag `0x0020` for "optional
+  fields" and skipped a pointer that bflat's ILC no longer emits (the bit
+  means "has GC pointers"). Every lookup in the sealed-virtual table of a
+  type that holds references and implements an interface (a struct with a
+  reference field, an async state machine) read one slot off and faulted.
+- `run /disk/X.ELF` was refused ("tidak dikenal") although the launcher
+  takes any ELF path; the check now accepts one.
+- `bz build-server --check` gave up after 16 s while the PC was still
+  compiling on a busy machine; the check warms the .NET SDK first and waits
+  up to a minute.
+
+- **A killed thread came back to life:** a thread killed while it was inside
+  a syscall on another CPU could still go to sleep afterwards (FUTEX_WAIT,
+  timed waits, `block_while`), which overwrote its Finished state with
+  Blocked. Once the kill had freed its address space, a timeout woke it and
+  it returned to ring 3 in freed memory -- a user page fault after `kill`,
+  then a kernel panic in the frame allocator (a corrupted free list). Seen
+  when restarting a game; the blocking paths now refuse to block a finished
+  task, and `kernel_exit` ends it.
 - **ARM64/RISC-V kernel stack overflow:** syscalls there run on the task's
   kernel stack, which was 32 KiB; a deep syscall (Studio's script debugger)
   reached 30 KiB and, in CI's image layout, overflowed into the kernel heap
@@ -22,6 +42,61 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   canary checked on every switch and a high-water report.
 
 ### Added
+- **FLAC music:** a no_std FLAC decoder in the CLR host (fixed / LPC
+  predictors, Rice residuals, stereo decorrelation, 8-24 bit; bit-exact with
+  ffmpeg) behind `AudioDecodeInfo` / `AudioDecodeInto`; Musik plays `.FLA` /
+  `.FLAC` files, and every image carries an original FLAC song.
+- **Comics:** Baca opens `.CBZ` archives -- one picture per page, natural
+  page order (new natives `ZipEntrySize` / `ZipEntryInto`).
+- **Signed packages:** `bz keygen` + `bz pack --sign` append an Ed25519
+  signature to a `.bzpkg`; the device verifies it (a broken signature is
+  always refused), names trusted keys with `bz trust add`, and `bz trust
+  require on` refuses unsigned or untrusted packages (also from a repository).
+- **Shell:** `$(command)` substitution (word-split when unquoted, nestable),
+  `$((expr))` integer arithmetic, functions (`name() { ...; }`, arguments,
+  `return`, recursion, `functions`), `echo -e`, `top` / `free` / `uptime`,
+  `clip` / `paste`. Self-test `MILESTONE: SHELL SCRIPT OK` on every kernel.
+- **System clipboard:** syscall `CLIPBOARD` (67: GET / SET / SEQ, 64 KiB),
+  shared by every program and the Terminal (Ctrl+V pastes); managed
+  `Buitenzorg.App.Clipboard`.
+- **Text selection:** Shift + arrows / Home / End / PgUp / PgDn now reach
+  programs as their own key codes (U+F720..), so `TextBox` (Buitenzorg.UI)
+  and Studio's code editor select text -- also by dragging the mouse and with
+  Ctrl+A -- and copy / cut / paste with Ctrl+C / X / V through the clipboard.
+- **Terminal colours:** ANSI SGR codes (foreground, background, bright) are
+  drawn in the Terminal and every text window.
+- **USB hot-plug:** keyboards, mice, hubs and USB sticks can be plugged in
+  and pulled out while the system runs -- root ports through xHCI Port Status
+  Change events, ports behind USB 2.0 hubs through each hub's status-change
+  endpoint. An unplugged device gives its slot and memory back (held keys are
+  released); a stick plugged in later is mounted at `/usb0`, `/usb1`, ... and
+  unmounted when it is pulled out. Shell `lsusb`. Smoke step `[hotplug]`
+  (QEMU `device_add` / `device_del`).
+- **async/await in native C#** (bflat zerolib): `bzasync.cs` supplies `Task`,
+  `Task<T>`, the async method builders, awaiters and a single-thread event
+  loop (`BzAsync.Run`: Yield, Delay, WhenAll, WhenAny, Task.Run, Result)
+  -> `MILESTONE: ASYNC OK` on x86-64 and ARM64. The shim gained the x86-64
+  `RhpByRefAssignRef` barrier.
+- **Raspberry Pi 4: new kernels over the network** (R6): `bz pi update
+  kernel8.img` uploads a kernel, boots it once through the firmware's tryboot
+  flag (`pi tryboot`), guarded by the PM watchdog so a hang returns the board
+  to the old kernel, checks it and keeps it (`pi promote`). Workflow
+  `.github/workflows/pi.yml` for a self-hosted runner next to a board; guide
+  `docs/raspberry-pi-ci.md`. Verified under QEMU raspi4b except the parts
+  only the board has (the tryboot flag, the watchdog's timeout).
+- **Raspberry Pi 4 GPU, step 2a** (`gpu v3d`, verified on the board): V3D
+  powered through the SoC power manager (reset + AXI bridges, as Linux's
+  bcm2835-power), its own MMU (4 MiB page table) and render-only jobs on the
+  control list executor -- a render control list that clears an image and
+  stores it to memory (23 us for 256x128), read back pixel by pixel.
+- **Entertainment:** **Baca**, an e-book reader for EPUB and text (ZIP inflate
+  in the host, chapters laid out by Peramban's page engine, pages, bookmarks;
+  an original story `BENIH.EPU`), **Labirin Kebun**, a first-person maze
+  game ray-cast in the host (`RayRender`), a **CHIP-8** emulator with two
+  original programs and their assembler (`scripts/chip8asm.py`), the **Video**
+  player (MJPEG + PCM in AVI, picture synced to the sound; an original clip
+  `FAJAR.AVI`), and game mode: syscall `IDLE_INHIBIT` (66) holds off the
+  screensaver while a game or song plays. New Start menu category Hiburan.
 - **Sound mixer and music:** `mixer.rs` keeps one stream per program
   (converted to 48 kHz stereo, up to 2 s), mixes them at per-program
   volumes with saturation, and the PC drivers stream it through a ring

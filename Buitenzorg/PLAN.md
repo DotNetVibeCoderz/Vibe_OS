@@ -29,7 +29,7 @@
 | AI/Power | v0.12 | Nalar | Subsistem AI-native + Hugging Face; power (shutdown/restart/sleep) | ✅ Selesai |
 | VM | v0.13 | Lapis | Virtualization (VMM tipe-2 + virtio + snapshot) | ✅ Selesai |
 | Polyglot | v0.14 | Babel | JS/TS + Python runtime (interpreter bersama) | ✅ Selesai |
-| Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Sebagian (GC reklamasi, async/await, EH belum) |
+| Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Jalur managed (RustCLR) lengkap: GC reklamasi, async/await, EH ✓; jalur native (bflat): async/await ✓, GC reklamasi + EH belum |
 | Rilis | v0.16 | Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | ✅ Selesai |
 | **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | ✅ **Rilis 2026-11-05** (PC fisik: Dell Latitude 7290; Hyper-V nyata belum diuji) |
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
@@ -245,9 +245,16 @@ sama (fib) di JS/TS/Python jalan berdampingan app C# — semua cetak fib(10)=55.
 > GroupBy/Distinct) → `MILESTONE: BCL3 OK`. **Exception:** format tabel EH
 > NativeAOT sudah dipetakan (klausa, funclet, `.eh_frame`), tetapi bflat mematikan
 > `EmitEHInfo` untuk zerolib — perlu bflat yang dibangun dari source (butuh
-> token GitHub `read:packages` untuk paket BFlat.Compiler). **Sisa:** GC yang
-> mereklamasi memori, exception unwinding (try/catch), `async`/
-> `await`, thread pool, TimeSpan/Guid/Interlocked, LINQ OrderBy/GroupBy/Distinct.
+> token GitHub `read:packages` untuk paket BFlat.Compiler).
+> **Dua jalur C# (status 2026-11-19):** jalur **managed** RustCLR (`CLRHOST.ELF`,
+> sejak 2026-11-02) sudah memberi C# lengkap -- GC mark-sweep yang mereklamasi,
+> try/catch/finally, async/await, thread, LINQ, reflection (Conformance 515 cek).
+> Yang dibahas di bawah adalah jalur **native** bflat/zerolib. **async/await ✓
+> (2026-11-19):** `bzasync.cs` (Task/Task<T>, builder, awaiter, event loop
+> `BzAsync`: Yield/Delay/WhenAll/WhenAny/Task.Run) → `MILESTONE: ASYNC OK`; ikut
+> memperbaiki bug lama shim (flag MethodTable 0x20 = "punya pointer GC", bukan
+> optional fields). **Sisa jalur native:** GC yang mereklamasi memori, exception
+> unwinding (try/catch), thread pool.
 > **Increment 1 ✓:** fondasi **PAL memori** — syscall user `MMAP/MPROTECT/MUNMAP`
 > (ABI 13–15, arena `memory.rs`), diverifikasi dari C# ring-3 (`matang.cs`).
 >
@@ -649,7 +656,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > **Tab + job control tercapai (2026-11-08):** Terminal kernel punya tab
 > (Ctrl+T/N/P/D, `tab`) dengan cwd/variabel sendiri, dan job (`&`, `jobs`,
 > `fg`, `kill %N`, Ctrl+C/Ctrl+Z; keluaran program masuk ke tab-nya).
-> Belum: `$(...)`/aritmetika, fungsi, app Terminal mandiri (copy/paste, ANSI).
+> **Tercapai 2026-11-19:** `$(...)` (dipecah jadi kata bila tanpa kutip), `$((...))`,
+> fungsi (`nama() { ...; }`, argumen, `return`, rekursi), `echo -e`, warna ANSI di
+> Terminal, `top`/`free`/`uptime`, papan klip sistem (syscall `CLIPBOARD`, Ctrl+V,
+> `clip`/`paste`) → `MILESTONE: SHELL SCRIPT OK`. Belum: `case`, here-document,
+> `local`, app Terminal mandiri.
 - **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
   (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
 - **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment
@@ -664,8 +675,11 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > **Tahap 1 ✓ (2026-11-06):** format `.bzpkg` v1 (SHA-256 arsip + per berkas),
 > `bz install/remove/info` di perangkat, state persisten `/disk/PKGS.CFG`,
 > paket di daftar App Store, host `bz pack`/`bz inspect`, contoh
-> `sdk/samples/halo-paket` (`MILESTONE: BZPKG OK`). Belum: tanda tangan,
-> dependensi, repo jarak jauh, sub-folder, izin dari manifest.
+> `sdk/samples/halo-paket` (`MILESTONE: BZPKG OK`). Dependensi, repo jarak jauh
+> dan rollback menyusul (2026-11-08). **Tanda tangan Ed25519 ✓ 2026-11-19:**
+> `bz keygen`, `bz pack --sign`, `bz inspect`; di perangkat `bz trust add/remove/
+> require on` (`/disk/TRUST.CFG`), tanda tangan rusak selalu ditolak. Belum:
+> sub-folder, izin dari manifest.
 - **Format paket `.bzpkg`**: arsip berisi `app.manifest` + ELF/skrip + aset +
   hash SHA-256 (tanda tangan menyusul). `bz install ./app.bzpkg` dari berkas.
 - **Host CLI**: `bz pack` (buat `.bzpkg` dari proyek), `bz publish` (ke repo).
@@ -685,7 +699,8 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > lintas bahasa dan kasus penggunaan, termasuk **21 aplikasi ber-UI** (form
 > dengan kolom teks `input()`, utilitas, game, gambar -- di setiap bahasa) (API immediate-mode `window/button/text/...` di host
 > `CLRHOST.ELF`, `docs/script-ui.md`). Belum: build C# di OS
-> (remote build server), debugger/breakpoint, seleksi mouse + clipboard.
+> (remote build server), debugger/breakpoint. Seleksi (Shift+panah, seret mouse,
+> Ctrl+A) + Ctrl+C/X/V lewat papan klip sistem ✓ 2026-11-19.
 - **Editor kode**: multi-tab, nomor baris, **syntax highlighting** (C#/JS/TS/
   Python/manifest), find/replace, go-to-line, auto-indent, undo/redo.
 - **Explorer proyek** (pohon berkas + template "New Project"), **panel terminal
@@ -1190,14 +1205,23 @@ modelnya sama sekali).
    *(Selesai 2026-11-02, terverifikasi di Pi 4 fisik: PCIe gen 2 x1, VL805 +
    hub USB 2.0, keyboard full-speed + mouse; GENET 100 Mb/s, alamat dari DHCP,
    ping ke router; restart/shutdown lewat watchdog PM, sleep. Belum: perangkat
-   USB low-speed di belakang hub VL805, hot-plug USB.)*
+   USB low-speed di belakang hub VL805. Hot-plug USB ✓ 2026-11-19 (port root +
+   hub USB 2.0, flashdisk dipasang di `/usb0`; diuji di QEMU).)*
 5. **R5 — Raspberry Pi 5.** Image `buitenzorg-rpi5.img` (EEPROM bootloader →
    rpi5-uefi → Limine), CPU Cortex-A76, **RP1** lewat PCIe (UART, USB, Ethernet
    GEM), SDHCI, RTC bawaan; NVMe lewat PCIe memakai driver NVMe yang dirancang
    untuk PC.
 6. **R6 — Matang di perangkat nyata.** *(Sebagian, 2026-11-02: GPIO/I2C/SPI/UART2-5/LED/sensor
    firmware untuk aplikasi lewat syscall `HW_*` + `Buitenzorg.Devices` (managed) /
-   `bzhw.cs` (native), sampel Lab Perangkat + hwdemo; jam lewat SNTP.)* GPIO/I2C/SPI untuk proyek IoT (selaras
+   `bzhw.cs` (native), sampel Lab Perangkat + hwdemo; jam lewat SNTP. **Uji
+   otomatis di papan ✓ 2026-11-19:** `bz pi update` mengirim kernel lewat jaringan,
+   boot sekali lewat flag tryboot firmware dijaga watchdog PM (macet → kembali ke
+   kernel lama), cek, lalu `pi promote`; workflow `.github/workflows/pi.yml`
+   untuk runner self-hosted -- tanpa relay; diuji di QEMU kecuali flag tryboot
+   dan timeout watchdog (perlu papan). **GPU V3D langkah 2a ✓ di papan** (V3D dinyalakan
+   lewat power manager SoC seperti `bcm2835-power`, MMU GPU, job render control list:
+   clear 256x128 dalam 23 us, setiap piksel benar → `V3D RENDER OK`). R5 (Pi 5) ditunda: belum ada
+   papan.)* GPIO/I2C/SPI untuk proyek IoT (selaras
    dengan HAL RustCLR `rustclr-hal`), audio (PWM/HDMI), power (reboot/shutdown
    lewat firmware), validasi di papan fisik + dokumentasi instalasi
    (`docs/install-raspberry-pi.md`), dan uji otomatis di papan nyata

@@ -9,14 +9,18 @@ disk; two original pieces come with every image.
 
 ## Musik
 
-`run mmusik`, or **Start > Multimedia > Musik**. The list shows the WAV files
-of `/disk` and the scratch folder (`/ram`); click one, or Space to play /
+`run mmusik`, or **Start > Multimedia > Musik**. The list shows the WAV and
+FLAC files (`.FLA` on the FAT disk, `.FLAC`) of `/disk` and the scratch folder (`/ram`); click one, or Space to play /
 pause; Sebelumnya / Berikutnya; click the progress bar to jump; the slider
 sets *this program's* volume in the mixer (the master volume stays in
 Pengaturan). The two songs on every image -- *Embun Pagi di Kebun Raya* and
 *Hujan Sore di Bogor* (`LAGU1.WAV`, `LAGU2.WAV`) -- are synthesized when the
 image is built (`synth_song` in `kernel/bzimage/build.rs`: bell tones on a
-five-note scale over a slow gong bass).
+five-note scale over a slow gong bass); a third, *Tetes Embun* (`LAGU3.FLA`,
+`assets/music`), is lossless FLAC. FLAC is decoded to PCM by the host when a
+song is loaded (`userland/clrhost/src/flac.rs`: fixed and LPC predictors,
+Rice residuals, stereo decorrelation, 8 to 24 bits -- output bit-exact with
+ffmpeg's), the title comes from its `TITLE=` comment.
 
 ## Gambar (pictures)
 
@@ -30,6 +34,20 @@ Three samples come with every image: `KEBUN.JPG`, `ANGGREK.PNG` (with
 transparency, shown over a checkerboard) and `DAUN.GIF` (12 frames).
 
 ![Gambar showing ANGGREK.PNG (QEMU)](img/gambar.png)
+
+## Video
+
+![Video playing *Fajar di Kebun Raya*](img/video.png)
+
+`run mvideo`, or **Start > Multimedia > Video**: plays AVI files with
+Motion-JPEG pictures and PCM sound (`/disk/*.AVI`); Space plays / pauses,
+click the bar to jump, **Dari awal** restarts. The picture follows the
+sound's position (what the mixer has really played), so they stay in step.
+Every image carries an original 12-second clip, *Fajar di Kebun Raya*
+(`FAJAR.AVI`: 320x180, 10 fps, 16 kHz sound), synthesized when the image is
+built (`synth_video` in `kernel/bzimage/build.rs`). Frames are decoded and
+scaled by the host's JPEG decoder (`Picture`). Not supported: other codecs
+(H.264, VP9 ...), MP4/MKV containers, compressed sound.
 
 ## For programs
 
@@ -97,7 +115,7 @@ self-test plays through `AUDIO_WRITE` in the boot's managed suite.
   is false; the Pi still plays one-shot sounds on its jack and HDMI).
 - Pictures: no EXIF rotation, thumbnails or editing; GIF frames are decoded
   up front (fine for small animations).
-- WAV only: no MP3, Ogg or FLAC decoder yet; no microphone; the level meter
+- WAV and FLAC: no MP3 or Ogg decoder yet; no microphone; the level meter
   shows peaks, not a spectrum.
 
 ---

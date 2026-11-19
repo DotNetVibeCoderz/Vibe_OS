@@ -205,8 +205,24 @@ public static class SyscallNumbers
     /// <summary>Resolve a host name: a0 = NUL-terminated name. Returns the IPv4 address big-endian in the low 32 bits.</summary>
     public const ulong DnsResolve = 65;
 
+    /// <summary>Game mode: a0 = 1 holds off the screensaver while this process runs, 0 releases it.</summary>
+    public const ulong IdleInhibit = 66;
+
+    /// <summary>The system clipboard (UTF-8 text): a0 = op (<see cref="ClipboardOp"/>); GET a1 = buffer, a2 = capacity -> full length; SET a1 = text, a2 = length -> 0; SEQ -> change counter.</summary>
+    public const ulong Clipboard = 67;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 66;
+    public const ulong Count = 68;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.Clipboard"/> (mirrors <c>bz_abi::clipboard_op</c>).</summary>
+public static class ClipboardOp
+{
+    public const ulong Get = 0;
+    public const ulong Set = 1;
+    public const ulong Seq = 2;
+    /// <summary>Largest text SET takes, in bytes.</summary>
+    public const ulong MaxBytes = 64 * 1024;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Gfx3d"/> (bz-abi <c>gfx3d_op</c>).</summary>

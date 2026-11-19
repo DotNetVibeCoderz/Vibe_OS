@@ -36,6 +36,10 @@ public static class Folder
         new AppInfo("mpaint", "Paint", "Menggambar dengan mouse", IconKind.Leaf, 0xE3A6C9),
         new AppInfo("mbuah", "Panen Buah 3D", "Tangkap buah yang jatuh, hindari batu", IconKind.Leaf, 0xE0352B),
         new AppInfo("mweb", "Peramban", "Jelajahi web: HTTP dan HTTPS", IconKind.Search, 0x5FA8D3),
+        new AppInfo("mlabirin", "Labirin Kebun", "Labirin 3D: kumpulkan bunga emas", IconKind.Leaf, 0x7CC4A4),
+        new AppInfo("mbaca", "Baca", "Pembaca e-book EPUB dan teks", IconKind.File, 0xD9B77E),
+        new AppInfo("mchip8", "CHIP-8", "Emulator CHIP-8 + dua program orisinal", IconKind.Grid, 0x9BE0B8),
+        new AppInfo("mvideo", "Video", "Putar video AVI (MJPEG + suara)", IconKind.Play, 0x8FB8E8),
         new AppInfo("mmusik", "Musik", "Putar lagu WAV, volume per aplikasi", IconKind.Play, 0xB99AE8),
         new AppInfo("mular", "Ular", "Makan buah, tumbuh panjang, jangan menabrak", IconKind.Leaf, 0x5FB85A),
         new AppInfo("mranjau", "Ranjau", "Buka kebun tanpa menggali ranjau", IconKind.Grid, 0xE0563B),
@@ -178,7 +182,11 @@ public static class Folder
         Report(MUlar.UlarApp.SelfTest()); // Buitenzorg.Game: the loop, raw key events, drawing
         Report(MMusik.MusikApp.SelfTest()); // Buitenzorg.Media: WAV, the player on the kernel mixer (AUDIO_WRITE)
         Report(MImage.PhotoApp.SelfTest()); // Buitenzorg.Media.Picture: PNG/JPEG/GIF decoded by the host
+        Report(MChip8.Chip8App.SelfTest()); // Buitenzorg.Game: an interpreter loop + raw keys
         Report(MWeb.BrowserApp.SelfTest()); // Buitenzorg.Net: TCP_OP + HTTP over loopback, the page engine
+        Report(MBaca.ReaderApp.SelfTest()); // EPUB through the host ZIP natives + the page engine
+        Report(MLabirin.LabirinApp.SelfTest()); // the host ray caster (RayRender), one blit per frame
+        Report(MVideo.VideoApp.SelfTest()); // AVI: MJPEG frames through Picture, PCM through the mixer
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());

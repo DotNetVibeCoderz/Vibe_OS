@@ -23,7 +23,7 @@ pub type Outcome = (Vec<String>, bool);
 pub const NAMES: &[&str] = &[
     "cat", "grep", "head", "tail", "wc", "sort", "uniq", "tee", "cp", "mv", "mkdir", "rmdir", "touch", "find",
     "hexdump", "xxd", "seq", "basename", "dirname", "true", "false", "env", "set", "export", "unset", "history",
-    "test", "[",
+    "test", "[", "clip", "paste",
 ];
 
 pub fn handles(name: &str) -> bool {
@@ -123,6 +123,16 @@ pub fn run(argv: &[String], stdin: Option<&[String]>) -> Outcome {
     let name = argv[0].as_str();
     let args = &argv[1..];
     match name {
+        // the system clipboard: `ls | clip`, `clip some text`, `paste`
+        "clip" => {
+            let text = match stdin {
+                Some(lines) if args.is_empty() => lines.join("\n"),
+                _ => args.join(" "),
+            };
+            crate::clipboard::set(&text);
+            (vec![format!("clip: {} karakter disalin ke papan klip", text.chars().count())], true)
+        }
+        "paste" => (crate::clipboard::get().lines().map(String::from).collect(), true),
         "cat" => {
             let a = parse(args, &[]);
             match input("cat", &a.rest, stdin) {

@@ -86,6 +86,8 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` â†
 | 63 | `AUDIO_APP_VOLUME` | pid (0 = self) | 0..=100, or `u64::MAX` to read | the program's mixer volume |
 | 64 | `TCP_OP` | op \| handle << 8 (`tcp_op`: CONNECT 0, SEND 1, RECV 2, STATE 3, CLOSE 4, LISTEN 5, ACCEPT 6) | CONNECT: IPv4 big-endian, LISTEN: -; SEND/RECV: data ptr; a2: port / length / capacity | handle, bytes, or `tcp_state` (CONNECTING 0, OPEN 1, PEER_CLOSED 2, CLOSED 3); handles are the process's own |
 | 65 | `DNS_RESOLVE` | NUL-terminated host name | - | IPv4 address big-endian in the low 32 bits (DNS over UDP 53, cached) |
+| 66 | `IDLE_INHIBIT` | 1 = hold off the screensaver / idle sleep, 0 = release | - | 0; released when the process ends (game mode, media playback) |
+| 67 | `CLIPBOARD` | op (`clipboard_op`: 0 GET, 1 SET, 2 SEQ) | GET: buffer, capacity / SET: text, length (<= 64 KiB) | GET: the clipboard's full length (copies at most the capacity); SET: 0; SEQ: a counter that grows with every SET. Shared with the Terminal (Ctrl+V, `clip`, `paste`) |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
 `INVAL = u64::MAX - 1`.

@@ -98,6 +98,31 @@ OK` (versi, indeks, urutan dependensi, siklus) di setiap boot self-test;
 `bz repo --selftest` (CI) dan `bz repo --check` (smoke `[bzlink]`: update,
 install dengan dependensi, upgrade 1.0 -> 1.1, paket yang diubah ditolak).
 
+## Paket bertanda tangan
+
+```
+bz keygen                                   # sekali, di PC: ~/.bz/signing.key + kunci publik
+bz pack sdk/samples/halo-paket --sign       # arsip + tanda tangan Ed25519
+bz inspect halo-paket.bzpkg                 # "signed by <kunci>: signature valid"
+```
+
+Di perangkat:
+
+```
+bz trust add 8ba331ac...94ae budi           # percayai sebuah kunci publik dengan nama
+bz trust                                    # kunci terpercaya dan kebijakannya
+bz trust require on                         # tolak paket tanpa tanda tangan / tak terpercaya
+bz install /disk/HALO.BZP                   # "ditandatangani 'budi' (terpercaya)"
+```
+
+Tanda tangan meliputi setiap byte arsip, jadi berkas, manifest atau tanda
+tangan yang diubah selalu ditolak, apa pun kebijakannya. Tanpa `require on`,
+paket tanpa tanda tangan dan paket dengan kunci tak dikenal tetap terpasang
+(`bz install` menyebutkan statusnya); dengan `require on` hanya kunci di
+`/disk/TRUST.CFG` yang diterima, juga untuk `bz install NAMA` dari repo dan
+`bz rollback`. `bz info BERKAS` menampilkan penanda tangannya. Simpan
+`signing.key` baik-baik (`BZ_SIGNING_KEY` mengarahkan `bz` ke berkas lain).
+
 ## Format, versi 1
 
 ```text

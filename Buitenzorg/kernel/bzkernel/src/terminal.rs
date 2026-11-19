@@ -6,6 +6,7 @@
 //!
 //! Line editing (Developer Workstation phase 1): Left/Right, Home/End,
 //! Backspace/Delete, Ctrl+A/E (start/end), Ctrl+U/K (delete to start/end),
+//! Ctrl+V (paste the system clipboard; `clip` / `paste` copy and print it),
 //! Ctrl+W (delete the word before), Ctrl+L (clear the screen), Ctrl+C (cancel
 //! the line); Up/Down walk the command history (also `history`, kept in
 //! `/disk/HISTORY.TXT` across boots); Tab completes command and file names.
@@ -205,6 +206,8 @@ fn with_tab<R>(tab_id: u32, f: impl FnOnce(&mut Tab) -> R) -> Option<R> {
 /// Feed one decoded character. Returns the effect of any command that ran
 /// (Clear/Redraw) so the caller can recompose the desktop.
 pub fn feed_char(c: char) -> Effect {
+    // Shift+arrow etc. (text selection in apps) act like the plain keys here
+    let c = crate::keyboard::unshift_nav(c);
     let mut effect = Effect::None;
     {
         let mut guard = TERMINAL.lock();
@@ -291,6 +294,19 @@ pub fn feed_char(c: char) -> Effect {
             '\u{b}' => {
                 // Ctrl+K: delete to the end
                 tab.input.truncate(tab.pos);
+            }
+            '\u{16}' => {
+                // Ctrl+V: paste the system clipboard at the caret (line
+                // breaks become "; ", so a pasted list of commands runs in turn)
+                let text = crate::clipboard::get();
+                let text = text.trim_end_matches(['\r', '\n']).replace("\r\n", "\n").replace('\n', "; ");
+                for c in text.chars().filter(|c| !c.is_control()) {
+                    if tab.input.len() >= 4096 {
+                        break;
+                    }
+                    tab.input.insert(tab.pos, c);
+                    tab.pos += 1;
+                }
             }
             '\u{17}' => {
                 // Ctrl+W: delete the word before the caret

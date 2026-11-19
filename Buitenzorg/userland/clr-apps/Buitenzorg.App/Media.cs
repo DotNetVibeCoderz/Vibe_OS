@@ -7,6 +7,10 @@
 // app. The kernel converts the format and mixes it with every other program's
 // sound; Audio.AppVolume sets this program's level in the mix.
 //
+// FLAC files (lossless) are decoded to PCM by the host (`AudioDecode*`
+// natives, clrhost flac.rs) when loaded, then play like a WAV; off the device
+// they cannot be decoded (Load returns false).
+//
 // Off the device (no sound card) the player still runs: Audio.Write takes
 // everything, and the position follows the clock -- so the self-tests work
 // on a PC.
@@ -100,6 +104,65 @@ public static class Wav
     static void I32(byte[] o, ref int p, int v) { I16(o, ref p, v); I16(o, ref p, v >> 16); }
 }
 
+/// <summary>Compressed formats the host decodes to 16-bit PCM (FLAC).</summary>
+public static class Compressed
+{
+    [System.Runtime.InteropServices.DllImport("buitenzorg")] static extern long AudioDecodeInfo(byte[] file);
+    [System.Runtime.InteropServices.DllImport("buitenzorg")] static extern int AudioDecodeInto(byte[] file, byte[] pcm);
+
+    public static bool IsFlac(byte[] b) => b.Length > 4 && b[0] == (byte)'f' && b[1] == (byte)'L' && b[2] == (byte)'a' && b[3] == (byte)'C';
+
+    /// <summary>Decode a FLAC file: the PCM and its WavInfo (null when not decodable here).</summary>
+    public static WavInfo? Decode(byte[] file, out byte[] pcm)
+    {
+        pcm = Array.Empty<byte>();
+        if (!IsFlac(file)) return null;
+        long word;
+        try { word = AudioDecodeInfo(file); }
+        catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { return null; }
+        if (word == 0) return null;
+        int rate = (int)(word & 0xFFFFF), channels = (int)((word >> 20) & 0xF);
+        long frames = word >> 32;
+        long bytes = frames * channels * 2;
+        if (bytes <= 0 || bytes > 256L * 1024 * 1024) return null;
+        pcm = new byte[bytes];
+        if (AudioDecodeInto(file, pcm) <= 0) return null;
+        return new WavInfo { Rate = rate, Channels = channels, Bits = 16, DataOffset = 0, DataLength = pcm.Length, Title = FlacTitle(file) };
+    }
+
+    /// <summary>TITLE from the VORBIS_COMMENT metadata block ("" when none).</summary>
+    public static string FlacTitle(byte[] b)
+    {
+        int p = 4;
+        while (p + 4 <= b.Length)
+        {
+            int h = b[p], len = b[p + 1] << 16 | b[p + 2] << 8 | b[p + 3];
+            int body = p + 4;
+            if ((h & 0x7F) == 4 && body + len <= b.Length)
+            {
+                int q = body;
+                int vlen = b[q] | b[q + 1] << 8 | b[q + 2] << 16 | b[q + 3] << 24;
+                q += 4 + vlen;
+                int count = b[q] | b[q + 1] << 8 | b[q + 2] << 16 | b[q + 3] << 24;
+                q += 4;
+                for (int k = 0; k < count && q + 4 <= body + len; k++)
+                {
+                    int n = b[q] | b[q + 1] << 8 | b[q + 2] << 16 | b[q + 3] << 24;
+                    q += 4;
+                    if (n < 0 || q + n > body + len) break;
+                    string c = System.Text.Encoding.UTF8.GetString(b, q, n);
+                    q += n;
+                    if (c.Length > 6 && c.Substring(0, 6).ToUpperInvariant() == "TITLE=") return c.Substring(6);
+                }
+                return "";
+            }
+            p = body + len;
+            if ((h & 0x80) != 0) break;
+        }
+        return "";
+    }
+}
+
 public enum PlayState { Stopped, Playing, Paused }
 
 /// <summary>Plays one WAV at a time through the program's mixer stream.</summary>
@@ -137,6 +200,12 @@ public sealed class MediaPlayer
     public bool Load(byte[] bytes, string fallbackTitle)
     {
         var info = Wav.Parse(bytes);
+        if (info == null && Compressed.IsFlac(bytes))
+        {
+            info = Compressed.Decode(bytes, out var pcm);
+            if (info == null) return false;
+            bytes = pcm;
+        }
         if (info == null) return false;
         Stop();
         _data = bytes;
@@ -165,6 +234,7 @@ public sealed class MediaPlayer
         _sim = !Audio.CanStream;
         _startMs = Environment.TickCount64;
         State = PlayState.Playing;
+        Session.KeepAwake(true); // no screensaver while music plays
         Pump();
     }
 
@@ -174,11 +244,13 @@ public sealed class MediaPlayer
         _base = Position;
         // what is queued (at most ~0.6 s) still plays out; resuming continues after it
         State = PlayState.Paused;
+        Session.KeepAwake(false);
     }
 
     public void Stop()
     {
         State = PlayState.Stopped;
+        Session.KeepAwake(false);
         _written = 0;
         _base = 0;
         Level = 0;
@@ -212,6 +284,7 @@ public sealed class MediaPlayer
         if (_written >= _info.DataLength && (_sim ? Position >= Duration : Audio.QueuedMs == 0))
         {
             State = PlayState.Stopped;
+            Session.KeepAwake(false);
             _base = Duration;
             Level = 0;
             Ended?.Invoke();

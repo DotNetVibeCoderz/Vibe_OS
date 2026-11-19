@@ -10,13 +10,17 @@ lagu orisinal ikut di setiap image.
 ## Musik
 
 `run mmusik`, atau **Mulai > Multimedia > Musik**. Daftarnya berisi berkas WAV
-di `/disk` dan folder scratch (`/ram`); klik satu, atau Spasi untuk putar /
+dan FLAC (`.FLA` di disk FAT, `.FLAC`) di `/disk` dan folder scratch (`/ram`); klik satu, atau Spasi untuk putar /
 jeda; Sebelumnya / Berikutnya; klik bilah progres untuk melompat; slider
 mengatur volume *program ini* di mixer (volume master tetap di Pengaturan).
 Dua lagu di setiap image -- *Embun Pagi di Kebun Raya* dan *Hujan Sore di
 Bogor* (`LAGU1.WAV`, `LAGU2.WAV`) -- disintesis saat image dibangun
 (`synth_song` di `kernel/bzimage/build.rs`: nada bel pada skala lima nada di
-atas bass gong yang lambat).
+atas bass gong yang lambat); lagu ketiga, *Tetes Embun* (`LAGU3.FLA`,
+`assets/music`), berformat FLAC lossless. FLAC di-decode ke PCM oleh host saat
+lagu dimuat (`userland/clrhost/src/flac.rs`: prediktor fixed dan LPC, residu
+Rice, dekorelasi stereo, 8 sampai 24 bit -- hasilnya bit-exact dengan
+ffmpeg), judulnya dari komentar `TITLE=`.
 
 ## Gambar
 
@@ -31,6 +35,18 @@ GIF animasi diputar. Tiga contoh ada di setiap image: `KEBUN.JPG`,
 bingkai).
 
 ![Gambar menampilkan ANGGREK.PNG (QEMU)](img/gambar.png)
+
+## Video
+
+![Video memutar *Fajar di Kebun Raya*](img/video.png)
+
+`run mvideo`, atau **Mulai > Multimedia > Video**: memutar berkas AVI berisi
+gambar Motion-JPEG dan suara PCM (`/disk/*.AVI`); Spasi putar / jeda, klik
+bilah untuk melompat, **Dari awal** mengulang. Gambar mengikuti posisi suara
+(yang benar-benar sudah diputar mixer), jadi keduanya tetap selaras. Setiap
+image membawa klip orisinal 12 detik, *Fajar di Kebun Raya* (`FAJAR.AVI`:
+320x180, 10 fps, suara 16 kHz), disintesis saat image dibangun. Belum
+didukung: codec lain (H.264, VP9 ...), kontainer MP4/MKV, suara terkompresi.
 
 ## Untuk program
 
@@ -71,7 +87,7 @@ menyalakannya lagi. Cek boot: `MILESTONE: MIXER OK` (semua arsitektur) dan
   tetap memutar bunyi sekali-putar di jack dan HDMI).
 - Gambar: belum ada rotasi EXIF, thumbnail atau penyuntingan; bingkai GIF
   didekode di awal (cukup untuk animasi kecil).
-- Hanya WAV: belum ada dekoder MP3, Ogg atau FLAC; belum ada mikrofon; meter
+- WAV dan FLAC: belum ada dekoder MP3 atau Ogg; belum ada mikrofon; meter
   menampilkan puncak, bukan spektrum.
 
 ---

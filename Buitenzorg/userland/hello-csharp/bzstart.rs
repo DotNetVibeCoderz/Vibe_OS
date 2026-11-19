@@ -961,6 +961,22 @@ core::arch::global_asm!(
     "    ret",
 );
 
+// The x86-64 by-ref copy barrier (copying a struct that holds references,
+// e.g. an async state machine): rdi = destination, rsi = source, both advance
+// by 8; rcx may be trashed (unix_amd64 WriteBarriers.S). No GC: a plain copy.
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".global RhpByRefAssignRef",
+    "RhpByRefAssignRef:",
+    "    push rcx",
+    "    mov rcx, [rsi]",
+    "    mov [rdi], rcx",
+    "    pop rcx",
+    "    add rdi, 8",
+    "    add rsi, 8",
+    "    ret",
+);
+
 // --- Type casts and covariant array stores (zerolib has neither) -----------
 //
 // ILC compiles `(T)o`, `o is T`, `o as T` into calls to the runtime's
@@ -1135,12 +1151,18 @@ pub unsafe extern "C" fn RhpStelemRef(array: *mut u8, index: isize, obj: *const 
 // from the *object's* vtable, so overrides win), above it an index into the
 // type's sealed-virtual table (32-bit relative pointers). The MethodTable
 // tail after the interface map: TypeManager and WritableData (rel32 each),
-// then the DispatchMap if flag 0x0004, the finalizer if 0x0010, optional
-// fields if 0x0020, the sealed-virtual table if 0x0040.
+// then the DispatchMap if flag 0x0004, the finalizer if 0x0010, the
+// sealed-virtual table if 0x0040 (0x0020 = "has GC pointers": no field).
 
 const MT_HAS_DISPATCH_MAP: u16 = 0x0004;
 const MT_HAS_FINALIZER: u16 = 0x0010;
-const MT_HAS_OPTIONAL_FIELDS: u16 = 0x0020;
+/// The type has GC references (a GCDesc in front of the MethodTable). Not
+/// "optional fields": that relative pointer no longer exists in the
+/// MethodTable layout bflat's ILC emits -- reading this bit as it put every
+/// sealed-vtable lookup of a type with references one slot off (a struct with
+/// a reference field implementing an interface, e.g. an async state machine).
+#[allow(dead_code)]
+const MT_HAS_POINTERS: u16 = 0x0020;
 const MT_HAS_SEALED_VTABLE: u16 = 0x0040;
 
 unsafe fn rel32_at(p: *const u8) -> *const u8 {
@@ -1158,9 +1180,6 @@ unsafe fn mt_tail(mt: *const MethodTable) -> (*const u8, *const u8) {
         p = p.add(4);
     }
     if f & MT_HAS_FINALIZER != 0 {
-        p = p.add(4);
-    }
-    if f & MT_HAS_OPTIONAL_FIELDS != 0 {
         p = p.add(4);
     }
     if f & MT_HAS_SEALED_VTABLE != 0 {

@@ -611,6 +611,60 @@ public class TextBox : Control
     public int MaxLength { get; set; }
     public int CaretIndex { get; set; }
     public event Action<TextBox>? TextChanged;
+    /// <summary>The other end of the selection (-1 = none): Shift+arrows, a drag, Ctrl+A.</summary>
+    int _anchor = -1;
+    bool _dragging;
+
+    /// <summary>Start and length of the selected text (length 0 = nothing selected).</summary>
+    public int SelectionStart => _anchor < 0 ? CaretIndex : Math.Min(_anchor, CaretIndex);
+    public int SelectionLength => _anchor < 0 ? 0 : Math.Abs(Math.Min(_anchor, Text.Length) - Math.Min(CaretIndex, Text.Length));
+    public string SelectedText => SelectionLength == 0 ? "" : Text.Substring(SelectionStart, SelectionLength);
+
+    public void Select(int start, int length)
+    {
+        start = Math.Max(0, Math.Min(start, Text.Length));
+        _anchor = start;
+        CaretIndex = Math.Min(Text.Length, start + Math.Max(0, length));
+        InvalidateVisual();
+    }
+
+    public void SelectAll() => Select(0, Text.Length);
+    public void ClearSelection() { _anchor = -1; InvalidateVisual(); }
+
+    /// <summary>Ctrl+C: the selection to the system clipboard.</summary>
+    public void Copy()
+    {
+        if (SelectionLength > 0 && PasswordChar == '\0') Buitenzorg.App.Clipboard.SetText(SelectedText);
+    }
+
+    /// <summary>Ctrl+X: copy, then remove the selection.</summary>
+    public void Cut()
+    {
+        if (SelectionLength == 0 || IsReadOnly || PasswordChar != '\0') return;
+        Copy();
+        ReplaceSelection("");
+    }
+
+    /// <summary>Ctrl+V: the clipboard replaces the selection (one line in a single-line box).</summary>
+    public void Paste()
+    {
+        if (IsReadOnly) return;
+        string clip = Buitenzorg.App.Clipboard.GetText().Replace("\r\n", "\n");
+        if (!AcceptsReturn)
+        {
+            int nl = clip.IndexOf('\n');
+            if (nl >= 0) clip = clip.Substring(0, nl);
+        }
+        if (clip.Length > 0) ReplaceSelection(clip);
+    }
+
+    void ReplaceSelection(string with)
+    {
+        int s = SelectionStart, n = SelectionLength;
+        string t = Text.Remove(s, n).Insert(s, with);
+        _anchor = -1;
+        Edit(t, s + with.Length);
+    }
     int _scrollX, _scrollLine;
     int _followedCaret = -1, _followedLen = -1;
     /// <summary>First line shown by a multi-line box (scrolled by the caret or the wheel).</summary>
@@ -707,6 +761,26 @@ public class TextBox : Control
         string t = Text;
         int c = Math.Min(CaretIndex, t.Length);
         char k = e.Key;
+        if (k == Keys.CtrlA) { SelectAll(); e.Handled = true; return; }
+        if (k == Keys.CtrlC) { Copy(); e.Handled = true; return; }
+        if (k == Keys.CtrlX) { Cut(); e.Handled = true; InvalidateVisual(); return; }
+        if (k == Keys.CtrlV) { Paste(); e.Handled = true; InvalidateVisual(); return; }
+        // Shift + a navigation key extends the selection; a plain one drops it
+        bool shift = Keys.IsShifted(k);
+        if (Keys.IsNavigation(k) && k != Keys.Delete)
+        {
+            if (shift) { if (_anchor < 0) _anchor = c; }
+            else _anchor = -1;
+            k = Keys.Unshift(k);
+        }
+        // typing, Backspace or Delete over a selection replace / remove it
+        if (SelectionLength > 0 && !IsReadOnly && (k == Keys.Backspace || k == Keys.Delete || Keys.IsPrintable(k) || (k == Keys.Enter && AcceptsReturn)))
+        {
+            ReplaceSelection(Keys.IsPrintable(k) ? k.ToString() : k == Keys.Enter ? "\n" : "");
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
         if (k == Keys.Left) { CaretIndex = Math.Max(0, c - 1); }
         else if (k == Keys.Right) { CaretIndex = Math.Min(t.Length, c + 1); }
         else if (k == Keys.Home) { var lc = LineCol(c); CaretIndex = IndexOf(lc.line, 0); }
@@ -735,12 +809,43 @@ public class TextBox : Control
         int line = AcceptsReturn ? _scrollLine + Math.Max(0, (e.Y - r.Y) / Lh) : 0;
         int col = Math.Max(0, (e.X - r.X + Gw / 2) / Gw + (AcceptsReturn ? 0 : _scrollX));
         CaretIndex = IndexOf(line, col);
+        _anchor = CaretIndex;
+        _dragging = true;
         _caretOn = true;
         _lastKey = Clock.Now;
         _blink?.Start();
         InvalidateVisual();
         e.Handled = true;
         base.OnPointerPressed(e);
+    }
+
+    int HitIndex(int x, int y)
+    {
+        var r = ContentRect(Bounds);
+        int line = AcceptsReturn ? _scrollLine + Math.Max(0, (y - r.Y) / Lh) : 0;
+        int col = Math.Max(0, (x - r.X + Gw / 2) / Gw + (AcceptsReturn ? 0 : _scrollX));
+        return IndexOf(line, col);
+    }
+
+    protected internal override void OnPointerMoved(PointerEventArgs e)
+    {
+        if (_dragging && e.LeftButton)
+        {
+            int i = HitIndex(e.X, e.Y);
+            if (i != CaretIndex) { CaretIndex = i; InvalidateVisual(); }
+            e.Handled = true;
+        }
+        base.OnPointerMoved(e);
+    }
+
+    protected internal override void OnPointerReleased(PointerEventArgs e)
+    {
+        if (_dragging)
+        {
+            _dragging = false;
+            if (_anchor == CaretIndex) _anchor = -1;
+        }
+        base.OnPointerReleased(e);
     }
 
     protected internal override void OnPointerWheelChanged(PointerEventArgs e)
@@ -784,6 +889,21 @@ public class TextBox : Control
         _followedCaret = CaretIndex;
         _followedLen = Text.Length;
         dc.PushClip(r);
+        if (SelectionLength > 0)
+        {
+            // one band per selected line piece
+            var (sl, sc) = LineCol(SelectionStart);
+            var (el, ec) = LineCol(SelectionStart + SelectionLength);
+            for (int ln = sl; ln <= el; ln++)
+            {
+                if (AcceptsReturn && (ln < _scrollLine || ln >= _scrollLine + visibleLines)) continue;
+                int from = ln == sl ? sc : 0;
+                int to = ln == el ? ec : IndexOf(ln, int.MaxValue) - IndexOf(ln, 0) + 1;
+                int sx = r.X + (from - (AcceptsReturn ? 0 : _scrollX)) * gw;
+                int sy = r.Y + (AcceptsReturn ? (ln - _scrollLine) * lh : (r.Height - lh) / 2 + 1);
+                if (to > from) dc.FillRect(new Rect(sx, sy, (to - from) * gw, lh - 1), Theme.Stroke);
+            }
+        }
         if (text.Length == 0 && Watermark.Length > 0 && !IsFocused)
             dc.Text(r.X, r.Y + (AcceptsReturn ? 0 : (r.Height - lh) / 2 + 1), Watermark, Theme.TextFaint, style);
         else

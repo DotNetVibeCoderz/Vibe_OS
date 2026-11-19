@@ -20,14 +20,16 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 |---|---|
 | [Jalankan di VM](run-in-vm.id.md) | Konversi image lalu jalankan di VMware Player, VirtualBox, atau Hyper-V. |
 | [Pasang di Hardware](install-hardware.id.md) | Tulis image ke stik USB dan boot mesin fisik (BIOS/UEFI), dengan tabel kompatibilitas yang jujur. |
+| [Kernel baru di Pi tanpa cabut kartu SD](raspberry-pi-ci.id.md) | `bz pi update`: kernel lewat jaringan, boot sekali dijaga watchdog, dipakai hanya bila lulus; CI di runner self-hosted. |
 | [Buitenzorg Studio](studio.id.md) | IDE di dalam OS: proyek dari 52 template, editor kode, Jalankan (F5), Keluaran, Masalah, Terminal. |
 | [C# Script (`.csx`)](csharp-script.id.md) | C# tanpa build: engine bytecode untuk C# tingkat atas, konsol dan UI (`Ui.Window`), 16x lebih cepat dari interpreter pohon. |
 | [Aplikasi UI JS/TS/Python](script-ui.id.md) | Aplikasi berjendela tanpa C#: `window`, `button`, `text`, ... gaya immediate mode, berjalan sebagai proses sendiri. |
 | [Shell & Skrip](shell.id.md) | Edit baris, pipe/redirect, variabel, coreutils, alias, skrip `.SH` dengan if/for/while, profil saat mulai. |
 | [bz-link: perangkat yang berjalan dari PC](bz-link.id.md) | `bz deploy` app atau skrip ke OS yang sedang berjalan (tanpa build ulang image), `bz run`/`shell`/`push`/`pull`/`logs` lewat jaringan. |
 | [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
+| [Membaca, labirin 3D, CHIP-8](entertainment.id.md) | Baca (EPUB/TXT), Labirin Kebun (3D ray-cast), emulator CHIP-8 dengan dua program orisinal, mode game. |
 | [Internet dan peramban web](internet.id.md) | Peramban (HTTP/HTTPS), `nslookup`, dan `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) untuk program. |
-| [Suara dan media](media.id.md) | Musik dan Gambar, mixer kernel (stream per program, volume per aplikasi), WAV, MediaPlayer dan gambar PNG/JPEG/GIF untuk program. |
+| [Suara dan media](media.id.md) | Musik, Video dan Gambar, mixer kernel (stream per program, volume per aplikasi), WAV, MediaPlayer dan gambar PNG/JPEG/GIF untuk program. |
 | [Game dan Buitenzorg.Game](games.id.md) | Ular, Ranjau, Bata, Balok, Kartu, dan framework game 2D (loop fixed-timestep, event tombol mentah, partikel, skor tertinggi). |
 | [Debugging & Profiling](debugging.id.md) | Attach GDB ke kernel yang berjalan, dan profiler zona berbasis TSC. |
 

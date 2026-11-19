@@ -20,6 +20,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 |---|---|
 | [Run in a VM](run-in-vm.md) | Convert the image and run it in VMware Player, VirtualBox, or Hyper-V. |
 | [Raspberry Pi 4](install-raspberry-pi.md) | The desktop on a Pi 4's HDMI screen, on all four cores: verified on a real 8 GB board and on QEMU. |
+| [New kernels on a Pi without the SD card](raspberry-pi-ci.md) | `bz pi update`: a kernel over the network, booted once under a watchdog, kept only if it passes; CI on a self-hosted runner. |
 | [Install on Hardware](install-hardware.md) | Flash the image to a USB stick and boot a physical machine (BIOS/UEFI), with an honest capability matrix. |
 | [Buitenzorg Studio](studio.md) | The IDE inside the OS: projects from 52 templates, a code editor, Run (F5), Output, Problems, Terminal. |
 | [C# Script (`.csx`)](csharp-script.md) | C# without a build step: a bytecode engine for top-level C#, console and UI (`Ui.Window`), 16x faster than the tree interpreter. |
@@ -27,8 +28,9 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [The Shell & Scripts](shell.md) | Line editing, pipes/redirection, variables, coreutils, aliases, `.SH` scripts with if/for/while, the startup profile. |
 | [bz-link: a running device from your PC](bz-link.md) | `bz deploy` an app or script to a running OS (no image rebuild), `bz run`/`shell`/`push`/`pull`/`logs` over the network. |
 | [Packages (`.bzpkg`)](packages.md) | `bz pack` on the host, `bz install/remove` on the device, the format and its safety rules. |
+| [Reading, a 3D maze, CHIP-8](entertainment.md) | Baca (EPUB/TXT), Labirin Kebun (ray-cast 3D), the CHIP-8 emulator with two original programs, game mode. |
 | [Internet and the web browser](internet.md) | Peramban (HTTP/HTTPS), `nslookup`, and `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) for programs. |
-| [Sound and media](media.md) | Musik and Gambar, the kernel mixer (a stream per program, per-app volume), WAV, MediaPlayer and PNG/JPEG/GIF pictures for programs. |
+| [Sound and media](media.md) | Musik, Video and Gambar, the kernel mixer (a stream per program, per-app volume), WAV, MediaPlayer and PNG/JPEG/GIF pictures for programs. |
 | [Games and Buitenzorg.Game](games.md) | Ular, Ranjau, Bata, Balok, Kartu, and the 2D game framework (fixed-timestep loop, raw key events, particles, high scores). |
 | [Debugging & Profiling](debugging.md) | Attach GDB to the running kernel, and the instrumented TSC zone profiler. |
 

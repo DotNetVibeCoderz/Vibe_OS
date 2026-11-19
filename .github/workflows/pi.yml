@@ -1,0 +1,46 @@
+# Raspberry Pi 4 on real hardware (roadmap R6): build the ARM64 kernel and try
+# it on a board with `bz pi update` -- uploaded over the network, booted once
+# through the firmware's tryboot (guarded by the PM watchdog: a hang returns
+# the board to the old kernel), checked, and kept only if every check passes.
+#
+# Needs a self-hosted runner labelled `rpi4` on a machine that can reach the
+# board, and the repository secrets BZ_DEVICE (the board's IP) and BZ_CODE (its
+# pairing code: `deploy on` on the board, persisted in /disk/DEPLOY.CFG).
+# See Buitenzorg/docs/raspberry-pi-ci.md. Runs only when started by hand.
+name: Raspberry Pi 4 (board)
+
+on:
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: Keep the new kernel on the board when every check passes
+        type: boolean
+        default: true
+
+jobs:
+  board:
+    runs-on: [self-hosted, rpi4]
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: Buitenzorg
+    env:
+      BZ_DEVICE: ${{ secrets.BZ_DEVICE }}
+      BZ_CODE: ${{ secrets.BZ_CODE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the ARM64 kernel and kernel8.img
+        shell: bash
+        run: |
+          cd kernel
+          cargo build --release -p bzkernel --target aarch64-unknown-none-softfloat
+          cargo run --release -p bzimage -- --out ../dist
+      - name: Try it on the board
+        shell: bash
+        run: |
+          keep=""
+          if [ "${{ inputs.promote }}" != "true" ]; then keep="--no-promote"; fi
+          dotnet run --project sdk/bz -c Release -- pi update dist/kernel8.img $keep \
+            --expect "first desktop frame on screen" \
+            --expect "background start-up done" \
+            --run "ver" --run "lsusb" --run "ipconfig"

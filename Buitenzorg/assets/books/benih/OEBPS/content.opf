@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:buitenzorg:benih-dari-kebun-raya</dc:identifier>
+    <dc:title>Benih dari Kebun Raya</dc:title>
+    <dc:creator>Gravicode Studios</dc:creator>
+    <dc:language>id</dc:language>
+  </metadata>
+  <manifest>
+    <item id="b1" href="bab1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b2" href="bab2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b3" href="bab3.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b4" href="bab4.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="b1"/>
+    <itemref idref="b2"/>
+    <itemref idref="b3"/>
+    <itemref idref="b4"/>
+  </spine>
+</package>

@@ -833,6 +833,12 @@ pub fn set_user_active(v: bool) {
 /// a wake-up between them cannot be lost. Returns false if the value differed.
 pub fn futex_wait_if(addr: u64, expected: u32) -> bool {
     let blocked = with_current(|t| {
+        // killed while in this syscall: never block (that would overwrite
+        // Finished, a later wake would resurrect the thread after its address
+        // space is gone) -- return, and kernel_exit ends it
+        if t.state == State::Finished {
+            return false;
+        }
         let val = unsafe { core::ptr::read_volatile(addr as *const u32) };
         if val != expected {
             return false;
@@ -854,6 +860,12 @@ pub fn futex_wait_if(addr: u64, expected: u32) -> bool {
 /// caller tells a timeout from a wake-up by the clock.
 pub fn futex_wait_timeout_if(addr: u64, expected: u32, deadline_ns: u64) -> bool {
     let blocked = with_current(|t| {
+        // killed while in this syscall: never block (that would overwrite
+        // Finished, a later wake would resurrect the thread after its address
+        // space is gone) -- return, and kernel_exit ends it
+        if t.state == State::Finished {
+            return false;
+        }
         let val = unsafe { core::ptr::read_volatile(addr as *const u32) };
         if val != expected {
             return false;
@@ -881,8 +893,8 @@ pub fn futex_wait_timeout_if(addr: u64, expected: u32, deadline_ns: u64) -> bool
 /// blocked.
 pub fn block_while(key: u64, still: impl FnOnce() -> bool) -> bool {
     let blocked = with_current(|t| {
-        if !still() {
-            return false;
+        if t.state == State::Finished || !still() {
+            return false; // killed: see futex_wait_if
         }
         t.state = State::Blocked;
         t.wait_key = key;

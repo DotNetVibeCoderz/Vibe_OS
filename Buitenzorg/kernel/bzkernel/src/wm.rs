@@ -47,7 +47,7 @@ struct Category {
     apps: &'static [(&'static str, &'static str)],
 }
 
-const CATEGORIES: [Category; 5] = [
+const CATEGORIES: [Category; 6] = [
     Category {
         name: "Kantor",
         leaf: gfx::rgb(0x7F, 0xB3, 0xE0),
@@ -58,7 +58,7 @@ const CATEGORIES: [Category; 5] = [
     Category {
         name: "Multimedia",
         leaf: gfx::rgb(0xC7, 0x92, 0xEA),
-        apps: &[("mmusik", "Musik"), ("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol")],
+        apps: &[("mmusik", "Musik"), ("mvideo", "Video"), ("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol")],
     },
     Category {
         name: "Permainan",
@@ -85,6 +85,11 @@ const CATEGORIES: [Category; 5] = [
         name: "Pengaturan",
         leaf: gfx::rgb(0xD9, 0xB3, 0x8C),
         apps: &[("msetting", "Pengaturan"), ("mwaktu", "Tanggal & Waktu"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
+    },
+    Category {
+        name: "Hiburan",
+        leaf: gfx::rgb(0xE8, 0x8F, 0x7A),
+        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8")],
     },
 ];
 
@@ -1659,7 +1664,11 @@ impl Wm {
                     if ty > body_bottom {
                         break;
                     }
-                    canvas.draw_text(win.x + 8, ty, line, th.text, win.x + win.w - 6);
+                    if line.contains('\u{1b}') {
+                        Self::draw_ansi_line(canvas, win.x + 8, ty, line, th.text, win.x + win.w - 6);
+                    } else {
+                        canvas.draw_text(win.x + 8, ty, line, th.text, win.x + win.w - 6);
+                    }
                     ty += gfx::glyph_height() as i32 + 3;
                 }
                 if let Some((row, col)) = win.caret {
@@ -1688,7 +1697,98 @@ impl Wm {
         self.draw_ripple(canvas, &th);
     }
 
-    /// What this frame shows, element by element, for damage tracking.
+    /// The colours of ANSI SGR 30..37 (and 90..97, brighter), tuned to read on
+/// the dark window bodies of the default theme.
+const ANSI: [Color; 16] = [
+    gfx::rgb(0x55, 0x5E, 0x58),
+    gfx::rgb(0xE5, 0x73, 0x5F),
+    gfx::rgb(0x7C, 0xC4, 0xA4),
+    gfx::rgb(0xE9, 0xB4, 0x4C),
+    gfx::rgb(0x7F, 0xB2, 0xD9),
+    gfx::rgb(0xC7, 0x92, 0xEA),
+    gfx::rgb(0x6C, 0xD3, 0xD3),
+    gfx::rgb(0xD8, 0xE2, 0xDA),
+    gfx::rgb(0x8A, 0x96, 0x8E),
+    gfx::rgb(0xFF, 0x95, 0x80),
+    gfx::rgb(0xA6, 0xE8, 0xC6),
+    gfx::rgb(0xFF, 0xD2, 0x7A),
+    gfx::rgb(0xA8, 0xD0, 0xF2),
+    gfx::rgb(0xE0, 0xB4, 0xFF),
+    gfx::rgb(0x9A, 0xEE, 0xEE),
+    gfx::rgb(0xFF, 0xFF, 0xFF),
+];
+
+/// A text line with ANSI colour codes (`ESC [ n ; ... m`): SGR 0 / 39
+/// reset, 1 bold (the bright colour), 30..37 / 90..97 the foreground, 40..47
+/// / 100..107 a background band. Other escape sequences are skipped.
+fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Color, max_x: i32) {
+    let gw = gfx::glyph_width() as i32;
+    let gh = gfx::glyph_height() as i32;
+    let (mut fg, mut bg, mut bold, mut idx): (Option<usize>, Option<usize>, bool, Option<usize>) = (None, None, false, None);
+    let mut cx = x;
+    let mut run = String::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    let flush = |canvas: &mut Canvas, cx: &mut i32, run: &mut String, color: Color, bg: Option<Color>| {
+        if run.is_empty() {
+            return;
+        }
+        let n = run.chars().count() as i32;
+        if let Some(b) = bg {
+            let w = (n * gw).min(max_x - *cx).max(0);
+            canvas.fill_rect(*cx, y - 1, w, gh + 2, b);
+        }
+        canvas.draw_text(*cx, y, run, color, max_x);
+        *cx += n * gw;
+        run.clear();
+    };
+    while i < chars.len() {
+        if chars[i] == '\u{1b}' {
+            let color = idx.map_or(default, |k| Self::ANSI[k]);
+            flush(canvas, &mut cx, &mut run, color, bg.map(|k| Self::ANSI[k]));
+            // ESC [ params final
+            if chars.get(i + 1) == Some(&'[') {
+                let mut j = i + 2;
+                let mut params = String::new();
+                while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == ';') {
+                    params.push(chars[j]);
+                    j += 1;
+                }
+                if chars.get(j) == Some(&'m') {
+                    for p in params.split(';') {
+                        match p.parse::<u32>().unwrap_or(0) {
+                            0 => {
+                                fg = None;
+                                bg = None;
+                                bold = false;
+                            }
+                            1 => bold = true,
+                            22 => bold = false,
+                            39 => fg = None,
+                            49 => bg = None,
+                            n @ 30..=37 => fg = Some((n - 30) as usize),
+                            n @ 90..=97 => fg = Some((n - 90) as usize + 8),
+                            n @ 40..=47 => bg = Some((n - 40) as usize),
+                            n @ 100..=107 => bg = Some((n - 100) as usize + 8),
+                            _ => {}
+                        }
+                    }
+                }
+                i = j + 1;
+            } else {
+                i += 2;
+            }
+            idx = fg.map(|k| if bold && k < 8 { k + 8 } else { k });
+            continue;
+        }
+        run.push(chars[i]);
+        i += 1;
+    }
+    let color = idx.map_or(default, |k| Self::ANSI[k]);
+    flush(canvas, &mut cx, &mut run, color, bg.map(|k| Self::ANSI[k]));
+}
+
+/// What this frame shows, element by element, for damage tracking.
     fn scene_desc(&self) -> SceneDesc {
         let th = theme::current();
         let mut global = gfx::mix(theme_key(&th), self.workspace as u64);

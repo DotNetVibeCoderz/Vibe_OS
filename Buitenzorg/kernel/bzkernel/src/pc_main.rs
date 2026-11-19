@@ -74,6 +74,7 @@ mod wallpaper;
 mod splash;
 mod clock;
 mod applog;
+mod clipboard;
 mod appprof;
 mod crash;
 mod gdbstub;
@@ -264,6 +265,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     println!();
     // Terminal tabs + jobs through the keys a user types (the session is
     // reset when the desktop starts); before READY: the smoke test stops at it
+    shell::script_self_test();
     terminal::self_test("helloclr", "Hello from managed C#");
     println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 
@@ -585,6 +587,11 @@ fn matang_demo() {
     match app::run_named("bcl3") {
         Ok(code) => println!("[kernel] bcl3 app exited (code {})", code),
         Err(e) => println!("[kernel] bcl3 app not run: {}", e),
+    }
+    // Buitenzorg.Bcl part 4: async/await on an event loop (bzasync.cs).
+    match app::run_named("async") {
+        Ok(code) => println!("[kernel] async app exited (code {})", code),
+        Err(e) => println!("[kernel] async app not run: {}", e),
     }
 
     // Increment 5: the GC memory model — lazy reserve (mmap PROT_NONE) + commit

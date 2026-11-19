@@ -126,6 +126,9 @@ pub fn run() -> ! {
         virtio::input::poll();
         // USB HID keyboards / mice (roadmap R4).
         crate::usb::poll();
+        // a trial boot of a new Pi kernel stays alive while this loop runs
+        #[cfg(target_arch = "aarch64")]
+        crate::platform::virt::tryboot::feed();
         #[cfg(target_arch = "x86_64")]
         crate::audio::poll();
         #[cfg(not(target_arch = "x86_64"))]
@@ -277,7 +280,7 @@ pub fn run() -> ! {
             let mut canvas = gfx::Canvas::new(&mut back, w, h);
             screensaver::render(&mut canvas, now);
             framebuffer::present(&back);
-        } else if screensaver::enabled() && now.saturating_sub(last_input) > screensaver::timeout() {
+        } else if screensaver::enabled() && now.saturating_sub(last_input) > screensaver::timeout() && !process::idle_inhibited() {
             saver_active = true;
             screensaver::set_showing(true);
         } else {

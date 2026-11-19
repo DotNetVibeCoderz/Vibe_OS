@@ -130,7 +130,7 @@ masuk ke berkas itu.
 | Firmware | UEFI **dan** BIOS lama | Secure Boot harus OFF (belum ditandatangani) |
 | CPU | x86-64, hingga 16 core dipakai | ARM64: [Raspberry Pi 4](install-raspberry-pi.md); RISC-V di QEMU |
 | Grafis | framebuffer dari firmware | belum ada driver GPU di PC: digambar CPU. Teruji hingga 2560x1440; image BIOS 1280x720 |
-| Keyboard/mouse | USB (xHCI: HID boot protocol) dan PS/2 | kontroler khusus USB 2.0 (EHCI) belum; **tanpa hot-plug**: colok sebelum boot |
+| Keyboard/mouse | USB (xHCI: HID boot protocol) dan PS/2 | kontroler khusus USB 2.0 (EHCI) belum; **hot-plug** jalan di port root dan di belakang hub USB 2.0 (flashdisk yang dicolok belakangan dipasang di `/usb0`; `lsusb` menampilkan yang terpasang) |
 | Penyimpanan | IDE, SATA (AHCI), NVMe, flash disk di xHCI | sektor 512 byte; mode RAID/Intel RST tidak didukung (set SATA ke AHCI); hub USB 3 belum |
 | Jaringan | keluarga Intel e1000 (82540, 82545, 82574, ...), Intel I217/I218/I219 on-board (terbukti: I219-LM, Latitude 7290), virtio-net | Realtek dan Wi-Fi **belum**; `ipconfig` menyebut sebab jaringan mati, `netup` mencoba lagi |
 | Suara | Intel HD Audio, AC'97, virtio-sound | HD Audio: hanya keluaran (speaker/headphone/line out), codec pertama yang ditemukan |

@@ -77,6 +77,7 @@ mod wallpaper;
 mod splash;
 mod clock;
 mod applog;
+mod clipboard;
 mod appprof;
 mod crash;
 mod gdbstub;
@@ -148,6 +149,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // `bz.selftest` boot argument, see bootmode.rs). A normal boot keeps the
     // log on the serial port only.
     let st = bootmode::detect(fdt.as_ref());
+    // a trial boot of a new kernel (`pi tryboot`): the watchdog first
+    platform::virt::tryboot::early(fdt.as_ref());
     if !st {
         interactive::set_active();
     }
@@ -201,6 +204,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         rtc_self_test();
     }
     storage_self_test();
+    platform::virt::tryboot::feed();
     clock::load();
     bzpkg::load();
     if st {
@@ -289,6 +293,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     task::init();
     start_secondary_cpus(info, fdt.as_ref());
     shared_kernel_setup(info, fdt.as_ref());
+    platform::virt::tryboot::feed();
     if st {
         run_boot_programs(info);
         // The managed C# path (RustCLR) next to the native one (bflat).
@@ -326,6 +331,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     // reset when the desktop starts); before READY: the smoke test stops at it
     if crate::bootmode::selftest() {
         desktop::ensure_session_windows();
+        shell::script_self_test();
         terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows");
@@ -809,7 +815,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     };
     let frames0 = memory::frames_in_use();
-    for name in ["hello", "matang", "heap", "statics", "bcl3", "gcmem", "bcl", "proctest"] {
+    for name in ["hello", "matang", "heap", "statics", "bcl3", "async", "gcmem", "bcl", "proctest"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ({} bytes, from {}) ---", name, image.len(), if from_disk.get() { "/disk" } else { "a Limine module" });
         match app::spawn_image(name, &image) {

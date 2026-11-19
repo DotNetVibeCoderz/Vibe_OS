@@ -184,6 +184,16 @@ public static class Keys
     public const char F1 = '', F2 = '', F3 = '', F4 = '', F5 = '', F6 = '',
         F7 = '', F8 = '', F9 = '', F10 = '', F11 = '', F12 = '';
 
+    /// <summary>Shift + a navigation key (Up .. PageDown, Delete) arrives 0x20 higher
+    /// (U+F720..U+F728, keyboard.rs SHIFT_OFFSET): extend a text selection.</summary>
+    public const char ShiftUp = (char)0xF720, ShiftDown = (char)0xF721, ShiftLeft = (char)0xF722, ShiftRight = (char)0xF723,
+        ShiftHome = (char)0xF724, ShiftEnd = (char)0xF725;
+    /// <summary>Ctrl + a letter arrives as its control character (Ctrl+A = 1 ...).</summary>
+    public const char CtrlA = (char)1, CtrlC = (char)3, CtrlV = (char)22, CtrlX = (char)24, CtrlZ = (char)26;
+
+    public static bool IsShifted(char c) => c >= (char)0xF720 && c <= (char)0xF728;
+    /// <summary>The plain key of a shifted navigation key (others unchanged).</summary>
+    public static char Unshift(char c) => IsShifted(c) ? (char)(c - 0x20) : c;
     public static bool IsNavigation(char c) => c >= '' && c <= '';
     public static bool IsPrintable(char c) => c >= ' ' && c != Rubout && !IsNavigation(c);
 }

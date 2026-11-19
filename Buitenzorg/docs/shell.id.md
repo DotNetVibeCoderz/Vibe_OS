@@ -15,6 +15,7 @@ perintah OS sendiri plus sekumpulan coreutils.
 | ↑ / ↓ | riwayat perintah (disimpan di `/disk/HISTORY.TXT`, 200 baris) |
 | Tab | lengkapi nama perintah atau berkas |
 | Ctrl+L / Ctrl+C | bersihkan layar / batalkan baris |
+| Ctrl+V | tempel papan klip sistem (baris baru menjadi `; `) |
 | PageUp / PageDown, roda mouse | gulir ke atas |
 
 ## Baris perintah
@@ -25,7 +26,21 @@ echo halo > /ram/A.TXT; cat < /ram/A.TXT >> /ram/B.TXT   # redirect
 mkdir /ram/X && cp /ram/A.TXT /ram/X || echo gagal       # ; && ||
 X=kebun; echo "nama: $X, status $?"                      # variabel, $?
 ls /disk/H*.ELF                                          # glob * ?
+echo "$(ls /disk | wc -l) berkas, $(( 6 * 7 )) jawaban"  # $(perintah), $((hitung))
+for f in $(ls /ram); do echo "- $f"; done                # $(...) dipecah jadi kata
+ls /disk | clip; paste                                   # papan klip sistem
 ```
+
+`$(perintah)` menjalankan baris perintah dan menaruh keluarannya di situ (tanpa
+kutip dipecah menjadi kata, dengan kutip tetap satu string; boleh bersarang).
+`$((ekspresi))` adalah aritmetika bilangan bulat: `+ - * / %`, perbandingan
+`< <= > >= == !=` (1 atau 0), `&& || !`, kurung, angka dan variabel (`$X` atau
+cukup `X`; yang tidak ada = 0); pembagian dengan nol menggagalkan perintah.
+
+**Warna:** Terminal menggambar kode warna ANSI (`ESC[31m` ... `ESC[0m`: warna
+teks 30-37 / 90-97, latar 40-47, tebal = terang) yang dicetak program;
+`echo -e '\e[32mhijau\e[0m biasa'` untuk mencobanya (kutip tunggal menjaga
+garis miring terbalik; `-e` juga mengenal `\n` dan `\t`).
 
 Kutip: `'...'` apa adanya, `"..."` mengembangkan `$NAMA`, `${NAMA}`, `$?`; `\`
 meloloskan satu karakter. `PATH` (bawaan `/disk:/ram`), `PWD`, `HOME`, `USER`
@@ -33,8 +48,14 @@ dan `SHELL` sudah ada; `env`/`set`/`export NAMA=nilai`, `unset`.
 
 **Coreutils:** `cat grep head tail wc sort uniq tee cp mv mkdir rmdir touch
 find hexdump/xxd seq basename dirname true false env set export unset history
-test [`. Perintah lain (`ls`, `rm`, `ps`, `kill`, `run`, `bz`, `ipconfig`,
-`ping`, `theme`, ...) ada di `help`.
+test [ clip paste`. **Sistem:** `ps`, `top` (proses menurut waktu CPU, memori,
+uptime), `free` (RAM, frame, heap kernel), `uptime`, `dmesg`, `df`, `lsusb`.
+Perintah lain (`ls`, `rm`, `kill`, `run`, `bz`, `ipconfig`, `ping`, `theme`,
+...) ada di `help`.
+
+**Papan klip:** satu teks yang dipakai bersama oleh Terminal dan semua app
+(Ctrl+C / X / V di kotak teks dan di Studio). `clip TEKS` atau `... | clip`
+menyalin, `paste` mencetaknya, Ctrl+V menempelkannya di baris perintah.
 
 ## Tab dan job
 
@@ -107,8 +128,23 @@ done
   dalam satu baris dipisah `;`.
 * Kondisi adalah perintah; `test` / `[ ]` mengenal `-e -f -d PATH`,
   `-z -n STR`, `A = B`, `A != B`, `N -eq -ne -lt -le -gt -ge M`, `!`, `-a`, `-o`.
-* **Belum ada:** substitusi perintah `$(...)` dan aritmetika `$((...))`,
-  fungsi, `case`, here-document, job latar (`&`).
+* **Fungsi:** `nama() { ...; }` atau `function nama { ...; }`, dalam satu
+  baris atau beberapa; dipanggil seperti perintah dengan `$1`..`$9`, `$#`,
+  `$@` sendiri; `return [N]` keluar dari fungsi; rekursi jalan (8 tingkat:
+  fungsi dan skrip berbagi batas sarang). `functions` menampilkan daftarnya;
+  `type NAMA` membedakan fungsi dari perintah. Simpan fungsi Anda di
+  `/disk/PROFILE.SH`.
+
+```sh
+fakt() {
+    if [ $1 -le 1 ]; then echo 1; return 0; fi
+    echo $(( $1 * $(fakt $(( $1 - 1 ))) ))
+}
+fakt 5          # 120
+```
+
+* **Belum ada:** `case`, here-document, variabel `local` (variabel di dalam
+  fungsi adalah variabel shell).
 
 **Batas:** skrip berjalan di task kernel milik desktop, jadi satu run paling
 banyak 20.000 pernyataan dan satu `while` paling banyak 5.000 putaran; skrip

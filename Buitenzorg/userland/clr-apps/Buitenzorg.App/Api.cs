@@ -22,6 +22,10 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int ScreenWidth();
     [DllImport("buitenzorg")] internal static extern int ScreenHeight();
     [DllImport("buitenzorg")] internal static extern int IsInteractive();
+    [DllImport("buitenzorg")] internal static extern int IdleInhibit(int on);
+    [DllImport("buitenzorg")] internal static extern string ClipboardGet();
+    [DllImport("buitenzorg")] internal static extern int ClipboardSet(string text);
+    [DllImport("buitenzorg")] internal static extern long ClipboardSeq();
     [DllImport("buitenzorg")] internal static extern long Spawn(string path, string args);
     [DllImport("buitenzorg")] internal static extern long Wait(long pid);
     [DllImport("buitenzorg")] internal static extern string FsList(string path);
@@ -124,6 +128,69 @@ public static class Session
     /// draw, report and exit rather than wait for a keyboard.
     /// </summary>
     public static bool IsInteractive => Native.IsInteractive() != 0;
+
+    /// <summary>Game mode: true keeps the desktop awake (no screensaver) while
+    /// this program runs -- for games and media; false releases it. The kernel
+    /// releases it by itself when the program ends. Ignored off the device.</summary>
+    public static void KeepAwake(bool on)
+    {
+        try { Native.IdleInhibit(on ? 1 : 0); }
+        catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { }
+    }
+}
+
+/// <summary>
+/// The system clipboard (text), shared with every program and the Terminal
+/// (Ctrl+V pastes there; `clip` / `paste` in the shell). Off the device a
+/// private in-memory clipboard stands in.
+/// </summary>
+public static class Clipboard
+{
+    static string _sim = "";
+    static long _simSeq;
+    static bool _offDevice;
+
+    /// <summary>The clipboard's text ("" when empty).</summary>
+    public static string GetText()
+    {
+        if (!_offDevice)
+        {
+            try { return Native.ClipboardGet() ?? ""; }
+            catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _offDevice = true; }
+        }
+        return _sim;
+    }
+
+    /// <summary>Replace the clipboard (at most 64 KiB of UTF-8; false when refused).</summary>
+    public static bool SetText(string text)
+    {
+        text ??= "";
+        if (!_offDevice)
+        {
+            try { return Native.ClipboardSet(text) == 0; }
+            catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _offDevice = true; }
+        }
+        if (System.Text.Encoding.UTF8.GetByteCount(text) > 64 * 1024) return false;
+        _sim = text;
+        _simSeq++;
+        return true;
+    }
+
+    /// <summary>Grows with every change (watch it to notice copies made elsewhere).</summary>
+    public static long Sequence
+    {
+        get
+        {
+            if (!_offDevice)
+            {
+                try { return Native.ClipboardSeq(); }
+                catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _offDevice = true; }
+            }
+            return _simSeq;
+        }
+    }
+
+    public static bool ContainsText => GetText().Length > 0;
 }
 
 /// <summary>Other programs.</summary>

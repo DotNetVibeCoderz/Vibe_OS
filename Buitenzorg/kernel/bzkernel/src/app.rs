@@ -238,6 +238,7 @@ fn builtin_app_file(name: &str) -> Option<&'static str> {
         "statics" => Some("STATICS.ELF"),
         "crashme" => Some("CRASHME.ELF"),
         "bcl3" => Some("BCL3.ELF"),
+        "async" => Some("ASYNC.ELF"),
         "gcmem" => Some("GCMEM.ELF"),
         "bcl" => Some("BCL.ELF"),
         "bcl2" => Some("BCL2.ELF"),
@@ -271,7 +272,9 @@ fn builtin_app_file(name: &str) -> Option<&'static str> {
 
 /// True if `name` is a launchable app.
 pub fn is_app(name: &str) -> bool {
-    app_file(name).is_some()
+    // an ELF by absolute path (`run /disk/MYAPP.ELF`): spawn_with_args takes one
+    (name.starts_with('/') && name.to_ascii_uppercase().ends_with(".ELF") && vfs::stat(name).is_ok_and(|e| !e.is_dir))
+        || app_file(name).is_some()
         || crate::clr::dll_for(name).is_some()
         || crate::clr::script_for(name).is_some()
         || crate::bzpkg::entry_for(name).is_some_and(|e| e.ends_with(".DLL") || crate::clr::script_for(&alloc::format!("/{}", e)).is_some())
