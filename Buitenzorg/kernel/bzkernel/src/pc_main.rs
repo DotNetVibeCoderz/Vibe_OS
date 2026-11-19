@@ -75,6 +75,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod perm;
 mod screenshot;
 mod appprof;
 mod crash;
@@ -1867,6 +1868,10 @@ fn dahan_demo() {
         Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
     }
     if vfs::mounts().iter().any(|m| m == "/disk") {
+        match perm::self_test() {
+            Ok(s) => println!("[kernel] MILESTONE: PERMISSIONS OK ({})", s),
+            Err(e) => println!("[kernel] permissions self-test FAILED: {}", e),
+        }
         match bzpkg::self_test("/disk") {
             Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),
             Err(e) => println!("[kernel] .bzpkg self-test FAILED: {}", e),

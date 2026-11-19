@@ -89,6 +89,19 @@ hanya menunggu; job milik Terminal (`jobs` dari `bz run` mengatakannya);
 program dari tab yang ditutup tetap berjalan tanpa terdaftar. Boot self-test
 menjalankan semuanya lewat penekanan tombol (`MILESTONE: TERMINAL TABS OK`).
 
+## Konsol: aplikasi terminal
+
+**Konsol** (`run mkonsol`, Mulai > Utilitas) adalah terminal di jendelanya
+sendiri, di samping Terminal bawaan desktop: tab (Ctrl+T baru, Ctrl+W tutup,
+Ctrl+N / Ctrl+P pindah, atau klik strip; `+` menambah), masing-masing dengan
+folder dan riwayat sendiri; scrollback 2000 baris (roda, PageUp/PageDown);
+warna ANSI; seret di atas baris lalu Ctrl+C untuk menyalin, Ctrl+V menempel;
+F2 mengganti huruf normal/besar; Tab melengkapi nama berkas; Atas/Bawah
+menelusuri riwayat (dimulai dari `/disk/HISTORY.TXT` Terminal). Perintah
+berjalan di shell yang sama dengan Terminal; program yang dimulai dengan `run`
+didaftar oleh `jobs` dan dihentikan dengan `kill %N`. Perintah yang sedang
+berjalan tidak bisa disela (Ctrl+C hanya mengosongkan baris input).
+
 ## Alias dan `which`
 
 ```sh

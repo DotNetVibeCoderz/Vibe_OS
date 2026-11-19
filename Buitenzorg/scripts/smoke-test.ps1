@@ -237,6 +237,8 @@ if (-not $bzOk) {
     $hello = (& dotnet $bz device 2>&1) -join "`n"
     $echo = (& dotnet $bz run "echo hello-bzlink" 2>&1) -join "`n"
     $dep = (& dotnet $bz deploy $script --follow 4 2>&1) -join "`n"
+    # the console debugger on the PC: record + replay of the deployed script
+    $rdbg = (& dotnet $bz debug --remote $script --commands "v;l;q" 2>&1) -join "`n"
     $pulled = Join-Path $root "dist\bzlink-pull.txt"
     $pull = (& dotnet $bz pull /disk/BATANG.TXT $pulled 2>&1) -join "`n"
     # the VS Code debug adapter: a whole DAP session against the device (the
@@ -261,6 +263,17 @@ if (-not $bzOk) {
     $applog = ""
     foreach ($i in 1..30) { Start-Sleep 2; $applog = (& dotnet $bz logs helloclr 2>&1) -join "`n"; if ($applog -match "Hello from managed C#") { break } }
     $audit = (& dotnet $bz run "deploy log 200" 2>&1) -join "`n"
+    # hot reload from the PC: bz deploy --watch, then a save on this machine
+    # reaches the running UI script, which reloads in its window
+    $hotJs = Join-Path $root "dist\BZHOT.JS"
+    Set-Content -Path $hotJs -Value 'window("Hot", 160, 90); print("BZHOT satu"); while (running()) { present(); }' -Encoding ascii
+    $watchJob = Start-Job -ScriptBlock { param($b, $f) $env:BZ_DEVICE = "127.0.0.1:7171"; $env:BZ_CODE = "4321"; & dotnet $b deploy $f --watch-seconds 40 2>&1 } -ArgumentList $bz, $hotJs
+    foreach ($i in 1..60) { Start-Sleep 1; if (Select-String -Path $linkLog -Pattern "BZHOT satu" -Quiet) { break } }
+    Start-Sleep 1
+    Set-Content -Path $hotJs -Value 'window("Hot", 160, 90); print("BZHOT dua"); while (running()) { present(); }' -Encoding ascii
+    foreach ($i in 1..40) { Start-Sleep 1; if (Select-String -Path $linkLog -Pattern "BZHOT dua" -Quiet) { break } }
+    $watchOut = (Receive-Job -Job $watchJob -Wait -AutoRemoveJob 2>&1) -join "`n"
+    Remove-Item $hotJs -Force -ErrorAction SilentlyContinue
     Remove-Item Env:BZ_DEVICE, Env:BZ_CODE -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
@@ -272,6 +285,7 @@ if (-not $bzOk) {
     elseif ($dep -notmatch "/disk/BZLINK.JS") { $fail = "bz deploy: $dep" }
     elseif (-not (Select-String -Path $linkLog -Pattern "BZLINK 42" -Quiet)) { $fail = "the deployed script did not print 'BZLINK 42' (bz deploy said: $dep)" }
     elseif (-not ((Test-Path $pulled) -and ((Get-Content $pulled -Raw) -match "Akar menembus tanah"))) { $fail = "bz pull: $pull" }
+    elseif ($rdbg -notmatch "1 henti direkam" -or $rdbg -notmatch "baris 1") { $fail = "bz debug --remote: $rdbg" }
     elseif ($dap -notmatch "bz dap: \d+ checks, 0 failed") { $fail = "bz dap --check: $dap" }
     elseif ($prof -match "prof: memprofil" -and $prof -notmatch "Crash__Hot") { $fail = "bz prof: $prof" }
     elseif ($repo -notmatch "bz repo: [0-9]+ checks, 0 failed") { $fail = "bz repo --check: $repo" }
@@ -281,10 +295,11 @@ if (-not $bzOk) {
     elseif ($overCom2 -notmatch "over-com2") { $fail = "bz over serial COM2: $overCom2" }
     elseif ($applog -notmatch "Hello from managed C#") { $fail = "bz logs helloclr: $applog" }
     elseif ($audit -notmatch "tcp .*exec echo over-tcp" -or $audit -notmatch "serial COM2 .*exec echo over-com2" -or $audit -notmatch "write /disk/BZLINK.JS .*sha256") { $fail = "deploy log (audit): $audit" }
+    elseif (-not (Select-String -Path $linkLog -Pattern "BZHOT.JS: dimuat ulang" -Quiet) -or -not (Select-String -Path $linkLog -Pattern "BZHOT dua" -Quiet)) { $fail = "bz deploy --watch: the running script did not reload ($watchOut)" }
     Remove-Item $pulled -Force -ErrorAction SilentlyContinue
     if ($fail) { Write-Error "SMOKE TEST FAILED (boot-bzlink.log): $fail"; exit 1 }
     Assert-Markers -Log $linkLog -Markers @("[deploy] service on at boot", "[deploy] exec: echo hello-bzlink", "[deploy] wrote /disk/BZLINK.JS")
-    Write-Host "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran, bz dap debugged it, bz repo served packages, bz build-server compiled C#"
+    Write-Host "smoke [bzlink]: bz device/run/deploy/pull against a running OS over BZDP (UDP), the deployed script ran, bz dap debugged it, bz repo served packages, bz build-server compiled C#, bz deploy --watch hot-reloaded a running script"
 }
 
 $ideLog = Join-Path $root "dist\boot-ide.log"
@@ -295,7 +310,7 @@ $ideMarkers = $basic + @(
     "MILESTONE: VFS OK", "MILESTONE: SERVICES OK", "MILESTONE: ASYNC IO OK",
     "MILESTONE: NETWORK OK", "MILESTONE: TERMINAL OK", "MILESTONE: THEME OK",
     "MILESTONE: WORKSPACE OK", "MILESTONE: KANOPI OK",
-    "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 35 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
+    "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
 # The C# ring-3 milestones only run when the ELFs were embedded (bflat present).
 if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
     $ideMarkers += @("Hello from C#!", "MILESTONE: TUNAS OK",
@@ -315,7 +330,7 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
                      "MILESTONE: FILES OK", "MILESTONE: EDITOR OK",
                      "MILESTONE: IMGVIEW OK", "MILESTONE: JPEG OK",
                      "MILESTONE: MULTIPROC OK", "MILESTONE: DISK WRITE OK",
-                     "MILESTONE: PROCCTL OK", "MILESTONE: WALLPAPERS OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: ICONS OK",
+                     "MILESTONE: PROCCTL OK", "MILESTONE: WALLPAPERS OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: ICONS OK",
                      "MILESTONE: SMP SCHED OK", "MILESTONE: SMP KERNEL OK", "MILESTONE: SMP FINELOCK OK", "MILESTONE: SMP THREADS OK")
 }
 $ideMarkers += @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK")
@@ -499,7 +514,7 @@ if ((Test-Path $qemuGl) -and (Test-Path $image)) {
     }
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $copy -Force -ErrorAction SilentlyContinue
-    Assert-Markers -Log $log -Markers @("[virgl] 3D context up", "MILESTONE: GFX3D OK", "MILESTONE: GFX3D VIRGL OK", "MILESTONE: MANAGED APPS OK", "Studio: 35 checks, 0 failed", "GPU (virgl)): 7 objek")
+    Assert-Markers -Log $log -Markers @("[virgl] 3D context up", "MILESTONE: GFX3D OK", "MILESTONE: GFX3D VIRGL OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "GPU (virgl)): 7 objek")
     Write-Host "smoke [virgl]: 3D API on the host GPU (virtio-gpu-gl): self-test + Ruang 3D through virgl"
 } else {
     Write-Host "smoke [virgl]: skipped (no kernel\target\qemu-gl -- scripts\setup-virgl.ps1 prepares one)"
@@ -538,7 +553,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
         "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "MILESTONE: ARM64 EL0 OK", "Hello from EL0",
         "MILESTONE: ARM64 RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: ARM64 DISK OK", "MILESTONE: VIRTIO GPU OK", "MILESTONE: DHCP OK",
         "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: ARM64 PSCI OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK",
-        "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 35 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
+        "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
     if (Select-String -Path $log -Pattern "program 'hello'" -Quiet) {
         Assert-Markers -Log $log -Markers @("Hello from C#!", "MILESTONE: ARM64 CSHARP OK", "MILESTONE: MATANG OK",
             "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: BCL3 OK", "MILESTONE: ASYNC OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
@@ -574,7 +589,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $kernel8)) {
     }
     Stop-Process -Id $p.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
     Assert-Markers -Log $log -Markers @("BREM", "framebuffer 1280x720", "ARM64 SMP OK (4 CPUs: spin tables", "window system: 1280x720", "MILESTONE: HELLO KERNEL OK", "loader=rpi-direct", "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "GICv2 at 0xff841000/0xff842000", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 EL0 OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RPI4 BOOT OK", "BUITENZORG ARM64 READY")
-    if ($haveSd) { Assert-Markers -Log $log -Markers @("MILESTONE: SD CARD OK", "MILESTONE: ARM64 DISK OK (SD card", "wallpaper 'nature' loaded: true", "MILESTONE: MANAGED APPS OK", "Studio: 35 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "Lab Perangkat: 10 checks, 0 failed") }
+    if ($haveSd) { Assert-Markers -Log $log -Markers @("MILESTONE: SD CARD OK", "MILESTONE: ARM64 DISK OK (SD card", "wallpaper 'nature' loaded: true", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "Lab Perangkat: 10 checks, 0 failed") }
     # Board I/O for applications, and the native sample when the C# programs were built.
     Assert-Markers -Log $log -Markers @("MILESTONE: RPI4 IO OK")
     if (Select-String -Path $log -Pattern "Hello from C#" -SimpleMatch -Quiet) { Assert-Markers -Log $log -Markers @("MILESTONE: HWDEMO OK") }
@@ -615,7 +630,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     Start-Sleep -Seconds 3
     Send-VirtioInput -Log $log -Port 4484
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 35 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
     Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
     # The file the kernel wrote to /disk must be inside the image file.
     # (QEMU must be gone first: it holds the image open.)

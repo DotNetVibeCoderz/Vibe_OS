@@ -103,6 +103,15 @@ punya form, utilitas, game dan gambar:
 
 ![Form pendaftaran, Pong dan kalkulator BMI](img/script-ui-templates.png)
 
+## Muat ulang otomatis (hot reload)
+
+`run APP.JS --watch` (juga `.TS`, `.PY`, `.CSX`) terus mengawasi berkasnya:
+bila berubah, program dimulai lagi dari atas **di jendela yang sama** (isi
+kolom teks dikosongkan). Run yang gagal menampilkan galatnya di jendela dan
+menunggu versi berikutnya, bukan menutup. Studio menjalankan skrip UI dengan
+cara ini, jadi menyimpan (Ctrl+S) memuat ulang app yang sedang berjalan; dari
+PC, `bz deploy APP.JS --watch` mengunggah setiap simpanan.
+
 ## Cara kerjanya
 
 `CLRHOST.ELF` (host runtime managed) menjalankan berkas `.js/.ts/.py` dengan

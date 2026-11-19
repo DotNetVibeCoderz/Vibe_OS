@@ -37,6 +37,7 @@ public static class Folder
         new AppInfo("mbuah", "Panen Buah 3D", "Tangkap buah yang jatuh, hindari batu", IconKind.Leaf, 0xE0352B),
         new AppInfo("mweb", "Peramban", "Jelajahi web: HTTP dan HTTPS", IconKind.Search, 0x5FA8D3),
         new AppInfo("munduh", "Unduhan", "Unduh berkas, jeda dan lanjutkan", IconKind.Save, 0x5FA8D3),
+        new AppInfo("mkonsol", "Konsol", "Terminal: tab, warna, salin/tempel, job", IconKind.Menu, 0x7CC4A4),
         new AppInfo("mlabirin", "Labirin Kebun", "Labirin 3D: kumpulkan bunga emas", IconKind.Leaf, 0x7CC4A4),
         new AppInfo("mbaca", "Baca", "Pembaca e-book EPUB dan teks", IconKind.File, 0xD9B77E),
         new AppInfo("mchip8", "CHIP-8", "Emulator CHIP-8 + dua program orisinal", IconKind.Grid, 0x9BE0B8),
@@ -146,7 +147,17 @@ public static class Folder
     public static int SelfTest(bool all)
     {
         int failed = 0;
-        void Report(Checks c) { Console.WriteLine(c.ToString()); if (!c.Ok) failed++; }
+        // each line says how long that app's self-test took (the time since the
+        // previous report): boot-time regressions show up per app in the log
+        var clock = System.Diagnostics.Stopwatch.StartNew(); // monotonic: a self-test sets the wall clock
+        long mark = 0;
+        void Report(Checks c)
+        {
+            long now = clock.ElapsedMilliseconds;
+            Console.WriteLine(c.ToString() + " (" + (now - mark) + " ms)");
+            mark = now;
+            if (!c.Ok) failed++;
+        }
 
         // 1. the toolkit on a real window: rounded rects, gradients, styled text, blends, a popup
         // a real window on the device; headless off it (no desktop to draw on)
@@ -188,6 +199,7 @@ public static class Folder
         Report(MBaca.ReaderApp.SelfTest()); // EPUB through the host ZIP natives + the page engine
         Report(MLabirin.LabirinApp.SelfTest()); // the host ray caster (RayRender), one blit per frame
         Report(MVideo.VideoApp.SelfTest()); // AVI: MJPEG frames through Picture, PCM through the mixer
+        Report(MKonsol.KonsolApp.SelfTest()); // the standalone terminal: tabs, folders, colours, copy/paste through SHELL_RUN
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());

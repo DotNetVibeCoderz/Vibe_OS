@@ -1385,6 +1385,11 @@ fn help() -> Vec<String> {
     v
 }
 
+/// "  izin: network, audio" for an installed package (`bz install`).
+fn perm_line(name: &str) -> String {
+    format!("  izin: {} (ubah: bz perm {} +izin / -izin)", crate::perm::names(crate::bzpkg::find(name).map_or(0, |p| p.perms)), name)
+}
+
 fn help_lines() -> Vec<String> {
     ["Perintah:",
      "  ls|dir [path]     daftar isi direktori (VFS)",
@@ -2361,6 +2366,7 @@ fn bz_cmd(args: &[&str]) -> (Vec<String>, Effect) {
         Some("repo") | Some("update") | Some("upgrade") => (crate::repo::command(args), Effect::None),
         Some("buildsrv") => (crate::rbuild::command(args), Effect::None),
         Some("trust") => (crate::bzpkg::trust_command(&args[1..]), Effect::None),
+        Some("perm") | Some("izin") => (crate::bzpkg::perm_command(&args[1..]), Effect::None),
         Some("rollback") => (
             match args.get(1) {
                 Some(n) => match crate::bzpkg::rollback(n) {
@@ -2450,8 +2456,8 @@ fn pkg_install(name: Option<&str>) -> Vec<String> {
     };
     if is_package_file(name) {
         return match crate::bzpkg::install_file(&resolve(Some(name))) {
-            Ok((n, v, Some(old))) => vec![format!("diperbarui: {} {} -> {}", n, old, v), format!("  {}", crate::bzpkg::last_signer())],
-            Ok((n, v, None)) => vec![format!("terpasang: {} v{} (dari berkas; jalankan '{}')", n, v, n), format!("  {}", crate::bzpkg::last_signer())],
+            Ok((n, v, Some(old))) => vec![format!("diperbarui: {} {} -> {}", n, old, v), format!("  {}", crate::bzpkg::last_signer()), perm_line(&n)],
+            Ok((n, v, None)) => vec![format!("terpasang: {} v{} (dari berkas; jalankan '{}')", n, v, n), format!("  {}", crate::bzpkg::last_signer()), perm_line(&n)],
             Err(e) => vec![format!("bz install: {}", e)],
         };
     }

@@ -660,7 +660,9 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > fungsi (`nama() { ...; }`, argumen, `return`, rekursi), `echo -e`, warna ANSI di
 > Terminal, `top`/`free`/`uptime`, papan klip sistem (syscall `CLIPBOARD`, Ctrl+V,
 > `clip`/`paste`) → `MILESTONE: SHELL SCRIPT OK`; lalu `case ... esac`, `local`,
-> here-document (`<<EOF`, `<<'EOF'`, `<<-EOF`). Belum: app Terminal mandiri.
+> here-document (`<<EOF`, `<<'EOF'`, `<<-EOF`). **App Terminal mandiri ✓
+> (2026-11-19):** Konsol (`mkonsol`) -- tab dengan folder sendiri, scrollback,
+> warna ANSI, salin/tempel, dua ukuran huruf, `jobs`/`kill %N`.
 - **Line editing**: kursor kiri/kanan, Home/End, Ctrl+A/E/U/K/W, **history**
   (↑/↓, `history`, simpan ke berkas), **tab-completion** perintah + path.
 - **Pipes `|`, redirection `>`/`>>`/`<`**, `&&`/`||`/`;`, variabel environment
@@ -680,7 +682,10 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > `bz keygen`, `bz pack --sign`, `bz inspect`; di perangkat `bz trust add/remove/
 > require on` (`/disk/TRUST.CFG`), tanda tangan rusak selalu ditolak.
 > **Sub-folder ✓ 2026-11-19** (path sampai 4 tingkat, folder kosong dibersihkan).
-> Belum: izin dari manifest.
+> **Izin dari manifest ✓ 2026-11-19:** permission broker di batas syscall
+> (`perm.rs`: network / audio / devices / system / filesystem.write), `bz perm`,
+> galat `DENIED`, anak tak pernah mendapat lebih dari induknya
+> (`MILESTONE: PERMISSIONS OK`).
 - **Format paket `.bzpkg`**: arsip berisi `app.manifest` + ELF/skrip + aset +
   hash SHA-256 (tanda tangan menyusul). `bz install ./app.bzpkg` dari berkas.
 - **Host CLI**: `bz pack` (buat `.bzpkg` dari proyek), `bz publish` (ke repo).
@@ -759,8 +764,12 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 > paket + jalankan, log perangkat mengalir balik), `bz run` (output + status),
 > `bz shell`, `bz push/pull/ls/logs -f/kill`; agen menambah op READ/EXEC/OUTPUT
 > dan bisa aktif saat boot (`/disk/DEPLOY.CFG`, fw_cfg); smoke `[bzlink]`;
-> panduan `docs/bz-link.md`. Belum: `bz debug --remote`, transport serial/TCP,
-> hash kriptografis + audit log.
+> panduan `docs/bz-link.md`. Transport serial/TCP, hash + audit log ✓
+> (2026-11-08). **`bz debug --remote` + hot reload ✓ (2026-11-19):** debugger
+> konsol di PC (skrip: rekam + putar ulang; native: `dbg`), `run X.JS --watch`
+> (skrip UI dimuat ulang di jendelanya saat berkas berubah; Run di Studio),
+> `bz deploy --watch`. **Bagian Developer Workstation selesai** kecuali
+> compiler C# di dalam OS (jangka panjang).
 - **Lokal**: `run <path>` menjalankan ELF/skrip dari path mana pun (bukan hanya
   registry); "Run" dari Studio; hot-reload skrip.
 - **Agen `bzd` (bz-link) di OS + perintah host `bz remote`**: `bz device list/
@@ -1014,6 +1023,27 @@ HTML mini. App ring-3 jalan **satu per satu**.
 dengan gamepad USB; video diputar dengan A/V sync; browser membuka halaman
 HTTPS; adegan 3D bertekstur ≥30 fps lewat rasterizer software dan lewat
 virtio-gpu.
+
+## 🔤 Font & Tipografi (permintaan 2026-11-19, dikerjakan setelah Multimedia)
+
+Kondisi sekarang: satu font bitmap monospace (`noto-sans-mono-bitmap`) dalam
+tiga gaya (16 px, tebal 16 px, tebal 24 px), dipakai kernel dan app lewat draw
+op. Tujuan: font TrueType/OpenType sungguhan plus pengelola font ala
+[fontist](https://www.fontist.org/).
+
+- **Mesin font**: `ttf-parser` + `fontdue` (keduanya `no_std`) -- rasterisasi
+  anti-aliasing + kerning, cache glyph per (font, ukuran); di compositor kernel
+  (judul jendela, Terminal, menu) dan untuk app.
+- **ABI**: gambar teks dengan id font + ukuran (op baru / `DrawCmd.pad`) dan
+  syscall `FONT_OP` (daftar / muat / metrik); Buitenzorg.UI `FontFamily` /
+  `FontSize`; API skrip UI dan native sama.
+- **Penyimpanan**: `/disk/FONTS/*.TTF|*.OTF`.
+- **`bz font search|install|list|remove`**: indeks "formula" (nama, URL,
+  SHA-256, lisensi) seperti fontist; font berlisensi bebas (OFL: Noto, Inter,
+  JetBrains Mono, Plus Jakarta Sans, ...) dipasang langsung lewat HTTPS,
+  lisensi lain minta persetujuan; dari PC `bz font install --from-pc`.
+- **Pengaturan**: font sistem + font terminal/editor dipilih di Pengaturan.
+- Perkiraan: 3-4 sesi kerja.
 
 ## 🏛️ v1.0 — "Buitenzorg" · Stable Release (x86-64) — *sedang berjalan*
 Stabilkan API & ABI, security hardening, dokumentasi + tutorial, debugger +

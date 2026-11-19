@@ -12,7 +12,7 @@ if (Device.Run(args) is int deviceResult)
 return args switch
 {
     ["deploy", .. var rest] when rest.Length >= 1 => DeployCmd(rest),
-    ["deploy"] => Fail("usage: bz deploy <file|project-dir> [--as NAME.EXT] [--no-run] [--follow SECONDS]"),
+    ["deploy"] => Fail("usage: bz deploy <file|project-dir> [--as NAME.EXT] [--no-run] [--follow SECONDS] [--watch]"),
     [] or ["help"] or ["--help"] or ["-h"] => Help(),
     ["version"] or ["--version"] => Version(),
     ["new", var template, var name] => NewProject(template, name),
@@ -53,7 +53,8 @@ static int Help()
         a running device (BZDP over UDP 7070; on the device: 'deploy on [code]'):
           bz device connect <host[:port]> <code>   remember the device (~/.bz/device.json)
           bz device [info|forget]           say hello / forget it
-          bz deploy <file|dir> [--as N] [--no-run] [--follow S]
+          bz deploy <file|dir> [--as N] [--no-run] [--follow S] [--watch]
+          bz debug --remote <file.js|ts|py|csx|app> [--break L] [--commands "n;v;q"]
                                             upload to /disk and start it: .bzpkg -> bz install,
                                             .ELF/.DLL/.JS/.TS/.PY/.CSX -> run, .SH -> sh;
                                             a project dir is packed (bz pack) first
@@ -201,6 +202,7 @@ static int Pack(string[] args)
 
     string category = m.Type switch { "game" => "GAME", "widget" => "UTILITAS", "web" => "INTERNET", _ => "LAINNYA" };
     string manifest = $"name={name}\nversion={m.Version}\ntitle={m.Name}\nkind={m.Type}\ncategory={category}\nentry={entry ?? ""}\n"
+        + (m.Permissions.Count == 0 ? "" : $"permissions={string.Join(",", m.Permissions)}\n")
         + (string.IsNullOrWhiteSpace(depends) ? "" : $"depends={depends.Replace(" ", "")}\n");
     using var ms = new MemoryStream();
     using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
@@ -242,14 +244,16 @@ static int DeployCmd(string[] args)
 {
     string target = args[0];
     string? asName = null;
-    bool run = true;
-    int follow = 5;
+    bool run = true, watch = false;
+    int follow = 5, watchSeconds = 0;
     for (int i = 1; i < args.Length; i++)
     {
         switch (args[i])
         {
             case "--as" when i + 1 < args.Length: asName = args[++i]; break;
             case "--no-run": run = false; break;
+            case "--watch": watch = true; break;
+            case "--watch-seconds" when i + 1 < args.Length && int.TryParse(args[i + 1], out var ws): watch = true; watchSeconds = ws; i++; break;
             case "--follow" when i + 1 < args.Length && int.TryParse(args[i + 1], out var f): follow = f; i++; break;
             default: return Fail($"unknown option '{args[i]}'");
         }
@@ -262,9 +266,11 @@ static int DeployCmd(string[] args)
         string tmp = Path.Combine(Path.GetTempPath(), stem.ToUpperInvariant() + ".BZP");
         int r = Pack(new[] { target, "-o", tmp });
         if (r != 0) return r;
+        if (watch) return Device.DeployWatch(tmp, asName, target, () => Pack(new[] { target, "-o", tmp }) == 0, watchSeconds);
         return Device.Deploy(tmp, asName, run, follow);
     }
     if (!File.Exists(target)) return Fail($"not found: {target}");
+    if (watch) return Device.DeployWatch(target, asName, target, null, watchSeconds);
     return Device.Deploy(target, asName, run, follow);
 }
 

@@ -89,6 +89,19 @@ jobs belong to the Terminal (`jobs` from `bz run` says so); a closed tab's
 programs keep running, unlisted. The self-test boot drives all of it with
 keystrokes (`MILESTONE: TERMINAL TABS OK`).
 
+## Konsol: the terminal app
+
+**Konsol** (`run mkonsol`, Start > Utilitas) is a terminal in its own window,
+next to the desktop's built-in Terminal: tabs (Ctrl+T new, Ctrl+W close,
+Ctrl+N / Ctrl+P switch, or click the strip; `+` adds one), each with its own
+folder and history; 2000 lines of scrollback (wheel, PageUp/PageDown); ANSI
+colours; drag over lines and press Ctrl+C to copy, Ctrl+V pastes; F2 switches
+between the normal and the large font; Tab completes file names; Up/Down walk
+the history (it starts with the Terminal's `/disk/HISTORY.TXT`). Commands run
+in the same shell as the Terminal; programs started with `run` are listed by
+`jobs` and stopped with `kill %N`. A command cannot be interrupted while it
+runs (Ctrl+C only clears the input line).
+
 ## Aliases and `which`
 
 ```sh

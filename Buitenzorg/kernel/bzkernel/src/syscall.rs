@@ -41,6 +41,10 @@ pub fn dispatch_from_user(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     // Profiler zone: total time spent servicing ring-3 syscalls. Inert unless
     // profiling is enabled.
     let _z = crate::profile::Guard::new("syscall");
+    // the permission broker: a package's program may only use what it was granted
+    if !crate::perm::check(nr, a0) {
+        return syserr::DENIED;
+    }
     let prev = task::set_in_user_syscall(true);
     let r = dispatch(nr, a0, a1, a2);
     task::set_in_user_syscall(prev);
@@ -597,6 +601,16 @@ fn sys_user_op(op: u64, req_ptr: u64, out_ptr: u64) -> u64 {
 fn sys_fs_op(op: u64, path_ptr: u64, a2: u64) -> u64 {
     use bz_abi::fs_op;
     let Some(path) = read_user_path_checked(path_ptr) else { return syserr::INVAL };
+    if op != bz_abi::fs_op::STAT && from_user() && !crate::perm::may_write(&path) {
+        return syserr::DENIED;
+    }
+    if op == bz_abi::fs_op::RENAME && from_user() {
+        match read_user_path_checked(a2) {
+            Some(to) if crate::perm::may_write(&to) => {}
+            Some(_) => return syserr::DENIED,
+            None => return syserr::INVAL,
+        }
+    }
     let ok = |r: Result<(), &'static str>| match r {
         Ok(()) => 0,
         Err(_) => syserr::INVAL,
@@ -747,6 +761,9 @@ fn sys_fs_write(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
         Some(p) => p,
         None => return syserr::INVAL,
     };
+    if from_user() && !crate::perm::may_write(&path) {
+        return syserr::DENIED;
+    }
     let data = copy_user_bytes(buf_ptr, len as usize);
     match crate::vfs::write(&path, &data) {
         Ok(()) => len,
@@ -766,6 +783,9 @@ fn sys_fs_append(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
         Some(p) => p,
         None => return syserr::INVAL,
     };
+    if from_user() && !crate::perm::may_write(&path) {
+        return syserr::DENIED;
+    }
     let data = copy_user_bytes(buf_ptr, len as usize);
     match crate::vfs::append(&path, &data) {
         Ok(()) => len,

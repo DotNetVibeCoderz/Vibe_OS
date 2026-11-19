@@ -57,6 +57,9 @@ bz device connect 127.0.0.1 1234
 | `bz logs [-f]` | log konsol perangkat (`-f` mengikutinya) |
 | `bz kill PID` | hentikan proses (`bz run ps` mendaftarnya) |
 | `bz prof APP [arg] [--seconds N]` | memprofil program di perangkat, mencetak fungsi terpanas ([Debugging](debugging.id.md)) |
+| `bz deploy BERKAS\|FOLDER --watch` | deploy, lalu ulangi setiap kali disimpan di PC: skrip UI berjalan dengan `--watch` dan **dimuat ulang di jendelanya**; program atau paket dihentikan lalu dijalankan lagi; log perangkat mengalir (Ctrl+C mengakhiri; `--watch-seconds N` berhenti setelah N dtk) |
+| `bz debug --remote BERKAS.js\|ts\|py\|csx` | debugger konsol tanpa VS Code: merekam jalannya skrip di perangkat, lalu `n`/`p` maju/mundur per henti, `c` lanjut ke breakpoint berikutnya (`b BARIS`, `--break 5,8`), `v` variabel, `bt` call stack, `o` keluaran sejauh ini, `l` kode di sekitar baris, `q` keluar |
+| `bz debug --remote APP` | sama untuk program native: setiap perintah ke `dbg` perangkat (`break NAMA`, `step`, `regs`, `bt`, `mem ALAMAT`); `c` sampai henti berikutnya, `q` menghentikan program |
 | `bz dap` | server Debug Adapter Protocol untuk VS Code: breakpoint di skrip dan program native di perangkat ([Debugging](debugging.id.md#-vs-code-breakpoint-di-perangkat-yang-berjalan-bz-dap)) |
 
 Nama berkas di perangkat berformat FAT 8.3 (`GAME.JS`, `HELLO.ELF`); `bz

@@ -34,6 +34,12 @@ bz_enter_user_thread:
     stp x29, x30, [sp, #80]
     mov x9, sp
     str x9, [x3]
+    // No exception from here to eret: an IRQ taken between `msr elr_el1` and
+    // `msr spsr_el1` returned with ELR = the kernel PC it interrupted, and the
+    // eret below then entered EL0 *at that kernel address* (a rare crash seen
+    // in CI as "undefined instruction" at a 0xffffffff8000xxxx pc, lr 0, sp =
+    // the fresh stack top). SPSR = 0 unmasks everything again in EL0.
+    msr daifset, #0xf
     msr sp_el0, x1
     msr elr_el1, x0
     msr spsr_el1, xzr          // EL0t, D/A/I/F unmasked

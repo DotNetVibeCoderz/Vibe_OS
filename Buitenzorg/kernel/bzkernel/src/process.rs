@@ -18,6 +18,8 @@ struct App {
     cpu_ticks: u64,
     /// Argument string handed to PROC_SPAWN / `run <app> <args>`.
     args: String,
+    /// What it may do (`perm.rs`); the system's programs: everything.
+    grant: crate::perm::Grant,
 }
 
 static APPS: Mutex<Vec<App>> = Mutex::new(Vec::new());
@@ -41,8 +43,21 @@ pub fn app_start(name: &str) -> u64 {
         name: copy_name(name),
         cpu_ticks: 0,
         args: String::new(),
+        grant: crate::perm::Grant::system(),
     });
     pid
+}
+
+/// Set program `pid`'s grant (before its task can run, like its args).
+pub fn set_grant(pid: u64, g: crate::perm::Grant) {
+    if let Some(a) = APPS.lock().iter_mut().find(|a| a.pid == pid) {
+        a.grant = g;
+    }
+}
+
+/// Program `pid`'s grant (everything for a pid with no record: the kernel).
+pub fn grant(pid: u64) -> crate::perm::Grant {
+    APPS.lock().iter().find(|a| a.pid == pid).map(|a| a.grant.clone()).unwrap_or_else(crate::perm::Grant::system)
 }
 
 /// Futex key a PROC_WAIT on `pid` sleeps on. Far above every user address

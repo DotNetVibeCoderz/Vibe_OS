@@ -485,10 +485,11 @@ public sealed partial class Studio
         // a UI script (it opens a window): its own process through the script host
         if (IsUiScript(Current.Text))
         {
-            Log("$ run " + Current.Path);
-            var started = Shell.Run("run " + Current.Path);
+            // --watch: saving the file again (Ctrl+S) reloads the running app
+            Log("$ run " + Current.Path + " --watch");
+            var started = Shell.Run("run " + Current.Path + " --watch");
             foreach (var l in started.Lines) Log(l);
-            Log(started.Ok ? "aplikasi berjalan di jendelanya sendiri (print() masuk ke log sistem; tutup jendelanya untuk berhenti)" : "gagal memulai aplikasi");
+            Log(started.Ok ? "aplikasi berjalan di jendelanya sendiri; simpan (Ctrl+S) untuk memuat ulang (print() masuk ke log sistem; tutup jendelanya untuk berhenti)" : "gagal memulai aplikasi");
             Problems.Clear();
             MarkProblems();
             UpdateStatus();
@@ -680,6 +681,18 @@ public sealed partial class Studio
             c.That(uiPid > 0 && st.Stops.Count >= 2 && st.Stops[1].Line == 4 && st.Stops[1].Globals.Any(v => v.Name == "n" && v.Value == "1") && string.Join("\n", st.Output).Contains("frames"),
                    "F6 debugged a UI script as an app (pid " + uiPid + "): " + st.Stops.Count + " stops on line 4, n = 1 on the second");
             st.EndDebug();
+            // hot reload: a UI script started with --watch picks up a new
+            // version of its file while it runs, in the same process
+            Files.WriteAllText(dir + "/HOT.JS", "window(\"Hot\", 160, 90);\nprint(\"versi satu\");\nlet n = 0;\nwhile (running()) {\n  n = n + 1;\n  present();\n}\n");
+            long hot = Programs.Start(dir + "/HOT.JS", "--watch");
+            // save the new version once the first one runs
+            for (int i = 0; i < 100 && hot > 0 && !string.Join("\n", Shell.Run("logs " + hot).Lines).Contains("versi satu"); i++)
+                System.Threading.Thread.Sleep(200);
+            Files.WriteAllText(dir + "/HOT.JS", "window(\"Hot\", 160, 90);\nprint(\"versi dua\");\n");
+            long hotCode = hot > 0 ? Programs.WaitForExit(hot) : -1;
+            string hotLog = string.Join("\n", Shell.Run("logs " + hot).Lines);
+            c.That(hotCode == 0 && hotLog.Contains("versi satu") && hotLog.Contains("dimuat ulang") && hotLog.Contains("versi dua"),
+                   "hot reload: the running UI script took the saved version (pid " + hot + ", exit " + hotCode + ")");
             var tr = st.TerminalRun("echo halo studio | wc -w");
             c.That(tr.Ok && tr.Output.Trim() == "2", "terminal panel runs a pipeline");
             // every runnable template really runs: console ones in the kernel

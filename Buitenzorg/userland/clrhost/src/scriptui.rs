@@ -109,6 +109,21 @@ struct Ui {
     focus: Option<String>,
     /// run under the debugger (`--bzdebug`): printed lines are also recorded
     debug: bool,
+    /// hot reload (`--watch`): the file, a hash of its text, when it was
+    /// last looked at; `reload` = it changed, the program restarts
+    watch: Option<(String, u64, u64)>,
+    reload: bool,
+}
+
+/// FNV-1a of a file's bytes (`--watch` compares it once a second).
+fn file_hash(path: &str) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    if let Some(b) = sys::read_file(path) {
+        for x in b {
+            h = (h ^ x as u64).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    h
 }
 
 fn nanos() -> u64 {
@@ -170,6 +185,14 @@ impl Ui {
         }
         self.last_frame = nanos();
         self.click = None;
+        if let Some((path, hash, checked)) = &mut self.watch {
+            if self.last_frame.saturating_sub(*checked) >= 1_000_000_000 {
+                *checked = self.last_frame;
+                if file_hash(path) != *hash {
+                    self.reload = true;
+                }
+            }
+        }
         if self.win == 0 {
             return;
         }
@@ -388,7 +411,10 @@ impl Host for Ui {
                 self.present();
                 nil
             }
-            "running" => Value::Bool(!self.closed && (self.interactive || self.frames < 3)),
+            // headless: three frames -- or, watching, ~10 s so a change can arrive
+            "running" => Value::Bool(
+                !self.closed && !self.reload && (self.interactive || self.frames < if self.watch.is_some() { 300 } else { 3 }),
+            ),
             "quit" => {
                 self.closed = true;
                 nil
@@ -499,11 +525,20 @@ pub fn run(path: &str, mut args: Vec<String>) -> ! {
         let breaks = spec.split(',').filter_map(|n| n.trim().parse().ok()).collect();
         debug = Some((breaks, spec == "all", report));
     }
+    // `--watch` (hot reload): restart the program in the same window
+    // whenever the file changes (Studio's Run, `bz deploy --watch`)
+    let watch = match args.iter().position(|a| a == "--watch") {
+        Some(i) => {
+            args.remove(i);
+            true
+        }
+        None => false,
+    };
     let Some(bytes) = sys::read_file(path) else {
         sys::print(&format!("[script] {}: file not found\n", path));
         sys::exit(3);
     };
-    let src = String::from_utf8_lossy(&bytes).into_owned();
+    let mut src = String::from_utf8_lossy(&bytes).into_owned();
     let p = path.to_ascii_lowercase();
     let lang = if p.ends_with(".py") { Lang::Python } else if p.ends_with(".ts") { Lang::Ts } else { Lang::Js };
     let t0 = nanos();
@@ -527,6 +562,8 @@ pub fn run(path: &str, mut args: Vec<String>) -> ! {
         fields: BTreeMap::new(),
         focus: None,
         debug: debug.is_some(),
+        watch: if watch { Some((String::from(path), file_hash(path), t0)) } else { None },
+        reload: false,
     };
     if let Some((breaks, every, report)) = debug {
         const MAX_STOPS: usize = 400;
@@ -543,12 +580,59 @@ pub fn run(path: &str, mut args: Vec<String>) -> ! {
         sys::print(&format!("[script] {}: debugger: {} -> {} ({})\n", path, ui.frames, report, if ok { "ok" } else { "GAGAL" }));
         sys::exit(if ok { 0 } else { 1 });
     }
-    let (lines, error, steps) = if p.ends_with(".csx") {
-        let out = crate::csx::run_with(&src, &ui.args.clone(), Some(&mut CsUi(&mut ui)), u64::MAX);
-        (out.lines, out.error, out.steps)
-    } else {
-        let out = script::run_with(lang, &src, Some(&mut ui), u64::MAX);
-        (out.lines, out.error, out.steps)
+    let mut reloads = 0u32;
+    let (lines, error, steps) = loop {
+        let (lines, error, steps) = if p.ends_with(".csx") {
+            let out = crate::csx::run_with(&src, &ui.args.clone(), Some(&mut CsUi(&mut ui)), u64::MAX);
+            (out.lines, out.error, out.steps)
+        } else {
+            let out = script::run_with(lang, &src, Some(&mut ui), u64::MAX);
+            (out.lines, out.error, out.steps)
+        };
+        if ui.watch.is_none() || ui.closed {
+            break (lines, error, steps);
+        }
+        for l in &lines {
+            sys::print(l);
+            sys::print("\n");
+        }
+        // watching: a failed run shows its error in the window and waits for
+        // the next version of the file; a finished one waits too
+        if !ui.reload {
+            if let Some(e) = &error {
+                sys::print(&format!("[script] {}: error: {} (menunggu perubahan berkas)\n", path, e));
+            }
+            let msg = match &error {
+                Some(e) => format!("Galat: {}", e),
+                None => String::from("Program selesai -- menunggu perubahan berkas"),
+            };
+            let headless_until = ui.frames + 30; // headless (self-test): ~1 s
+            while !ui.reload && !ui.closed && (ui.interactive || ui.frames < headless_until) {
+                if ui.win != 0 {
+                    ui.draw(CLEAR, 0, 0, 0, 0, 0x2A1A1A, 0, "", 0);
+                    ui.draw(DRAW_TEXT_STYLED, 12, 12, 0, 0, 0xFFB4A8, 0, &msg, 0);
+                    ui.draw(DRAW_TEXT_STYLED, 12, 40, 0, 0, 0xC8C8C8, 0, "Simpan berkasnya untuk memuat ulang.", 0);
+                }
+                ui.present();
+            }
+            if !ui.reload {
+                break (Vec::new(), None, steps);
+            }
+        }
+        // the new version
+        ui.reload = false;
+        reloads += 1;
+        match sys::read_file(path) {
+            Some(b) => src = String::from_utf8_lossy(&b).into_owned(),
+            None => break (Vec::new(), Some(String::from("berkas hilang")), steps),
+        }
+        if let Some(w) = &mut ui.watch {
+            w.1 = file_hash(path);
+        }
+        ui.fields.clear();
+        ui.focus = None;
+        ui.keys.clear();
+        sys::print(&format!("[script] {}: dimuat ulang ({})\n", path, reloads));
     };
     for l in &lines {
         sys::print(l);

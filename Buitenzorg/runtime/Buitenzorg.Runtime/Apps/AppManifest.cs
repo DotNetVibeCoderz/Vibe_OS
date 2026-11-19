@@ -42,6 +42,7 @@ public sealed class AppManifest
         "filesystem.read", "filesystem.write", "network",
         "ai.llm", "ai.vision", "ai.genai",
         "camera", "microphone", "gallery",
+        "audio", "devices", "system",
     ];
 
     public static AppManifest Load(string path)

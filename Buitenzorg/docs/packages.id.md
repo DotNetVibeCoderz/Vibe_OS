@@ -54,6 +54,27 @@ Paket terpasang, dan app registry yang dipasang dengan `bz install NAMA`,
 disimpan di `/disk/PKGS.CFG` dan dipulihkan saat boot. Paket dari berkas juga
 muncul di daftar App Store (`PKG_LIST`).
 
+## Izin
+
+Paket menyebut kebutuhan programnya di `app.manifest`:
+`"permissions": ["network", "audio"]`. Id yang dikenal: `network` (socket,
+TCP, DNS), `audio` (memutar suara, volume), `devices` (GPIO/I2C/SPI/UART/LED
+Raspberry Pi), `system` (`Shell.Run`, pengaturan, akun, paket, menghentikan
+program lain), `filesystem.write` (menulis di mana saja; tanpanya hanya di
+`/ram` dan foldernya sendiri `/disk/APPDATA/<NAMA>`); `filesystem.read`,
+`microphone`, `camera`, `gallery`, `ai.*` dicatat dan ditampilkan (belum ada
+yang dijaga).
+
+`bz install` memberi izin yang diminta manifest dan menampilkannya. Ubah di
+perangkat dengan `bz perm` (daftar), `bz perm NAMA -network` (cabut),
+`bz perm NAMA +devices` (beri). Broker bekerja di batas syscall: program paket
+itu (dan apa pun yang dimulainya -- anak tak pernah mendapat lebih dari
+induknya) yang memanggil sesuatu tanpa izin mendapat galat `DENIED`, dan
+penolakan pertama dicatat beserta perintah yang mengizinkannya. Program
+sistem tidak dibatasi; membaca berkas, menggambar, input dan jam terbuka untuk
+semua. Entry `.SH` berjalan di shell dengan hak Anda. Perubahan berlaku untuk
+program yang dijalankan setelahnya.
+
 ## Repo remote (`bz update`, `bz upgrade`)
 
 Paket bisa datang dari repo: folder berisi berkas `.bzpkg` dan `INDEX.TXT`,

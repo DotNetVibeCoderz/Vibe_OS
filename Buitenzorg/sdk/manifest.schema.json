@@ -24,7 +24,8 @@
         "enum": [
           "filesystem.read", "filesystem.write", "network",
           "ai.llm", "ai.vision", "ai.genai",
-          "camera", "microphone", "gallery"
+          "camera", "microphone", "gallery",
+          "audio", "devices", "system"
         ]
       },
       "uniqueItems": true,

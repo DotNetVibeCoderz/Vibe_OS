@@ -132,6 +132,7 @@ public class AbiContractTests
 
         Assert.Equal(ulong.MaxValue, SyscallErrors.NoSys);
         Assert.Equal(ulong.MaxValue - 1, SyscallErrors.Invalid);
+        Assert.Equal(ulong.MaxValue - 2, SyscallErrors.Denied);
     }
 
     [Fact]

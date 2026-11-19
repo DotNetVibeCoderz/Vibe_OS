@@ -70,6 +70,9 @@ RISC-V boards have only one UART (the console), so serial is PC-only.
 | `bz logs APP [-f]` | what one program printed (the last 8 KiB, also after it ended; `logs` on the device lists them) |
 | `bz kill PID` | stops a process (`bz run ps` lists them) |
 | `bz prof APP [args] [--seconds N]` | profiles a program on the device, prints the hottest functions ([Debugging](debugging.md#%EF%B8%8F-profiler-for-apps-prof-app-bz-prof)) |
+| `bz deploy FILE\|DIR --watch` | deploys, then again on every save on the PC: a UI script runs with `--watch` and **reloads in its window**; a program or package is stopped and started again; the device log streams meanwhile (Ctrl+C ends; `--watch-seconds N` stops after N s) |
+| `bz debug --remote FILE.js\|ts\|py\|csx` | a console debugger without VS Code: records the script's run on the device, then `n`/`p` step forward/back through the stops, `c` runs to the next breakpoint (`b LINE`, `--break 5,8`), `v` variables, `bt` call stack, `o` output so far, `l` the source around the line, `q` quits |
+| `bz debug --remote APP` | the same for a native program: every command goes to the device's `dbg` (`break NAME`, `step`, `regs`, `bt`, `mem ADDR`); `c` runs to the next stop, `q` stops the program |
 | `bz dap` | Debug Adapter Protocol server for VS Code: breakpoints in scripts and native programs on the device ([Debugging](debugging.md#-vs-code-breakpoints-on-a-running-device-bz-dap)) |
 
 File names on the device are FAT 8.3 (`GAME.JS`, `HELLO.ELF`); `bz deploy`

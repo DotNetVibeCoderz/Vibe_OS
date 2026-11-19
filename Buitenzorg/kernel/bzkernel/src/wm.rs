@@ -79,7 +79,7 @@ const CATEGORIES: [Category; 6] = [
         name: "Utilitas",
         leaf: gfx::rgb(0x7C, 0xC4, 0xA4),
         // `hellogui` is a managed C# app (/disk/HELLOGUI.DLL, RustCLR).
-        apps: &[("mclock", "Jam"), ("mtasks", "Task Manager"), ("mhwlab", "Lab Perangkat"), ("hellogui", "Jam C#"), ("munduh", "Unduhan")],
+        apps: &[("mclock", "Jam"), ("mtasks", "Task Manager"), ("mhwlab", "Lab Perangkat"), ("hellogui", "Jam C#"), ("munduh", "Unduhan"), ("mkonsol", "Konsol")],
     },
     Category {
         name: "Pengaturan",

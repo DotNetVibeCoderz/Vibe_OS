@@ -406,6 +406,8 @@ public sealed class HttpClient
     public int TimeoutMs = 20000;
     public int MaxRedirects = 5;
     public int MaxBody = 8 << 20;
+    /// <summary>Download: bytes gathered before each write to the file.</summary>
+    public int DownloadPiece = 256 * 1024;
 
     public HttpResponse Get(string url) => Send("GET", url, null, null);
 
@@ -515,7 +517,7 @@ public sealed class HttpClient
                 while (true)
                 {
                     bool end = (!chunked && length >= 0 && got >= length) || (chunked && pending.EndsWith("0\r\n\r\n"));
-                    if (!chunked && (pending.Count >= 262144 || (end && pending.Count > 0)))
+                    if (!chunked && (pending.Count >= DownloadPiece || (end && pending.Count > 0)))
                     {
                         int n = (int)Math.Min(pending.Count, length >= 0 ? have + length - saved : pending.Count);
                         if (!Buitenzorg.App.Files.AppendAllBytes(path, pending.Data, 0, n)) throw new NetException("menulis " + path + " gagal (disk penuh?)");

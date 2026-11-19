@@ -91,7 +91,9 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` â†
 | 68 | `FS_APPEND` | NUL-terminated path | data | bytes written (0 = failed). a2 = length, at most 1 MiB per call; the file is created when missing, existing data stays where it is (the last cluster's tail is filled, new clusters linked). For downloads and logs that grow |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,
-`INVAL = u64::MAX - 1`.
+`INVAL = u64::MAX - 1`, `DENIED = u64::MAX - 2` (the calling program lacks a
+permission the call needs -- a package's program, see
+[packages.md](packages.md#permissions)).
 
 ## ðŸ”’ Pointer security model (v1.0 hardening)
 

@@ -76,7 +76,12 @@ pub fn spawn_image(name: &str, image: &[u8]) -> Result<u64, &'static str> {
 /// PROC_ARGS. The arguments are recorded *before* its task can be scheduled:
 /// on SMP another CPU may start running the child the moment it is spawned.
 pub fn spawn_image_args(name: &str, image: &[u8], args: &str) -> Result<u64, &'static str> {
-    spawn_image_full(name, image, None, args)
+    spawn_image_full(name, image, None, args, crate::perm::for_launch(None))
+}
+
+/// [`spawn_image_args`] with an explicit grant (a package's program).
+pub fn spawn_image_granted(name: &str, image: &[u8], args: &str, grant: crate::perm::Grant) -> Result<u64, &'static str> {
+    spawn_image_full(name, image, None, args, grant)
 }
 
 /// Like [`spawn_image`], optionally entering at `entry_override` instead of
@@ -87,7 +92,7 @@ pub fn spawn_image_at(
     image: &[u8],
     entry_override: Option<u64>,
 ) -> Result<u64, &'static str> {
-    spawn_image_full(name, image, entry_override, "")
+    spawn_image_full(name, image, entry_override, "", crate::perm::for_launch(None))
 }
 
 fn spawn_image_full(
@@ -95,9 +100,11 @@ fn spawn_image_full(
     image: &[u8],
     entry_override: Option<u64>,
     args: &str,
+    grant: crate::perm::Grant,
 ) -> Result<u64, &'static str> {
     let pid = process::app_start(name);
     process::set_args(pid, args);
+    process::set_grant(pid, grant);
     match load_program(pid, image) {
         Ok((space, entry, stack_top)) => {
             crate::crash::on_load(pid, image); // symbols for a crash report
@@ -193,19 +200,23 @@ pub fn spawn_named(name: &str) -> Result<u64, &'static str> {
 /// Start a program with an argument string. `target` is an app name
 /// (`"calc"`) or an absolute VFS path to an ELF (`"/disk/MYAPP.ELF"`).
 pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
+    // What the program may do: a package's program gets the package's grant
+    // (`perm.rs`), narrowed to what the caller itself may do.
+    let pkg = crate::bzpkg::package_of(target);
+    let grant = crate::perm::for_launch(pkg.as_ref().map(|(n, b)| (n.as_str(), *b)));
     // A managed (.NET) app: `x.dll`, or a name with no native ELF whose
     // /disk/<NAME>.DLL exists. It runs in the RustCLR host, CLRHOST.ELF.
     // a UI script (/path/APP.JS|TS|PY): the script host in CLRHOST.ELF
     if let Some(script) = crate::clr::script_for(target) {
-        return crate::clr::spawn(&script, args);
+        return crate::clr::spawn_granted(&script, args, grant);
     }
     if app_file(target).is_none() {
         // a package whose entry is a managed app or a UI script
         if let Some(entry) = crate::bzpkg::entry_for(target).filter(|e| e.ends_with(".DLL") || crate::clr::script_for(&alloc::format!("/{}", e)).is_some()) {
-            return crate::clr::spawn(&alloc::format!("/disk/{}", entry), args);
+            return crate::clr::spawn_granted(&alloc::format!("/disk/{}", entry), args, grant);
         }
         if let Some(dll) = crate::clr::dll_for(target) {
-            return crate::clr::spawn(&dll, args);
+            return crate::clr::spawn_granted(&dll, args, grant);
         }
     }
     let (name, bytes) = if target.starts_with('/') {
@@ -218,7 +229,7 @@ pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
     // The args are recorded before the child's task exists: on SMP another
     // CPU can start running it immediately (it used to be set afterwards,
     // which was only safe on one core).
-    spawn_image_args(&name, &bytes, args)
+    spawn_image_granted(&name, &bytes, args, grant)
 }
 
 /// Map a short app name to its 8.3 ELF filename.

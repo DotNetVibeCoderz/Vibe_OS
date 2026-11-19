@@ -33,7 +33,7 @@
 //! <TAB>FILE,FILE<TAB>category` for packages from files, `reg<TAB>name` for
 //! registry packages installed with `bz install NAME`.
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, string::String, vec, vec::Vec};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
@@ -50,6 +50,10 @@ pub struct Installed {
     pub entry: String,
     pub files: Vec<String>,
     pub category: String,
+    /// Granted permissions (`perm.rs` bits).
+    pub perms: u32,
+    /// What the manifest asked for.
+    pub requested: u32,
 }
 
 pub struct Archive {
@@ -61,6 +65,8 @@ pub struct Archive {
     pub description: String,
     pub entry: String,
     pub files: Vec<(String, Vec<u8>)>,
+    /// `permissions=` of the manifest.
+    pub permissions: u32,
 }
 
 static STATE: Mutex<Option<Vec<Installed>>> = Mutex::new(None);
@@ -347,6 +353,7 @@ pub fn parse(bytes: &[u8]) -> Result<Archive, &'static str> {
         description: String::new(),
         entry: String::new(),
         files: Vec::new(),
+        permissions: 0,
     };
     for line in manifest.lines() {
         let Some((k, v)) = line.split_once('=') else { continue };
@@ -359,6 +366,7 @@ pub fn parse(bytes: &[u8]) -> Result<Archive, &'static str> {
             "category" => a.category = v.to_uppercase(),
             "description" => a.description = v,
             "entry" => a.entry = v.to_uppercase(),
+            "permissions" => a.permissions = crate::perm::parse(&v).map_err(|_| "izin tidak dikenal di manifest (permissions=)")?,
             _ => {}
         }
     }
@@ -417,6 +425,9 @@ fn with_state<R>(f: impl FnOnce(&mut Vec<Installed>) -> R) -> R {
                         entry: String::from(*entry),
                         files: files.split(',').filter(|f| !f.is_empty()).map(String::from).collect(),
                         category: String::from(rest.first().copied().unwrap_or("LAINNYA")),
+                        // granted / requested permission bits (none for records from before them)
+                        perms: rest.get(1).and_then(|v| u32::from_str_radix(v, 16).ok()).unwrap_or(0),
+                        requested: rest.get(2).and_then(|v| u32::from_str_radix(v, 16).ok()).unwrap_or(0),
                     }),
                     _ => {}
                 }
@@ -434,7 +445,17 @@ fn save(state: &[Installed]) -> Result<(), &'static str> {
         text.push_str(&format!("reg\t{}\n", r));
     }
     for p in state {
-        text.push_str(&format!("pkg\t{}\t{}\t{}\t{}\t{}\t{}\n", p.name, p.version, p.title, p.entry, p.files.join(","), p.category));
+        text.push_str(&format!(
+            "pkg\t{}\t{}\t{}\t{}\t{}\t{}\t{:x}\t{:x}\n",
+            p.name,
+            p.version,
+            p.title,
+            p.entry,
+            p.files.join(","),
+            p.category,
+            p.perms,
+            p.requested
+        ));
     }
     crate::vfs::write(STATE_FILE, text.as_bytes())
 }
@@ -475,6 +496,59 @@ pub fn find(name: &str) -> Option<Installed> {
 }
 
 /// The file `run <name>` starts for a package installed from a file.
+/// The package a launch target belongs to, with its grant: a package name,
+/// or a path to one of its files (`/disk/GAME/MAIN.DLL`).
+pub fn package_of(target: &str) -> Option<(String, u32)> {
+    if let Some(p) = find(target) {
+        return Some((p.name, p.perms));
+    }
+    let rel = target.strip_prefix("/disk/")?.to_uppercase();
+    with_state(|s| s.iter().find(|p| p.files.iter().any(|f| *f == rel)).map(|p| (p.name.clone(), p.perms)))
+}
+
+/// `bz perm [NAME [+id|-id ...]]`: show or change what packages may do.
+pub fn perm_command(args: &[&str]) -> Vec<String> {
+    let Some(name) = args.first() else {
+        let mut out = vec![String::from("izin paket (bz perm NAMA +izin / -izin):")];
+        for p in installed() {
+            out.push(format!("  {:<16} {}", p.name, crate::perm::names(p.perms)));
+        }
+        if out.len() == 1 {
+            out.push(String::from("  (belum ada paket dari berkas)"));
+        }
+        return out;
+    };
+    let changes = &args[1..];
+    with_state(|state| {
+        let Some(p) = state.iter_mut().find(|p| p.name == *name) else {
+            return vec![format!("bz perm: '{}' tidak terpasang dari berkas", name)];
+        };
+        for c in changes {
+            let (add, id) = match c.split_at(1) {
+                ("+", id) => (true, id),
+                ("-", id) => (false, id),
+                _ => return vec![format!("bz perm: pakai +izin atau -izin, bukan '{}'", c)],
+            };
+            match crate::perm::parse(id) {
+                Ok(b) if add => p.perms |= b,
+                Ok(b) => p.perms &= !b,
+                Err(e) => return vec![format!("bz perm: {}", e)],
+            }
+        }
+        let line = format!("{}: {} (diminta: {})", p.name, crate::perm::names(p.perms), crate::perm::names(p.requested));
+        if !changes.is_empty() {
+            if let Err(e) = save(state) {
+                return vec![format!("bz perm: menyimpan {}: {}", STATE_FILE, e)];
+            }
+        }
+        let mut out = vec![line];
+        if !changes.is_empty() {
+            out.push(String::from("  berlaku untuk program yang dijalankan setelah ini"));
+        }
+        out
+    })
+}
+
 pub fn entry_for(name: &str) -> Option<String> {
     find(name).filter(|p| !p.entry.is_empty()).map(|p| p.entry)
 }
@@ -572,6 +646,10 @@ fn install_bytes(bytes: &[u8]) -> Result<(String, String, Option<String>), Strin
             entry: a.entry.clone(),
             files: a.files.iter().map(|(n, _)| n.clone()).collect(),
             category: a.category.clone(),
+            // installing grants what the manifest asks for (shown by bz install /
+            // bz info; `bz perm` takes it back)
+            perms: a.permissions,
+            requested: a.permissions,
         };
         let upgraded = match previous {
             Some(i) => Some(core::mem::replace(&mut state[i], rec).version),
@@ -679,6 +757,20 @@ pub fn self_test(dir: &str) -> Result<String, String> {
     let n = remove("bztest")?;
     if n != 1 || crate::vfs::stat("/disk/BZTEST.SH").is_ok() || find("bztest").is_some() {
         return Err(String::from("remove"));
+    }
+    // permissions: the manifest's become the grant; `bz perm` changes it;
+    // an unknown id is refused; a launch target maps to its package
+    let pv = build("name=bztperm\nversion=1\npermissions=network,audio\n", &[("BZTPERM.TXT", b"x")]);
+    crate::vfs::write(file, &pv).map_err(|e| format!("write: {}", e))?;
+    install_file(file)?;
+    let granted = find("bztperm").is_some_and(|p| p.perms == crate::perm::NETWORK | crate::perm::AUDIO);
+    let _ = perm_command(&["bztperm", "-network", "+devices"]);
+    let changed = find("bztperm").is_some_and(|p| p.perms == crate::perm::AUDIO | crate::perm::DEVICES)
+        && package_of("/disk/BZTPERM.TXT").is_some_and(|(n, b)| n == "bztperm" && b == crate::perm::AUDIO | crate::perm::DEVICES);
+    let unknown = parse(&build("name=bztbad\nversion=1\npermissions=terbang\n", &[("X.TXT", b"x")])).is_err();
+    let _ = remove("bztperm");
+    if !(granted && changed && unknown) {
+        return Err(format!("permissions: granted {} changed {} unknown refused {}", granted, changed, unknown));
     }
     // sub-folders: created on install, an entry inside one runs, the folders
     // a package leaves empty go (on upgrade and on remove)

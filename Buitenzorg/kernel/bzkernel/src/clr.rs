@@ -22,13 +22,18 @@ pub const HOST: &str = "/disk/CLRHOST.ELF";
 /// Start the assembly at `dll` (a VFS path) with `args` as a managed
 /// process: `CLRHOST.ELF <dll> <args>`. Its pid.
 pub fn spawn(dll: &str, args: &str) -> Result<u64, &'static str> {
+    spawn_granted(dll, args, crate::perm::for_launch(None))
+}
+
+/// [`spawn`] with the grant the program gets (`perm.rs`).
+pub fn spawn_granted(dll: &str, args: &str, grant: crate::perm::Grant) -> Result<u64, &'static str> {
     let line = if args.is_empty() { alloc::string::String::from(dll) } else { format!("{} {}", dll, args) };
     // The process is named after the assembly (`/disk/MCALC.DLL` -> `mcalc`),
     // not the host, so `ps`, the task managers and PROC_LIST tell apps apart.
     let file = dll.rsplit('/').next().unwrap_or(dll);
     let name = file.split('.').next().unwrap_or(file).to_lowercase();
     let image = host_image()?;
-    crate::app::spawn_image_args(&name, &image, &line)
+    crate::app::spawn_image_granted(&name, &image, &line, grant)
 }
 
 /// CLRHOST.ELF, read once. Every managed app and UI script starts from it

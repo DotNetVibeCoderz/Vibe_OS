@@ -77,6 +77,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod perm;
 mod screenshot;
 mod appprof;
 mod crash;
@@ -227,6 +228,10 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         match vfs::folder_self_test("/disk") {
             Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
             Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
+        }
+        match perm::self_test() {
+            Ok(s) => println!("[kernel] MILESTONE: PERMISSIONS OK ({})", s),
+            Err(e) => println!("[kernel] permissions self-test FAILED: {}", e),
         }
         match bzpkg::self_test("/disk") {
             Ok(s) => println!("[kernel] MILESTONE: BZPKG OK ({})", s),

@@ -103,6 +103,15 @@ form, a utility, a game and a drawing:
 
 ![Sign-up form, Pong and the BMI calculator](img/script-ui-templates.png)
 
+## Hot reload
+
+`run APP.JS --watch` (also `.TS`, `.PY`, `.CSX`) keeps watching the file: when
+it changes, the program starts again from the top **in the same window** (its
+text fields are cleared). A run that fails shows the error in the window and
+waits for the next version instead of closing. Studio starts UI scripts this
+way, so saving (Ctrl+S) reloads the running app; from a PC,
+`bz deploy APP.JS --watch` uploads every save ([bz-link](bz-link.md)).
+
 ## How it works
 
 `CLRHOST.ELF` (the managed-runtime host) runs `.js/.ts/.py` files with the

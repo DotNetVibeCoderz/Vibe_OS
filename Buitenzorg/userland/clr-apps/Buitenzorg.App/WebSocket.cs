@@ -28,6 +28,10 @@ public sealed class WebSocket
 
     WebSocket(INetStream s, bool client) { _s = s; _client = client; }
 
+    /// <summary>A WebSocket over a stream whose handshake is already done
+    /// (`client` = this side masks its frames). Tests use it on an in-memory pipe.</summary>
+    public static WebSocket Over(INetStream s, bool client) => new WebSocket(s, client);
+
     /// <summary>Connect to ws://host[:port]/path or wss://...</summary>
     public static WebSocket Connect(string url, int timeoutMs = 10000)
     {

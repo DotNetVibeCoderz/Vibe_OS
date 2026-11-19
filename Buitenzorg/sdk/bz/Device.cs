@@ -98,6 +98,7 @@ static class Device
                 ["build-server", "--check", .. var rest] => WithDevice(t => BuildServer.Check(new BzdpDebugDevice(PatientClient(t)), rest)),
                 ["repo", "--check", .. var rest] => WithDevice(t => RepoCli.Check(new BzdpDebugDevice(Client(t)), rest)),
                 ["dap", .. var rest] => DapCli.Run(rest, () => Load() is Target t ? new BzdpDebugDevice(Client(t)) : null),
+                ["debug", .. var rest] => RemoteDebug.Run(rest, () => Load() is Target t ? new BzdpDebugDevice(Client(t)) : null),
                 _ => null,
             };
         }
@@ -433,6 +434,84 @@ static class Device
             if (line.StartsWith("entry=")) entry = line[6..].Trim();
         }
         return name.Length > 0 && entry.Length > 0 ? name : null;
+    }
+
+    /// <summary>The 8.3 /disk name a local file is deployed as.</summary>
+    static string? RemoteName(string local, string? asName)
+    {
+        string name = (asName ?? Path.GetFileName(local)).ToUpperInvariant();
+        if (Path.GetExtension(name) is ".BZPKG") name = Path.GetFileNameWithoutExtension(name) + ".BZP";
+        if (Is83(name)) return name;
+        string stem = new(Path.GetFileNameWithoutExtension(name).Where(char.IsAsciiLetterOrDigit).Take(8).ToArray());
+        string e3 = new(Path.GetExtension(name).TrimStart('.').Take(3).ToArray());
+        name = e3.Length > 0 ? $"{stem}.{e3}" : stem;
+        return Is83(name) ? name : null;
+    }
+
+    static bool IsScript(string name) => Path.GetExtension(name) is ".JS" or ".TS" or ".PY" or ".CSX";
+
+    /// <summary>`bz deploy X --watch`: deploy, then deploy again on every save of `watched`
+    /// (a file or a project folder; `rebuild` repacks a project first). A UI script runs with
+    /// `--watch` on the device and reloads in its window; a program or package is stopped and
+    /// started again. The device log streams meanwhile; Ctrl+C ends it.</summary>
+    public static int DeployWatch(string local, string? asName, string watched, Func<bool>? rebuild, int seconds = 0)
+    {
+        var t = Load();
+        if (t is null) return WithDevice(_ => 0);
+        string? name = RemoteName(local, asName);
+        if (name is null) return Fail($"cannot make an 8.3 name of {Path.GetFileName(local)} (use --as NAME.EXT)");
+        string remote = "/disk/" + name;
+        string ext = Path.GetExtension(name);
+        DateTime Stamp() => Directory.Exists(watched)
+            ? Directory.GetFiles(watched, "*", SearchOption.AllDirectories).Select(File.GetLastWriteTimeUtc).DefaultIfEmpty().Max()
+            : File.GetLastWriteTimeUtc(watched);
+        try
+        {
+            using var c = Client(t);
+            uint cursor = c.LogAsync(uint.MaxValue).GetAwaiter().GetResult().Next;
+            long pid = 0;
+            void Start()
+            {
+                string line = ext switch
+                {
+                    ".BZP" => "bz install " + remote,
+                    ".SH" => "sh " + remote,
+                    _ when IsScript(name) => "run " + remote + " --watch",
+                    _ => "run " + remote,
+                };
+                var (failed, output) = c.ExecAsync(line).GetAwaiter().GetResult();
+                Console.Write(output);
+                if (!failed && ext == ".BZP" && PackageName(local) is string pkg)
+                    (failed, output) = c.ExecAsync(pkg).GetAwaiter().GetResult();
+                if (ext == ".BZP") Console.Write(output);
+                var m = System.Text.RegularExpressions.Regex.Match(output, @"\(pid (\d+)\)");
+                pid = m.Success ? long.Parse(m.Groups[1].Value) : 0;
+            }
+            Upload(t, local, remote);
+            Start();
+            var last = Stamp();
+            Console.WriteLine($"-- watching {watched}: every save is deployed again (Ctrl+C ends) --");
+            var until = seconds > 0 ? DateTime.UtcNow.AddSeconds(seconds) : DateTime.MaxValue;
+            while (DateTime.UtcNow < until)
+            {
+                var (next, text) = c.LogAsync(cursor).GetAwaiter().GetResult();
+                Console.Write(text);
+                cursor = next;
+                Thread.Sleep(400);
+                var now = Stamp();
+                if (now == last) continue;
+                last = now;
+                Thread.Sleep(200); // let the editor finish writing
+                if (rebuild != null && !rebuild()) { Console.WriteLine("-- rebuild failed; waiting for the next save --"); continue; }
+                Upload(t, local, remote);
+                if (IsScript(name) && pid != 0) { Console.WriteLine($"-- {name} reloads in its window (pid {pid}) --"); continue; }
+                if (pid != 0) c.ExecAsync("kill " + pid).GetAwaiter().GetResult();
+                Start();
+            }
+            return 0;
+        }
+        catch (BzdpTimeoutException e) { return Fail(e.Message); }
+        catch (BzdpException e) { return Fail(e.Message); }
     }
 
     /// <summary>Upload a file to /disk and start it: a package is installed, a program or

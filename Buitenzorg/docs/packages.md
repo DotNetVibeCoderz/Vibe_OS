@@ -54,6 +54,42 @@ Installed packages, and registry apps installed with `bz install NAME`, are
 kept in `/disk/PKGS.CFG` and restored at boot. Packages from files show up in
 the App Store list (`PKG_LIST`) too.
 
+## Permissions
+
+A package says what its programs need in `app.manifest`:
+
+```json
+"permissions": ["network", "audio"]
+```
+
+| id | allows |
+|---|---|
+| `network` | sockets, TCP, DNS (`Buitenzorg.Net`, UDP) |
+| `audio` | playing sound, setting the volume |
+| `devices` | GPIO, I2C, SPI, UART and LEDs (Raspberry Pi) |
+| `system` | running shell commands (`Shell.Run`), changing settings, accounts, packages, stopping other programs |
+| `filesystem.write` | writing anywhere; without it a program writes only in `/ram` and in its own folder `/disk/APPDATA/<NAME>` |
+| `filesystem.read`, `microphone`, `camera`, `gallery`, `ai.llm`, `ai.vision`, `ai.genai` | recorded and shown; nothing to guard yet |
+
+`bz install` grants what the manifest asks for and says so
+(`izin: network, audio`). Change it later on the device:
+
+```sh
+bz perm                     # every package and its permissions
+bz perm mygame -network     # take one away
+bz perm mygame +devices     # grant one
+```
+
+The broker works at the syscall boundary: a program of the package (and
+anything it starts -- a child never gets more than its parent) that calls
+something it was not granted gets the error `DENIED`, and the first refusal
+is logged with the command that grants it
+(`[perm] paket 'mygame' (pid 12) ditolak: butuh izin network -- izinkan: bz perm mygame +network`).
+The system's own programs are not restricted. Reading files, drawing, input
+and clocks are open to every program. A package's `.SH` entry runs in the
+shell with your rights, like a command you type. Changes apply to programs
+started afterwards.
+
 ## A remote repository (`bz update`, `bz upgrade`)
 
 Packages can come from a repository: a folder of `.bzpkg` files plus an

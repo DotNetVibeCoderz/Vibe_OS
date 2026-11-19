@@ -591,6 +591,9 @@ pub mod syserr {
     pub const NOSYS: u64 = u64::MAX;
     /// An argument was invalid (bad pointer, bad length, ...).
     pub const INVAL: u64 = u64::MAX - 1;
+    /// The calling program lacks the permission this call needs (a package's
+    /// program: `permissions=` in its manifest, `bz perm` on the device).
+    pub const DENIED: u64 = u64::MAX - 2;
 }
 
 /// Description of the boot framebuffer, shared zero-copy with user-space.
@@ -1103,6 +1106,7 @@ mod tests {
         // Error codes are part of the contract too.
         assert_eq!(syserr::NOSYS, u64::MAX);
         assert_eq!(syserr::INVAL, u64::MAX - 1);
+        assert_eq!(syserr::DENIED, u64::MAX - 2);
     }
 
     /// Layouts of the pre-v1.0 BCL structs must match the C# mirrors.

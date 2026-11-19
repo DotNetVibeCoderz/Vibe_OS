@@ -403,6 +403,9 @@ public static class SyscallErrors
 
     /// <summary>An argument was invalid.</summary>
     public const ulong Invalid = ulong.MaxValue - 1;
+
+    /// <summary>The calling program lacks the permission this call needs (its package's manifest, `bz perm`).</summary>
+    public const ulong Denied = ulong.MaxValue - 2;
 }
 
 /// <summary>The ABI major version this library implements.</summary>

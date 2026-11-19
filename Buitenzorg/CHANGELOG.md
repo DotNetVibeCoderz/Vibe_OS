@@ -15,6 +15,12 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ### Fixed
 
+- **ARM64: a new user program could start at a kernel address.**
+  `bz_enter_user_thread` wrote ELR_EL1/SPSR_EL1 with interrupts unmasked; an
+  IRQ between the two left ELR = the kernel PC it interrupted, and `eret` then
+  entered EL0 there (seen once in CI as an "undefined instruction" crash of a
+  Studio template). DAIF is now masked first.
+
 - **Native C#: interface calls on types with references read the wrong
   table:** the startup shim took MethodTable flag `0x0020` for "optional
   fields" and skipped a pointer that bflat's ILC no longer emits (the bit
@@ -42,6 +48,16 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   canary checked on every switch and a high-water report.
 
 ### Added
+- **Permissions:** a package's programs may only use what its manifest asked
+  for (`network`, `audio`, `devices`, `system`, `filesystem.write`); `bz perm`
+  changes the grant; refused calls get the new error `DENIED` and are logged
+  (`MILESTONE: PERMISSIONS OK`).
+- **Hot reload:** `run APP.JS --watch` restarts a UI script in its window on
+  every save (Studio's Run uses it); `bz deploy FILE --watch` from the PC.
+- **`bz debug --remote`:** a console debugger on the PC for scripts (record +
+  replay, breakpoints, variables) and native programs (the device's `dbg`).
+- **Konsol:** a standalone terminal app -- tabs with their own folders,
+  scrollback, ANSI colours, copy/paste, two font sizes, jobs.
 - **System keys:** Print Screen saves the screen to `/disk/LAYAR` (shell
   `layar` too), volume up / down / mute change the sound card's volume with an
   on-screen display -- from any window (`MILESTONE: MEDIA KEYS OK`).

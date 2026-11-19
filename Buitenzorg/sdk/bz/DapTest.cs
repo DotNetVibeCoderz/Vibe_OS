@@ -310,7 +310,7 @@ static class DapCli
 
     /// <summary>Answers like the kernel does for <see cref="TestScript"/> and for
     /// `dbg` on crashme (kernel/bzkernel/src/shell.rs debug_lines, debug.rs).</summary>
-    sealed class FakeDevice : IDebugDevice
+    internal sealed class FakeDevice : IDebugDevice
     {
         readonly Dictionary<string, byte[]> _files = new();
         bool _running;
