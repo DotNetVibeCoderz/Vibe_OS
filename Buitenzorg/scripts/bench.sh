@@ -22,7 +22,14 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 img="$root/dist/buitenzorg-bios.img"
 log="$root/dist/bench-boot.log"
 
-BOOT_BUDGET_S="${BOOT_BUDGET_S:-90}"
+# The budget covers the self-test boot, which runs every app's self-test
+# (~25 managed apps, codecs decoding whole songs under soft-float emulation).
+# 2026-11-19: raised 90 -> 120 s when the suite grew by the recorder, the
+# terminal app, permissions, MP3/MIDI/Ogg decoding (per-app times are in the
+# log: "NAME: N checks, 0 failed (MS ms)"). It still catches a regression like
+# the jump from ~46 to 112 s that commit c4f81f2 caused. The normal boot is
+# gated separately (smoke [fastboot]: desktop within 8 s of kernel start).
+BOOT_BUDGET_S="${BOOT_BUDGET_S:-120}"
 AIO_MIN_OPS="${AIO_MIN_OPS:-10000}"
 WAIT_S="${WAIT_S:-420}"
 
