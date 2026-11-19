@@ -28,6 +28,7 @@ const FS_LIST: u64 = 29;
 const FS_READ: u64 = 30;
 const FS_WRITE: u64 = 32;
 const FS_APPEND: u64 = 68;
+const AUDIO_READ: u64 = 69;
 const PROC_SPAWN: u64 = 40;
 const PROC_WAIT: u64 = 41;
 const WIN_EVENT: u64 = 45;
@@ -549,6 +550,47 @@ fn fs_append(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_i32(if sys::is_err(n) { 0 } else { n as i64 })
 }
 
+/// `AudioRead(int op, byte[] buffer)` -> AUDIO_READ: START 0 / STOP 2 -> 0;
+/// READ 1 -> bytes of 48 kHz stereo 16-bit PCM written into `buffer`;
+/// QUEUED 3 -> ms. Errors: -1 no recording device, -2 refused / busy,
+/// -3 no `microphone` permission.
+fn audio_read(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let op = int(a, 0) as u64;
+    let err = |r: u64| -> i64 {
+        if r == u64::MAX {
+            -1
+        } else if r == u64::MAX - 2 {
+            -3
+        } else {
+            -2
+        }
+    };
+    if op == 1 {
+        let cap = match a.get(1) {
+            Some(Value::Obj(h)) if !h.is_null() => i.heap.with::<ClrArray, _>(*h, |arr| match &arr.storage {
+                ArrayStorage::U8(v) => v.len(),
+                _ => 0,
+            }).unwrap_or(0),
+            _ => 0,
+        }
+        .min(1 << 20)
+            & !3;
+        if cap == 0 {
+            return ret_i32(0);
+        }
+        let mut buf = alloc::vec![0u8; cap];
+        let n = sys::syscall(AUDIO_READ, 1, buf.as_mut_ptr() as u64, cap as u64);
+        if sys::is_err(n) {
+            return ret_i32(err(n));
+        }
+        let n = (n as usize).min(cap);
+        store_bytes(i, a, 1, &buf[..n]);
+        return ret_i32(n as i64);
+    }
+    let r = sys::syscall(AUDIO_READ, op, 0, 0);
+    ret_i32(if sys::is_err(r) { err(r) } else { r as i64 })
+}
+
 /// `ProcList()` -> one process per line: `pid,state,cpu_ticks,kind,name`.
 fn proc_list(i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>> {
     // bz_abi::ProcInfo: 4 x u64 + a 32-byte name = 8 words.
@@ -816,7 +858,7 @@ fn clipboard_seq(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 55] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 56] = [
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),
@@ -847,6 +889,7 @@ pub fn install(interp: &mut Interpreter) {
         ("FsWriteText", fs_write_text),
         ("FsWriteBytes", fs_write_bytes),
         ("FsAppend", fs_append),
+        ("AudioRead", audio_read),
         ("ProcList", proc_list),
         ("ProcKill", proc_kill),
         ("SysStat", sys_stat),

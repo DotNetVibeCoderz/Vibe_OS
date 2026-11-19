@@ -35,6 +35,10 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["with-all
 libm = "0.2"
 # MP3 (Musik): a safe no_std port of minimp3
 nanomp3 = { version = "0.2", default-features = false, features = ["alloc"] }
+# Ogg Vorbis: rustb-vorbis 0.1.2 (stb_vorbis port), vendored with a no_std patch (vendor/rustb-vorbis/NOTICE.md)
+rustb-vorbis = { path = "vendor/rustb-vorbis" }
+# Ogg Opus: opus-pure 0.2.3, vendored with a no_std patch (vendor/opus-pure/NOTICE.md)
+opus-pure = { path = "vendor/opus-pure" }
 
 [profile.release]
 panic = "abort"

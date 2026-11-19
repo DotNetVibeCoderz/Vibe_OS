@@ -214,8 +214,11 @@ public static class SyscallNumbers
     /// <summary>Append to a file (created when missing): a0 = NUL-terminated path, a1 = data, a2 = length (at most 1 MiB). Returns the bytes written, 0 = failed.</summary>
     public const ulong FsAppend = 68;
 
+    /// <summary>Record from the microphone: a0 = op (<see cref="AudioReadOp"/>); READ a1 = buffer, a2 = length -> bytes of 48 kHz stereo s16. Needs the microphone permission.</summary>
+    public const ulong AudioRead = 69;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 69;
+    public const ulong Count = 70;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Clipboard"/> (mirrors <c>bz_abi::clipboard_op</c>).</summary>
@@ -393,6 +396,15 @@ public static class MmapProt
     public const ulong Write = 2;
     /// <summary>Executable.</summary>
     public const ulong Exec = 4;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.AudioRead"/>.</summary>
+public static class AudioReadOp
+{
+    public const ulong Start = 0;
+    public const ulong Read = 1;
+    public const ulong Stop = 2;
+    public const ulong Queued = 3;
 }
 
 /// <summary>Error results returned in the high range of a syscall result.</summary>

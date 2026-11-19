@@ -1,0 +1,9 @@
+[package]
+name = "rustb-vorbis"
+version = "0.1.2"
+edition = "2021"
+license = "MIT OR Unlicense"
+description = "rustb-vorbis 0.1.2 (a port of stb_vorbis), vendored with a no_std patch for Buitenzorg's CLR host -- see NOTICE.md"
+
+[dependencies]
+libm = "0.2"

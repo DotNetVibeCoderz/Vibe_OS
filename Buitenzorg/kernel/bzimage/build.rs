@@ -641,6 +641,14 @@ fn main() {
         if let Ok(bytes) = std::fs::read(&p) {
             add_file(&mut builder, &mut files, "lagu5.mid".into(), bytes);
         }
+        // Ogg Vorbis and Ogg Opus pieces (scripts/make-ogg-songs.py)
+        for (asset, name) in [("LAGU6.OGG", "lagu6.ogg"), ("LAGU7.OPU", "lagu7.opu")] {
+            let p = manifest_dir().join("..").join("..").join("assets").join("music").join(asset);
+            println!("cargo:rerun-if-changed={}", p.display());
+            if let Ok(bytes) = std::fs::read(&p) {
+                add_file(&mut builder, &mut files, name.into(), bytes);
+            }
+        }
     }
 
     // Video: an original 12-second animation with music, MJPEG + PCM in AVI

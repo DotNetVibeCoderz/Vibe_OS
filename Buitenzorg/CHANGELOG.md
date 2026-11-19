@@ -76,6 +76,13 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
   and `wss://` (TLS), text/binary messages of any length, fragments, pings
   answered, close handshake, and the server side for a `TcpServer`; checked by
   Peramban's self-test against its own echo server.
+- **Sound recorder:** the **Perekam Suara** app records from the microphone
+  (AC'97) and saves WAV files; new syscall **`AUDIO_READ`** (69), gated by the
+  `microphone` permission, and `Buitenzorg.Media.Recorder`
+  (`MILESTONE: AUDIO CAPTURE OK`).
+- **Ogg Vorbis and Ogg Opus music:** decoded in the CLR host (`ogg.rs` +
+  vendored no_std ports of stb_vorbis and a pure-Rust Opus decoder), within one
+  step of ffmpeg's output; two original pieces (`LAGU6.OGG`, `LAGU7.OPU`).
 - **MIDI music:** a small integer synthesizer in the CLR host plays Standard
   MIDI Files (General MIDI families, drums on channel 10, tempo changes);
   Musik plays `.MID`; an original piece (`LAGU5.MID`) on every image.

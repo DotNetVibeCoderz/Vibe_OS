@@ -35,6 +35,7 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int FsWriteText(string path, string text);
     [DllImport("buitenzorg")] internal static extern int FsWriteBytes(string path, byte[] data, int offset, int count);
     [DllImport("buitenzorg")] internal static extern int FsAppend(string path, byte[] data, int offset, int count);
+    [DllImport("buitenzorg")] internal static extern int AudioRead(int op, byte[]? buffer);
     [DllImport("buitenzorg")] internal static extern int FsOp(int op, string path, string path2);
     [DllImport("buitenzorg")] internal static extern string FsStat(string path);
     [DllImport("buitenzorg")] internal static extern string ProcList();

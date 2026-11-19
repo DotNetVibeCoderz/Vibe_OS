@@ -99,6 +99,19 @@ public static class Wav
         return o;
     }
 
+    /// <summary>The 44-byte header of a 16-bit PCM WAV file whose data (already
+    /// interleaved, little-endian) is <paramref name="dataBytes"/> long.</summary>
+    public static byte[] Header(int dataBytes, int rate, int channels)
+    {
+        var o = new byte[44];
+        int p = 0;
+        Tag(o, ref p, "RIFF"); I32(o, ref p, 36 + dataBytes); Tag(o, ref p, "WAVE");
+        Tag(o, ref p, "fmt "); I32(o, ref p, 16); I16(o, ref p, 1); I16(o, ref p, channels);
+        I32(o, ref p, rate); I32(o, ref p, rate * channels * 2); I16(o, ref p, channels * 2); I16(o, ref p, 16);
+        Tag(o, ref p, "data"); I32(o, ref p, dataBytes);
+        return o;
+    }
+
     static void Tag(byte[] o, ref int p, string t) { for (int i = 0; i < 4; i++) o[p++] = (byte)t[i]; }
     static void I16(byte[] o, ref int p, int v) { o[p++] = (byte)v; o[p++] = (byte)(v >> 8); }
     static void I32(byte[] o, ref int p, int v) { I16(o, ref p, v); I16(o, ref p, v >> 16); }
@@ -119,7 +132,27 @@ public static class Compressed
     /// <summary>A Standard MIDI File (rendered by the host's synthesizer).</summary>
     public static bool IsMidi(byte[] b) => b.Length > 14 && b[0] == (byte)'M' && b[1] == (byte)'T' && b[2] == (byte)'h' && b[3] == (byte)'d';
 
-    public static bool IsCompressed(byte[] b) => IsFlac(b) || IsMp3(b) || IsMidi(b);
+    /// <summary>An Ogg file (Vorbis or Opus, decoded by the host).</summary>
+    public static bool IsOgg(byte[] b) => b.Length > 36 && b[0] == (byte)'O' && b[1] == (byte)'g' && b[2] == (byte)'g' && b[3] == (byte)'S';
+
+    public static bool IsCompressed(byte[] b) => IsFlac(b) || IsMp3(b) || IsMidi(b) || IsOgg(b);
+
+    /// <summary>The TITLE= comment of an Ogg Vorbis / Opus file ("" when none): the
+    /// comment header holds length-prefixed "KEY=value" strings.</summary>
+    public static string OggTitle(byte[] b)
+    {
+        int end = Math.Min(b.Length, 65536);
+        for (int i = 4; i + 6 < end; i++)
+        {
+            if ((b[i] | 0x20) != 't' || (b[i + 1] | 0x20) != 'i' || (b[i + 2] | 0x20) != 't' || (b[i + 3] | 0x20) != 'l' || (b[i + 4] | 0x20) != 'e' || b[i + 5] != '=') continue;
+            int len = b[i - 4] | b[i - 3] << 8 | b[i - 2] << 16 | b[i - 1] << 24;
+            if (len < 7 || len > 512 || i + len > b.Length) continue;
+            var sb = new System.Text.StringBuilder();
+            for (int k = 6; k < len; k++) sb.Append((char)b[i + k]);
+            return sb.ToString().Trim();
+        }
+        return "";
+    }
 
     /// <summary>The first track-name meta event (FF 03) of a MIDI file ("" when none).</summary>
     public static string MidiTitle(byte[] b)
@@ -155,7 +188,7 @@ public static class Compressed
         if (bytes <= 0 || bytes > 256L * 1024 * 1024) return null;
         pcm = new byte[bytes];
         if (AudioDecodeInto(file, pcm) <= 0) return null;
-        return new WavInfo { Rate = rate, Channels = channels, Bits = 16, DataOffset = 0, DataLength = pcm.Length, Title = IsFlac(file) ? FlacTitle(file) : IsMidi(file) ? MidiTitle(file) : Id3Title(file) };
+        return new WavInfo { Rate = rate, Channels = channels, Bits = 16, DataOffset = 0, DataLength = pcm.Length, Title = IsFlac(file) ? FlacTitle(file) : IsMidi(file) ? MidiTitle(file) : IsOgg(file) ? OggTitle(file) : Id3Title(file) };
     }
 
     /// <summary>The TIT2 frame of an ID3v2.3 / 2.4 tag ("" when none).</summary>
@@ -372,6 +405,87 @@ public sealed class MediaPlayer
         {
             int v = _info.Bits == 8 ? (_data[i] - 128) << 8 : (short)(_data[i] | _data[i + 1] << 8);
             peak = Math.Max(peak, Math.Abs(v));
+        }
+        return peak * 100 / 32768;
+    }
+}
+
+/// <summary>Records from the microphone (AUDIO_READ): 48 kHz stereo 16-bit
+/// PCM. One program records at a time; a package needs the `microphone`
+/// permission. Off the device a simulated microphone gives a soft 440 Hz tone
+/// in real time, so a recorder app can be tested on a development machine.</summary>
+public sealed class Recorder
+{
+    public const int Rate = 48000, Channels = 2;
+    bool _sim;
+    long _simStart;
+    long _simSent;
+    /// <summary>Why the last Start failed ("" = it did not).</summary>
+    public string Error { get; private set; } = "";
+    public bool Recording { get; private set; }
+
+    /// <summary>Start recording; false (and <see cref="Error"/>) when it cannot.</summary>
+    public bool Start()
+    {
+        int r;
+        try { r = Buitenzorg.App.Native.AudioRead(0, null); }
+        catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException)
+        {
+            _sim = true;
+            _simStart = Environment.TickCount64;
+            _simSent = 0;
+            Recording = true;
+            Error = "";
+            return true;
+        }
+        Error = r == -1 ? "tidak ada perangkat perekam (kartu suara tanpa input)"
+              : r == -3 ? "aplikasi ini tidak punya izin mikrofon"
+              : r < 0 ? "mikrofon sedang dipakai program lain" : "";
+        Recording = r == 0;
+        return Recording;
+    }
+
+    /// <summary>Recorded bytes into <paramref name="buffer"/> (whole frames); 0 = nothing yet.</summary>
+    public int Read(byte[] buffer)
+    {
+        if (!Recording) return 0;
+        if (_sim)
+        {
+            long due = (Environment.TickCount64 - _simStart) * Rate / 1000;
+            int frames = (int)Math.Min(due - _simSent, buffer.Length / 4);
+            for (int i = 0; i < frames; i++)
+            {
+                long n = _simSent + i;
+                // a triangle wave approximating 440 Hz, at a quarter of full scale
+                int ph = (int)(n * 440 * 4 % (Rate * 4));
+                int v = ph < Rate * 2 ? ph - Rate : Rate * 3 - ph;
+                short sm = (short)(v * 8000 / Rate);
+                buffer[i * 4] = (byte)sm; buffer[i * 4 + 1] = (byte)(sm >> 8);
+                buffer[i * 4 + 2] = (byte)sm; buffer[i * 4 + 3] = (byte)(sm >> 8);
+            }
+            _simSent += Math.Max(0, frames);
+            return Math.Max(0, frames) * 4;
+        }
+        int r = Buitenzorg.App.Native.AudioRead(1, buffer);
+        return Math.Max(0, r);
+    }
+
+    public void Stop()
+    {
+        if (!Recording) return;
+        Recording = false;
+        if (!_sim) Buitenzorg.App.Native.AudioRead(2, null);
+    }
+
+    /// <summary>The loudest sample of a chunk, 0..100 (a level meter).</summary>
+    public static int Level(byte[] pcm, int count)
+    {
+        int peak = 0;
+        for (int i = 0; i + 1 < count; i += 8)
+        {
+            int v = (short)(pcm[i] | pcm[i + 1] << 8);
+            if (v < 0) v = -v;
+            if (v > peak) peak = v;
         }
         return peak * 100 / 32768;
     }

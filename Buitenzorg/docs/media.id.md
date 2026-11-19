@@ -24,6 +24,14 @@ ffmpeg), judulnya dari komentar `TITLE=`. MP3 (juga MP1 / MP2) lewat crate
 `nanomp3`, port Rust aman dari minimp3 (selisih paling banyak satu langkah
 dari keluaran ffmpeg; tag ID3 dilewati, jeda dan padding encoder dipangkas),
 judulnya dari frame ID3v2 `TIT2`; `LAGU4.MP3` (*Gerimis*) ada di setiap image.
+**Ogg Vorbis** (`.OGG`, `.OGA`) dan **Ogg Opus** (`.OPU`, `.OPUS`) juga
+di-decode di host (`userland/clrhost/src/ogg.rs` membaca halaman Ogg): Vorbis
+lewat port stb_vorbis, Opus lewat dekoder Opus Rust murni (keduanya di-vendor
+di `userland/clrhost/vendor`, lihat `NOTICE.md`-nya), masing-masing selisih
+paling banyak satu langkah dari keluaran ffmpeg; Opus diputar 48 kHz,
+pre-skip dan padding akhirnya dipotong; judul dari komentar `TITLE=`. *Angin
+Sore* (`LAGU6.OGG`) dan *Embun Pagi* (`LAGU7.OPU`, dibuat
+`scripts/make-ogg-songs.py`) ada di setiap image.
 Berkas MIDI (`.MID`) dimainkan synthesizer kecil di host
 (`userland/clrhost/src/midi.rs`): format 0 dan 1, perubahan tempo, 48 suara
 dengan warna bunyi per keluarga instrumen General MIDI (piano, organ, gitar,
@@ -32,6 +40,17 @@ bass, string, brass / reed, flute, synth) dan envelope, kanal 10 sebagai drum
 pertama. *Kupu-kupu di Taman* (`LAGU5.MID`, dibuat
 `scripts/make-midi-song.py`) ada di setiap image -- MIDI juga cocok sebagai
 musik game: beberapa KB per lagu.
+
+## Perekam Suara
+
+`run mrekam`, atau **Mulai > Multimedia > Perekam Suara**. **Rekam** (atau
+Spasi) merekam dari mikrofon, dengan waktu dan meter level; **Berhenti**
+menyimpannya sebagai `/disk/REKAMAN/REKAMnnn.WAV` (48 kHz stereo, maks 60
+detik); **Putar** memutar rekaman terpilih, **Hapus** menghapusnya. Merekam
+berfungsi di PC dengan kartu suara AC'97 (`-device AC97` di QEMU); input HD
+Audio (kebanyakan laptop) dan Raspberry Pi belum bisa merekam -- aplikasinya
+memberi tahu. Program merekam lewat `Buitenzorg.Media.Recorder` (`Start()`,
+`Read(byte[])`, `Stop()`), yang butuh izin `microphone` di manifest paket.
 
 ## Gambar
 
@@ -98,9 +117,10 @@ menyalakannya lagi. Cek boot: `MILESTONE: MIXER OK` (semua arsitektur) dan
   tetap memutar bunyi sekali-putar di jack dan HDMI).
 - Gambar: belum ada rotasi EXIF, thumbnail atau penyuntingan; bingkai GIF
   didekode di awal (cukup untuk animasi kecil).
-- WAV, FLAC, MP3 dan MIDI: belum ada dekoder Ogg Vorbis / Opus; synth MIDI
+- WAV, FLAC, MP3, MIDI, Ogg Vorbis dan Ogg Opus; Opus lebih dari dua kanal
+  (surround) ditolak, Vorbis disimpan dua kanal pertamanya; synth MIDI
   belum punya SoundFont, reverb atau panning stereo; lagu di-decode
-  utuh saat dimuat (beberapa detik untuk MP3 panjang di QEMU); belum ada mikrofon; meter
+  utuh saat dimuat (beberapa detik untuk MP3 panjang di QEMU); merekam baru lewat AC'97 (belum HD Audio, virtio-snd atau Pi); meter
   menampilkan puncak, bukan spektrum.
 
 ---

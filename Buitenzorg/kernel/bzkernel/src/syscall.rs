@@ -388,6 +388,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
         sysno::FS_APPEND => sys_fs_append(a0, a1, a2),
+        sysno::AUDIO_READ => sys_audio_read(a0, a1, a2),
         sysno::FS_OP => sys_fs_op(a0, a1, a2),
         sysno::USER_OP => sys_user_op(a0, a1, a2),
         sysno::GFX3D => sys_gfx3d(a0),
@@ -1157,6 +1158,60 @@ fn sys_audio_write(ptr: u64, len: u64, format: u64) -> u64 {
     let took = crate::mixer::write(me, &bytes, format as u32);
     crate::audio::stream_pump();
     took as u64
+}
+
+/// The program recording now (0 = none).
+static CAPTURE_OWNER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// A program ended: let go of the microphone if it had it.
+pub fn capture_release(pid: u64) {
+    use core::sync::atomic::Ordering;
+    if CAPTURE_OWNER.compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+        crate::audio::capture_stop();
+    }
+}
+
+/// AUDIO_READ: record from the microphone (`audio_read_op`).
+fn sys_audio_read(op: u64, buf: u64, len: u64) -> u64 {
+    use bz_abi::audio_read_op;
+    use core::sync::atomic::Ordering;
+    if !crate::audio::can_capture() {
+        return syserr::NOSYS;
+    }
+    let me = crate::aspace::current_id();
+    let owner = CAPTURE_OWNER.load(Ordering::Acquire);
+    match op {
+        audio_read_op::START => {
+            if owner != 0 && owner != me && crate::process::is_alive(owner) {
+                return syserr::INVAL;
+            }
+            CAPTURE_OWNER.store(me, Ordering::Release);
+            if crate::audio::capture_start() { 0 } else { syserr::INVAL }
+        }
+        _ if owner != me => syserr::INVAL,
+        audio_read_op::READ => {
+            let len = len.min(1 << 20) & !3;
+            if !user_write(buf, len) {
+                return syserr::INVAL;
+            }
+            let mut tmp = alloc::vec![0i16; (len / 2) as usize];
+            let n = crate::audio::capture_read(&mut tmp);
+            let out = buf as *mut i16;
+            for (k, v) in tmp.iter().take(n).enumerate() {
+                unsafe { out.add(k).write_volatile(*v) };
+            }
+            (n * 2) as u64
+        }
+        audio_read_op::STOP => {
+            capture_release(me);
+            0
+        }
+        audio_read_op::QUEUED => {
+            crate::audio::capture_pump();
+            crate::audio::capture_queued_ms()
+        }
+        _ => syserr::INVAL,
+    }
 }
 
 /// TCP_OP: a program's TCP connections (`appnet.rs`).

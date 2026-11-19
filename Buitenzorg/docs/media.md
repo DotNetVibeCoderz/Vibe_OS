@@ -32,6 +32,26 @@ drums (kick, snare, hi-hat, toms), rendered at 22 kHz mono; the title is the
 first track name. *Kupu-kupu di Taman* (`LAGU5.MID`, made by
 `scripts/make-midi-song.py`) is on every image -- MIDI is also what games
 can ship as music: a few KB per song.
+**Ogg Vorbis** (`.OGG`, `.OGA`) and **Ogg Opus** (`.OPU`, `.OPUS`) are decoded
+in the host too (`userland/clrhost/src/ogg.rs` reads the Ogg pages): Vorbis
+through a port of stb_vorbis, Opus through a pure-Rust Opus decoder (both
+vendored under `userland/clrhost/vendor`, see their `NOTICE.md`), each within
+one step of ffmpeg's output; Opus plays at 48 kHz, its pre-skip and end
+padding trimmed; the title is the `TITLE=` comment. *Angin Sore*
+(`LAGU6.OGG`) and *Embun Pagi* (`LAGU7.OPU`, made by
+`scripts/make-ogg-songs.py`) are on every image.
+
+## Perekam Suara (sound recorder)
+
+`run mrekam`, or **Start > Multimedia > Perekam Suara**. **Rekam** (or Space)
+records from the microphone, with the time and a level meter; **Berhenti**
+saves it as `/disk/REKAMAN/REKAMnnn.WAV` (48 kHz stereo, at most 60 s);
+**Putar** plays the selected recording, **Hapus** deletes it. Recording works
+on PCs with an AC'97 sound card (QEMU's `-device AC97`); HD Audio input
+(most laptops) and the Raspberry Pi have no recording yet -- the app says so.
+Programs record through `Buitenzorg.Media.Recorder`
+(`Start()`, `Read(byte[])`, `Stop()`), which needs the `microphone`
+permission in a package's manifest.
 
 ## Gambar (pictures)
 
@@ -126,9 +146,10 @@ self-test plays through `AUDIO_WRITE` in the boot's managed suite.
   is false; the Pi still plays one-shot sounds on its jack and HDMI).
 - Pictures: no EXIF rotation, thumbnails or editing; GIF frames are decoded
   up front (fine for small animations).
-- WAV, FLAC, MP3 and MIDI: no Ogg Vorbis / Opus decoder yet; the MIDI synth
+- WAV, FLAC, MP3, MIDI, Ogg Vorbis and Ogg Opus; Opus with more than two
+  channels (surround) is refused, Vorbis keeps its first two; the MIDI synth
   has no SoundFont, reverb or stereo panning; a song is decoded
-  whole when it is loaded (a few seconds for a long MP3 under QEMU); no microphone; the level meter
+  whole when it is loaded (a few seconds for a long MP3 under QEMU); recording only through AC'97 (not HD Audio, virtio-snd or the Pi); the level meter
   shows peaks, not a spectrum.
 
 ---

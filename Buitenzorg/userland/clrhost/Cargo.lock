@@ -130,6 +130,8 @@ dependencies = [
  "linked_list_allocator",
  "miniz_oxide",
  "nanomp3",
+ "opus-pure",
+ "rustb-vorbis",
  "rustclr-bcl",
  "rustclr-core",
  "rustclr-gc",
@@ -499,6 +501,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "opus-pure"
+version = "0.2.3"
+dependencies = [
+ "libm",
+ "num-traits",
+ "spin",
+]
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -700,6 +711,13 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustb-vorbis"
+version = "0.1.2"
+dependencies = [
+ "libm",
 ]
 
 [[package]]

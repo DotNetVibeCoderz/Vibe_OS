@@ -5,7 +5,8 @@
 //! byte[] pcm)` -> bytes written. Formats: FLAC (`flac.rs`) and MP3 (MPEG
 //! layer 1-3 through the `nanomp3` crate: tags skipped, encoder delay and
 //! padding trimmed) and MIDI (Standard MIDI Files rendered by `midi.rs`, 22 kHz
-//! mono). The last decode is cached, so Info + Into decode once.
+//! mono) and Ogg Vorbis / Ogg Opus (`ogg.rs`). The last decode is cached, so
+//! Info + Into decode once.
 
 use alloc::vec::Vec;
 
@@ -41,7 +42,7 @@ fn decode(d: &[u8]) -> (u64, usize) {
             return (*word, pcm.len());
         }
     }
-    let Some((info, pcm)) = crate::flac::decode(d).or_else(|| mp3(d)).or_else(|| midi(d)) else { return (0, 0) };
+    let Some((info, pcm)) = crate::flac::decode(d).or_else(|| mp3(d)).or_else(|| crate::ogg::decode(d)).or_else(|| midi(d)) else { return (0, 0) };
     let word = info.rate as u64 | (info.channels as u64) << 20 | 16u64 << 24 | info.frames << 32;
     let len = pcm.len();
     *c = Some((k, pcm, word));

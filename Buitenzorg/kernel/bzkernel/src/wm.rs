@@ -58,7 +58,7 @@ const CATEGORIES: [Category; 6] = [
     Category {
         name: "Multimedia",
         leaf: gfx::rgb(0xC7, 0x92, 0xEA),
-        apps: &[("mmusik", "Musik"), ("mvideo", "Video"), ("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol")],
+        apps: &[("mmusik", "Musik"), ("mvideo", "Video"), ("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol"), ("mrekam", "Perekam Suara")],
     },
     Category {
         name: "Permainan",

@@ -519,11 +519,25 @@ public sealed class HttpClient
                     bool end = (!chunked && length >= 0 && got >= length) || (chunked && pending.EndsWith("0\r\n\r\n"));
                     if (!chunked && (pending.Count >= DownloadPiece || (end && pending.Count > 0)))
                     {
-                        int n = (int)Math.Min(pending.Count, length >= 0 ? have + length - saved : pending.Count);
-                        if (!Buitenzorg.App.Files.AppendAllBytes(path, pending.Data, 0, n)) throw new NetException("menulis " + path + " gagal (disk penuh?)");
-                        saved += n;
-                        pending.Count = 0;
-                        progress?.Invoke(saved, total);
+                        // write what arrived in pieces of DownloadPiece bytes: progress
+                        // after each, and a cancel takes effect between them
+                        int have_now = (int)Math.Min(pending.Count, length >= 0 ? have + length - saved : pending.Count);
+                        int off = 0;
+                        while (off < have_now && (end || have_now - off >= DownloadPiece))
+                        {
+                            int n = Math.Min(DownloadPiece, have_now - off);
+                            if (!Buitenzorg.App.Files.AppendAllBytes(path, pending.Data, off, n)) throw new NetException("menulis " + path + " gagal (disk penuh?)");
+                            saved += n;
+                            off += n;
+                            progress?.Invoke(saved, total);
+                            if (off < have_now && cancel != null && cancel()) { r.Cancelled = true; break; }
+                        }
+                        if (r.Cancelled) break;   // the rest is fetched again when it resumes
+                        // keep what is left (less than a piece) for the next round
+                        int left = pending.Count - off;
+                        if (left > 0) Array.Copy(pending.Data, off, pending.Data, 0, left);
+                        pending.Count = Math.Max(0, left);
+                        if (end) pending.Count = 0;
                     }
                     if (end) break;
                     if (cancel != null && cancel())

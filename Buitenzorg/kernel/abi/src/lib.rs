@@ -281,8 +281,26 @@ pub mod sysno {
     /// length (at most 1 MiB per call). The file is created when missing;
     /// existing data is not rewritten. Returns the bytes written (0 = failed).
     pub const FS_APPEND: u64 = 68;
+    /// Record from the microphone: `a0` = op ([`audio_read_op`]). START ->
+    /// 0 (`NOSYS` without a recording device, `INVAL` while another program
+    /// records); READ: `a1` = buffer, `a2` = its length in bytes -> bytes of
+    /// 48 kHz stereo 16-bit PCM copied; STOP -> 0; QUEUED -> milliseconds
+    /// recorded and not read yet. Needs the `microphone` permission.
+    pub const AUDIO_READ: u64 = 69;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 69;
+    pub const COUNT: u64 = 70;
+}
+
+/// Operations of [`sysno::AUDIO_READ`].
+pub mod audio_read_op {
+    /// Start recording (the caller becomes the owner of the microphone).
+    pub const START: u64 = 0;
+    /// Copy recorded PCM into `a1` (length `a2`).
+    pub const READ: u64 = 1;
+    /// Stop recording and let go of the microphone.
+    pub const STOP: u64 = 2;
+    /// Milliseconds recorded and not read yet.
+    pub const QUEUED: u64 = 3;
 }
 
 /// Operations of [`sysno::CLIPBOARD`].
@@ -1035,7 +1053,9 @@ mod tests {
         assert_eq!(sysno::IDLE_INHIBIT, 66);
         assert_eq!(sysno::CLIPBOARD, 67);
         assert_eq!(sysno::FS_APPEND, 68);
-        assert_eq!(sysno::COUNT, 69);
+        assert_eq!(sysno::AUDIO_READ, 69);
+        assert_eq!(audio_read_op::QUEUED, 3);
+        assert_eq!(sysno::COUNT, 70);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1055,7 +1075,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 69, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 70, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

@@ -43,6 +43,7 @@ public static class Folder
         new AppInfo("mchip8", "CHIP-8", "Emulator CHIP-8 + dua program orisinal", IconKind.Grid, 0x9BE0B8),
         new AppInfo("mvideo", "Video", "Putar video AVI (MJPEG + suara)", IconKind.Play, 0x8FB8E8),
         new AppInfo("mmusik", "Musik", "Putar lagu WAV, volume per aplikasi", IconKind.Play, 0xB99AE8),
+        new AppInfo("mrekam", "Perekam Suara", "Rekam dari mikrofon, simpan WAV", IconKind.Play, 0xE5735F),
         new AppInfo("mular", "Ular", "Makan buah, tumbuh panjang, jangan menabrak", IconKind.Leaf, 0x5FB85A),
         new AppInfo("mranjau", "Ranjau", "Buka kebun tanpa menggali ranjau", IconKind.Grid, 0xE0563B),
         new AppInfo("mbata", "Bata", "Pantulkan biji, runtuhkan tembok bata", IconKind.Grid, 0xE9A64C),
@@ -200,6 +201,7 @@ public static class Folder
         Report(MLabirin.LabirinApp.SelfTest()); // the host ray caster (RayRender), one blit per frame
         Report(MVideo.VideoApp.SelfTest()); // AVI: MJPEG frames through Picture, PCM through the mixer
         Report(MKonsol.KonsolApp.SelfTest()); // the standalone terminal: tabs, folders, colours, copy/paste through SHELL_RUN
+        Report(MRekam.RekamApp.SelfTest()); // AUDIO_READ: record 0.7 s, save a WAV, play it back
         if (all)
         {
             Report(MCalc.CalcApp.SelfTest());

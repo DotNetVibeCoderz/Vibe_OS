@@ -665,6 +665,7 @@ fn panen_audio_demo() {
     if up && audio::is_present() && audio::mixer_ok() {
         println!("[kernel] MILESTONE: AUDIO OK (AC'97 detected + mixer verified + PCM DMA playback)");
         audio_stream_test();
+        audio_capture_test();
     } else {
         println!("[kernel] audio: subsystem not fully up (present={}, mixer_ok={})", audio::is_present(), audio::mixer_ok());
     }
@@ -1774,6 +1775,37 @@ fn audio_stream_test() {
         println!("[kernel] MILESTONE: AUDIO STREAM OK (mixer -> DMA ring: {} buffer fills in 0.6 s, {} ms left of 1000, ring stopped after the stream)", refills, left);
     } else {
         println!("[audio] stream test: took {} started {} refills {} left {} ms stopped {}", took, started, refills, left, stopped);
+    }
+}
+
+/// Recording: the PCM-in ring for half a second -- buffers drained at the
+/// card's rate (QEMU's audio backend gives silence, so the samples are not
+/// checked, only that they arrive at 48 kHz) -> `AUDIO CAPTURE OK`.
+fn audio_capture_test() {
+    use core::sync::atomic::Ordering;
+    if !audio::can_capture() {
+        println!("[audio] capture test: no recording device (HD Audio input is not driven yet)");
+        return;
+    }
+    let f0 = audio::CAPTURE_FILLS.load(Ordering::Relaxed);
+    let started = audio::capture_start();
+    let t0 = arch::cpu::nanos();
+    let mut got = 0usize;
+    let mut buf = alloc::vec![0i16; 8192];
+    while arch::cpu::nanos() - t0 < 500_000_000 {
+        got += audio::capture_read(&mut buf);
+        task::yield_now();
+    }
+    audio::capture_stop();
+    got += audio::capture_read(&mut buf);
+    let ms = (arch::cpu::nanos() - t0) / 1_000_000;
+    let fills = audio::CAPTURE_FILLS.load(Ordering::Relaxed) - f0;
+    let frames = got / 2;
+    // at least a third of what 48 kHz gives (a busy emulator delivers late)
+    if started && fills >= 4 && frames as u64 * 1000 >= 48_000 * ms / 3 {
+        println!("[kernel] MILESTONE: AUDIO CAPTURE OK (PCM-in ring: {} buffers, {} frames in {} ms)", fills, frames, ms);
+    } else {
+        println!("[audio] capture test: started {} buffers {} frames {} in {} ms", started, fills, frames, ms);
     }
 }
 

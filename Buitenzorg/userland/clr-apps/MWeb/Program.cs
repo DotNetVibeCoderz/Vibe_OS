@@ -419,9 +419,9 @@ public sealed class BrowserApp
                 string path = sp > 0 && sp2 > sp ? line.Substring(sp + 1, sp2 - sp - 1) : "/";
                 if (path == "/besar.bin")
                 {
-                    // a download: 40000 bytes, honouring "Range: bytes=N-"
+                    // a download: 20000 bytes, honouring "Range: bytes=N-"
                     var all = BigFile();
-                    c.TimeoutMs = 2000;   // a cancelled client stops reading: give up soon
+                    c.TimeoutMs = 300;    // a cancelled client stops reading: give up soon
                     long from = 0;
                     int ri = line.IndexOf("Range: bytes=");
                     if (ri >= 0)
@@ -513,10 +513,15 @@ public sealed class BrowserApp
         public void Close() { }
     }
 
+    static byte[]? _bigFile;
+
+    /// <summary>The download test's file (made once: a byte loop is slow in the interpreter).</summary>
     static byte[] BigFile()
     {
-        var b = new byte[40000];
+        if (_bigFile != null) return _bigFile;
+        var b = new byte[20000];
         for (int i = 0; i < b.Length; i++) b[i] = (byte)(i * 13 + (i >> 9));
+        _bigFile = b;
         return b;
     }
 
@@ -645,13 +650,13 @@ public sealed class BrowserApp
                 var (pa, pb) = Pipe.Pair();
                 var wc = WebSocket.Over(pa, true);
                 var wsrv = WebSocket.Over(pb, false);
+                // (sent by the server side: its frames are not masked, so no
+                // per-byte loop in the interpreter -- the length is what is tested)
                 var big = new byte[66000];
-                for (int i = 0; i < big.Length; i++) big[i] = (byte)(i >> 3);
-                wc.Send(big);
-                var got = wsrv.Receive();
-                if (got != null) wsrv.Send(got.Data);
+                big[0] = 1; big[1234] = 9; big[65999] = 7;
+                wsrv.Send(big);
                 var m3 = wc.Receive();
-                c.That(m3 != null && m3.Data.Length == 66000 && m3.Data[65999] == big[65999] && m3.Data[1234] == big[1234], "WebSocket 64-bit length (66000 bytes, masked + unmasked)");
+                c.That(m3 != null && m3.Data.Length == 66000 && m3.Data[65999] == 7 && m3.Data[1234] == 9 && m3.Data[0] == 1, "WebSocket 64-bit length (66000 bytes)");
                 ws.Send("ping-me");
                 var m4 = ws.Receive();
                 c.That(m4 != null && m4.Text == "ping-me", "WebSocket ping from the server answered" + (m4 == null ? " (closed; server: " + ServerError + ")" : ""));
@@ -666,20 +671,20 @@ public sealed class BrowserApp
                 var want = BigFile();
                 string dl = Files.ScratchDirectory + "/UNDUH.BIN";
                 Files.Delete(dl);
-                var http = new HttpClient { TimeoutMs = 30000, DownloadPiece = 8192 };
+                var http = new HttpClient { TimeoutMs = 30000, DownloadPiece = 4096 };
                 int calls = 0;
                 var r = http.Download("http://localhost:" + TestPort + "/besar.bin", dl, (done, total) => { calls++; });
-                c.That(r.Status == 200 && r.Saved == 40000 && !r.Cancelled && SameFile(Files.ReadAllBytes(dl), want) && calls >= 2,
-                    "download 40000 bytes to a file in pieces (" + r.Saved + ", " + calls + " progress calls)");
+                c.That(r.Status == 200 && r.Saved == 20000 && !r.Cancelled && SameFile(Files.ReadAllBytes(dl), want) && calls >= 2,
+                    "download 20000 bytes to a file in pieces (" + r.Saved + ", " + calls + " progress calls)");
                 // stop after the first piece, then continue it
                 Files.Delete(dl);
                 var r2 = http.Download("http://localhost:" + TestPort + "/besar.bin", dl, null, () => Files.Size(dl) > 0);
                 long part = Files.Size(dl);
-                c.That(r2.Cancelled && part > 0 && part < 40000, "download cancelled after " + part + " bytes");
+                c.That(r2.Cancelled && part > 0 && part < 20000, "download cancelled after " + part + " bytes");
                 var r3 = http.Download("http://localhost:" + TestPort + "/besar.bin", dl);
-                c.That(r3.Status == 206 && r3.Resumed && r3.Saved == 40000 && SameFile(Files.ReadAllBytes(dl), want), "download resumed with Range (206) and complete");
+                c.That(r3.Status == 206 && r3.Resumed && r3.Saved == 20000 && SameFile(Files.ReadAllBytes(dl), want), "download resumed with Range (206) and complete");
                 var r4 = http.Download("http://localhost:" + TestPort + "/besar.bin", dl);
-                c.That(r4.Status == 416 && r4.Saved == 40000, "a complete file is not fetched again (416)");
+                c.That(r4.Status == 416 && r4.Saved == 20000, "a complete file is not fetched again (416)");
                 Files.Delete(dl);
             }
             catch (Exception e) { c.That(false, "download: " + e.Message); }

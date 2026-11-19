@@ -21,6 +21,22 @@ pub fn is_streaming() -> bool {
 
 pub fn stream_pump() {}
 
+/// Recording: not on these boards yet (the Pi has no microphone input).
+pub fn can_capture() -> bool {
+    false
+}
+pub fn capture_start() -> bool {
+    false
+}
+pub fn capture_stop() {}
+pub fn capture_pump() {}
+pub fn capture_read(_out: &mut [i16]) -> usize {
+    0
+}
+pub fn capture_queued_ms() -> u64 {
+    0
+}
+
 pub fn is_present() -> bool {
     #[cfg(target_arch = "aarch64")]
     return jack::audio_present();

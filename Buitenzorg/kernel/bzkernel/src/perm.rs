@@ -14,13 +14,14 @@
 //! |---|---|
 //! | `network` | NET_SOCKET/BIND/SEND/RECV/CLOSE, TCP_OP, DNS_RESOLVE |
 //! | `audio` | AUDIO_SET_VOLUME, AUDIO_TONE, AUDIO_PLAY, AUDIO_WRITE |
+//! | `microphone` | AUDIO_READ (recording) |
 //! | `devices` | HW_GPIO, HW_I2C, HW_SPI, HW_UART, HW_LED |
 //! | `system` | SHELL_RUN, USER_OP, PKG_SET, SETTING (set), PROC_KILL of another process |
 //! | `filesystem.write` | FS_WRITE / FS_APPEND / FS_OP outside `/ram` and the package's own `/disk/APPDATA/<NAME>` |
 //!
 //! A refused call returns `syserr::DENIED` and the first refusal per process
 //! and permission is logged with the command that grants it. Reading files,
-//! drawing, input, clocks and the rest stay open. `microphone`, `camera`,
+//! drawing, input, clocks and the rest stay open. `camera`,
 //! `gallery`, `filesystem.read` and `ai.*` are recorded and shown, with no
 //! syscall to guard yet. Shell scripts (`.SH` entries) run in the kernel's
 //! shell with the user's rights, like commands typed in the Terminal.
@@ -137,6 +138,7 @@ pub fn needed(nr: u64, a0: u64, me: u64) -> u32 {
     match nr {
         NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE => NETWORK,
         AUDIO_SET_VOLUME | AUDIO_TONE | AUDIO_PLAY | AUDIO_WRITE => AUDIO,
+        AUDIO_READ => MICROPHONE,
         HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED => DEVICES,
         SHELL_RUN | USER_OP | PKG_SET => SYSTEM,
         SETTING if a0 == bz_abi::setting_op::SET => SYSTEM,
@@ -152,7 +154,7 @@ fn gated(nr: u64) -> bool {
     matches!(
         nr,
         NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE | AUDIO_SET_VOLUME | AUDIO_TONE | AUDIO_PLAY
-            | AUDIO_WRITE | HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED | SHELL_RUN | USER_OP | PKG_SET | SETTING | PROC_KILL
+            | AUDIO_WRITE | AUDIO_READ | HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED | SHELL_RUN | USER_OP | PKG_SET | SETTING | PROC_KILL
     )
 }
 
@@ -231,7 +233,7 @@ pub fn self_test() -> Result<String, String> {
     let got = crate::process::grant(pid);
     let audio = check_for(pid, &got, sysno::AUDIO_TONE, 440);
     let net = !check_for(pid, &got, sysno::TCP_OP, 0) && !check_for(pid, &got, sysno::DNS_RESOLVE, 0);
-    let hw = !check_for(pid, &got, sysno::HW_GPIO, 0);
+    let hw = !check_for(pid, &got, sysno::HW_GPIO, 0) && !check_for(pid, &got, sysno::AUDIO_READ, 0);
     let sys = !check_for(pid, &got, sysno::SHELL_RUN, 0) && !check_for(pid, &got, sysno::SETTING, bz_abi::setting_op::SET);
     let read_ok = check_for(pid, &got, sysno::SETTING, bz_abi::setting_op::GET) && check_for(pid, &got, sysno::FS_READ, 0);
     let kill = check_for(pid, &got, sysno::PROC_KILL, pid) && !check_for(pid, &got, sysno::PROC_KILL, 1);

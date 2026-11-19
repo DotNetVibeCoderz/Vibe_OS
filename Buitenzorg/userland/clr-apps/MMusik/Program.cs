@@ -112,7 +112,7 @@ public sealed class MusikApp
             foreach (var f in files)
             {
                 string up = f.Name.ToUpperInvariant();
-                if (!f.IsDirectory && (up.EndsWith(".WAV") || up.EndsWith(".FLA") || up.EndsWith(".FLAC") || up.EndsWith(".MP3") || up.EndsWith(".MID")))
+                if (!f.IsDirectory && (up.EndsWith(".WAV") || up.EndsWith(".FLA") || up.EndsWith(".FLAC") || up.EndsWith(".MP3") || up.EndsWith(".MID") || up.EndsWith(".OGG") || up.EndsWith(".OGA") || up.EndsWith(".OPU") || up.EndsWith(".OPUS")))
                     Tracks.Add(new Track(f.Path, f.Name.LastIndexOf('.') > 0 ? f.Name.Substring(0, f.Name.LastIndexOf('.')) : f.Name));
             }
         }
@@ -238,6 +238,20 @@ public sealed class MusikApp
             bool ok = mp.Load(app.Tracks[mp3].Path);
             c.That(ok && mp.Title == "Gerimis" && Math.Abs(mp.Duration - 10) < 0.3 && mp.Info!.Rate == 22050,
                 "MP3 decoded: '" + mp.Title + "', " + (int)(mp.Duration * 10) / 10 + "." + (int)(mp.Duration * 10) % 10 + " s");
+        }
+        // Ogg Vorbis and Ogg Opus, decoded in the host
+        string[] oggFiles = { "LAGU6.OGG", "LAGU7.OPU" }, oggTitles = { "Angin Sore", "Embun Pagi" };
+        int[] oggRates = { 22050, 48000 };
+        int[] oggSecs = { 22, 20 };
+        for (int f = 0; f < oggFiles.Length; f++)
+        {
+            int slot = -1;
+            for (int i = 0; i < app.Tracks.Count; i++) if (app.Tracks[i].Path.ToUpperInvariant().EndsWith(oggFiles[f])) slot = i;
+            if (slot < 0) continue;
+            var og = new MediaPlayer();
+            bool ok = og.Load(app.Tracks[slot].Path);
+            c.That(ok && og.Title == oggTitles[f] && Math.Abs(og.Duration - oggSecs[f]) < 0.3 && og.Info!.Rate == oggRates[f],
+                oggFiles[f] + " decoded: '" + og.Title + "', " + (int)og.Duration + " s at " + (og.Info == null ? 0 : og.Info.Rate) + " Hz");
         }
         return c;
     }

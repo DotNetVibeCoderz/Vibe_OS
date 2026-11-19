@@ -3,8 +3,9 @@
 //! Drives QEMU's `AC97` sound card: enumerates it on the PCI bus, cold-resets
 //! the codec, programs the mixer (master + PCM-out volume), and plays 16-bit
 //! signed stereo PCM at 48 kHz through the Native Audio Bus-Master DMA engine
-//! using a buffer-descriptor list (BDL). Speaker output only for now; mic
-//! capture (the NABM PCM-in box) is a straightforward follow-up.
+//! using a buffer-descriptor list (BDL). Recording (2026-11-19): the PCM-in
+//! box (NABM 0x00) fills its own ring of buffers from the codec's record
+//! source (the microphone), drained into a queue by `capture_pump`.
 //!
 //! Registers follow the AC'97 spec: BAR0 = NAM (Native Audio Mixer, I/O),
 //! BAR1 = NABM (Native Audio Bus Master, I/O). The PCM-out channel "box" lives
@@ -20,6 +21,18 @@ const NAM_MASTER_VOL: u16 = 0x02;
 const NAM_PCM_OUT_VOL: u16 = 0x18;
 
 // --- NABM (bus master) register offsets ---
+// PCM-in box (recording), NABM offset 0x00
+const PI_BDBAR: u16 = 0x00;
+const PI_CIV: u16 = 0x04;
+const PI_LVI: u16 = 0x05;
+const PI_SR: u16 = 0x06;
+const PI_CR: u16 = 0x0B;
+// mixer registers for recording
+const NAM_MIC_VOL: u16 = 0x0E;
+const NAM_REC_SELECT: u16 = 0x1A;
+const NAM_REC_GAIN: u16 = 0x1C;
+/// Buffers in the recording ring (4 KiB each = 21 ms of 48 kHz stereo).
+const CAP_BUFFERS: usize = 16;
 const PO_BDBAR: u16 = 0x10; // u32: BDL physical base
 const PO_CIV: u16 = 0x14; // u8:  current index value (RO)
 const PO_LVI: u16 = 0x15; // u8:  last valid index
@@ -57,6 +70,11 @@ struct Ac97 {
     lvi: usize,
     /// Buffers in a row filled with silence (a full ring of them stops it).
     idle: usize,
+    /// Recording: its own BDL and ring, whether it runs, the next buffer to drain.
+    cap_bdl: (u64, u64),
+    cap_bufs: [(u64, u64); CAP_BUFFERS],
+    capturing: bool,
+    cap_next: usize,
 }
 
 // Only accessed behind the global Mutex; the addresses are plain integers.
@@ -155,6 +173,18 @@ pub fn init() -> bool {
         }
     }
 
+    let Some((cap_bdl_phys, cap_bdl_virt)) = memory::alloc_dma_frame() else {
+        crate::println!("[audio] failed to allocate the recording BDL");
+        return false;
+    };
+    let mut cap_bufs = [(0u64, 0u64); CAP_BUFFERS];
+    for slot in cap_bufs.iter_mut() {
+        match memory::alloc_dma_frame() {
+            Some((p, v)) => *slot = (p, v as u64),
+            None => return false,
+        }
+    }
+
     let ac = Ac97 {
         nam,
         nabm,
@@ -168,6 +198,10 @@ pub fn init() -> bool {
         streaming: false,
         lvi: 0,
         idle: 0,
+        cap_bdl: (cap_bdl_phys, cap_bdl_virt as u64),
+        cap_bufs,
+        capturing: false,
+        cap_next: 0,
     };
     // Apply the default volume.
     outw(nam + NAM_MASTER_VOL, vol_encode(ac.volume, ac.muted));
@@ -189,6 +223,7 @@ pub fn is_present() -> bool {
 pub fn poll() {
     super::hda::poll();
     stream_pump();
+    capture_pump();
 }
 
 /// Streams refilled (tests).
@@ -283,6 +318,104 @@ pub fn stream_pump() {
         outb(d.nabm + PO_CR, 0);
         d.streaming = false;
     }
+}
+
+// ---- recording ------------------------------------------------------------------
+
+/// Recorded samples (48 kHz stereo i16) not read yet; at most `CAP_QUEUE`.
+static CAPTURED: Mutex<alloc::collections::VecDeque<i16>> = Mutex::new(alloc::collections::VecDeque::new());
+/// Four seconds: a reader that falls further behind loses the oldest.
+const CAP_QUEUE: usize = 48_000 * 2 * 4;
+/// Buffers drained (tests).
+pub static CAPTURE_FILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Whether this card records (AC'97 does; HD Audio input is not driven yet).
+pub fn can_capture() -> bool {
+    DEVICE.lock().is_some()
+}
+
+/// Start recording from the codec's record source (the microphone, 0 dB).
+pub fn capture_start() -> bool {
+    let mut g = DEVICE.lock();
+    let Some(d) = g.as_mut() else { return false };
+    CAPTURED.lock().clear();
+    outw(d.nam + NAM_REC_SELECT, 0x0000); // microphone, both channels
+    outw(d.nam + NAM_REC_GAIN, 0x0000); // 0 dB, unmuted
+    outw(d.nam + NAM_MIC_VOL, 0x0008); // 0 dB, unmuted
+    outb(d.nabm + PI_CR, 0);
+    outb(d.nabm + PI_CR, CR_RR);
+    for _ in 0..100_000 {
+        if inb(d.nabm + PI_CR) & CR_RR == 0 {
+            break;
+        }
+    }
+    let bdl = d.cap_bdl.1 as *mut u32;
+    for i in 0..CAP_BUFFERS {
+        unsafe {
+            bdl.add(i * 2).write_volatile(d.cap_bufs[i].0 as u32);
+            bdl.add(i * 2 + 1).write_volatile(WORDS_PER_BUF as u32);
+        }
+    }
+    outl(d.nabm + PI_BDBAR, d.cap_bdl.0 as u32);
+    outb(d.nabm + PI_LVI, (CAP_BUFFERS - 1) as u8);
+    outw(d.nabm + PI_SR, inw(d.nabm + PI_SR));
+    outb(d.nabm + PI_CR, CR_RPBM);
+    d.capturing = true;
+    d.cap_next = 0;
+    true
+}
+
+pub fn capture_stop() {
+    if let Some(d) = DEVICE.lock().as_mut() {
+        outb(d.nabm + PI_CR, 0);
+        d.capturing = false;
+    }
+}
+
+/// Move the buffers the engine has filled (behind its current index) into
+/// the queue and hand them back to it (LVI follows).
+pub fn capture_pump() {
+    let Some(mut g) = DEVICE.try_lock() else { return };
+    let Some(d) = g.as_mut() else { return };
+    if !d.capturing {
+        return;
+    }
+    if inw(d.nabm + PI_SR) & SR_DCH != 0 {
+        // nobody drained in time and the engine stopped: go on from here
+        outw(d.nabm + PI_SR, inw(d.nabm + PI_SR));
+        outb(d.nabm + PI_LVI, ((d.cap_next + CAP_BUFFERS - 1) % CAP_BUFFERS) as u8);
+        outb(d.nabm + PI_CR, CR_RPBM);
+    }
+    let civ = inb(d.nabm + PI_CIV) as usize % CAP_BUFFERS;
+    let mut q = CAPTURED.lock();
+    while d.cap_next != civ {
+        let src = d.cap_bufs[d.cap_next].1 as *const i16;
+        for k in 0..WORDS_PER_BUF {
+            q.push_back(unsafe { src.add(k).read_volatile() });
+        }
+        outb(d.nabm + PI_LVI, d.cap_next as u8);
+        d.cap_next = (d.cap_next + 1) % CAP_BUFFERS;
+        CAPTURE_FILLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+    while q.len() > CAP_QUEUE {
+        q.pop_front();
+    }
+}
+
+/// Up to `out.len()` recorded samples (interleaved stereo); how many.
+pub fn capture_read(out: &mut [i16]) -> usize {
+    capture_pump();
+    let mut q = CAPTURED.lock();
+    let n = out.len().min(q.len()) & !1;
+    for v in out.iter_mut().take(n) {
+        *v = q.pop_front().unwrap_or(0);
+    }
+    n
+}
+
+/// Recorded milliseconds waiting to be read.
+pub fn capture_queued_ms() -> u64 {
+    (CAPTURED.lock().len() / 2) as u64 * 1000 / SAMPLE_RATE as u64
 }
 
 /// Was the mixer write/readback check successful (proves the NAM path works)?
