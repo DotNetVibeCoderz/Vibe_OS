@@ -269,6 +269,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // reset when the desktop starts); before READY: the smoke test stops at it
     shell::script_self_test();
     desktop::hotkey_self_test();
+    usb::hid::pad_self_test();
     terminal::self_test("helloclr", "Hello from managed C#");
     println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 

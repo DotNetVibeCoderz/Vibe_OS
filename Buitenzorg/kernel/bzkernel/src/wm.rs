@@ -89,7 +89,7 @@ const CATEGORIES: [Category; 6] = [
     Category {
         name: "Hiburan",
         leaf: gfx::rgb(0xE8, 0x8F, 0x7A),
-        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8")],
+        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8"), ("mlompat", "Lompat Kodok")],
     },
 ];
 
@@ -247,6 +247,20 @@ fn ws_button_rect(width: i32, height: i32, ws: u8) -> (i32, i32, i32, i32) {
 
 /// The tray's date + time block (left x, width); clicking it opens the
 /// "Tanggal & Waktu" app.
+/// Processes whose sound is queued in the mixer now ("now playing": their
+/// taskbar buttons carry a note).
+fn playing_pids() -> Vec<u64> {
+    crate::mixer::list().into_iter().filter(|(pid, ms, _)| *pid != 0 && *ms > 0).map(|(pid, _, _)| pid).collect()
+}
+
+/// A small eighth note (head + stem + flag) at (x, y), 9 x 13 px.
+fn draw_note(canvas: &mut Canvas, x: i32, y: i32, c: u32) {
+    canvas.ellipse(x, y + 8, 6, 5, c, true);
+    canvas.fill_rect(x + 5, y, 2, 11, c);
+    canvas.fill_rect(x + 7, y + 1, 2, 2, c);
+    canvas.fill_rect(x + 8, y + 3, 1, 3, c);
+}
+
 fn clock_area(width: i32) -> (i32, i32) {
     let right = width - 10 - WORKSPACES as i32 * 26 - 10;
     let (t, n) = tray_time();
@@ -2012,7 +2026,9 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             .next_back()
             .map(|w| w.id);
         k = gfx::mix(k, top_id.map_or(u64::MAX, |i| i as u64));
+        let playing = playing_pids();
         for w in self.windows.iter().filter(|w| w.workspace == self.workspace) {
+            k = gfx::mix(k, playing.contains(&w.owner) as u64);
             let st = match w.state {
                 WinState::Normal => 0,
                 WinState::Minimized => 1,
@@ -2102,11 +2118,16 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             .map(|w| w.id);
         let start_x = 6 + START_W + 8; // keep in sync with taskbar_click
         let mut bx = start_x;
+        let playing = playing_pids();
         for win in self.windows.iter().filter(|w| w.workspace == self.workspace) {
             if bx + 116 > rx - 4 {
                 break; // no room before the tray
             }
             let active = Some(win.id) == top_id;
+            // now playing: a note before the label (the window's sound is in the mixer)
+            let sounding = win.owner != 0 && playing.contains(&win.owner);
+            let pad = if sounding { 14 } else { 0 };
+
             if glass {
                 if active {
                     fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 6, shift(th.taskbar_bg, 20));
@@ -2119,7 +2140,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
                 } else {
                     crate::theme::LICHEN
                 };
-                canvas.draw_text(bx + 10, y + 9, &win.title, tc, bx + 104);
+                canvas.draw_text(bx + 10 + pad, y + 9, &win.title, tc, bx + 104);
             } else {
                 if active {
                     fill_rounded_gradient(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, shift(th.win_title_active, 26), th.win_title_active);
@@ -2129,7 +2150,10 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
                     fill_rounded(canvas, bx, y + 5, 110, TASKBAR_H - 10, 5, th.win_title_inactive);
                 }
                 let tc = if active { th.title_text } else { th.text };
-                canvas.draw_text(bx + 8, y + 9, &win.title, tc, bx + 108);
+                canvas.draw_text(bx + 8 + pad, y + 9, &win.title, tc, bx + 108);
+            }
+            if sounding {
+                draw_note(canvas, bx + 7, y + 9, if glass { crate::theme::POLLEN } else { th.title_text });
             }
             bx += 116;
         }

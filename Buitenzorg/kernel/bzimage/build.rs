@@ -651,6 +651,15 @@ fn main() {
         }
     }
 
+    // A glTF 2.0 model (scripts/make-gltf-model.py) for Buitenzorg.Three's loader
+    {
+        let p = manifest_dir().join("..").join("..").join("assets").join("models").join("pohon.glb");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "pohon.glb".into(), bytes);
+        }
+    }
+
     // Video: an original 12-second animation with music, MJPEG + PCM in AVI
     add_file(&mut builder, &mut files, "fajar.avi".into(), synth_video());
 

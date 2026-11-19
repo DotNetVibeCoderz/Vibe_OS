@@ -13,6 +13,44 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Added -- media, games and 3D (2026-11-20)
+
+- **2D game engine** in `Buitenzorg.Game` (`Engine.cs`): sprites from pixel-art
+  strings or pictures, sprite sheets and animations, tile maps with box
+  collision against tiles, a following camera, scenes, a 3x5 pixel font,
+  `SaveData` and looping `GameMusic`. The canvas is drawn by three host
+  natives (`PixFill`/`PixBlit`/`PixTiles`, clrhost `pix.rs`): a per-pixel loop
+  in the interpreter is far too slow for this.
+- **Lompat Kodok** (`mlompat`, Start > Hiburan): an original platformer made
+  with it -- leaf platforms, dew drops, thorns, a snail, a flag, parallax,
+  best time saved; keyboard or gamepad.
+- **USB gamepads:** a generic HID report-descriptor parser (buttons, X/Y,
+  hat switch, d-pad usages, report ids) plus the fixed Xbox 360 (XInput)
+  report, mapped to one standard layout of raw key codes (`RawKey.PadA` ..
+  `PadRight`) that arrive as ordinary key events. `MILESTONE: GAMEPAD OK`
+  checks it with a sample descriptor and reports: QEMU has no gamepad model,
+  and it has not been tried with a real pad yet.
+- **CSS in Peramban:** `<style>` blocks, fetched `<link rel=stylesheet>`
+  files and `style=""`; selectors by tag / class / id, compounds and
+  descendants; color, background, border, bold / size, text-align, display
+  none / block / inline, left indents. Engine in clrhost (`css.rs`), copy for
+  .NET (`Css.cs`); new native `HtmlAddCss`.
+- **glTF 2.0** in `Buitenzorg.Three` (`Gltf.cs`): .glb and .gltf (embedded or
+  external buffers), the node tree with quaternions / matrices, several
+  primitives per mesh, vertex colors, base-color materials with
+  transparency. Textures, skins and animations are not read. Sample model
+  `/disk/POHON.GLB` (`scripts/make-gltf-model.py`).
+- **Physics and 3D audio** in `Buitenzorg.Three` (`Physics.cs`): spheres and
+  boxes under gravity with bounce, friction and sleeping; sounds panned and
+  attenuated by their position relative to the camera. Ruang 3D drops fruit
+  with J.
+- **Sound on ARM64 and RISC-V:** virtio-snd now streams the mixer (8 periods
+  in flight) and records from its input stream, so music, games, Piano and
+  the recorder work there (`VIRTIO SND STREAM OK`, `VIRTIO SND CAPTURE OK`).
+- **Music library** in Musik (folders two levels deep, USB sticks, sorted,
+  search box), **Now Playing** (a taskbar button whose app is sounding gets a
+  note), **thumbnails** in Gambar.
+
 ### Fixed
 
 - **ARM64: a new user program could start at a kernel address.**

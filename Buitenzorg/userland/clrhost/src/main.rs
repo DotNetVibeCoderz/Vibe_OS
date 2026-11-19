@@ -28,6 +28,7 @@ mod g3d;
 mod heap;
 mod imgdecode;
 mod netapi;
+mod css;
 mod htmlpage;
 mod zipapi;
 mod raycast;
@@ -35,6 +36,7 @@ mod flac;
 mod audiodec;
 mod midi;
 mod ogg;
+mod pix;
 /// The kernel's JS/TS/Python interpreter (same source), for UI scripts.
 #[path = "../../../kernel/bzkernel/src/script.rs"]
 #[allow(dead_code)]

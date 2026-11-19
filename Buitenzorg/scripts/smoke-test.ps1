@@ -110,7 +110,7 @@ $basic = @("MILESTONE: HELLO KERNEL OK", "MILESTONE: SCHEDULER OK",
            "MILESTONE: POWER OK", "MILESTONE: NALAR OK",
            "MILESTONE: VMX OK", "MILESTONE: VM OK", "MILESTONE: VIRTIO OK",
            "MILESTONE: SNAPSHOT OK", "MILESTONE: LAPIS OK",
-           "MILESTONE: SCRIPT JS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "MILESTONE: SCRIPT TS OK", "MILESTONE: SCRIPT PY OK",
+           "MILESTONE: SCRIPT JS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "MILESTONE: GAMEPAD OK", "MILESTONE: SCRIPT TS OK", "MILESTONE: SCRIPT PY OK",
            "MILESTONE: POLYGLOT OK", "MILESTONE: BABEL OK",
            "MILESTONE: PAL MEM OK", "MILESTONE: THREADS OK",
            "MILESTONE: SYNC PAL OK", "MILESTONE: HEAP PAL OK",
@@ -535,7 +535,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
                '-global', 'virtio-mmio.force-legacy=false',
                '-drive', "`"id=d0,format=raw,file=$armImage,if=none`"", '-device', 'virtio-blk-device,drive=d0',
                '-device', 'virtio-gpu-device', '-device', 'ramfb',
-               '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0',
+               '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0', '-audiodev', 'none,id=vsnd', '-device', 'virtio-sound-device,audiodev=vsnd',
                '-device', 'virtio-keyboard-device', '-device', 'virtio-tablet-device',
                '-monitor', 'tcp:127.0.0.1:4482,server,nowait', '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemuArm -ArgumentList ($qargs + $selftest) -PassThru
@@ -553,7 +553,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
         "MILESTONE: DTB OK", "MILESTONE: ARM64 MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: ARM64 ASPACE OK", "MILESTONE: ARM64 CONTEXT OK", "MILESTONE: ARM64 EL0 OK", "Hello from EL0",
         "MILESTONE: ARM64 RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: ARM64 DISK OK", "MILESTONE: VIRTIO GPU OK", "MILESTONE: DHCP OK",
         "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: ARM64 PSCI OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK",
-        "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
+        "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: VIRTIO SND OK", "MILESTONE: VIRTIO SND STREAM OK", "MILESTONE: VIRTIO SND CAPTURE OK", "MILESTONE: ARM64 SMP OK (2 CPUs", "MILESTONE: ARM64 TIMER OK", "MILESTONE: ARM64 BOOT OK", "BUITENZORG ARM64 READY", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "MILESTONE: GAMEPAD OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0")
     if (Select-String -Path $log -Pattern "program 'hello'" -Quiet) {
         Assert-Markers -Log $log -Markers @("Hello from C#!", "MILESTONE: ARM64 CSHARP OK", "MILESTONE: MATANG OK",
             "MILESTONE: HEAP OK", "MILESTONE: STATICS OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: BCL3 OK", "MILESTONE: ASYNC OK", "MILESTONE: GCMEM OK", "MILESTONE: ARM64 MULTIPROC OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "frames leaked: 0", "from /disk",
@@ -583,7 +583,7 @@ if ((Test-Path $qemuArm) -and (Test-Path $kernel8)) {
         $qargs += @('-drive', "`"file=$sdCopy,if=sd,format=raw`"")
     }
     $p = Start-Process -FilePath $qemuArm -ArgumentList ($qargs + @('-append', 'bz.selftest')) -PassThru -RedirectStandardError (Join-Path $root "dist\boot-rpi4.err")
-    foreach ($i in 1..720) {
+    foreach ($i in 1..1080) {
         Start-Sleep -Seconds 1
         if ((Test-Path $log) -and (Select-String -Path $log -Pattern "ARM64 READY" -Quiet)) { break }
     }
@@ -618,7 +618,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
                '-global', 'virtio-mmio.force-legacy=false',
                '-drive', "`"id=d0,format=raw,file=$rvImage,if=none`"", '-device', 'virtio-blk-device,drive=d0',
                '-device', 'virtio-gpu-device', '-device', 'virtio-keyboard-device', '-device', 'virtio-tablet-device',
-               '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0', '-device', 'ramfb',
+               '-netdev', 'user,id=n0', '-device', 'virtio-net-device,netdev=n0', '-audiodev', 'none,id=vsnd', '-device', 'virtio-sound-device,audiodev=vsnd', '-device', 'ramfb',
                '-monitor', 'tcp:127.0.0.1:4484,server,nowait', '-display', 'none', '-serial', "file:$log", '-no-reboot')
     $p = Start-Process -FilePath $qemuRv -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
@@ -630,7 +630,7 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     Start-Sleep -Seconds 3
     Send-VirtioInput -Log $log -Port 4484
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
+    Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "MILESTONE: GAMEPAD OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: VIRTIO SND OK", "MILESTONE: VIRTIO SND STREAM OK", "MILESTONE: VIRTIO SND CAPTURE OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
     Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
     # The file the kernel wrote to /disk must be inside the image file.
     # (QEMU must be gone first: it holds the image open.)

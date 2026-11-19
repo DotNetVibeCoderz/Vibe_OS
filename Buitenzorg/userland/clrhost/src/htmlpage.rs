@@ -61,6 +61,10 @@ struct Page {
     links: Vec<String>,
     items: Vec<Item>,
     height: i32,
+    /// style sheets (`<style>`, fetched `<link>`s) and the hrefs of linked ones
+    rules: Vec<crate::css::Rule>,
+    css_order: u32,
+    css_links: Vec<String>,
 }
 
 struct Pages {
@@ -266,7 +270,7 @@ fn collapse(s: &str) -> String {
 }
 
 fn parse(html: &str) -> Page {
-    let mut page = Page { id: 0, title: String::new(), toks: Vec::new(), images: Vec::new(), image_info: Vec::new(), links: Vec::new(), items: Vec::new(), height: 0 };
+    let mut page = Page { id: 0, title: String::new(), toks: Vec::new(), images: Vec::new(), image_info: Vec::new(), links: Vec::new(), items: Vec::new(), height: 0, rules: Vec::new(), css_order: 0, css_links: Vec::new() };
     let b = html.as_bytes();
     let n = b.len();
     let mut i = 0;
@@ -318,8 +322,15 @@ fn parse(html: &str) -> Page {
         }
         if !tag.closing && matches!(tag.name.as_str(), "script" | "style" | "noscript" | "svg" | "template") {
             let end = alloc::format!("</{}", tag.name);
-            i = find_ci(b, end.as_bytes(), i).unwrap_or(n);
+            let stop = find_ci(b, end.as_bytes(), i).unwrap_or(n);
+            if tag.name == "style" {
+                crate::css::parse_sheet(&html[i..stop], &mut page.css_order, &mut page.rules);
+            }
+            i = stop;
             continue;
+        }
+        if tag.name == "link" && tag.attr("rel").to_ascii_lowercase().contains("stylesheet") && !tag.attr("href").is_empty() {
+            page.css_links.push(String::from(tag.attr("href")));
         }
         if tag.name == "img" && !tag.closing {
             let src = tag.attr("src");
@@ -380,7 +391,29 @@ fn image_size(img: &Img, max_w: i32) -> (i32, i32) {
     (w.max(4), h.max(4))
 }
 
+/// An open element during layout: what selectors match against, its computed
+/// style, and the box it draws (background / border) once it closes.
+struct Frame {
+    tag: String,
+    id: String,
+    class: String,
+    st: crate::css::Style,
+    block: bool,
+    /// (first item index, top y, left x, right x) of a block with a background or border
+    boxed: Option<(usize, i32, i32, i32)>,
+    indent: i32,
+}
+
+fn is_void(n: &str) -> bool {
+    matches!(n, "br" | "hr" | "img" | "input" | "meta" | "link" | "area" | "base" | "col" | "embed" | "source" | "wbr" | "param" | "track")
+}
+
 struct Lay<'a> {
+    frames: Vec<Frame>,
+    /// frames index of a `display: none` element: everything inside is skipped
+    hidden: Option<usize>,
+    link_color: Option<i32>,
+    page_bg: Option<i32>,
     items: Vec<Item>,
     line: Vec<Item>,
     width: i32,
@@ -404,10 +437,14 @@ impl Lay<'_> {
     fn right(&self) -> i32 {
         self.width - self.margin
     }
+    fn css(&self) -> crate::css::Style {
+        self.frames.last().map(|f| f.st).unwrap_or_default()
+    }
     fn style(&self) -> i32 {
-        if self.heading == 1 || self.heading == 2 {
+        let f = self.css().font;
+        if self.heading == 1 || self.heading == 2 || f == 3 {
             2
-        } else if self.heading > 0 || self.bold > 0 {
+        } else if (self.heading > 0 || self.bold > 0 || f == 2) && f != 1 || (f == 1 && (self.bold > 0 || self.heading > 2)) {
             1
         } else {
             0
@@ -421,7 +458,9 @@ impl Lay<'_> {
     }
     fn color(&self) -> i32 {
         if self.href >= 0 {
-            self.pal[1]
+            self.link_color.unwrap_or(self.pal[1])
+        } else if let Some(c) = self.css().color {
+            c
         } else if self.heading > 0 {
             self.pal[2]
         } else {
@@ -434,6 +473,19 @@ impl Lay<'_> {
             return;
         }
         let h = self.line.iter().map(|i| i.h).max().unwrap_or(0);
+        // text-align: move the whole line
+        let align = self.css().align;
+        if align != 0 {
+            let x0 = self.line.iter().map(|i| i.x).min().unwrap_or(0);
+            let x1 = self.line.iter().map(|i| i.x + i.w).max().unwrap_or(0);
+            let room = self.right() - x1;
+            let shift = if align == 1 { (room - (x0 - self.left())) / 2 } else { room };
+            if shift > 0 {
+                for it in self.line.iter_mut() {
+                    it.x += shift;
+                }
+            }
+        }
         for mut it in core::mem::take(&mut self.line) {
             it.y = if it.kind == 0 { self.y + h - it.h } else { self.y };
             self.items.push(it);
@@ -451,6 +503,82 @@ impl Lay<'_> {
             self.last_gap = g;
         }
         self.x = self.left();
+    }
+
+    /// Open an element (not a void one): compute its style, start its box.
+    fn push(&mut self, tag: &Tag, rules: &[crate::css::Rule], block_default: bool) -> crate::css::Style {
+        let parent = self.css();
+        let elems: Vec<crate::css::Elem> = self.frames.iter().map(|f| crate::css::Elem { tag: &f.tag, id: &f.id, class: &f.class }).collect();
+        let me = crate::css::Elem { tag: &tag.name, id: tag.attr("id"), class: tag.attr("class") };
+        let st = if rules.is_empty() && tag.attr("style").is_empty() { parent.inherit() } else { crate::css::compute(&parent, &me, &elems, rules, tag.attr("style")) };
+        drop(elems);
+        let block = match st.display {
+            2 => true,
+            3 => false,
+            _ => block_default,
+        };
+        self.frames.push(Frame { tag: tag.name.clone(), id: String::from(tag.attr("id")), class: String::from(tag.attr("class")), st, block, boxed: None, indent: 0 });
+        st
+    }
+
+    /// After an opened block's own spacing: its indent and box start.
+    fn start_box(&mut self) {
+        let Some(f) = self.frames.last() else { return };
+        let (st, block, tag) = (f.st, f.block, f.tag.clone());
+        if tag == "body" || tag == "html" {
+            if let Some(bg) = st.background {
+                self.page_bg = Some(bg);
+            }
+        } else if block && (st.background.is_some() || st.border.is_some()) {
+            self.end_line();
+            let (n, y, l, r) = (self.items.len(), self.y, self.left(), self.right());
+            self.frames.last_mut().unwrap().boxed = Some((n, y, l, r));
+            self.y += 4;
+        }
+        if block && st.indent > 0 {
+            self.indent += st.indent;
+            self.frames.last_mut().unwrap().indent = st.indent;
+            self.x = self.left();
+        }
+        if tag == "a" {
+            self.link_color = if st.own_color { st.color } else { None };
+        }
+    }
+
+    /// Close the innermost open element named `name` (and anything opened
+    /// inside it that was never closed). Returns whether it was a block.
+    fn pop_to(&mut self, name: &str) -> Option<bool> {
+        let at = self.frames.iter().rposition(|f| f.tag == name)?;
+        let mut block = false;
+        while self.frames.len() > at {
+            let f = self.frames.last().unwrap();
+            let (fblock, boxed, indent, st, tag) = (f.block, f.boxed, f.indent, f.st, f.tag.clone());
+            if fblock {
+                self.end_line(); // aligned by this frame, still on top
+            }
+            if let Some((n, y0, x0, x1)) = boxed {
+                self.y += 4;
+                let h = (self.y - y0).max(2);
+                let mut k = n;
+                if let Some(bg) = st.background {
+                    self.items.insert(k, Item { kind: 3, x: x0, y: y0, w: x1 - x0, h, style: 0, color: bg, image: -1, href: -1, text: String::new() });
+                    k += 1;
+                }
+                if let Some(bc) = st.border {
+                    self.items.insert(k, Item { kind: 4, x: x0, y: y0, w: x1 - x0, h, style: 0, color: bc, image: -1, href: -1, text: String::new() });
+                }
+                self.y += 2;
+                self.last_gap = 0;
+            }
+            self.indent = (self.indent - indent).max(0);
+            if tag == "a" {
+                self.link_color = None;
+            }
+            block = fblock;
+            self.frames.pop();
+        }
+        self.x = self.left();
+        Some(block)
     }
 
     fn word(&mut self, w: &str) {
@@ -494,12 +622,28 @@ impl Lay<'_> {
 }
 
 fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
-    let mut l = Lay { items: Vec::new(), line: Vec::new(), width, margin: 12, indent: 0, x: 12, y: 8, pending_space: false, last_gap: 0, bold: 0, heading: 0, href: -1, m, pal };
+    let mut l = Lay { frames: Vec::new(), hidden: None, link_color: None, page_bg: None, items: Vec::new(), line: Vec::new(), width, margin: 12, indent: 0, x: 12, y: 8, pending_space: false, last_gap: 0, bold: 0, heading: 0, href: -1, m, pal };
     let mut pre = 0;
     let mut lists: Vec<i32> = Vec::new();
     let mut img_index = 0usize;
     let mut link_index = 0i32;
     for t in &page.toks {
+        if l.hidden.is_some() {
+            // inside a display: none element: only track nesting
+            if let Tok::Tag(tag) = t {
+                if !is_void(&tag.name) {
+                    if tag.closing {
+                        l.frames.iter().rposition(|f| f.tag == tag.name).map(|at| l.frames.truncate(at));
+                    } else {
+                        l.frames.push(Frame { tag: tag.name.clone(), id: String::new(), class: String::new(), st: Default::default(), block: false, boxed: None, indent: 0 });
+                    }
+                }
+            }
+            if l.frames.len() <= l.hidden.unwrap() {
+                l.hidden = None;
+            }
+            continue;
+        }
         match t {
             Tok::Text(s) => {
                 if pre > 0 {
@@ -536,13 +680,30 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
             Tok::Tag(tag) => {
                 let nm = tag.name.as_str();
                 let closing = tag.closing;
+                let void = is_void(nm);
+                let mut block = is_block(nm);
+                if closing && !void {
+                    match l.pop_to(nm) {
+                        Some(b) => block = b,
+                        None => continue, // a stray closing tag
+                    }
+                }
+                if !closing && !void {
+                    let st = l.push(tag, &page.rules, block);
+                    if st.display == 1 {
+                        l.hidden = Some(l.frames.len() - 1);
+                        continue;
+                    }
+                    block = l.frames.last().map(|f| f.block).unwrap_or(block);
+                }
+                'logic: {
                 match nm {
                     "br" => {
                         if l.line.is_empty() {
                             l.y += l.lh(0);
                         }
                         l.end_line();
-                        continue;
+                        break 'logic;
                     }
                     "hr" => {
                         l.gap(8);
@@ -550,11 +711,11 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         l.items.push(Item { kind: 1, x, y: l.y, w, h: 1, style: 0, color: pal[4], image: -1, href: -1, text: String::new() });
                         l.y += 9;
                         l.last_gap = 8;
-                        continue;
+                        break 'logic;
                     }
                     "img" if !closing => {
                         if img_index >= page.images.len() {
-                            continue;
+                            break 'logic;
                         }
                         let (w, h) = image_size(&page.images[img_index], l.right() - l.left());
                         if l.x + w > l.right() && l.x > l.left() {
@@ -568,7 +729,7 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         l.x += w;
                         l.pending_space = false;
                         img_index += 1;
-                        continue;
+                        break 'logic;
                     }
                     "a" => {
                         if closing {
@@ -579,14 +740,14 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         } else {
                             l.href = -1;
                         }
-                        continue;
+                        break 'logic;
                     }
                     _ => {}
                 }
                 if nm == "b" || nm == "strong" || nm == "th" {
                     l.bold = (l.bold + if closing { -1 } else { 1 }).max(0);
                     if nm != "th" {
-                        continue;
+                        break 'logic;
                     }
                 }
                 if nm == "td" || nm == "th" {
@@ -594,16 +755,20 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         l.x += l.gw(0) * 2;
                         l.pending_space = false;
                     }
-                    continue;
+                    break 'logic;
+                }
+                if !block {
+                    break 'logic; // inline (or made inline by display)
                 }
                 if !is_block(nm) {
-                    continue;
+                    l.gap(2); // an inline element made a block by display
+                    break 'logic;
                 }
                 let nb = nm.as_bytes();
                 if nb.len() == 2 && nb[0] == b'h' && (b'1'..=b'6').contains(&nb[1]) {
                     l.gap(if closing { 6 } else { 12 });
                     l.heading = if closing { 0 } else { (nb[1] - b'0') as i32 };
-                    continue;
+                    break 'logic;
                 }
                 match nm {
                     "ul" | "ol" => {
@@ -656,11 +821,21 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         _ => 2,
                     }),
                 }
+                }
+                if !closing && !void {
+                    l.start_box();
+                }
             }
         }
     }
+    while let Some(t) = l.frames.last().map(|f| f.tag.clone()) {
+        l.pop_to(&t); // elements never closed
+    }
     l.end_line();
     page.height = l.y + 16;
+    if let Some(bg) = l.page_bg {
+        l.items.insert(0, Item { kind: 3, x: 0, y: 0, w: width, h: page.height, style: 0, color: bg, image: -1, href: -1, text: String::new() });
+    }
     page.items = l.items;
 }
 
@@ -695,7 +870,8 @@ fn html_load(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     Ok(Some(Value::I64(id)))
 }
 
-/// `HtmlInfo(id, what)`: 0 title, 1 images ("src\talt\twidth\theight" lines), 2 links (lines).
+/// `HtmlInfo(id, what)`: 0 title, 1 images ("src\talt\twidth\theight" lines), 2 links (lines),
+/// 3 linked style sheets (hrefs, lines).
 fn html_info(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let (id, what) = (int(a, 0), int(a, 1));
     let s = {
@@ -709,6 +885,14 @@ fn html_info(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
                     for (k, (src, alt)) in p.image_info.iter().enumerate() {
                         let im = &p.images[k];
                         s.push_str(&alloc::format!("{}\t{}\t{}\t{}\n", src.replace(['\t', '\n'], " "), alt.replace(['\t', '\n'], " "), im.attr_w, im.attr_h));
+                    }
+                    s
+                }
+                3 => {
+                    let mut s = String::new();
+                    for l in &p.css_links {
+                        s.push_str(&l.replace('\n', ""));
+                        s.push('\n');
                     }
                     s
                 }
@@ -813,6 +997,20 @@ fn html_texts(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_str(i, &s)
 }
 
+/// `HtmlAddCss(id, string css)`: a fetched `<link>` style sheet (appended
+/// after the page's own `<style>` blocks). Returns the number of rules added.
+fn html_add_css(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let id = int(a, 0);
+    let css = string(i, a, 1);
+    let mut t = PAGES.lock();
+    let Some(p) = t.pages.iter_mut().find(|p| p.id == id) else { return Ok(Some(Value::I32(-1))) };
+    let before = p.rules.len();
+    let mut order = p.css_order;
+    crate::css::parse_sheet(&css, &mut order, &mut p.rules);
+    p.css_order = order;
+    Ok(Some(Value::I32((p.rules.len() - before) as i32)))
+}
+
 fn html_free(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let id = int(a, 0);
     PAGES.lock().pages.retain(|p| p.id != id);
@@ -820,7 +1018,8 @@ fn html_free(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 }
 
 pub fn register(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 7] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 8] = [
+        ("HtmlAddCss", html_add_css),
         ("HtmlLoad", html_load),
         ("HtmlInfo", html_info),
         ("HtmlSetImage", html_set_image),

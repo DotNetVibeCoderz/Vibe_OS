@@ -67,6 +67,15 @@ public sealed class PageView : Control
                 case ItemKind.Rule:
                     dc.FillRect(new Rect(x, y, it.W, 1), it.Color);
                     break;
+                case ItemKind.Bar: // a CSS background (before the block's content in the list)
+                    dc.FillRect(new Rect(x, y, it.W, it.H), it.Color);
+                    break;
+                case ItemKind.Frame: // a CSS border
+                    dc.FillRect(new Rect(x, y, it.W, 1), it.Color);
+                    dc.FillRect(new Rect(x, y + it.H - 1, it.W, 1), it.Color);
+                    dc.FillRect(new Rect(x, y, 1, it.H), it.Color);
+                    dc.FillRect(new Rect(x + it.W - 1, y, 1, it.H), it.Color);
+                    break;
                 case ItemKind.Image:
                     DrawImage(dc, it, x, y, b);
                     break;
@@ -268,6 +277,7 @@ public sealed class BrowserApp
                 var bytes = Files.ReadAllBytes(url);
                 if (bytes == null) throw new NetException("berkas " + url + " tidak ada");
                 r.Page = Picture.IsPictureName(url) ? ImagePage(url) : Html.Parse(Encoding.UTF8.GetString(bytes));
+                LoadCss(r.Page, url);
                 return r;
             }
             var http = new HttpClient();
@@ -277,7 +287,7 @@ public sealed class BrowserApp
             r.Info = resp.Status + " " + resp.Reason + (resp.Tls.Length > 0 ? "  -  terenkripsi (" + resp.Tls + ")" : "");
             if (ct.StartsWith("image/")) r.Page = ImagePage(resp.Url);
             else if (ct.StartsWith("text/plain")) r.Page = Html.Parse("<pre>" + Escape(resp.Text) + "</pre>");
-            else r.Page = Html.Parse(resp.Text);
+            else { r.Page = Html.Parse(resp.Text); LoadCss(r.Page, resp.Url); }
             if (!resp.Ok && r.Page.Title.Length == 0) r.Page.Title = "HTTP " + resp.Status;
         }
         catch (Exception e)
@@ -287,6 +297,37 @@ public sealed class BrowserApp
                 "</p><p>Periksa alamatnya, atau apakah jaringan tersambung (<b>ipconfig</b> di Terminal).</p><p><a href=\"about:home\">Kembali ke beranda</a></p>");
         }
         return r;
+    }
+
+    /// <summary>A page's linked style sheets (at most 4, each at most 256 KB): fetched
+    /// and added before the first layout. A sheet that fails is skipped.</summary>
+    public static int LoadCss(Page page, string baseUrl)
+    {
+        int added = 0, n = 0;
+        foreach (var href in page.CssLinks)
+        {
+            if (n++ >= 4) break;
+            try
+            {
+                string css;
+                if (baseUrl.StartsWith("/"))
+                {
+                    string path = href.StartsWith("/") ? href : baseUrl.Substring(0, baseUrl.LastIndexOf('/') + 1) + href;
+                    css = Files.ReadAllText(path);
+                }
+                else
+                {
+                    var u = Url.Parse(baseUrl)?.Resolve(href);
+                    if (u == null) continue;
+                    var resp = new HttpClient().Get(u.ToString());
+                    if (!resp.Ok || resp.Text.Length > 256 * 1024) continue;
+                    css = resp.Text;
+                }
+                if (css.Length > 0) added += Html.AddCss(page, css);
+            }
+            catch (Exception) { }
+        }
+        return added;
     }
 
     static Page ImagePage(string url) => Html.Parse("<title>" + Escape(url) + "</title><img src=\"" + Escape(url) + "\">");
@@ -579,6 +620,24 @@ public sealed class BrowserApp
         bool noScript = !items.Exists(i => i.Text.Contains("var"));
         c.That(heading && link && ent && noScript, "layout: heading, link, entities, script skipped");
         c.That(items.Exists(i => i.Kind == ItemKind.Image && i.W == 40 && i.H == 20) && height > 40, "image box from width/height");
+        // CSS: <style>, a fetched sheet (AddCss), style="", class / id / descendant selectors
+        var cp = Html.Parse("<style>.box{background:#123456;color:#ffffff;border:1px solid #ff0000} .hid{display:none} #t h2{text-align:center}" +
+            " span.b{font-weight:bold} a:hover{color:red}</style><div class=box><p>isi kotak</p></div><p class=hid>rahasia <b>sekali</b></p>" +
+            "<section id=t><h2>tengah</h2></section><p style=\"color:#00ff00\">hijau <span class=b>tebal</span></p><p class=extra>biru</p>");
+        int addedRules = Html.AddCss(cp, "/* fetched */ p.extra { color: #0000ff !important }");
+        var (ci, _) = Html.Layout(cp, 400, new Palette { Text = 1, Link = 2, Heading = 3, Rule = 4, Muted = 5 });
+        var bar = ci.Find(i => i.Kind == ItemKind.Bar);
+        var inBox = ci.Find(i => i.Kind == ItemKind.Text && i.Text.Contains("isi kotak"));
+        c.That(bar != null && bar.Color == 0x123456 && inBox != null && inBox.Color == 0xFFFFFF && inBox.Y >= bar.Y && inBox.Y + inBox.H <= bar.Y + bar.H
+            && ci.IndexOf(bar) < ci.IndexOf(inBox) && ci.Exists(i => i.Kind == ItemKind.Frame && i.Color == 0xFF0000), "CSS: background + border box, text color inside it");
+        var centered = ci.Find(i => i.Text == "tengah");
+        c.That(!ci.Exists(i => i.Text.Contains("rahasia") || i.Text.Contains("sekali")) && centered != null && centered.X > 100, "CSS: display:none hidden, text-align:center by descendant selector (x " + (centered?.X ?? -1) + ")");
+        var green = ci.Find(i => i.Text.StartsWith("hijau"));
+        var bold = ci.Find(i => i.Text == "tebal");
+        var blue = ci.Find(i => i.Text == "biru");
+        c.That(green != null && green.Color == 0x00FF00 && bold != null && bold.Style == 1 && bold.Color == 0x00FF00 && addedRules == 1 && blue != null && blue.Color == 0x0000FF,
+            "CSS: style attribute, inherited color, bold from a class, a fetched sheet");
+        Html.Free(cp);
         var wrap = Html.Layout(Html.Parse("<p>" + string.Join(" ", Enumerable.Repeat("kata", 60)) + "</p>"), 200, default).Item1;
         int lines = 0; int lastY = -1;
         foreach (var it in wrap) if (it.Y != lastY) { lines++; lastY = it.Y; }

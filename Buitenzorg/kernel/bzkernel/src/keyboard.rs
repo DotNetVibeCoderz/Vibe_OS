@@ -24,7 +24,13 @@ static DECODER: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Mutex
 /// The last byte was the 0xE0 prefix.
 static E0: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Which keys are down: bit `code` (set-1 make code, | 0x100 for E0 keys).
-static DOWN: [core::sync::atomic::AtomicU64; 8] = [const { core::sync::atomic::AtomicU64::new(0) }; 8];
+/// Key state: set-1 codes (0x000..0x1FF) and gamepad buttons (0x200.., `PAD_*`).
+static DOWN: [core::sync::atomic::AtomicU64; 10] = [const { core::sync::atomic::AtomicU64::new(0) }; 10];
+
+/// Gamepad buttons as raw key codes (USB HID gamepads, `usb::hid::Pad`):
+/// A B X Y L R Select Start, then the d-pad Up Down Left Right.
+pub const PAD_A: u32 = 0x200;
+pub const PAD_UP: u32 = 0x210;
 /// Press / release events: `code | pressed << 16`.
 static EVENTS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
@@ -75,6 +81,21 @@ fn raw_scancode(byte: u8) {
         return; // the fake shifts around E0 keys
     }
     let pressed = byte & 0x80 == 0;
+    key_change(code, pressed);
+}
+
+/// A key or gamepad button went down / up: state bitmap, hotkeys, one event
+/// per change. Callable with interrupts on (the queues are shared with the
+/// PS/2 interrupt handler, so they are taken with interrupts off).
+pub fn key_change(code: u32, pressed: bool) {
+    crate::arch::cpu::without_interrupts(|| key_change_locked(code, pressed));
+}
+
+fn key_change_locked(code: u32, pressed: bool) {
+    use core::sync::atomic::Ordering::Relaxed;
+    if code >= 640 {
+        return;
+    }
     let (w, bit) = ((code / 64) as usize, 1u64 << (code % 64));
     let was = DOWN[w].load(Relaxed) & bit != 0;
     if pressed {
@@ -116,7 +137,7 @@ pub fn clear_chars() {
 
 /// Whether key `code` is held down.
 pub fn is_down(code: u32) -> bool {
-    code < 512 && DOWN[(code / 64) as usize].load(core::sync::atomic::Ordering::Relaxed) & (1u64 << (code % 64)) != 0
+    code < 640 && DOWN[(code / 64) as usize].load(core::sync::atomic::Ordering::Relaxed) & (1u64 << (code % 64)) != 0
 }
 
 /// Feed one PC scancode (set 1, `0xE0` prefixes included) from any keyboard:

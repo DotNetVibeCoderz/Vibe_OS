@@ -106,3 +106,19 @@ switch new contexts between software and GPU. `smoke-test.ps1` runs the
   it to memory, read back pixel by pixel by the CPU and shown at the top
   right of the screen for 4 s (`MILESTONE: V3D RENDER OK`). Triangles need a
   binning job and QPU shaders (next steps).
+
+## glTF models, physics and 3D sound
+
+- `Gltf.LoadFile("/disk/POHON.GLB")` returns a `Node` tree for a glTF 2.0 model (`.glb`, or `.gltf` with
+  embedded or neighbouring `.bin` buffers): nodes with translation / rotation / scale (or a matrix), every
+  triangle primitive, normals (computed when missing), texture coordinates, vertex colors, and the base
+  color, transparency and double-sidedness of materials. Not read: textures, skins, morph targets,
+  animations, sparse or compressed data. `Gltf.LastError` says why a load failed.
+- `PhysicsWorld` moves `RigidBody.Sphere(node, r)` / `RigidBody.Box(node, halfSize)` under gravity against
+  `Plane`s, static boxes and each other, with restitution, friction and sleeping; `Collided` reports
+  impacts. Bodies do not rotate from contacts.
+- `Audio3D` (listener = the camera node) plays mono sounds at positions in the scene: equal-power panning
+  and 1/distance attenuation, mixed into the program's mixer stream; call `Update()` every frame.
+
+Ruang 3D uses all three: the tree model, and **J** drops fruit that bounce with a thud where they land.
+

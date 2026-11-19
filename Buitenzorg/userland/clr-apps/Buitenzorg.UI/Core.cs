@@ -43,6 +43,10 @@ public static class RawKey
     public const int Z = 0x2C, X = 0x2D, C = 0x2E, V = 0x2F, B = 0x30, N = 0x31, M = 0x32;
     public const int F1 = 0x3B, F2 = 0x3C, F3 = 0x3D, F4 = 0x3E, F5 = 0x3F, F6 = 0x40, F7 = 0x41, F8 = 0x42, F9 = 0x43, F10 = 0x44, F11 = 0x57, F12 = 0x58;
     public const int Up = 0x148, Down = 0x150, Left = 0x14B, Right = 0x14D, Home = 0x147, End = 0x14F, PageUp = 0x149, PageDown = 0x151, Delete = 0x153, RightCtrl = 0x11D, RightAlt = 0x138;
+    /// <summary>Gamepad buttons (USB HID gamepads; the kernel maps every pad to
+    /// this standard layout: A/B/X/Y = bottom/right/left/top face buttons).</summary>
+    public const int PadA = 0x200, PadB = 0x201, PadX = 0x202, PadY = 0x203, PadL = 0x204, PadR = 0x205,
+        PadSelect = 0x206, PadStart = 0x207, PadUp = 0x210, PadDown = 0x211, PadLeft = 0x212, PadRight = 0x213;
 
     /// <summary>The raw key for a character a test types ('a' -> A, ' ' -> Space).</summary>
     public static int FromChar(char c)

@@ -3,7 +3,8 @@
 // A textured cube, a glossy sphere, a gold torus, a cone, a glass block, a
 // lantern (point light) circling them, a sun, a grid floor and fog. Drag with
 // the mouse or use the arrow keys to orbit, W/S to zoom, Space to pause,
-// R for wireframe, K for fog.
+// R for wireframe, K for fog, J to drop a fruit (rigid-body physics, with a
+// thud placed in 3D space where it lands).
 
 using Buitenzorg.UI;
 using Buitenzorg.Three;
@@ -17,6 +18,12 @@ public sealed class Garden
     public readonly Scene Scene = new Scene();
     public readonly Node Camera, Cube, Sphere, Torus, Cone, Glass, Lantern, Floor;
     public readonly List<Material> Solid = new List<Material>();
+    /// <summary>Fruit dropped with J: physics against the floor and the crate, sound where they land.</summary>
+    public readonly PhysicsWorld Physics = new PhysicsWorld();
+    public readonly Audio3D Sound = new Audio3D();
+    public readonly List<RigidBody> Fruit = new List<RigidBody>();
+    public int Thuds;
+    static readonly short[] Thud = Audio3D.Tone(180, 120);
     public float Azimuth = 0.6f, Elevation = 0.42f, Distance = 7.5f, Time;
     public bool Fog = true;
     const int Forest = 0x0E1A14;
@@ -69,6 +76,14 @@ public sealed class Garden
         sun.LookAt(Vector3.Zero);
 
         Camera = s.AddCamera(Buitenzorg.Three.Camera.Perspective(0.9f, 0.1f, 60f), new Vector3(0, 2, 7));
+        Physics.Planes.Add(Plane.Ground(-1));
+        Physics.Add(RigidBody.Box(Cube, new Vector3(0.65f, 0.65f, 0.65f), 0, isStatic: true));
+        Physics.Collided += (a, b, speed) =>
+        {
+            Thuds++;
+            Sound.Play(Thud, 22050, a.Position, volume: Math.Min(1f, speed / 4));
+        };
+        Sound.Listener = Camera;
         Step(0);
     }
 
@@ -86,6 +101,25 @@ public sealed class Garden
 
     public bool Wireframe => Solid[0].Wireframe;
 
+    /// <summary>Drop a fruit from above (x, z); at most 8 (the oldest is removed).</summary>
+    public RigidBody DropFruit(float x, float z)
+    {
+        if (Fruit.Count >= 8)
+        {
+            var old = Fruit[0];
+            Fruit.RemoveAt(0);
+            Physics.Bodies.Remove(old);
+            old.Node.Remove();
+        }
+        int[] colors = { 0xF2A03D, 0xE3615A, 0xF2D84B, 0x8BC34A };
+        var n = Scene.AddMesh(Geometry.Sphere(0.3f, 12, 8), Material.Phong(colors[Fruit.Count % 4], 40, 0.6f), null, "buah");
+        n.Position = new Vector3(x, 3.5f, z);
+        var b = Physics.Add(RigidBody.Sphere(n, 0.3f));
+        b.Restitution = 0.5f;
+        Fruit.Add(b);
+        return b;
+    }
+
     /// <summary>Advance the animation by dt seconds and place the camera.</summary>
     public void Step(float dt)
     {
@@ -96,6 +130,11 @@ public sealed class Garden
         Sphere.Position = new Vector3(0, -0.12f + 0.25f * MathF.Sin(t * 1.6f), 0);
         Lantern.Position = new Vector3(3.2f * MathF.Cos(t * 0.7f), 1.2f, 3.2f * MathF.Sin(t * 0.7f));
         PlaceCamera();
+        if (dt > 0 && Fruit.Count > 0)
+        {
+            Physics.Step(Math.Min(dt, 0.05f));
+            Sound.Update();
+        }
     }
 
     public void PlaceCamera()
@@ -200,6 +239,7 @@ public sealed class Viewport3D : Control
             case Keys.Down: g.Elevation -= 0.1f; break;
             case 'w': g.Distance -= 0.6f; break;
             case 's': g.Distance += 0.6f; break;
+            case 'j': g.DropFruit(-2.4f + 0.3f * (g.Fruit.Count % 3 - 1), 0.2f * (g.Fruit.Count % 2)); break;
             default: used = false; break;
         }
         if (used)
@@ -269,6 +309,22 @@ public static class RuangApp
     static int G(int c) => (c >> 8) & 0xFF;
     static int B(int c) => c & 0xFF;
 
+    /// <summary>Off the device: the model from the source tree (the simulated VFS has no /disk files).</summary>
+    static byte[]? RepoModel()
+    {
+        try
+        {
+            string? d = AppContext.BaseDirectory;
+            for (int i = 0; i < 8 && d != null; i++, d = System.IO.Path.GetDirectoryName(d))
+            {
+                string f = System.IO.Path.Combine(d, "assets", "models", "pohon.glb");
+                if (System.IO.File.Exists(f)) return System.IO.File.ReadAllBytes(f);
+            }
+        }
+        catch (Exception) { }
+        return null;
+    }
+
     public static Checks SelfTest()
     {
         var c = new Checks("Ruang 3D");
@@ -335,6 +391,52 @@ public static class RuangApp
         int before3 = view.RenderScene().DrawCalls;
         obj.Remove();
         c.That(before3 == 8, "the OBJ model is drawn as an eighth object (" + before3 + ")");
+
+        // physics: a fruit dropped onto the crate bounces off it and comes to rest on the floor
+        var ga = new Garden();
+        ga.Cube.EulerAngles = Vector3.Zero;
+        var f1 = ga.DropFruit(-2.4f, 0.4f);
+        var f2 = ga.DropFruit(1.5f, 0);
+        float lowest = 99;
+        bool hitCrate = false;
+        ga.Physics.SubSteps = 3;
+        for (int i = 0; i < 100; i++) // 3.3 s of simulated time, cheap enough for slow emulators
+        {
+            ga.Physics.Step(1 / 30f);
+            lowest = MathF.Min(lowest, f2.Position.Y);
+            if (f1.Contacts > 0 && f1.Position.Y > 0) hitCrate = true;
+        }
+        c.That(hitCrate && MathF.Abs(f2.Position.Y - (-0.7f)) < 0.02f && lowest > -0.75f && f2.Sleeping,
+            "physics: fruit lands on the crate, another rests on the floor (y " + f2.Position.Y.ToString("0.00") + ", asleep " + f2.Sleeping + ")");
+        c.That(ga.Thuds >= 2 && ga.Sound.Playing >= 1, "physics: landings make positioned sounds (" + ga.Thuds + " thuds)");
+        // 3D audio: a sound to the camera's right is louder on the right, a far one quieter
+        ga.PlaceCamera();
+        ga.Scene.UpdateWorldTransforms();
+        var right = ga.Camera.WorldPosition + ga.Camera.WorldMatrix.TransformDirection(new Vector3(3, 0, 0));
+        var (l1, r1) = ga.Sound.Gains(right);
+        var (l2, r2) = ga.Sound.Gains(ga.Camera.WorldPosition + ga.Camera.WorldForward * 30);
+        c.That(r1 > l1 * 2 && MathF.Abs(l2 - r2) < 0.05f && l2 + r2 < (l1 + r1) / 3, "3D audio: panned to the right, quieter far away (" + l1.ToString("0.00") + "/" + r1.ToString("0.00") + ")");
+
+        // a glTF model (/disk/POHON.GLB): node tree, quaternion, vertex colors, materials
+        var glb = Buitenzorg.App.Files.ReadAllBytes("/disk/POHON.GLB") ?? RepoModel();
+        var tree = glb == null ? null : Gltf.Load(glb);
+        var pohon = tree != null && tree.Children.Count == 1 ? tree.Children[0] : null;
+        Node? batang = null, tajuk = null, kolam = null;
+        if (pohon != null) foreach (var ch in pohon.Children) { if (ch.Name == "batang") batang = ch; else if (ch.Name == "tajuk") tajuk = ch; else if (ch.Name == "kolam") kolam = ch; }
+        c.That(pohon != null && batang?.Geometry != null && batang.Geometry.TriangleCount == 12 && batang.Geometry.Colors != null
+            && tajuk != null && tajuk.Children.Count == 2 && tajuk.Children[0].Geometry?.TriangleCount == 16,
+            "glTF: nodes, meshes, two primitives, vertex colors (" + (glb == null ? "no file" : Gltf.LastError) + ")");
+        c.That(tajuk != null && MathF.Abs(tajuk.EulerAngles.Y - 20 * MathF.PI / 180) < 0.01f && kolam?.Material != null && kolam.Material.Transparent
+            && MathF.Abs(kolam.Material.Opacity - 0.6f) < 0.01f && kolam.Material.DoubleSided, "glTF: rotation quaternion, translucent double-sided material");
+        if (pohon != null)
+        {
+            pohon.Position = new Vector3(2.5f, -0.6f, -1.5f);
+            g.Scene.Root.Add(pohon);
+            int withTree = view.RenderScene().DrawCalls;
+            var tw = tajuk!.WorldPosition;
+            c.That(withTree == 11 && MathF.Abs(tw.Y - (-0.6f + 1.08f)) < 0.01f, "glTF: the model draws (" + withTree + " objects), world transform (y " + tw.Y.ToString("0.00") + ")");
+            pohon.Remove();
+        }
         r.Dispose();
         return c;
     }

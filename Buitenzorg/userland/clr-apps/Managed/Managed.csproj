@@ -38,6 +38,7 @@
     <ProjectReference Include="..\MChip8\MChip8.csproj" />
     <ProjectReference Include="..\MBaca\MBaca.csproj" />
     <ProjectReference Include="..\MLabirin\MLabirin.csproj" />
+    <ProjectReference Include="..\MLompat\MLompat.csproj" />
     <ProjectReference Include="..\MVideo\MVideo.csproj" />
     <ProjectReference Include="..\MRanjau\MRanjau.csproj" />
     <ProjectReference Include="..\MBata\MBata.csproj" />

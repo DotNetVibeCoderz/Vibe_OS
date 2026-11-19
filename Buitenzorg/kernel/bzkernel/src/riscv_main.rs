@@ -312,6 +312,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         desktop::ensure_session_windows();
         shell::script_self_test();
         desktop::hotkey_self_test();
+        usb::hid::pad_self_test();
+        virtio::snd::stream_self_test();
         terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG RISCV READY -- increments 1-6 (boot, traps, memory, address spaces, timer, U-mode, ELF programs, scheduler + processes + threads, PLIC, virtio-mmio /disk + GPU + input + net, RTC, SBI power, shared syscalls + window system, JS/TS/Python, interactive desktop, SMP via SBI HSM) -- M4 complete");
@@ -1031,6 +1033,8 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
         println!("[riscv] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
     }
     virtio::input::init();
+    // virtio sound: the AUDIO_* device here (the tone test only on a self-test boot)
+    virtio::snd::init_with(st);
     if !st {
         net::init([10, 0, 0, 1]);
         return; // the NIC and the rest: boot_background

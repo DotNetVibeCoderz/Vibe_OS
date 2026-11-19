@@ -240,6 +240,8 @@ pub enum HidKind {
     Mouse,
     /// A hub's status-change endpoint: a bitmap of ports that changed.
     Hub,
+    /// A gamepad / joystick (HID report descriptor, or XInput).
+    Gamepad,
 }
 
 struct Interrupt {
@@ -252,6 +254,8 @@ struct Interrupt {
     broken: bool,
     reports: u32,
     state: u32,
+    /// A gamepad's report layout and held buttons.
+    pad: Option<super::hid::Pad>,
 }
 
 /// A mass-storage interface: two bulk endpoints and the driver's DMA pages.
@@ -347,6 +351,7 @@ pub struct Xhci {
     buf: Page,
     devices: Devices,
     pub keyboards: usize,
+    pub pads: usize,
     pub mice: usize,
     pub hubs: usize,
     pub disks: usize,
@@ -465,6 +470,7 @@ impl Xhci {
             buf,
             devices: Devices(Vec::new()),
             keyboards: 0,
+            pads: 0,
             mice: 0,
             hubs: 0,
             disks: 0,
@@ -738,6 +744,9 @@ impl Xhci {
         // or a mass-storage one (SCSI over Bulk-Only Transport) with two bulk ones
         let mut i = 0;
         let mut iface: Option<(u8, u8)> = None;
+        // a HID interface without the boot protocol (gamepads): (number, report
+        // descriptor length, XInput)
+        let mut pad_iface: Option<(u8, u16, bool)> = None;
         let mut storage: Option<u8> = None;
         let (mut bulk_in, mut bulk_out) = (None, None);
         while i + 2 <= cfg.len() {
@@ -753,6 +762,21 @@ impl Xhci {
                         None
                     };
                     storage = (cfg[i + 5] == 8 && cfg[i + 6] == 6 && cfg[i + 7] == 0x50).then_some(cfg[i + 2]);
+                    pad_iface = if iface.is_none() && cfg[i + 5] == 3 {
+                        Some((cfg[i + 2], 0, false))
+                    } else if cfg[i + 5] == 0xFF && cfg[i + 6] == 0x5D && cfg[i + 7] == 1 {
+                        Some((cfg[i + 2], 0, true)) // Xbox 360 controller
+                    } else {
+                        None
+                    };
+                }
+                0x21 if len >= 9 => {
+                    // HID descriptor: the report descriptor's length
+                    if let Some((n, _, false)) = pad_iface {
+                        if cfg[i + 6] == 0x22 {
+                            pad_iface = Some((n, u16::from_le_bytes([cfg[i + 7], cfg[i + 8]]), false));
+                        }
+                    }
                 }
                 5 if len >= 7 => {
                     if storage.is_some() && cfg[i + 3] & 3 == 2 {
@@ -784,6 +808,33 @@ impl Xhci {
                             self.devices[di].what =
                                 alloc::format!("{:04x}:{:04x} {}", vid, pid, if kind == HidKind::Keyboard { "keyboard" } else { "mouse" });
                             return self.setup_hid(di, num, kind, addr, mps, cfg[i + 6]);
+                        }
+                    }
+                    if let Some((num, dlen, xinput)) = pad_iface {
+                        let addr = cfg[i + 2];
+                        if addr & 0x80 != 0 && cfg[i + 3] & 3 == 3 {
+                            pad_iface = None;
+                            let pad = if xinput {
+                                Some(super::hid::Pad::xinput())
+                            } else if dlen > 0 {
+                                let n = dlen.min(1024);
+                                match self.control(di, 0x81, 6, 0x2200, num as u16, n) {
+                                    Ok(got) => super::hid::Pad::parse(&self.bytes(got.min(n as usize))),
+                                    Err(_) => None,
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(pad) = pad {
+                                let mps = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]) as u32 & 0x7FF;
+                                crate::println!("[usb] {} port {}: {:04x}:{:04x} {} gamepad ({})", self.name, label, vid, pid, speed_name(speed), pad.summary());
+                                self.devices[di].what = alloc::format!("{:04x}:{:04x} gamepad", vid, pid);
+                                self.setup_hid(di, num, HidKind::Gamepad, addr, mps, cfg[i + 6])?;
+                                if let Some(it) = self.devices[di].intr.as_mut() {
+                                    it.pad = Some(pad);
+                                }
+                                return Ok(());
+                            }
                         }
                     }
                 }
@@ -1034,7 +1085,9 @@ impl Xhci {
     }
 
     fn setup_hid(&mut self, di: usize, iface: u8, kind: HidKind, ep_addr: u8, mps: u32, b_interval: u8) -> Result<(), &'static str> {
-        self.control(di, 0x21, 0x0B, 0, iface as u16, 0)?; // SET_PROTOCOL boot
+        if kind != HidKind::Gamepad {
+            self.control(di, 0x21, 0x0B, 0, iface as u16, 0)?; // SET_PROTOCOL boot
+        }
         if kind == HidKind::Keyboard {
             let idle = self.control(di, 0x21, 0x0A, 0, iface as u16, 0); // SET_IDLE: reports only on change
             // SET_REPORT(output): Num Lock LED on, as a PC host does at start-up
@@ -1086,10 +1139,14 @@ impl Xhci {
         dev.inp.sync(0, 4096);
         let (p, slot) = (dev.inp.phys, dev.slot);
         self.command(p, (TRB_CONFIGURE_EP << 10) | (slot << 24))?;
-        self.devices[di].intr = Some(Interrupt { dci, ring, buf, len: mps.min(64), kind, last: [0; 8], broken: false, reports: 0, state: 0 });
+        self.devices[di].intr = Some(Interrupt { dci, ring, buf, len: mps.min(64), kind, last: [0; 8], broken: false, reports: 0, state: 0, pad: None });
         match kind {
             HidKind::Keyboard => self.keyboards += 1,
             HidKind::Mouse => self.mice += 1,
+            HidKind::Gamepad => {
+                self.pads += 1;
+                super::hid::PADS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
             HidKind::Hub => {}
         }
         self.queue_report(di);
@@ -1241,7 +1298,7 @@ impl Xhci {
         let (p, slot) = (dev.inp.phys, dev.slot);
         self.command(p, (TRB_CONFIGURE_EP << 10) | (slot << 24))?;
         let len = mps.clamp(1, 8);
-        self.devices[di].intr = Some(Interrupt { dci, ring, buf, len, kind: HidKind::Hub, last: [0; 8], broken: false, reports: 0, state: 0 });
+        self.devices[di].intr = Some(Interrupt { dci, ring, buf, len, kind: HidKind::Hub, last: [0; 8], broken: false, reports: 0, state: 0, pad: None });
         self.queue_report(di);
         Ok(())
     }
@@ -1271,17 +1328,25 @@ impl Xhci {
             }
             return;
         }
-        let got = (i.len as usize).saturating_sub((ev[2] & 0xFF_FFFF) as usize).min(8);
+        let got = (i.len as usize).saturating_sub((ev[2] & 0xFF_FFFF) as usize).min(64);
         i.buf.sync(0, i.len as usize);
-        let mut report = [0u8; 8];
-        for (k, r) in report.iter_mut().enumerate().take(got) {
+        let mut long = [0u8; 64];
+        for (k, r) in long.iter_mut().enumerate().take(got) {
             *r = i.buf.byte(k);
         }
+        let mut report = [0u8; 8];
+        report.copy_from_slice(&long[..8]);
+        let got8 = got.min(8);
         match i.kind {
+            HidKind::Gamepad => {
+                if let Some(p) = i.pad.as_mut() {
+                    p.feed(&long[..got]);
+                }
+            }
             HidKind::Keyboard => super::hid::keyboard(&i.last, &report),
-            HidKind::Mouse => super::hid::mouse(&report[..got]),
+            HidKind::Mouse => super::hid::mouse(&report[..got8]),
             HidKind::Hub => {
-                let bits = report[..got.min(4)].iter().enumerate().fold(0u32, |a, (k, b)| a | (*b as u32) << (8 * k));
+                let bits = report[..got8.min(4)].iter().enumerate().fold(0u32, |a, (k, b)| a | (*b as u32) << (8 * k));
                 if bits & !1 != 0 {
                     self.hub_changes.push((di, bits & !1));
                 }
@@ -1397,7 +1462,10 @@ impl Xhci {
     /// Forget one device: release held keys / buttons, give its slot back to
     /// the controller, free its memory, report a disk as gone.
     fn detach(&mut self, di: usize) {
-        let Some(dev) = self.devices.0[di].take() else { return };
+        let Some(mut dev) = self.devices.0[di].take() else { return };
+        if let Some(p) = dev.intr.as_mut().and_then(|i| i.pad.as_mut()) {
+            p.release(); // buttons held at the moment it was unplugged
+        }
         if let Some(i) = dev.intr.as_ref() {
             match i.kind {
                 HidKind::Keyboard => {
@@ -1407,6 +1475,10 @@ impl Xhci {
                 HidKind::Mouse => {
                     crate::mouse::inject_relative(0, 0, 0);
                     self.mice = self.mice.saturating_sub(1);
+                }
+                HidKind::Gamepad => {
+                    self.pads = self.pads.saturating_sub(1);
+                    super::hid::PADS.fetch_sub(1, core::sync::atomic::Ordering::Relaxed);
                 }
                 HidKind::Hub => {}
             }
@@ -1474,7 +1546,11 @@ impl Xhci {
                     "[usb] {}: slot {} {} endpoint {}: {}, {} report(s)",
                     name,
                     slot,
-                    if i.kind == HidKind::Keyboard { "keyboard" } else { "mouse" },
+                    match i.kind {
+                        HidKind::Keyboard => "keyboard",
+                        HidKind::Gamepad => "gamepad",
+                        _ => "mouse",
+                    },
                     i.dci,
                     st,
                     i.reports

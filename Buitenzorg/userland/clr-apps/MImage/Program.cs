@@ -154,12 +154,112 @@ public sealed class PhotoView : Control
     }
 }
 
+/// <summary>A strip of thumbnails (one per picture, 72 x 54) under the photo: made
+/// one per frame so a folder of large pictures does not stall the window, kept
+/// in memory, the current one framed; a click opens a picture, the wheel scrolls.</summary>
+public sealed class ThumbStrip : Control
+{
+    public const int TW = 72, TH = 54, Gap = 8;
+    readonly PhotoApp _app;
+    readonly Dictionary<string, int[]?> _cache = new Dictionary<string, int[]?>();
+    public int Scroll;
+    public int Made => _cache.Count;
+    public ThumbStrip(PhotoApp app) { _app = app; }
+
+    protected override Size MeasureOverride(Size a) => new Size(a.Width, TH + 12);
+
+    /// <summary>Make the thumbnail of one picture (the first frame, fitted, centred on a dark tile).</summary>
+    public int[]? Thumb(string path)
+    {
+        if (_cache.TryGetValue(path, out var t)) return t;
+        int[]? px = null;
+        try
+        {
+            var pic = Picture.Load(path);
+            if (pic != null)
+            {
+                var (w, h) = pic.FitSize(TW, TH, allowUp: true);
+                var small = new int[w * h];
+                if (pic.Render(0, small, w, h, 0, 0, pic.Width, pic.Height) >= 0)
+                {
+                    px = new int[TW * TH];
+                    for (int i = 0; i < px.Length; i++) px[i] = 0x16221C;
+                    int ox = (TW - w) / 2, oy = (TH - h) / 2;
+                    for (int y = 0; y < h; y++) Array.Copy(small, y * w, px, (oy + y) * TW + ox, w);
+                }
+            }
+        }
+        catch (Exception) { }
+        _cache[path] = px;
+        return px;
+    }
+
+    public override void Render(DrawingContext dc)
+    {
+        var b = Bounds;
+        dc.FillRoundRect(b, 8, 0x101A15);
+        bool madeOne = false;
+        for (int i = 0; i < _app.Paths.Count; i++)
+        {
+            int x = b.X + 6 + i * (TW + Gap) - Scroll, y = b.Y + 6;
+            if (x + TW < b.X || x > b.Right) continue;
+            var path = _app.Paths[i];
+            int[]? px;
+            if (!_cache.TryGetValue(path, out px))
+            {
+                if (madeOne) { dc.FillRect(new Rect(x, y, TW, TH), 0x22302A); continue; }
+                px = Thumb(path);
+                madeOne = true;
+            }
+            var r = new Rect(x, y, TW, TH);
+            if (px != null && x >= b.X && x + TW <= b.Right) dc.Blit(x, y, TW, TH, px);
+            else dc.FillRect(r, 0x22302A);
+            if (i == _app.Current) dc.StrokeRoundRect(new Rect(x - 3, y - 3, TW + 6, TH + 6), 4, 0x7CC4A4, 2);
+        }
+        if (madeOne) InvalidateVisual(); // the next thumbnail on the next frame
+    }
+
+    /// <summary>The picture under a point of the strip, -1 for none.</summary>
+    public int IndexAt(int px)
+    {
+        int rel = px - Bounds.X - 6 + Scroll;
+        if (rel < 0 || rel % (TW + Gap) >= TW) return -1;
+        int i = rel / (TW + Gap);
+        return i < _app.Paths.Count ? i : -1;
+    }
+
+    protected override void OnPointerPressed(PointerEventArgs e)
+    {
+        int i = IndexAt(e.X);
+        if (i >= 0) _app.Show(i);
+        e.Handled = true;
+    }
+
+    protected override void OnPointerWheelChanged(PointerEventArgs e)
+    {
+        int max = Math.Max(0, _app.Paths.Count * (TW + Gap) + 12 - Bounds.Width);
+        Scroll = Math.Clamp(Scroll - e.WheelDelta * (TW + Gap), 0, max);
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    /// <summary>Keep the current picture's thumbnail in view.</summary>
+    public void Reveal(int i)
+    {
+        int x = 6 + i * (TW + Gap);
+        if (x - Scroll < 0) Scroll = Math.Max(0, x - 6);
+        else if (x + TW - Scroll > Bounds.Width && Bounds.Width > 0) Scroll = x + TW + 6 - Bounds.Width;
+        InvalidateVisual();
+    }
+}
+
 public sealed class PhotoApp
 {
     public Window W { get; }
     public readonly List<string> Paths = new List<string>();
     public readonly List<string> Names = new List<string>();
     public readonly PhotoView View = new PhotoView();
+    public readonly ThumbStrip Thumbs;
     readonly ListBox _list;
     readonly TextBlock _showText = new TextBlock("Slide show");
     readonly DispatcherTimer _slides = new DispatcherTimer(3000);
@@ -168,8 +268,9 @@ public sealed class PhotoApp
 
     public PhotoApp(bool headless)
     {
-        W = new Window("Gambar", 820, 560, headless);
+        W = new Window("Gambar", 820, 600, headless);
         Scan();
+        Thumbs = new ThumbStrip(this) { Margin = new Thickness(0, 8, 0, 0) };
         _list = new ListBox { ItemsSource = Names, Width = 180 };
         _list.SelectionChanged += l => { if (l.SelectedIndex >= 0 && l.SelectedIndex != Current) Show(l.SelectedIndex); };
         _slides.Tick += () => Step(1);
@@ -187,6 +288,7 @@ public sealed class PhotoApp
         var root = new DockPanel { Margin = new Thickness(16) };
         root.Children.Add(Kit.Header("Multimedia", "Gambar", IconKind.Sun, 0xC792EA).DockTo(Dock.Top));
         root.Children.Add(bar.DockTo(Dock.Top));
+        root.Children.Add(Thumbs.DockTo(Dock.Bottom));
         var body = new DockPanel();
         body.Children.Add(_list.DockTo(Dock.Left));
         View.Margin = new Thickness(12, 0, 0, 0);
@@ -244,6 +346,7 @@ public sealed class PhotoApp
         View.Name = Names[i];
         View.Message = pic == null ? Names[i] + ": formatnya tidak dapat dibaca" : "";
         View.Source = pic;
+        Thumbs?.Reveal(i);
         return pic != null;
     }
 
@@ -328,6 +431,19 @@ public sealed class PhotoApp
             }
         }
         else c.That(app.View.Message.Length > 0, "no pictures: " + app.View.Message);
+        // thumbnails: one is made per frame; every picture gets one; a click on the strip opens it
+        if (app.Paths.Count > 0)
+        {
+            for (int k = 0; k < app.Paths.Count + 1; k++) app.W.RenderFrame();
+            int made = 0;
+            for (int k = 0; k < app.Paths.Count; k++) if (app.Thumbs.Thumb(app.Paths[k]) != null) made++;
+            bool once = app.Thumbs.Made == app.Paths.Count;
+            int last = app.Paths.Count - 1;
+            int tx = app.Thumbs.Bounds.X + 6 + last * (ThumbStrip.TW + ThumbStrip.Gap) - app.Thumbs.Scroll + 10;
+            int hit = app.Thumbs.IndexAt(tx);
+            if (hit >= 0) app.Show(hit);
+            c.That(once && made == app.Paths.Count && hit == last && app.Current == last, "thumbnails: " + made + " made, the strip opens picture " + (hit + 1));
+        }
         app.ToggleSlideShow();
         c.That(app.SlideShow, "slide show on");
         app.ToggleSlideShow();

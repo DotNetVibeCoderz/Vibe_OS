@@ -1,15 +1,17 @@
 // The page engine of Peramban: a tolerant HTML tokenizer and a flow layout
 // into positioned items (text runs, links, images, rules) for the kernel's
-// three monospaced fonts. No CSS and no JavaScript: structure only --
-// headings, paragraphs, lists, links, images, preformatted text, quotes,
-// rules, simple tables (one row per line).
+// three monospaced fonts: headings, paragraphs, lists, links, images,
+// preformatted text, quotes, rules, simple tables (one row per line), and a
+// CSS subset (Css.cs: colors, backgrounds, borders, bold/size, alignment,
+// display none/block/inline, left indents). No JavaScript.
 
 using System.Text;
 using Buitenzorg.UI;
 
 namespace MWeb;
 
-public enum ItemKind { Text, Rule, Image, Bar, PreBack }
+/// <summary>Bar = a block's CSS background (drawn behind its content), Frame = its border.</summary>
+public enum ItemKind { Text, Rule, Image, Bar, PreBack, Frame }
 
 public sealed class Item
 {
@@ -39,6 +41,10 @@ public sealed class Page
     public readonly List<ImageRef> Images = new List<ImageRef>();
     public readonly List<Token> Tokens = new List<Token>();
     public readonly List<string> Links = new List<string>();
+    /// <summary>CSS: rules of the page's style sheets, and the linked sheets' addresses.</summary>
+    public readonly List<CssRule> Rules = new List<CssRule>();
+    public int CssOrder;
+    public readonly List<string> CssLinks = new List<string>();
 }
 
 public sealed class Token
@@ -63,6 +69,16 @@ public static class Html
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlItems(long id, int[] output);
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlTexts(long id);
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlFree(long id);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlAddCss(long id, string css);
+    }
+
+    /// <summary>Add a fetched style sheet (a &lt;link rel=stylesheet&gt;); the rules it held.</summary>
+    public static int AddCss(Page p, string css)
+    {
+        if (p.NativeId > 0) return Native.HtmlAddCss(p.NativeId, css);
+        int before = p.Rules.Count;
+        Css.ParseSheet(css, ref p.CssOrder, p.Rules);
+        return p.Rules.Count - before;
     }
 
     /// <summary>Forget the host's copy of a page.</summary>
@@ -90,6 +106,7 @@ public static class Html
                     p.Images.Add(img);
                 }
                 foreach (var line in Native.HtmlInfo(id, 2).Split('\n')) if (line.Length > 0) p.Links.Add(line);
+                foreach (var line in Native.HtmlInfo(id, 3).Split('\n')) if (line.Length > 0) p.CssLinks.Add(line);
                 return p;
             }
             catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _native = 2; }
@@ -118,6 +135,7 @@ public static class Html
             {
                 int end = IndexOfIgnoreCase(html, "</" + skipUntil, i);
                 if (end < 0) break;
+                if (skipUntil == "style") Css.ParseSheet(html.Substring(i, end - i), ref page.CssOrder, page.Rules);
                 i = end;
                 skipUntil = null;
                 continue;
@@ -163,6 +181,7 @@ public static class Html
                 if (img.Src.Length > 0) page.Images.Add(img);
             }
             if (tok.Name == "a" && !tok.Closing && tok.Attr("href").Length > 0) page.Links.Add(tok.Attr("href"));
+            if (tok.Name == "link" && tok.Attr("rel").ToLowerInvariant().Contains("stylesheet") && tok.Attr("href").Length > 0) page.CssLinks.Add(tok.Attr("href"));
             page.Tokens.Add(tok);
         }
         FlushText();
@@ -357,7 +376,7 @@ public static class Html
             int o = k * 9;
             var it = new Item
             {
-                Kind = data[o] == 0 ? ItemKind.Text : data[o] == 1 ? ItemKind.Rule : ItemKind.Image,
+                Kind = data[o] switch { 0 => ItemKind.Text, 1 => ItemKind.Rule, 3 => ItemKind.Bar, 4 => ItemKind.Frame, _ => ItemKind.Image },
                 X = data[o + 1], Y = data[o + 2], W = data[o + 3], H = data[o + 4], Style = data[o + 5], Color = data[o + 6],
                 Text = k < texts.Length ? texts[k] : "",
             };
@@ -380,17 +399,36 @@ public static class Html
         var lists = new List<int>(); // -1 = bullet, n = next number
         bool pendingSpace = false;
         int lastBlockGap = 0;
+        var frames = new List<Frame>();
+        int hidden = -1;           // frames index of a display:none element
+        int? linkColor = null, pageBg = null;
 
         int Left() => margin + indent;
         int Right() => width - margin;
-        int Style() => heading is 1 or 2 ? 2 : (heading > 0 || bold > 0) ? 1 : 0;
-        int ColorOf() => href != null ? pal.Link : heading > 0 ? pal.Heading : pal.Text;
+        CssStyle Top() => frames.Count > 0 ? frames[frames.Count - 1].St : default;
+        int Style()
+        {
+            int f = Top().Font;
+            if (heading is 1 or 2 || f == 3) return 2;
+            if (((heading > 0 || bold > 0 || f == 2) && f != 1) || (f == 1 && (bold > 0 || heading > 2))) return 1;
+            return 0;
+        }
+        int ColorOf() => href != null ? (linkColor ?? pal.Link) : Top().Color ?? (heading > 0 ? pal.Heading : pal.Text);
 
         void EndLine()
         {
             if (lineItems.Count == 0) return;
             int h = 0;
             foreach (var it in lineItems) h = Math.Max(h, it.H);
+            int align = Top().Align;
+            if (align != 0)
+            {
+                int x0 = int.MaxValue, x1 = 0;
+                foreach (var it in lineItems) { x0 = Math.Min(x0, it.X); x1 = Math.Max(x1, it.X + it.W); }
+                int room = Right() - x1;
+                int shift = align == 1 ? (room - (x0 - Left())) / 2 : room;
+                if (shift > 0) foreach (var it in lineItems) it.X += shift;
+            }
             foreach (var it in lineItems)
                 if (it.Kind == ItemKind.Text) it.Y = y + h - it.H; // baseline-ish: bottoms aligned
             items.AddRange(lineItems);
@@ -437,9 +475,169 @@ public static class Html
             x += w.Length * gw;
         }
 
+        CssStyle Push(Token t, bool blockDefault)
+        {
+            var parent = Top();
+            var anc = new List<CssElem>();
+            foreach (var f in frames) anc.Add(new CssElem(f.Tag, f.Id, f.Class));
+            var st = page.Rules.Count == 0 && t.Attr("style").Length == 0 ? parent.Inherit()
+                : Css.Compute(parent, new CssElem(t.Name, t.Attr("id"), t.Attr("class")), anc, page.Rules, t.Attr("style"));
+            bool block = st.Display == 2 ? true : st.Display == 3 ? false : blockDefault;
+            frames.Add(new Frame { Tag = t.Name, Id = t.Attr("id"), Class = t.Attr("class"), St = st, Block = block });
+            return st;
+        }
+
+        void StartBox()
+        {
+            var f = frames[frames.Count - 1];
+            if (f.Tag == "body" || f.Tag == "html") { if (f.St.Background != null) pageBg = f.St.Background; }
+            else if (f.Block && (f.St.Background != null || f.St.Border != null))
+            {
+                EndLine();
+                f.Boxed = true; f.BoxItem = items.Count; f.BoxY = y; f.BoxL = Left(); f.BoxR = Right();
+                y += 4;
+            }
+            if (f.Block && f.St.Indent > 0) { indent += f.St.Indent; f.Indent = f.St.Indent; x = Left(); }
+            if (f.Tag == "a") linkColor = f.St.OwnColor ? f.St.Color : null;
+        }
+
+        bool? PopTo(string name)
+        {
+            int at = -1;
+            for (int k = frames.Count - 1; k >= 0; k--) if (frames[k].Tag == name) { at = k; break; }
+            if (at < 0) return null;
+            bool block = false;
+            while (frames.Count > at)
+            {
+                var f = frames[frames.Count - 1];
+                if (f.Block) EndLine();
+                if (f.Boxed)
+                {
+                    y += 4;
+                    int h = Math.Max(2, y - f.BoxY), k = f.BoxItem;
+                    if (f.St.Background != null) items.Insert(k++, new Item { Kind = ItemKind.Bar, X = f.BoxL, Y = f.BoxY, W = f.BoxR - f.BoxL, H = h, Color = f.St.Background.Value });
+                    if (f.St.Border != null) items.Insert(k, new Item { Kind = ItemKind.Frame, X = f.BoxL, Y = f.BoxY, W = f.BoxR - f.BoxL, H = h, Color = f.St.Border.Value });
+                    y += 2;
+                    lastBlockGap = 0;
+                }
+                indent = Math.Max(0, indent - f.Indent);
+                if (f.Tag == "a") linkColor = null;
+                block = f.Block;
+                frames.RemoveAt(frames.Count - 1);
+            }
+            x = Left();
+            return block;
+        }
+
         int imgIndex = 0;
+        void TagLogic(Token t, bool blk)
+        {
+                string nm = t.Name;
+                if (nm == "br") { if (lineItems.Count == 0) y += lineH; EndLine(); return; }
+                if (nm == "hr")
+                {
+                    Gap(8);
+                    items.Add(new Item { Kind = ItemKind.Rule, X = Left(), Y = y, W = Right() - Left(), H = 1, Color = pal.Rule });
+                    y += 9; lastBlockGap = 8;
+                    return;
+                }
+                if (nm == "img" && !t.Closing)
+                {
+                    if (imgIndex >= page.Images.Count) return;
+                    var img = page.Images[imgIndex++];
+                    var (w, h) = ImageSize(img, Right() - Left());
+                    if (x + w > Right() && x > Left()) EndLine();
+                    if (pendingSpace && x > Left()) x += Fonts.GlyphWidth(0);
+                    lineItems.Add(new Item { Kind = ItemKind.Image, X = x, W = w, H = h, Image = img, Href = href, Text = img.Alt });
+                    x += w;
+                    pendingSpace = false;
+                    return;
+                }
+                if (nm == "a") { href = t.Closing ? null : (t.Attr("href").Length > 0 ? t.Attr("href") : null); return; }
+                if (nm == "b" || nm == "strong" || nm == "th") { bold += t.Closing ? -1 : 1; if (bold < 0) bold = 0; if (nm != "th") return; }
+                if (nm == "td" || nm == "th") { if (!t.Closing && x > Left()) { x += Fonts.GlyphWidth(0) * 2; pendingSpace = false; } return; }
+                if (!blk) return; // inline (or made inline by display)
+                if (!IsBlock(nm)) { Gap(2); return; } // an inline element made a block by display
+
+                // block elements
+                if (nm.Length == 2 && nm[0] == 'h' && nm[1] >= '1' && nm[1] <= '6')
+                {
+                    Gap(t.Closing ? 6 : 12);
+                    heading = t.Closing ? 0 : nm[1] - '0';
+                    return;
+                }
+                if (nm == "ul" || nm == "ol")
+                {
+                    if (!t.Closing) { Gap(lists.Count == 0 ? 6 : 0); lists.Add(nm == "ol" ? 1 : -1); indent += 24; }
+                    else if (lists.Count > 0) { lists.RemoveAt(lists.Count - 1); indent = Math.Max(0, indent - 24); Gap(lists.Count == 0 ? 6 : 0); }
+                    return;
+                }
+                if (nm == "li")
+                {
+                    Gap(t.Closing ? 0 : 2);
+                    if (!t.Closing)
+                    {
+                        string mark = "*";
+                        if (lists.Count > 0 && lists[lists.Count - 1] > 0) { mark = lists[lists.Count - 1] + "."; lists[lists.Count - 1]++; }
+                        int gw = Fonts.GlyphWidth(0);
+                        items.Add(new Item { Kind = ItemKind.Text, X = Left() - (mark.Length + 1) * gw, Y = y, W = mark.Length * gw, H = Fonts.LineHeight(0), Text = mark, Color = pal.Muted });
+                    }
+                    return;
+                }
+                if (nm == "pre")
+                {
+                    Gap(8);
+                    if (!t.Closing) { pre++; indent += 12; }
+                    else { pre = Math.Max(0, pre - 1); indent = Math.Max(0, indent - 12); }
+                    return;
+                }
+                if (nm == "blockquote")
+                {
+                    Gap(8);
+                    if (!t.Closing) { quote++; indent += 20; }
+                    else { quote = Math.Max(0, quote - 1); indent = Math.Max(0, indent - 20); }
+                    return;
+                }
+                if (nm == "dd") { Gap(0); indent += t.Closing ? -20 : 20; if (indent < 0) indent = 0; return; }
+                Gap(nm == "p" || nm == "table" || nm == "figure" ? 10 : nm == "tr" ? 0 : 2);
+        }
+
         foreach (var t in page.Tokens)
         {
+            if (hidden >= 0)
+            {
+                // inside a display:none element: only track nesting
+                if (t.IsTag && !IsVoid(t.Name))
+                {
+                    if (t.Closing)
+                    {
+                        for (int k = frames.Count - 1; k >= 0; k--) if (frames[k].Tag == t.Name) { frames.RemoveRange(k, frames.Count - k); break; }
+                    }
+                    else frames.Add(new Frame { Tag = t.Name, Id = "", Class = "" });
+                }
+                if (frames.Count <= hidden) hidden = -1;
+                continue;
+            }
+            if (t.IsTag)
+            {
+                bool isVoid = IsVoid(t.Name);
+                bool blk = IsBlock(t.Name);
+                if (t.Closing && !isVoid)
+                {
+                    var b = PopTo(t.Name);
+                    if (b == null) continue; // a stray closing tag
+                    blk = b.Value;
+                }
+                if (!t.Closing && !isVoid)
+                {
+                    var st = Push(t, blk);
+                    if (st.Display == 1) { hidden = frames.Count - 1; continue; }
+                    blk = frames[frames.Count - 1].Block;
+                }
+                TagLogic(t, blk);
+                if (!t.Closing && !isVoid) StartBox();
+                continue;
+            }
             if (!t.IsTag)
             {
                 if (pre > 0)
@@ -468,77 +666,22 @@ public static class Html
                 if (s.Length > 0 && s[s.Length - 1] == ' ' && any) pendingSpace = true;
                 continue;
             }
-            string nm = t.Name;
-            if (nm == "br") { if (lineItems.Count == 0) y += lineH; EndLine(); continue; }
-            if (nm == "hr")
-            {
-                Gap(8);
-                items.Add(new Item { Kind = ItemKind.Rule, X = Left(), Y = y, W = Right() - Left(), H = 1, Color = pal.Rule });
-                y += 9; lastBlockGap = 8;
-                continue;
-            }
-            if (nm == "img" && !t.Closing)
-            {
-                if (imgIndex >= page.Images.Count) continue;
-                var img = page.Images[imgIndex++];
-                var (w, h) = ImageSize(img, Right() - Left());
-                if (x + w > Right() && x > Left()) EndLine();
-                if (pendingSpace && x > Left()) x += Fonts.GlyphWidth(0);
-                lineItems.Add(new Item { Kind = ItemKind.Image, X = x, W = w, H = h, Image = img, Href = href, Text = img.Alt });
-                x += w;
-                pendingSpace = false;
-                continue;
-            }
-            if (nm == "a") { href = t.Closing ? null : (t.Attr("href").Length > 0 ? t.Attr("href") : null); continue; }
-            if (nm == "b" || nm == "strong" || nm == "th") { bold += t.Closing ? -1 : 1; if (bold < 0) bold = 0; if (nm != "th") continue; }
-            if (nm == "td" || nm == "th") { if (!t.Closing && x > Left()) { x += Fonts.GlyphWidth(0) * 2; pendingSpace = false; } continue; }
-            if (!IsBlock(nm)) continue;
-
-            // block elements
-            if (nm.Length == 2 && nm[0] == 'h' && nm[1] >= '1' && nm[1] <= '6')
-            {
-                Gap(t.Closing ? 6 : 12);
-                heading = t.Closing ? 0 : nm[1] - '0';
-                continue;
-            }
-            if (nm == "ul" || nm == "ol")
-            {
-                if (!t.Closing) { Gap(lists.Count == 0 ? 6 : 0); lists.Add(nm == "ol" ? 1 : -1); indent += 24; }
-                else if (lists.Count > 0) { lists.RemoveAt(lists.Count - 1); indent = Math.Max(0, indent - 24); Gap(lists.Count == 0 ? 6 : 0); }
-                continue;
-            }
-            if (nm == "li")
-            {
-                Gap(t.Closing ? 0 : 2);
-                if (!t.Closing)
-                {
-                    string mark = "*";
-                    if (lists.Count > 0 && lists[lists.Count - 1] > 0) { mark = lists[lists.Count - 1] + "."; lists[lists.Count - 1]++; }
-                    int gw = Fonts.GlyphWidth(0);
-                    items.Add(new Item { Kind = ItemKind.Text, X = Left() - (mark.Length + 1) * gw, Y = y, W = mark.Length * gw, H = Fonts.LineHeight(0), Text = mark, Color = pal.Muted });
-                }
-                continue;
-            }
-            if (nm == "pre")
-            {
-                Gap(8);
-                if (!t.Closing) { pre++; indent += 12; }
-                else { pre = Math.Max(0, pre - 1); indent = Math.Max(0, indent - 12); }
-                continue;
-            }
-            if (nm == "blockquote")
-            {
-                Gap(8);
-                if (!t.Closing) { quote++; indent += 20; }
-                else { quote = Math.Max(0, quote - 1); indent = Math.Max(0, indent - 20); }
-                continue;
-            }
-            if (nm == "dd") { Gap(0); indent += t.Closing ? -20 : 20; if (indent < 0) indent = 0; continue; }
-            Gap(nm == "p" || nm == "table" || nm == "figure" ? 10 : nm == "tr" ? 0 : 2);
         }
+        while (frames.Count > 0) PopTo(frames[frames.Count - 1].Tag); // elements never closed
         EndLine();
+        if (pageBg != null) items.Insert(0, new Item { Kind = ItemKind.Bar, X = 0, Y = 0, W = width, H = y + 16, Color = pageBg.Value });
         return (items, y + 16);
     }
+
+    sealed class Frame
+    {
+        public string Tag = "", Id = "", Class = "";
+        public CssStyle St;
+        public bool Block, Boxed;
+        public int BoxItem, BoxY, BoxL, BoxR, Indent;
+    }
+
+    static bool IsVoid(string n) => n is "br" or "hr" or "img" or "input" or "meta" or "link" or "area" or "base" or "col" or "embed" or "source" or "wbr" or "param" or "track";
 
     /// <summary>The size an image takes: its own (or its attributes'), at most the line width.</summary>
     public static (int, int) ImageSize(ImageRef img, int maxW)

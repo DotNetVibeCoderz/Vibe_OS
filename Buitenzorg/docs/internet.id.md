@@ -107,6 +107,17 @@ mundur).
   untuk berkas besar.
 - Satu sambungan per permintaan (tanpa keep-alive).
 
+
+## CSS di Peramban
+
+Peramban menerapkan sebagian CSS: blok `<style>`, sampai empat berkas `<link rel="stylesheet">` (diambil
+sebelum halaman ditata) dan atribut `style="..."`. Selektor: `*`, `tag`, `.kelas`, `#id`, gabungan
+seperti `p.catatan`, dan kombinator keturunan / anak; aturan dengan pseudo-class (`:hover`), selektor
+atribut atau kombinator saudara diabaikan. Properti: `color`, `background(-color)`, `border` (bingkai di
+sekeliling blok), `font-weight`, `font-size` / `font` (dipetakan ke tiga font sistem),
+`display: none | block | inline`, `text-align`, dan `margin-left` / `padding-left`. Belum ada flexbox,
+grid, float atau positioning, dan belum ada JavaScript.
+
 ---
 
 ← [Indeks dokumentasi](README.id.md) · *Buitenzorg OS — dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.*

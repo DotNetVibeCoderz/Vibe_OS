@@ -39,6 +39,7 @@ public static class Folder
         new AppInfo("munduh", "Unduhan", "Unduh berkas, jeda dan lanjutkan", IconKind.Save, 0x5FA8D3),
         new AppInfo("mkonsol", "Konsol", "Terminal: tab, warna, salin/tempel, job", IconKind.Menu, 0x7CC4A4),
         new AppInfo("mlabirin", "Labirin Kebun", "Labirin 3D: kumpulkan bunga emas", IconKind.Leaf, 0x7CC4A4),
+        new AppInfo("mlompat", "Lompat Kodok", "Platformer: kumpulkan embun, capai bendera", IconKind.Leaf, 0x5FB85A),
         new AppInfo("mbaca", "Baca", "Pembaca e-book EPUB dan teks", IconKind.File, 0xD9B77E),
         new AppInfo("mchip8", "CHIP-8", "Emulator CHIP-8 + dua program orisinal", IconKind.Grid, 0x9BE0B8),
         new AppInfo("mvideo", "Video", "Putar video AVI (MJPEG + suara)", IconKind.Play, 0x8FB8E8),
@@ -199,6 +200,7 @@ public static class Folder
         Report(MWeb.BrowserApp.SelfTest()); // Buitenzorg.Net: TCP_OP + HTTP over loopback, the page engine
         Report(MBaca.ReaderApp.SelfTest()); // EPUB through the host ZIP natives + the page engine
         Report(MLabirin.LabirinApp.SelfTest()); // the host ray caster (RayRender), one blit per frame
+        Report(MLompat.LompatApp.SelfTest()); // Buitenzorg.Game 2D engine: tilemap, sprites, camera, scenes (Pix* natives)
         Report(MVideo.VideoApp.SelfTest()); // AVI: MJPEG frames through Picture, PCM through the mixer
         Report(MKonsol.KonsolApp.SelfTest()); // the standalone terminal: tabs, folders, colours, copy/paste through SHELL_RUN
         Report(MRekam.RekamApp.SelfTest()); // AUDIO_READ: record 0.7 s, save a WAV, play it back

@@ -53,6 +53,29 @@ ada gamepad (HID boot protocol hanya keyboard dan mouse), belum ada musik, dan
 screensaver masih bisa muncul saat lama berpikir di Kartu -- "mode game" masuk
 langkah berikutnya.
 
+
+## Mesin 2D: sprite, tilemap, kamera, scene
+
+`Buitenzorg.Game` juga punya bagian dunia game 2D (`Engine.cs`):
+
+- `Canvas2D(w, h)` -- gambar pada resolusi game sendiri; `Fill`, `Draw(sprite, x, y, flip)`,
+  `Draw(sheet, frame, x, y)`, `Draw(tileMap, kamera)`; `Present(dc, field)` memperbesarnya dengan faktor
+  bulat dalam satu blit. Di Buitenzorg pikselnya ditulis native host, jadi satu layar penuh tile cukup
+  satu panggilan.
+- `Sprite.FromStrings(baris, karakter, warna)` (pixel art di kode), `Sprite.FromPicture(Picture.Load(...))`
+  (PNG / GIF / JPEG / BMP), `Sprite.Row(...)` (sheet atau tileset), `SpriteSheet`, `Animation`.
+- `TileMap.FromText(baris, ukuran, ch => tile)`, `IsSolid`, `Hits(x, y, w, h)`, `Move(body, dt)` (satu
+  sumbu per langkah; mengisi `OnGround` / `HitWall`).
+- `Camera2D.Follow(x, y, lebarDunia, tinggiDunia, ease)`, `Scene` + `SceneGame.Go(scene)`,
+  `PixelFont.Draw`, `SaveData("NAMA")` (`/disk/NAMA.SAV`), `GameMusic.Play("/disk/LAGU5.MID")`.
+
+**Gamepad:** tombol gamepad USB datang sebagai event key mentah dengan kode `RawKey.PadA`, `PadB`,
+`PadX`, `PadY`, `PadL`, `PadR`, `PadSelect`, `PadStart`, `PadUp`, `PadDown`, `PadLeft`, `PadRight`, jadi
+`Input.IsDown(RawKey.PadA)` bekerja seperti tombol keyboard. Gamepad HID generik dan pad Xbox 360
+dipetakan; baru diuji dengan report contoh, belum dengan pad sungguhan.
+
+Contohnya **Lompat Kodok** (`run mlompat`, Mulai > Hiburan), sebuah platformer.
+
 ---
 
 ← [Indeks dokumentasi](README.id.md) · *Buitenzorg OS — dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.*

@@ -89,6 +89,29 @@ right regardless); on real hardware they are smooth. There is no gamepad yet
 screensaver can still start during a long think in Kartu -- the "game mode"
 is part of the next steps (`PLAN.md`, Multimedia/Games).
 
+
+## The 2D engine: sprites, tile maps, camera, scenes
+
+`Buitenzorg.Game` also has the parts of a 2D game world (`Engine.cs`):
+
+- `Canvas2D(w, h)` -- a picture at the game's own resolution; `Fill`, `Draw(sprite, x, y, flip)`,
+  `Draw(sheet, frame, x, y)`, `Draw(tileMap, camera)`; `Present(dc, field)` scales it up by a whole
+  factor in one blit. On Buitenzorg the pixels are written by host natives, so a full screen of tiles
+  costs one call.
+- `Sprite.FromStrings(rows, chars, colors)` (pixel art in code), `Sprite.FromPicture(Picture.Load(...))`
+  (PNG / GIF / JPEG / BMP), `Sprite.Row(...)` (a sheet or tileset), `SpriteSheet`, `Animation`.
+- `TileMap.FromText(lines, size, ch => tile)`, `IsSolid`, `Hits(x, y, w, h)`, `Move(body, dt)` (one axis
+  at a time; sets `OnGround` / `HitWall`).
+- `Camera2D.Follow(x, y, worldW, worldH, ease)`, `Scene` + `SceneGame.Go(scene)`, `PixelFont.Draw`,
+  `SaveData("NAME")` (`/disk/NAME.SAV`), `GameMusic.Play("/disk/LAGU5.MID")`.
+
+**Gamepads:** a USB gamepad's buttons arrive as raw key events with the codes `RawKey.PadA`, `PadB`,
+`PadX`, `PadY`, `PadL`, `PadR`, `PadSelect`, `PadStart`, `PadUp`, `PadDown`, `PadLeft`, `PadRight`, so
+`Input.IsDown(RawKey.PadA)` works like a key. Generic HID gamepads and Xbox 360 pads are mapped; this
+has been tested with recorded reports only, not with a real pad yet.
+
+The sample is **Lompat Kodok** (`run mlompat`, Start > Hiburan), a platformer.
+
 ---
 
 ← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

@@ -1,5 +1,6 @@
-// Musik -- a music player: the WAV files on /disk (and in the scratch
-// folder), play / pause / previous / next, a seekable progress bar, this
+// Musik -- a music player with a library: every song on /disk, in its
+// folders (two levels, e.g. /disk/MUSIK/ALBUM) and on plugged-in USB sticks
+// (/usb0..3), sorted by title and searchable; play / pause / previous / next, a seekable progress bar, this
 // program's volume in the kernel mixer, and a level meter. It plays through
 // Buitenzorg.Media.MediaPlayer, which keeps the program's mixer stream fed
 // from a UI timer -- other programs' sounds mix in alongside. Buitenzorg.UI.
@@ -50,7 +51,12 @@ public sealed class Meter : Control
 public sealed class MusikApp
 {
     public readonly MediaPlayer Player = new MediaPlayer();
+    /// <summary>The songs shown (the library, filtered by the search box).</summary>
     public readonly ObservableCollection<Track> Tracks = new ObservableCollection<Track>();
+    /// <summary>Every song found by <see cref="Scan"/>.</summary>
+    public readonly List<Track> Library = new List<Track>();
+    readonly TextBox _search = new TextBox { Watermark = "Cari lagu..." };
+    readonly TextBlock _count = new TextBlock("");
     public int Current { get; private set; } = -1;
     public Window W { get; }
     readonly ListBox _list;
@@ -91,6 +97,11 @@ public sealed class MusikApp
         root.Children.Add(buttons.DockTo(Dock.Top));
         root.Children.Add(_meter.DockTo(Dock.Top));
         root.Children.Add(vol.DockTo(Dock.Bottom));
+        var lib = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
+        lib.Children.Add(_count.WithClass("faint").DockTo(Dock.Right));
+        lib.Children.Add(_search);
+        _search.TextChanged += t => Filter(t.Text);
+        root.Children.Add(lib.DockTo(Dock.Top));
         root.Children.Add(_list);
         W.Content = root;
         W.UnhandledKey += e => { if (e.Key == ' ') { Toggle(); e.Handled = true; } };
@@ -101,24 +112,62 @@ public sealed class MusikApp
         W.UpdateLayout();
     }
 
-    /// <summary>The WAV, FLAC, MP3 and MIDI files of /disk and the scratch folder.</summary>
-    public void Scan()
+    public static bool IsSong(string name)
     {
-        Tracks.Clear();
-        foreach (var dir in Files.ScratchDirectory == "/disk" ? new[] { "/disk" } : new[] { "/disk", Files.ScratchDirectory })
+        string up = name.ToUpperInvariant();
+        return up.EndsWith(".WAV") || up.EndsWith(".FLA") || up.EndsWith(".FLAC") || up.EndsWith(".MP3") || up.EndsWith(".MID") || up.EndsWith(".OGG")
+            || up.EndsWith(".OGA") || up.EndsWith(".OPU") || up.EndsWith(".OPUS");
+    }
+
+    // system folders on /disk that never hold music
+    static readonly string[] Skip = { "PKGHIST", "CRASH", "APPDATA", "LAYAR", "PROYEK", "UNDUHAN" };
+
+    void ScanDir(string dir, int depth, HashSet<string> seen)
+    {
+        if (Library.Count >= 400) return;
+        List<FileEntry> files;
+        try { files = Files.List(dir); } catch (Exception) { return; }
+        foreach (var f in files)
         {
-            List<FileEntry> files;
-            try { files = Files.List(dir); } catch (Exception) { continue; }
-            foreach (var f in files)
+            if (f.IsDirectory)
             {
-                string up = f.Name.ToUpperInvariant();
-                if (!f.IsDirectory && (up.EndsWith(".WAV") || up.EndsWith(".FLA") || up.EndsWith(".FLAC") || up.EndsWith(".MP3") || up.EndsWith(".MID") || up.EndsWith(".OGG") || up.EndsWith(".OGA") || up.EndsWith(".OPU") || up.EndsWith(".OPUS")))
-                    Tracks.Add(new Track(f.Path, f.Name.LastIndexOf('.') > 0 ? f.Name.Substring(0, f.Name.LastIndexOf('.')) : f.Name));
+                if (depth < 2 && Array.IndexOf(Skip, f.Name.ToUpperInvariant()) < 0) ScanDir(f.Path, depth + 1, seen);
+                continue;
             }
+            if (!IsSong(f.Name) || !seen.Add(f.Path.ToUpperInvariant())) continue;
+            int dot = f.Name.LastIndexOf('.');
+            Library.Add(new Track(f.Path, dot > 0 ? f.Name.Substring(0, dot) : f.Name));
         }
     }
 
-    public void Add(Track t) => Tracks.Add(t);
+    /// <summary>The library: songs on /disk (two folder levels deep), the scratch
+    /// folder and USB sticks, sorted by title; then the search filter.</summary>
+    public void Scan()
+    {
+        Library.Clear();
+        var seen = new HashSet<string>();
+        var roots = new List<string> { "/disk" };
+        if (Files.ScratchDirectory != "/disk") roots.Add(Files.ScratchDirectory);
+        for (int u = 0; u < 4; u++) roots.Add("/usb" + u);
+        foreach (var r in roots) ScanDir(r, 0, seen);
+        Library.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase));
+        Filter(_search.Text);
+    }
+
+    /// <summary>Show the songs whose title or path contains `q` (case-insensitive).</summary>
+    public void Filter(string q)
+    {
+        _syncing = true;
+        Tracks.Clear();
+        string lq = (q ?? "").Trim().ToLowerInvariant();
+        foreach (var t in Library)
+            if (lq.Length == 0 || t.Title.ToLowerInvariant().Contains(lq) || t.Path.ToLowerInvariant().Contains(lq)) Tracks.Add(t);
+        _syncing = false;
+        Current = -1;
+        _count.Text = Tracks.Count == Library.Count ? Library.Count + " lagu" : Tracks.Count + " dari " + Library.Count + " lagu";
+    }
+
+    public void Add(Track t) { Library.Add(t); Tracks.Add(t); }
 
     public bool PlayTrack(int i)
     {
@@ -198,6 +247,23 @@ public sealed class MusikApp
         c.That(Math.Abs(p.Position - 0.5) < 0.05, "seek to 0.5 s");
         p.Stop();
         c.That(p.Position == 0, "stop rewinds");
+
+        // the library: a song in an album folder is found, the search narrows the list
+        string album = Files.ScratchDirectory + "/MUSIK";
+        Files.CreateDirectory(album);
+        Files.CreateDirectory(album + "/KEBUN");
+        Files.WriteAllBytes(album + "/KEBUN/UJIALBUM.WAV", wav);
+        var lib = new MusikApp(headless: true);
+        lib.Scan();
+        bool inAlbum = lib.Library.Exists(t => t.Path.ToUpperInvariant().EndsWith("/MUSIK/KEBUN/UJIALBUM.WAV"));
+        bool sorted = true;
+        for (int i = 1; i < lib.Library.Count; i++) if (string.Compare(lib.Library[i - 1].Title, lib.Library[i].Title, StringComparison.OrdinalIgnoreCase) > 0) sorted = false;
+        lib.Filter("ujialbum");
+        c.That(inAlbum && sorted && lib.Tracks.Count == 1 && lib.Library.Count >= 1, "library: album folder scanned, sorted, search finds 1 of " + lib.Library.Count);
+        lib.Filter("");
+        Files.Delete(album + "/KEBUN/UJIALBUM.WAV");
+        Files.Delete(album + "/KEBUN");
+        Files.Delete(album);
 
         // the app around it (an in-memory track off the device)
         var app = new MusikApp(headless: true);

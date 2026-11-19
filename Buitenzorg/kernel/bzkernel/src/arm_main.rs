@@ -339,6 +339,8 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         desktop::ensure_session_windows();
         shell::script_self_test();
         desktop::hotkey_self_test();
+        usb::hid::pad_self_test();
+        virtio::snd::stream_self_test();
         terminal::self_test("helloclr", "Hello from managed C#");
     }
     println!("[kernel] BUITENZORG ARM64 READY -- increments 1-8 (boot, interrupts, memory, EL0, scheduler, virtio-mmio, RTC, PSCI, shared syscalls + window system, C# GUI apps, interactive desktop); the rest of the kernel follows");
@@ -1118,6 +1120,8 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         println!("[arm64] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);
     }
     virtio::input::init();
+    // virtio sound: the AUDIO_* device here (the tone test only on a self-test boot)
+    virtio::snd::init_with(st);
     if !st {
         net::init([10, 0, 0, 1]);
         return; // USB, the NICs and the rest: boot_background

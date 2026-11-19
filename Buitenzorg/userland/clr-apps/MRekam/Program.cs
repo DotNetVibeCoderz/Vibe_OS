@@ -134,8 +134,9 @@ public sealed class RekamApp
     public void Tick()
     {
         if (!Rec.Recording) return;
-        int n;
-        while ((n = Rec.Read(_chunk)) > 0)
+        int n, reads = 0;
+        // bounded: a device that delivers faster than real time must not keep the UI here
+        while (reads++ < 16 && (n = Rec.Read(_chunk)) > 0)
         {
             Files.AppendAllBytes(_temp, _chunk, 0, n);
             _bytes += n;

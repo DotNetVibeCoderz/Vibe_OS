@@ -919,6 +919,15 @@ yang dibutuhkan game; tak ada USB (gamepad/webcam). Jaringan = **UDP loopback**
 saja (tanpa NIC, TCP, DNS, TLS). Format: BMP + JPEG baseline. WebView = subset
 HTML mini. App ring-3 jalan **satu per satu**.
 
+**Status 2026-11-20:** selesai -- musik WAV/FLAC/MP3/MIDI/Ogg Vorbis/Opus +
+perpustakaan + Now Playing, perekam suara (AC'97, virtio-snd), suara di
+ARM64/RISC-V lewat virtio-snd, gambar PNG/GIF/JPEG + thumbnail, video MJPEG/AVI,
+browser dengan TLS + WebSocket + unduhan + **CSS subset**, game 2D dengan
+sprite/tilemap/kamera/scene + **gamepad USB** (belum diuji pada pad nyata) +
+platformer Lompat Kodok, 3D dengan **glTF**, **fisika rigid body**, **audio 3D**,
+raycaster. **Belum:** container MP4/MKV/WebM + codec VP8/VP9/AV1, lapisan
+libc + SDL2 (port DOOM), mic HDA, webcam UVC, animasi skeletal, JS di browser.
+
 ### Prasyarat bersama (kernel & driver)
 - ✅ **Multi-proses preemptif** *(increment 1 selesai 2026-11-01)* — musik tetap jalan saat bermain game/browsing.
 - **Surface shared-memory zero-copy** — app menggambar langsung ke buffer yang

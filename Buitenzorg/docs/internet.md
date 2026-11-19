@@ -153,6 +153,17 @@ thread of its own over TCP on the machine's address and browses them
 - WebSocket: no extensions (no `permessage-deflate`), no subprotocol choice;
   `Receive` blocks (use a background thread).
 
+
+## CSS in Peramban
+
+Peramban applies a subset of CSS: `<style>` blocks, up to four `<link rel="stylesheet">` files (fetched
+before the page is laid out) and `style="..."` attributes. Selectors: `*`, `tag`, `.class`, `#id`,
+compounds such as `p.note`, and descendant / child combinators; rules with pseudo-classes (`:hover`),
+attribute selectors or sibling combinators are ignored. Properties: `color`, `background(-color)`,
+`border` (a frame around the block), `font-weight`, `font-size` / `font` (mapped onto the three system
+fonts), `display: none | block | inline`, `text-align`, and `margin-left` / `padding-left`. There is no
+flexbox, grid, floats or positioning, and no JavaScript.
+
 ---
 
 ← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

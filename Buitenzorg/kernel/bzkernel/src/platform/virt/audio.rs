@@ -1,53 +1,76 @@
 //! The AUDIO_* syscalls' device on Device-Tree boards. A PC has an AC'97
 //! card (`platform/pc/audio.rs`); a Raspberry Pi 4 has its 3.5 mm headphone
-//! jack, driven by PWM (`rpi_io`); other boards have none here (sound on QEMU
-//! `virt` is virtio-snd, its own test path), so the syscalls report an absent
-//! device.
+//! jack, driven by PWM (`rpi_io`); QEMU `virt` (and any board with a virtio
+//! sound device) streams the mixer through virtio-snd (`virtio::snd`), and
+//! records from its input stream. Without either the syscalls report an
+//! absent device.
 
 pub const SAMPLE_RATE: u32 = 48_000;
 
 #[cfg(target_arch = "aarch64")]
 use super::rpi_io as jack;
 
-/// The mixer's stream (AUDIO_WRITE): PC sound cards only so far -- the Pi's
-/// jack and HDMI are fed by the CPU in one go (`play_pcm`), not from a ring.
-pub fn can_stream() -> bool {
-    false
-}
+use core::sync::atomic::{AtomicU32, Ordering};
 
-pub fn is_streaming() -> bool {
-    false
-}
+use crate::virtio::snd;
 
-pub fn stream_pump() {}
+/// The virtio sound card's master volume (percent); it has no mixer of its own.
+static VIRTIO_VOLUME: AtomicU32 = AtomicU32::new(80);
 
-/// Recording: not on these boards yet (the Pi has no microphone input).
-pub fn can_capture() -> bool {
-    false
-}
-pub fn capture_start() -> bool {
-    false
-}
-pub fn capture_stop() {}
-pub fn capture_pump() {}
-pub fn capture_read(_out: &mut [i16]) -> usize {
-    0
-}
-pub fn capture_queued_ms() -> u64 {
-    0
-}
-
-pub fn is_present() -> bool {
+fn has_jack() -> bool {
     #[cfg(target_arch = "aarch64")]
     return jack::audio_present();
     #[cfg(not(target_arch = "aarch64"))]
     false
 }
 
+/// The mixer's stream (AUDIO_WRITE): through virtio-snd. The Pi's jack and
+/// HDMI are fed by the CPU in one go (`play_pcm`), not from a ring.
+pub fn can_stream() -> bool {
+    !has_jack() && snd::available()
+}
+
+pub fn is_streaming() -> bool {
+    snd::is_streaming()
+}
+
+pub fn stream_pump() {
+    if !has_jack() {
+        snd::pump();
+    }
+}
+
+/// Recording: virtio-snd's input stream (the Pi has no microphone input).
+pub fn can_capture() -> bool {
+    snd::can_capture()
+}
+pub fn capture_start() -> bool {
+    snd::capture_start()
+}
+pub fn capture_stop() {
+    snd::capture_stop()
+}
+pub fn capture_pump() {
+    snd::pump()
+}
+pub fn capture_read(out: &mut [i16]) -> usize {
+    snd::capture_read(out)
+}
+pub fn capture_queued_ms() -> u64 {
+    snd::capture_queued_ms()
+}
+
+pub fn is_present() -> bool {
+    has_jack() || snd::available()
+}
+
 pub fn volume() -> u32 {
     #[cfg(target_arch = "aarch64")]
     if jack::audio_present() {
         return jack::audio_volume();
+    }
+    if snd::available() {
+        return VIRTIO_VOLUME.load(Ordering::Relaxed);
     }
     0
 }
@@ -58,27 +81,59 @@ pub fn is_muted() -> bool {
 
 pub fn set_volume(pct: u32) -> bool {
     #[cfg(target_arch = "aarch64")]
-    return jack::audio_set_volume(pct);
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        let _ = pct;
-        false
+    if jack::audio_present() {
+        return jack::audio_set_volume(pct);
     }
+    if snd::available() {
+        VIRTIO_VOLUME.store(pct.min(100), Ordering::Relaxed);
+        return true;
+    }
+    false
+}
+
+/// A tone into the mixer (as program 0), streamed through virtio-snd.
+fn mixer_tone(freq: u32, ms: u32) -> bool {
+    let frames = (48_000u64 * ms.min(5000) as u64 / 1000) as usize;
+    let mut bytes = alloc::vec::Vec::with_capacity(frames * 4);
+    let step = ((freq as u64) << 16) / 48_000;
+    let mut phase: u32 = 0;
+    for f in 0..frames {
+        let p = (phase >> 6) & 0x3FF;
+        let tri = (if p < 512 { p as i32 - 256 } else { 767 - p as i32 }) * 32;
+        // short fade in / out: no clicks
+        let edge = (f.min(frames - f) as i32).min(480);
+        let s = (tri * edge / 480) as i16;
+        bytes.extend_from_slice(&s.to_le_bytes());
+        bytes.extend_from_slice(&s.to_le_bytes());
+        phase = phase.wrapping_add(step as u32);
+    }
+    let took = crate::mixer::write(0, &bytes, 0);
+    snd::pump();
+    took > 0
 }
 
 pub fn play_tone(freq: u32, ms: u32) -> bool {
     #[cfg(target_arch = "aarch64")]
-    return jack::audio_present() && jack::audio_tone(freq, ms);
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        let _ = (freq, ms);
-        false
+    if jack::audio_present() {
+        return jack::audio_tone(freq, ms);
     }
+    snd::available() && mixer_tone(freq, ms)
 }
 
 /// PCM from a caller buffer (validated by the syscall layer): copied with
 /// volatile reads (never a slice over user memory), at most 4 MiB (~22 s).
 pub fn play_pcm(src: u64, len: u64) -> bool {
+    if !has_jack() && snd::available() {
+        let n = len.min(4 << 20) as usize & !3;
+        let mut pcm = alloc::vec::Vec::with_capacity(n);
+        let p = src as *const u8;
+        for i in 0..n {
+            pcm.push(unsafe { p.add(i).read_volatile() });
+        }
+        let took = crate::mixer::write(0, &pcm, 0);
+        snd::pump();
+        return took > 0;
+    }
     #[cfg(target_arch = "aarch64")]
     {
         if !jack::audio_present() {
