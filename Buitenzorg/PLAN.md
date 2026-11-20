@@ -925,8 +925,9 @@ ARM64/RISC-V lewat virtio-snd, gambar PNG/GIF/JPEG + thumbnail, video MJPEG/AVI,
 browser dengan TLS + WebSocket + unduhan + **CSS subset**, game 2D dengan
 sprite/tilemap/kamera/scene + **gamepad USB** (belum diuji pada pad nyata) +
 platformer Lompat Kodok, 3D dengan **glTF**, **fisika rigid body**, **audio 3D**,
-raycaster. **Belum:** container MP4/MKV/WebM + codec VP8/VP9/AV1, lapisan
-libc + SDL2 (port DOOM), mic HDA, webcam UVC, animasi skeletal, JS di browser.
+raycaster, **video WebM/MKV/MP4/MOV (VP8, Motion JPEG)**, **DOOM lewat runtime C +
+subset SDL2** di ketiga arsitektur, **mikrofon HDA**. **Belum:** VP9/AV1 (H.264/AAC
+terikat paten), suara DOOM, webcam UVC, animasi skeletal, JS di browser.
 
 ### Prasyarat bersama (kernel & driver)
 - ✅ **Multi-proses preemptif** *(increment 1 selesai 2026-11-01)* — musik tetap jalan saat bermain game/browsing.

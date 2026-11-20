@@ -89,6 +89,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` â†
 | 66 | `IDLE_INHIBIT` | 1 = hold off the screensaver / idle sleep, 0 = release | - | 0; released when the process ends (game mode, media playback) |
 | 67 | `CLIPBOARD` | op (`clipboard_op`: 0 GET, 1 SET, 2 SEQ) | GET: buffer, capacity / SET: text, length (<= 64 KiB) | GET: the clipboard's full length (copies at most the capacity); SET: 0; SEQ: a counter that grows with every SET. Shared with the Terminal (Ctrl+V, `clip`, `paste`) |
 | 69 | `AUDIO_READ` | op (`audio_read_op`: 0 START, 1 READ, 2 STOP, 3 QUEUED) | READ: buffer | READ: bytes of 48 kHz stereo 16-bit PCM copied (a2 = buffer length); START: 0, `NOSYS` without a recording device, `INVAL` while another program records; QUEUED: ms recorded and not read. Needs the `microphone` permission; one program records at a time, released when it ends |
+| 70 | `FS_READ_AT` | NUL-terminated path | buffer | bytes read from byte `a2 >> 24`, at most `a2 & 0xFFFFFF` (capped at 4 MiB per call); fewer at the end of the file, 0 past it, `INVAL` for a bad buffer. Reads a large file in pieces (the C runtime loads game data with it) |
 | 68 | `FS_APPEND` | NUL-terminated path | data | bytes written (0 = failed). a2 = length, at most 1 MiB per call; the file is created when missing, existing data stays where it is (the last cluster's tail is filled, new clusters linked). For downloads and logs that grow |
 
 Errors are returned in the high `u64` range: `NOSYS = u64::MAX`,

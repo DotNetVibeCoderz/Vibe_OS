@@ -37,6 +37,10 @@ mod audiodec;
 mod midi;
 mod ogg;
 mod pix;
+mod vp8;
+mod vp8_tables;
+mod movie;
+mod movieapi;
 /// The kernel's JS/TS/Python interpreter (same source), for UI scripts.
 #[path = "../../../kernel/bzkernel/src/script.rs"]
 #[allow(dead_code)]

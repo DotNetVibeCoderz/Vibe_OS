@@ -199,6 +199,31 @@ pub fn spawn_named(name: &str) -> Result<u64, &'static str> {
 
 /// Start a program with an argument string. `target` is an app name
 /// (`"calc"`) or an absolute VFS path to an ELF (`"/disk/MYAPP.ELF"`).
+/// Self-test of the C runtime (userland/c) and its SDL2 subset with DOOM
+/// (doomgeneric + the Freedoom IWAD as /disk/DOOM.WAD, on images built after
+/// scripts/fetch-doom + build-doom): it plays the IWAD's first demo for 40
+/// frames, checks the last picture and exits 0 -> `MILESTONE: DOOM OK`.
+pub fn doom_self_test() {
+    if crate::vfs::stat("/disk/DOOM.ELF").is_err() || crate::vfs::stat("/disk/DOOM.WAD").is_err() {
+        crate::println!("[doom] DOOM.ELF / DOOM.WAD not on this image (scripts/fetch-doom + build-doom): test skipped");
+        return;
+    }
+    let t0 = crate::arch::cpu::nanos();
+    let code = match spawn_with_args("/disk/DOOM.ELF", "-iwad /disk/DOOM.WAD -playdemo demo1 -bzframes 40") {
+        Ok(pid) => wait(pid),
+        Err(e) => {
+            crate::println!("[doom] could not start: {}", e);
+            return;
+        }
+    };
+    let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
+    if code == 0 {
+        crate::println!("[kernel] MILESTONE: DOOM OK (doomgeneric + Freedoom on the C runtime and SDL2 subset: demo1, 40 frames, {} ms)", ms);
+    } else {
+        crate::println!("[doom] test failed: exit code {:#x} after {} ms", code, ms);
+    }
+}
+
 pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
     // What the program may do: a package's program gets the package's grant
     // (`perm.rs`), narrowed to what the caller itself may do.
@@ -236,6 +261,8 @@ pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {
 fn builtin_app_file(name: &str) -> Option<&'static str> {
     match name {
         "xox" | "tictactoe" => Some("XOX.ELF"),
+        // C programs (userland/c): DOOM when scripts/fetch-doom + build-doom ran
+        "doom" => Some("DOOM.ELF"),
         "hello" => Some("HELLO.ELF"),
         "svc" => Some("SVC.ELF"),
         "taskmgr" | "monitor" => Some("TASKMGR.ELF"),

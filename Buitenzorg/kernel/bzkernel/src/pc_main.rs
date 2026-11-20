@@ -234,6 +234,8 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     multiproc_demo();
     // The managed C# path (RustCLR) next to the native one (bflat).
     clr::boot_demo("x86-64");
+    // C programs: DOOM through userland/c (when the image carries it)
+    app::doom_self_test();
 
     // v1.0 hardening: syscalls must refuse user pointers the caller does not
     // own (kernel addresses, unmapped pages, ranges that overflow the user
@@ -1772,7 +1774,10 @@ fn audio_stream_test() {
     }
     let stopped = !audio::is_streaming();
     // the ring holds 680 ms (AC'97) / 340 ms (HDA): 600 ms of play needs refills
-    if took == bytes.len() && started && refills > 32 && left < 1000 && stopped {
+    // the ring is 32 buffers on AC'97, 16 pages on HD Audio: playing 0.6 s
+    // must refill it beyond its first fill
+    let need = if platform::pc::hda::present() { 20 } else { 32 };
+    if took == bytes.len() && started && refills > need && left < 1000 && stopped {
         println!("[kernel] MILESTONE: AUDIO STREAM OK (mixer -> DMA ring: {} buffer fills in 0.6 s, {} ms left of 1000, ring stopped after the stream)", refills, left);
     } else {
         println!("[audio] stream test: took {} started {} refills {} left {} ms stopped {}", took, started, refills, left, stopped);
@@ -1785,7 +1790,7 @@ fn audio_stream_test() {
 fn audio_capture_test() {
     use core::sync::atomic::Ordering;
     if !audio::can_capture() {
-        println!("[audio] capture test: no recording device (HD Audio input is not driven yet)");
+        println!("[audio] capture test: no recording device (no AC'97, and no HD Audio input path)");
         return;
     }
     let f0 = audio::CAPTURE_FILLS.load(Ordering::Relaxed);

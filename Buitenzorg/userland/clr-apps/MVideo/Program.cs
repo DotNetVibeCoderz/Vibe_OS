@@ -1,8 +1,11 @@
-// Video -- plays AVI files with Motion-JPEG pictures and PCM sound: frames
-// are JPEG-decoded and scaled by the host (Buitenzorg.Media.Picture), sound
-// goes to this program's mixer stream (AUDIO_WRITE), and the picture follows
-// the sound's position (A/V sync). One original clip ships on every image:
-// /disk/FAJAR.AVI, "Fajar di Kebun Raya" (synthesized when the image is built).
+// Video -- plays AVI files with Motion-JPEG pictures and PCM sound (frames
+// JPEG-decoded and scaled by the host through Buitenzorg.Media.Picture), and
+// Matroska / WebM and MP4 / QuickTime files through Buitenzorg.Media.Movie
+// (VP8 or Motion JPEG pictures; Opus, Vorbis, MP3 or PCM sound, all decoded by
+// the host). Sound goes to this program's mixer stream (AUDIO_WRITE) and the
+// picture follows the sound's position (A/V sync). Original clips on every
+// image: /disk/FAJAR.AVI (synthesized at build time), /disk/KEBUN.WEB (VP8 +
+// Opus) and /disk/SENJA.MP4 (Motion JPEG + MP3).
 
 using Buitenzorg.App;
 using Buitenzorg.Media;
@@ -22,6 +25,29 @@ public sealed class Avi
     public readonly List<(int Offset, int Size)> Sound = new List<(int, int)>();
     public int AudioRate, AudioChannels, AudioBits;
     public string Error = "";
+    /// <summary>A Matroska / WebM / MP4 file: the host decodes its frames.</summary>
+    public Movie? Native;
+    public string Codecs = "";
+
+    /// <summary>A host-read movie as a clip: the sound decoded whole, in quarter-second chunks.</summary>
+    public static Avi FromMovie(Movie m)
+    {
+        var a = new Avi { Native = m, Width = m.Width, Height = m.Height, Title = m.Title };
+        a.MicrosPerFrame = m.Fps > 0 ? (int)(1_000_000 / m.Fps) : 100_000;
+        a.Codecs = m.VideoCodec + (m.AudioCodec.Length > 0 ? " + " + m.AudioCodec : "");
+        if (m.HasVideo) for (int i = 0; i < m.FrameCount; i++) a.Frames.Add((i, 0));
+        if (m.AudioBytes > 0 && m.AudioRate > 0)
+        {
+            a.Data = m.Sound();
+            a.AudioRate = m.AudioRate;
+            a.AudioChannels = m.AudioChannels;
+            a.AudioBits = 16;
+            int chunk = m.AudioRate / 4 * m.AudioChannels * 2;
+            for (int o = 0; o < a.Data.Length; o += chunk) a.Sound.Add((o, Math.Min(chunk, a.Data.Length - o)));
+        }
+        if (!m.HasVideo) a.Error = m.Unsupported.Length > 0 ? "tidak bisa diputar: " + m.Unsupported : "tidak ada gambar di berkas ini";
+        return a;
+    }
 
     public double Fps => MicrosPerFrame > 0 ? 1_000_000.0 / MicrosPerFrame : 0;
     public double Seconds => Frames.Count / Math.Max(0.001, Fps);
@@ -104,6 +130,19 @@ public sealed class VideoView : Control
     public bool Show(Avi avi, int i)
     {
         if (i == Shown || i < 0 || i >= avi.Frames.Count) return false;
+        if (avi.Native != null)
+        {
+            var bn = Bounds;
+            double sc = Math.Min((double)Math.Max(16, bn.Width) / Math.Max(1, avi.Width), (double)Math.Max(16, bn.Height) / Math.Max(1, avi.Height));
+            int nw = Math.Max(1, (int)(avi.Width * sc)), nh = Math.Max(1, (int)(avi.Height * sc));
+            if (_px.Length != nw * nh) _px = new int[nw * nh];
+            if (!avi.Native.Frame(i, _px, nw, nh)) { Message = "bingkai " + i + " tidak terbaca"; return false; }
+            _w = nw;
+            _h = nh;
+            Shown = i;
+            InvalidateVisual();
+            return true;
+        }
         var pic = Picture.FromBytes(avi.Frame(i));
         if (pic == null) { Message = "bingkai " + i + " tidak terbaca"; return false; }
         var b = Bounds;
@@ -114,6 +153,17 @@ public sealed class VideoView : Control
         Shown = i;
         InvalidateVisual();
         return true;
+    }
+
+    /// <summary>A sum of the shown picture (tests: frames differ).</summary>
+    public int Checksum
+    {
+        get
+        {
+            int sum = 0;
+            for (int i = 0; i < _w * _h; i += 7) sum = sum * 31 + _px[i];
+            return sum;
+        }
     }
 
     public override void Render(DrawingContext dc)
@@ -174,7 +224,7 @@ public sealed class VideoApp
         _timer.Tick += Tick;
         Application.Current?.Apply(W);
         W.UpdateLayout();
-        if (Paths.Count > 0) _list.SelectedIndex = 0; else View.Message = "Tidak ada berkas .AVI di /disk";
+        if (Paths.Count > 0) _list.SelectedIndex = 0; else View.Message = "Tidak ada berkas video (.AVI, .MP4, .WEBM, .MKV, .MOV) di /disk";
     }
 
     public void Scan()
@@ -186,14 +236,21 @@ public sealed class VideoApp
             List<FileEntry> files;
             try { files = Files.List(d); } catch (Exception) { continue; }
             foreach (var f in files)
-                if (!f.IsDirectory && f.Name.ToUpperInvariant().EndsWith(".AVI")) { Paths.Add(f.Path); Names.Add(f.Name); }
+                if (!f.IsDirectory && (f.Name.ToUpperInvariant().EndsWith(".AVI") || Movie.IsMovieName(f.Name))) { Paths.Add(f.Path); Names.Add(f.Name); }
         }
     }
 
     public bool Open(int i)
     {
         var b = Files.ReadAllBytes(Paths[i]);
-        return Load(b == null ? new Avi { Error = "berkas tidak terbaca" } : Avi.Parse(b));
+        if (b == null) return Load(new Avi { Error = "berkas tidak terbaca" });
+        if (Movie.IsMovieName(Paths[i]))
+        {
+            Clip?.Native?.Close();
+            var m = Movie.Open(b);
+            return Load(m == null ? new Avi { Error = Movie.LastError } : Avi.FromMovie(m));
+        }
+        return Load(Avi.Parse(b));
     }
 
     public bool Load(Avi avi)
@@ -290,7 +347,7 @@ public sealed class VideoApp
     {
         if (Clip == null) return;
         double pos = Position;
-        _time.Text = Clock(pos) + " / " + Clock(Clip.Seconds) + "   " + (Clip.Title.Length > 0 ? Clip.Title + "   " : "") + Clip.Width + "x" + Clip.Height + ", " + (int)Math.Round(Clip.Fps) + " fps" + (Clip.HasSound ? ", suara " + Clip.AudioRate / 1000 + " kHz" : ", tanpa suara");
+        _time.Text = Clock(pos) + " / " + Clock(Clip.Seconds) + "   " + (Clip.Title.Length > 0 ? Clip.Title + "   " : "") + Clip.Width + "x" + Clip.Height + ", " + (int)Math.Round(Clip.Fps) + " fps" + (Clip.HasSound ? ", suara " + Clip.AudioRate / 1000 + " kHz" : ", tanpa suara") + (Clip.Codecs.Length > 0 ? "   (" + Clip.Codecs + ")" : "");
         _bar.Value = Clip.Seconds > 0 ? pos * 1000 / Clip.Seconds : 0;
         _playText.Text = Playing ? "Jeda" : "Putar";
     }
@@ -355,6 +412,34 @@ public sealed class VideoApp
             int decoded = 0;
             for (int i = 0; i < 120; i += 30) { app.View.Shown = -1; if (app.View.Show(app.Clip!, i)) decoded++; }
             c.That(decoded == 4, "MJPEG frames decoded (" + decoded + " of 4 sampled)");
+        }
+        // host-read movies (on the device): VP8 + Opus in WebM, Motion JPEG + MP3 in MP4
+        string[] mfiles = { "KEBUN.WEB", "SENJA.MP4" };
+        string[] mcodecs = { "V_VP8", "mp4v" };
+        int[] mrates = { 48000, 44100 };
+        for (int mi = 0; mi < mfiles.Length; mi++)
+        {
+            string file = mfiles[mi], codec = mcodecs[mi];
+            int rate = mrates[mi];
+            int k = -1;
+            for (int n = 0; n < app.Names.Count; n++) if (app.Names[n].ToUpperInvariant() == file) k = n;
+            if (k < 0) continue;
+            bool opened = app.Open(k);
+            var clip = app.Clip!;
+            c.That(opened && clip.Native != null && clip.Frames.Count >= 40 && clip.HasSound && clip.AudioRate == rate && clip.Native.VideoCodec == codec,
+                file + ": " + clip.Frames.Count + " frames " + (clip.Native == null ? "?" : clip.Native.VideoCodec) + ", sound " + clip.AudioRate + " Hz " + clip.Error);
+            int ok = 0, distinct = 0, last = 0;
+            for (int i = 0; i < 31; i += 15)
+            {
+                app.View.Shown = -1;
+                if (!app.View.Show(clip, i)) continue;
+                ok++;
+                int sum = app.View.Checksum;
+                if (sum != last) distinct++;
+                last = sum;
+            }
+            c.That(ok == 3 && distinct == 3, file + ": frames 1, 16, 31 decoded and differ (" + ok + " / " + distinct + ")");
+            if (file == "KEBUN.WEB") c.That(clip.Title == "Kebun Fraktal", "WebM title: " + clip.Title);
         }
         return c;
     }

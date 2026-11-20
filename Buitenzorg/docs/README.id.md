@@ -28,6 +28,7 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 | [bz-link: perangkat yang berjalan dari PC](bz-link.id.md) | `bz deploy` app atau skrip ke OS yang sedang berjalan (tanpa build ulang image), `bz run`/`shell`/`push`/`pull`/`logs` lewat jaringan. |
 | [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
 | [Membaca, labirin 3D, CHIP-8](entertainment.id.md) | Baca (EPUB/TXT), Labirin Kebun (3D ray-cast), emulator CHIP-8 dengan dua program orisinal, mode game. |
+| [Program C, SDL2 dan DOOM](c-programs.id.md) | Runtime C (`userland/c`) dan subset SDL2-nya; DOOM dengan Freedoom di ketiga arsitektur. |
 | [Internet dan peramban web](internet.id.md) | Peramban (HTTP/HTTPS), `nslookup`, dan `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) untuk program. |
 | [Suara dan media](media.id.md) | Musik, Video dan Gambar, mixer kernel (stream per program, volume per aplikasi), WAV, MediaPlayer dan gambar PNG/JPEG/GIF untuk program. |
 | [Game dan Buitenzorg.Game](games.id.md) | Ular, Ranjau, Bata, Balok, Kartu, dan framework game 2D (loop fixed-timestep, event tombol mentah, partikel, skor tertinggi). |

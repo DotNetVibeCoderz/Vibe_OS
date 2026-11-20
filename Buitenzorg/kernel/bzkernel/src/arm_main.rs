@@ -304,6 +304,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         run_boot_programs(info);
         // The managed C# path (RustCLR) next to the native one (bflat).
         clr::boot_demo("ARM64");
+        app::doom_self_test();
         show_desktop();
     } else {
         // the network (DHCP waits), Ethernet, USB, the wallpaper, the random

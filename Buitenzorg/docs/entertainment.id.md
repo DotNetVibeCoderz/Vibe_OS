@@ -71,6 +71,18 @@ Game atau lagu yang sedang diputar menjaga desktop tetap terjaga: syscall
 berjalan, `MediaPlayer` selama memutar; program lain memanggil
 `Buitenzorg.App.Session.KeepAwake(true / false)`.
 
+
+## Berkas video: WebM, MKV, MP4, MOV
+
+Video memutar AVI (Motion JPEG + PCM) dan, lewat `Buitenzorg.Media.Movie`,
+berkas Matroska / WebM dan MP4 / QuickTime: gambar **VP8** (port decoder
+referensi RFC 6386, bit-exact dengan ffmpeg) atau Motion JPEG, dan suara Opus,
+Vorbis, MP3 atau PCM. Dua klip orisinal ada di setiap image:
+`/disk/KEBUN.WEB` (VP8 + Opus) dan `/disk/SENJA.MP4` (Motion JPEG + MP3).
+Video H.264 / H.265 / VP9 / AV1 dan suara AAC dikenali dan dilaporkan tidak
+didekode (H.264 dan AAC terikat paten; yang lain decoder besar yang menyusul).
+FAT memakai nama 8.3: berkas WebM bernama `NAMA.WEB`.
+
 ---
 
 ← [Indeks dokumentasi](README.id.md) · *Buitenzorg OS — dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.*

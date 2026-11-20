@@ -479,6 +479,72 @@ impl FatVolume {
     }
 }
 
+impl FatVolume {
+    /// Up to `len` bytes of a file from byte `offset` (fewer at its end, none
+    /// past it): the chain is walked to the cluster holding `offset`, then
+    /// read run by run like [`Self::read_file`]. Lets a program read a large
+    /// file (a game's data) in pieces instead of the kernel holding it whole.
+    pub fn read_range(&self, dev: &mut dyn BlockDevice, name: &str, offset: u64, len: usize) -> Result<Vec<u8>, &'static str> {
+        let (_, _, _, e) = self.lookup(dev, name).map_err(|_| "file not found")?;
+        if e.is_dir {
+            return Err("that is a folder");
+        }
+        let size = e.size as u64;
+        if offset >= size || len == 0 {
+            return Ok(Vec::new());
+        }
+        let len = (len as u64).min(size - offset) as usize;
+        let cbytes = self.sectors_per_cluster * SECTOR_SIZE as u64;
+        let mut cluster = e.cluster as u32;
+        let mut steps = 0u64;
+        for _ in 0..offset / cbytes {
+            cluster = self.next_cluster(dev, cluster)?.ok_or("cluster chain ended early")?;
+            steps += 1;
+            if steps > self.cluster_count + 2 {
+                return Err("cluster chain loops");
+            }
+        }
+        // whole sectors from the one holding `offset`
+        let first_sector = (offset % cbytes) / SECTOR_SIZE as u64;
+        let skip = (offset % SECTOR_SIZE as u64) as usize;
+        let total = (skip + len).div_ceil(SECTOR_SIZE);
+        let mut data = alloc::vec![0u8; total * SECTOR_SIZE];
+        let mut done = 0usize;
+        let mut in_cluster = first_sector;
+        while done < total {
+            if cluster < 2 || cluster as u64 >= self.cluster_count + 2 {
+                return Err("corrupt cluster chain");
+            }
+            let start = cluster;
+            let mut run = 1u64;
+            let mut next = self.next_cluster(dev, cluster)?;
+            while (done as u64 + run * self.sectors_per_cluster - in_cluster) < total as u64 && next == Some(cluster + 1) && run < 64 {
+                cluster += 1;
+                run += 1;
+                next = self.next_cluster(dev, cluster)?;
+            }
+            let n = ((run * self.sectors_per_cluster - in_cluster) as usize).min(total - done);
+            dev.read_sectors(self.cluster_to_sector(start) + in_cluster, &mut data[done * SECTOR_SIZE..(done + n) * SECTOR_SIZE])?;
+            done += n;
+            in_cluster = 0;
+            steps += run;
+            if steps > self.cluster_count + 2 {
+                return Err("cluster chain loops");
+            }
+            match next {
+                Some(c) => cluster = c,
+                None => break,
+            }
+        }
+        if done < total {
+            return Err("cluster chain ended early");
+        }
+        data.drain(..skip);
+        data.truncate(len);
+        Ok(data)
+    }
+}
+
 /// "BATANG.TXT" → 11-byte space-padded 8.3 directory form.
 fn encode_83(name: &str) -> Result<[u8; 11], &'static str> {
     let mut out = [b' '; 11];

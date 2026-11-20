@@ -70,6 +70,15 @@ pub fn read(path: &str) -> Result<Vec<u8>, &'static str> {
     with_mount(mount, |m| m.volume.read_file(m.device.as_mut(), file))
 }
 
+/// Read `len` bytes of the file at `path` from byte `offset` (fewer at its end).
+pub fn read_at(path: &str, offset: u64, len: usize) -> Result<Vec<u8>, &'static str> {
+    let (mount, file) = split_path(path)?;
+    if file.is_empty() {
+        return Err("path names a directory, not a file");
+    }
+    with_mount(mount, |m| m.volume.read_range(m.device.as_mut(), file, offset, len))
+}
+
 /// Write a whole file at `path` (creates or overwrites).
 pub fn write(path: &str, data: &[u8]) -> Result<(), &'static str> {
     let (mount, file) = split_path(path)?;

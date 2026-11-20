@@ -217,8 +217,11 @@ public static class SyscallNumbers
     /// <summary>Record from the microphone: a0 = op (<see cref="AudioReadOp"/>); READ a1 = buffer, a2 = length -> bytes of 48 kHz stereo s16. Needs the microphone permission.</summary>
     public const ulong AudioRead = 69;
 
+    /// <summary>Read part of a file: a0 = NUL-terminated path, a1 = buffer, a2 = offset &lt;&lt; 24 | length (length &lt; 16 MiB, at most 4 MiB per call). Returns the bytes read (0 past the end).</summary>
+    public const ulong FsReadAt = 70;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 70;
+    public const ulong Count = 71;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Clipboard"/> (mirrors <c>bz_abi::clipboard_op</c>).</summary>

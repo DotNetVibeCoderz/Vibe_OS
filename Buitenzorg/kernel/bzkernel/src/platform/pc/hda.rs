@@ -1,5 +1,6 @@
 //! Intel High Definition Audio (the sound of nearly every PC since 2004):
-//! the controller (PCI class 04/03) and its codec, polled, output only.
+//! the controller (PCI class 04/03) and its codec, polled: output, and
+//! recording from a microphone (or line in) through the first input stream.
 //!
 //! Codec commands go through the Immediate Command registers (no CORB/RIRB
 //! rings). The driver walks the codec's widget graph from every output pin the
@@ -11,6 +12,14 @@
 //! The stream DMA is cyclic -- it never stops by itself -- so a sound fills
 //! part of the buffer, the rest is silence, and `poll` (the desktop loop)
 //! stops the stream once the sound is over.
+//!
+//! Recording: the driver walks back from an input converter (ADC) through
+//! mixers / selectors to an input pin whose default configuration says
+//! microphone (else line in), selects and unmutes that path, enables the pin
+//! (microphone bias 80 %) and binds the ADC to stream tag 2 on the first input
+//! stream descriptor (cyclic, `IN_PAGES` pages, 48 kHz 16-bit stereo).
+//! `capture_pump` copies the pages the link position has passed into the
+//! capture queue `audio.rs` shares with AC'97.
 
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
@@ -43,6 +52,9 @@ const SOUND_PAGES: usize = 12;
 pub const FRAME_BYTES: usize = 4096;
 
 const W_OUTPUT: u32 = 0;
+const W_INPUT: u32 = 1;
+const IN_TAG: u32 = 2;
+const IN_PAGES: usize = 16;
 const W_MIXER: u32 = 2;
 const W_SELECTOR: u32 = 3;
 const W_PIN: u32 = 4;
@@ -63,6 +75,14 @@ struct Hda {
     streaming: bool,
     wpage: usize,
     idle: usize,
+    /// recording: the input stream descriptor (0 = none), its pages and BDL,
+    /// the next page to copy, and the ADC (0 = no input path)
+    isd: usize,
+    in_bdl: (u64, *mut u8),
+    in_pages: Vec<(u64, *mut u8)>,
+    rpage: usize,
+    adc: u32,
+    capturing: bool,
 }
 
 // The registers and DMA pages belong to this driver instance.
@@ -231,6 +251,99 @@ impl Hda {
         outputs
     }
 
+    /// A path from `nid` (an ADC, mixer or selector) back to an input pin
+    /// of `want` device type (10 = mic in, 8 = line in), depth first.
+    fn find_pin(&self, nid: u32, depth: u32, want: u32, path: &mut Vec<(u32, usize)>) -> bool {
+        if depth > 5 {
+            return false;
+        }
+        for (i, c) in self.connections(nid).into_iter().enumerate() {
+            match self.widget_type(c) {
+                W_PIN => {
+                    let caps = self.param(c, 0x0C);
+                    let config = self.cmd(c, 0xF1C << 8).unwrap_or(0);
+                    if caps & (1 << 5) != 0 && (config >> 20) & 0xF == want && config >> 30 != 1 {
+                        path.push((nid, i));
+                        path.push((c, 0));
+                        return true;
+                    }
+                }
+                W_MIXER | W_SELECTOR => {
+                    path.push((nid, i));
+                    if self.find_pin(c, depth + 1, want, path) {
+                        return true;
+                    }
+                    path.pop();
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Set up an ADC fed by a microphone (else line in). Returns the ADC.
+    fn configure_input(&self, afg: u32) -> u32 {
+        let sub = self.param(afg, 0x04);
+        let (start, count) = ((sub >> 16) & 0xFF, sub & 0xFF);
+        for want in [0xA, 0x8] {
+            for adc in start..start + count {
+                if self.widget_type(adc) != W_INPUT {
+                    continue;
+                }
+                let mut path = Vec::new();
+                if !self.find_pin(adc, 0, want, &mut path) {
+                    continue;
+                }
+                for &(node, input) in &path {
+                    let _ = self.cmd(node, 0x705 << 8); // D0
+                    let kind = self.widget_type(node);
+                    if kind == W_MIXER {
+                        self.unmute(node, false, input as u32);
+                    } else if kind != W_PIN {
+                        if self.connections(node).len() > 1 {
+                            let _ = self.cmd(node, 0x701 << 8 | input as u32); // connection select
+                        }
+                        self.unmute(node, false, if kind == W_INPUT { input as u32 } else { 0 });
+                    }
+                    if kind != W_INPUT && kind != W_PIN {
+                        self.unmute(node, true, 0);
+                    }
+                }
+                let pin = path.last().map(|p| p.0).unwrap_or(0);
+                // pin: input enable, microphone bias 80 % when it has one
+                let vref = if want == 0xA && (self.param(pin, 0x0C) >> 8) & (1 << 4) != 0 { 4 } else { 0 };
+                let _ = self.cmd(pin, 0x707 << 8 | 0x20 | vref);
+                self.unmute(pin, false, 0); // a pin's input amplifier (boost), if it has one
+                let _ = self.cmd(adc, 0x706 << 8 | IN_TAG << 4);
+                let _ = self.cmd(adc, 0x2 << 16 | FORMAT as u32);
+                crate::println!(
+                    "[hda] input: {} pin {:#04x} via {} widget(s) to ADC {:#04x}",
+                    if want == 0xA { "microphone" } else { "line in" },
+                    pin,
+                    path.len(),
+                    adc
+                );
+                return adc;
+            }
+        }
+        0
+    }
+
+    fn reset_stream(&self, sd: usize) {
+        self.w8(sd + SD_CTL, self.r8(sd + SD_CTL) | 1);
+        for _ in 0..1_000_000 {
+            if self.r8(sd + SD_CTL) & 1 != 0 {
+                break;
+            }
+        }
+        self.w8(sd + SD_CTL, self.r8(sd + SD_CTL) & !1);
+        for _ in 0..1_000_000 {
+            if self.r8(sd + SD_CTL) & 1 == 0 {
+                break;
+            }
+        }
+    }
+
     fn stop(&mut self) {
         let ctl = self.r8(self.sd + SD_CTL);
         self.w8(self.sd + SD_CTL, ctl & !0x02);
@@ -283,6 +396,12 @@ fn bring_up(dev: &PciDevice) -> Result<Hda, &'static str> {
         streaming: false,
         wpage: 0,
         idle: 0,
+        isd: 0,
+        in_bdl: (0, core::ptr::null_mut()),
+        in_pages: Vec::new(),
+        rpage: 0,
+        adc: 0,
+        capturing: false,
     };
     // controller reset: CRST low, then high
     h.w32(GCTL, h.r32(GCTL) & !1);
@@ -338,6 +457,9 @@ fn bring_up(dev: &PciDevice) -> Result<Hda, &'static str> {
                 crate::println!("[hda] codec {} ({:04x}:{:04x}): audio function group {:#04x}", cad, vendor >> 16, vendor & 0xFFFF, nid);
                 h.outputs = h.configure(nid);
                 if h.outputs > 0 {
+                    if iss > 0 {
+                        h.adc = h.configure_input(nid);
+                    }
                     break;
                 }
             }
@@ -352,18 +474,7 @@ fn bring_up(dev: &PciDevice) -> Result<Hda, &'static str> {
 
     // the stream: reset it, then a cyclic buffer of PAGES pages
     let sd = h.sd;
-    h.w8(sd + SD_CTL, h.r8(sd + SD_CTL) | 1);
-    for _ in 0..1_000_000 {
-        if h.r8(sd + SD_CTL) & 1 != 0 {
-            break;
-        }
-    }
-    h.w8(sd + SD_CTL, h.r8(sd + SD_CTL) & !1);
-    for _ in 0..1_000_000 {
-        if h.r8(sd + SD_CTL) & 1 == 0 {
-            break;
-        }
-    }
+    h.reset_stream(sd);
     for _ in 0..PAGES {
         h.pages.push(crate::memory::alloc_dma_frame().ok_or("out of memory")?);
     }
@@ -382,6 +493,31 @@ fn bring_up(dev: &PciDevice) -> Result<Hda, &'static str> {
     h.w16(sd + SD_FMT, FORMAT);
     // stream tag in CTL bits 23:20 (byte 2)
     h.w8(sd + SD_CTL + 2, (STREAM_TAG << 4) as u8);
+
+    // recording: the first input stream descriptor, its own cyclic buffer
+    if h.adc != 0 {
+        let isd = 0x80;
+        h.reset_stream(isd);
+        h.in_bdl = crate::memory::alloc_dma_frame().ok_or("out of memory")?;
+        for _ in 0..IN_PAGES {
+            h.in_pages.push(crate::memory::alloc_dma_frame().ok_or("out of memory")?);
+        }
+        let bdl = h.in_bdl.1;
+        for (i, (phys, _)) in h.in_pages.iter().enumerate() {
+            unsafe {
+                write_volatile(bdl.add(i * 16) as *mut u64, *phys);
+                write_volatile(bdl.add(i * 16 + 8) as *mut u32, FRAME_BYTES as u32);
+                write_volatile(bdl.add(i * 16 + 12) as *mut u32, 0);
+            }
+        }
+        h.w32(isd + SD_BDPL, h.in_bdl.0 as u32);
+        h.w32(isd + SD_BDPU, (h.in_bdl.0 >> 32) as u32);
+        h.w32(isd + SD_CBL, (IN_PAGES * FRAME_BYTES) as u32);
+        h.w16(isd + SD_LVI, IN_PAGES as u16 - 1);
+        h.w16(isd + SD_FMT, FORMAT);
+        h.w8(isd + SD_CTL + 2, (IN_TAG << 4) as u8);
+        h.isd = isd;
+    }
     Ok(h)
 }
 
@@ -547,4 +683,58 @@ pub fn play_pcm(src: u64, len: u64) -> bool {
     let ms = (bytes / 4) as u64 * 1000 / 48_000;
     h.start(used, ms);
     true
+}
+
+// ---- recording ------------------------------------------------------------------
+
+/// An input path and an input stream exist.
+pub fn can_capture() -> bool {
+    DEVICE.lock().as_ref().is_some_and(|h| h.isd != 0)
+}
+
+pub fn capture_start() -> bool {
+    let mut g = DEVICE.lock();
+    let Some(h) = g.as_mut() else { return false };
+    if h.isd == 0 {
+        return false;
+    }
+    let isd = h.isd;
+    h.w8(isd + SD_CTL, h.r8(isd + SD_CTL) & !0x02);
+    for (_, va) in &h.in_pages {
+        unsafe { core::ptr::write_bytes(*va, 0, FRAME_BYTES) };
+    }
+    h.w8(isd + SD_STS, 0x1C);
+    h.w8(isd + SD_CTL, h.r8(isd + SD_CTL) | 0x02); // RUN
+    h.rpage = (h.r32(isd + SD_LPIB) as usize / FRAME_BYTES) % IN_PAGES;
+    h.capturing = true;
+    true
+}
+
+pub fn capture_stop() {
+    if let Some(h) = DEVICE.lock().as_mut() {
+        if h.isd != 0 {
+            h.w8(h.isd + SD_CTL, h.r8(h.isd + SD_CTL) & !0x02);
+        }
+        h.capturing = false;
+    }
+}
+
+/// Copy the pages the input DMA has finished (behind the link position).
+pub fn capture_pump(queue: &mut alloc::collections::VecDeque<i16>) -> u64 {
+    let Some(mut g) = DEVICE.try_lock() else { return 0 };
+    let Some(h) = g.as_mut() else { return 0 };
+    if !h.capturing {
+        return 0;
+    }
+    let cur = (h.r32(h.isd + SD_LPIB) as usize / FRAME_BYTES) % IN_PAGES;
+    let mut pages = 0;
+    while h.rpage != cur {
+        let src = h.in_pages[h.rpage].1 as *const i16;
+        for k in 0..FRAME_BYTES / 2 {
+            queue.push_back(unsafe { src.add(k).read_volatile() });
+        }
+        h.rpage = (h.rpage + 1) % IN_PAGES;
+        pages += 1;
+    }
+    pages
 }

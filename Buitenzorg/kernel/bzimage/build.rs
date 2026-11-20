@@ -247,7 +247,10 @@ fn limine_image_for(efi_name: &str, limine: &std::path::Path, kernel: &std::path
 fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::path::Path, files: &[(String, Vec<u8>)], extra_conf: &str, raw: &[(String, Vec<u8>)], out: &std::path::Path) -> std::io::Result<bool> {
     // An SD card image (the Raspberry Pi's, raw files present) is 128 MiB in all,
     // a power of two as QEMU's SD card model requires; the others 1 + 64 MiB.
-    let part_mib: u64 = if raw.is_empty() { 64 } else { 127 };
+    // 64 MiB unless the files need more (DOOM's game data): their size + 25 %, in 16 MiB steps.
+    let content: u64 = files.iter().map(|(_, b)| b.len() as u64).sum::<u64>() + std::fs::metadata(kernel).map(|m| m.len()).unwrap_or(0);
+    let need = (content * 5 / 4).div_ceil(16 << 20) * 16;
+    let part_mib: u64 = if raw.is_empty() { need.max(64) } else { 127 };
     use std::io::{Read, Seek, SeekFrom, Write};
     let Ok(efi) = std::fs::read(limine.join(efi_name)) else { return Ok(false) };
     let kernel_elf = std::fs::read(kernel)?;
@@ -651,6 +654,27 @@ fn main() {
         }
     }
 
+    // Video clips for Buitenzorg.Media.Movie: VP8 + Opus in WebM, Motion JPEG + MP3 in MP4
+    for (asset, name) in [("kebun.web", "kebun.web"), ("senja.mp4", "senja.mp4")] {
+        let p = manifest_dir().join("..").join("..").join("assets").join("video").join(asset);
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, name.into(), bytes);
+        }
+    }
+    // DOOM (doomgeneric, GPL-2.0, built by scripts/build-doom.* against
+    // userland/c) and the Freedoom IWAD (BSD), when scripts/fetch-doom.* ran;
+    // neither is committed. The IWAD goes on /disk as DOOM.WAD (the name
+    // Freedoom suggests for ports), so `run doom` finds it without -iwad.
+    // The x86-64 build here, the others below.
+    let doom_dir = manifest_dir().join("..").join("target").join("doom");
+    for (path, name) in [(doom_dir.join("x86_64").join("DOOM.ELF"), "doom.elf"), (doom_dir.join("FREEDOOM.WAD"), "doom.wad")] {
+        println!("cargo:rerun-if-changed={}", path.display());
+        if let Ok(bytes) = std::fs::read(&path) {
+            add_file(&mut builder, &mut files, name.into(), bytes);
+        }
+    }
+
     // A glTF 2.0 model (scripts/make-gltf-model.py) for Buitenzorg.Three's loader
     {
         let p = manifest_dir().join("..").join("..").join("assets").join("models").join("pohon.glb");
@@ -759,6 +783,9 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed={}", arm_progs.display());
+    if let Ok(bytes) = std::fs::read(doom_dir.join("aarch64").join("DOOM.ELF")) {
+        arm_files.push(("DOOM.ELF".into(), bytes));
+    }
     let arm_ok = arm_kernel.exists()
         && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &[], &arm_path).unwrap_or(false);
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
@@ -775,7 +802,9 @@ fn main() {
             raw.push(("kernel8.img".into(), k.clone()));
             // The /disk files too (wallpapers, icons, programs, managed apps): the
             // kernel mounts the card's FAT partition as /disk (R3).
-            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
+            // without DOOM's 29 MB game data: the SD partition is a fixed 127 MiB
+            let pi_files: Vec<(String, Vec<u8>)> = arm_files.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("doom.wad") && !n.eq_ignore_ascii_case("DOOM.ELF")).cloned().collect();
+            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &pi_files, RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
         }
         _ => false,
     };
@@ -797,6 +826,9 @@ fn main() {
     for (stem, bytes) in build_riscv_programs(&out_dir) {
         let file = format!("{}.ELF", stem.to_uppercase());
         rv_files.push((file, bytes));
+    }
+    if let Ok(bytes) = std::fs::read(doom_dir.join("riscv64").join("DOOM.ELF")) {
+        rv_files.push(("DOOM.ELF".into(), bytes));
     }
     let rv_ok = rv_kernel.exists()
         && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, &rv_modules, &[], &rv_path).unwrap_or(false);

@@ -136,6 +136,7 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::CLOCK_RTC
             | sysno::FS_LIST
             | sysno::FS_READ
+            | sysno::FS_READ_AT
             | sysno::FS_WRITE
             | sysno::FS_APPEND
             | sysno::FS_OP
@@ -385,6 +386,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::PKG_SET => sys_pkg_set(a0, a1, a2),
         sysno::FS_LIST => sys_fs_list(a0, a1, a2),
         sysno::FS_READ => sys_fs_read(a0, a1, a2),
+        sysno::FS_READ_AT => sys_fs_read_at(a0, a1, a2),
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
         sysno::FS_APPEND => sys_fs_append(a0, a1, a2),
@@ -639,6 +641,27 @@ fn sys_fs_op(op: u64, path_ptr: u64, a2: u64) -> u64 {
         }
         _ => syserr::INVAL,
     }
+}
+
+/// FS_READ_AT: part of a file (`a2` = offset << 24 | length).
+fn sys_fs_read_at(path_ptr: u64, buf_ptr: u64, a2: u64) -> u64 {
+    let (offset, len) = (a2 >> 24, (a2 & 0xFF_FFFF).min(4 << 20));
+    if len == 0 || !user_write(buf_ptr, len) {
+        return syserr::INVAL;
+    }
+    let Some(path) = read_user_path_checked(path_ptr) else { return syserr::INVAL };
+    let data = match crate::vfs::read_at(&path, offset, len as usize) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::println!("[fs] FS_READ_AT {} at {}: {}", path, offset, e);
+            return 0;
+        }
+    };
+    let dst = buf_ptr as *mut u8;
+    for (i, b) in data.iter().enumerate() {
+        unsafe { core::ptr::write_volatile(dst.add(i), *b) };
+    }
+    data.len() as u64
 }
 
 fn sys_fs_read(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {

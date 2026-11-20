@@ -291,6 +291,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         run_boot_programs(info);
         // The managed C# path (RustCLR): C# on RISC-V, where bflat has no target.
         clr::boot_demo("RISC-V");
+        app::doom_self_test();
         gpu_self_test(info);
         show_desktop();
     } else {

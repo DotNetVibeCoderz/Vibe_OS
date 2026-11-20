@@ -1,6 +1,6 @@
 # Buitenzorg OS — marketing images
 
-Eight visuals for posts, slides and the project page (1536×1024 PNG). They
+Eight visuals for posts, slides and the project page (1536×1024 PNG; 04 and 05 updated 2026-11-20). They
 were generated with GPT Image (Rodin MCP) from prompts that list only
 features that are finished and verified. **They are illustrations, not
 screenshots:** the window contents are artistic. For real screenshots of the
@@ -11,8 +11,8 @@ OS, use the images in [`docs/img`](../img).
 | ![](01-hero.png) `01-hero.png` | **Buitenzorg OS 1.0** — a hybrid OS: Rust kernel, C# apps | v1.0 released 2026-11-05; Rust `no_std` kernel, ring-3 C# (NativeAOT + RustCLR) |
 | ![](02-three-architectures.png) `02-three-architectures.png` | **One OS. Three architectures.** | The same kernel and apps on x86-64, ARM64 and RISC-V; CI boots all three |
 | ![](03-developer-workflow.png) `03-developer-workflow.png` | **Build, deploy, debug — live** | Studio IDE, VS Code DAP, `bz deploy --watch`, `bz debug --remote`, hot reload |
-| ![](04-polyglot-apps.png) `04-polyglot-apps.png` | **Write apps your way** | C#, JavaScript, TypeScript, Python and C# script (`.csx`), with UI apps in each |
-| ![](05-multimedia-games.png) `05-multimedia-games.png` | **Play, watch, listen** | Music (WAV/FLAC/MP3/MIDI), video (AVI), photos (PNG/JPEG/GIF), original games, 3D |
+| ![](04-polyglot-apps.png) `04-polyglot-apps.png` | **Write apps your way** | C#, JavaScript, TypeScript, Python and C# script (`.csx`), with UI apps in each; C programs with an SDL2 subset (DOOM with Freedoom runs on all three architectures) |
+| ![](05-multimedia-games.png) `05-multimedia-games.png` | **Play, watch, listen** | Music (WAV/FLAC/MP3/Ogg Vorbis/Opus/MIDI) with a library, video (WebM/MKV/MP4/MOV with VP8 or Motion JPEG, AVI), photos (PNG/JPEG/GIF) with thumbnails, original games incl. the platformer Lompat Kodok, USB gamepads, 3D with glTF models, physics and 3D sound |
 | ![](06-connectivity.png) `06-connectivity.png` | **Connected, securely** | Its own network stack: Ethernet/DHCP/DNS, TCP, TLS 1.3, HTTP, WebSocket, downloads, SSH server |
 | ![](07-security.png) `07-security.png` | **Secure by design** | Per-app permissions (broker at the syscall boundary), Ed25519-signed packages, isolated address spaces, validated syscall pointers |
 | ![](08-real-hardware.png) `08-real-hardware.png` | **Runs on real hardware** | A physical laptop (Intel UHD 620 3D, HD Audio, I219 Ethernet) and a Raspberry Pi 4 (HDMI, USB, Ethernet) |

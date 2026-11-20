@@ -61,8 +61,10 @@ function Invoke-Boot {
                      '-device', 'virtio-gpu-pci', '-audiodev', 'none,id=vsnd', '-device', 'virtio-sound-pci,audiodev=vsnd',
                      '-monitor', 'tcp:127.0.0.1:4481,server,nowait') }
     }
-    $qargs += @('-m', '512M', '-audiodev', 'none,id=snd0', '-device', 'AC97,audiodev=snd0',
-                '-display', 'none', '-serial', "file:$Log", '-no-reboot')
+    # the NVMe boot carries Intel HD Audio with a line-in codec instead of AC'97:
+    # HDA playback (mixer stream) and recording (input stream) get tested too
+    $audio = if ($Media -eq "nvme") { @('-device', 'intel-hda', '-device', 'hda-duplex,audiodev=snd0') } else { @('-device', 'AC97,audiodev=snd0') }
+    $qargs += @('-m', '512M', '-audiodev', 'none,id=snd0') + $audio + @('-display', 'none', '-serial', "file:$Log", '-no-reboot')
     $p = Start-Process -FilePath $qemu -ArgumentList ($qargs + $selftest) -PassThru
     foreach ($i in 1..420) {
         Start-Sleep -Seconds 1
@@ -336,6 +338,11 @@ if (Select-String -Path $ideLog -Pattern "Hello from C#" -Quiet) {
 $ideMarkers += @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK")
 Assert-Markers -Log $ideLog -Markers $ideMarkers
 Write-Host "smoke [ide]: all milestones present (2 CPUs, ring-3 on the AP)"
+# DOOM (scripts/fetch-doom + build-doom; not in CI): the C runtime + SDL2 subset
+if ((Test-Path (Join-Path $root "kernel\target\doom\x86_64\DOOM.ELF")) -and (Test-Path (Join-Path $root "kernel\target\doom\FREEDOOM.WAD"))) {
+    Assert-Markers -Log $ideLog -Markers @("MILESTONE: SDL FRAMES OK", "MILESTONE: DOOM OK")
+    Write-Host "smoke [ide]: DOOM (doomgeneric + Freedoom) ran demo1 through the C runtime"
+}
 
 
 # Persistent /disk: the kernel printed the exact contents it wrote to
@@ -383,6 +390,10 @@ foreach ($media in @("ahci", "nvme", "usb")) {
         Assert-Markers -Log $log -Markers @("MILESTONE: SMP OK (2 CPU(s): 1 AP(s)", "MILESTONE: SMP PERCPU OK",
             "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse")
         Write-Host "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
+    }
+    if ($media -eq "nvme") {
+        Assert-Markers -Log $log -Markers @("[hda] input:", "MILESTONE: AUDIO STREAM OK", "MILESTONE: AUDIO CAPTURE OK")
+        Write-Host "smoke [nvme]: Intel HD Audio: mixer stream out, line-in recorded through the input stream"
     }
     $on = @{ ahci = "ahci0"; nvme = "nvme0"; usb = "usb" }[$media]
     Assert-Markers -Log $log -Markers @("mounted /disk (FAT16, rw) on $on")
@@ -561,6 +572,10 @@ if ((Test-Path $qemuArm) -and (Test-Path $armFw) -and (Test-Path $armImage)) {
             "MILESTONE: DRAW OK", "MILESTONE: ARM64 DESKTOP FRAME OK", "MILESTONE: ARM64 SMP SCHED OK")
     }
     Write-Host "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + interactive desktop, 2 CPUs (PSCI)"
+    if ((Test-Path (Join-Path $root "kernel\target\doom\aarch64\DOOM.ELF")) -and (Test-Path (Join-Path $root "kernel\target\doom\FREEDOOM.WAD"))) {
+        Assert-Markers -Log $log -Markers @("MILESTONE: DOOM OK")
+        Write-Host "smoke [arm64]: DOOM ran through the C runtime"
+    }
 } else {
     Skip-Step "smoke [arm64]: skipped (needs qemu-system-aarch64, edk2-aarch64-code.fd and dist\buitenzorg-arm64.img)"
 }
@@ -632,6 +647,10 @@ if ((Test-Path $qemuRv) -and (Test-Path $rvFw) -and (Test-Path $rvVarsSrc) -and 
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     Assert-Markers -Log $log -Markers @("MILESTONE: HELLO KERNEL OK", "loader=limine", "loader DTB: parsed", "MILESTONE: DTB OK", "MILESTONE: RISCV MEMORY OK", "MILESTONE: MEMORY OK", "MILESTONE: RISCV ASPACE OK", "MILESTONE: RISCV CONTEXT OK", "MILESTONE: RISCV TIMER OK", "Hello from U-mode", "MILESTONE: RISCV UMODE OK", "Hello from Rust on RISC-V", "MILESTONE: RISCV ELF OK", "MILESTONE: RISCV USERMEM OK", "MILESTONE: RISCV MULTIPROC OK", "MILESTONE: RISCV THREAD OK", "MILESTONE: RISCV SYNC OK", "MILESTONE: RISCV PROCESSES OK", "MILESTONE: CRASH REPORT OK", "MILESTONE: DEBUGGER OK", "MILESTONE: APP PROFILER OK", "MILESTONE: CLR OK", "MILESTONE: CLR GUI OK", "MILESTONE: MANAGED UI OK", "MILESTONE: MANAGED APPS OK", "Studio: 36 checks, 0 failed", "MILESTONE: TERMINAL TABS OK", "MILESTONE: SHELL SCRIPT OK", "MILESTONE: MEDIA KEYS OK", "MILESTONE: GAMEPAD OK", "HelloGui: live clock ticked", "Hello from managed C# on Buitenzorg (RustCLR)!", "checks=515 failures=", "checks=35 failures=0", "MILESTONE: RISCV SMP OK (2 harts", "MILESTONE: RISCV SMP SCHED OK", "MILESTONE: RISCV RTC OK", "MILESTONE: VIRTIO BLK OK (virtio-mmio", "MILESTONE: RISCV DISK OK", "MILESTONE: RISCV PLIC OK", "user programs from /disk", "MILESTONE: VIRTIO GPU OK", "MILESTONE: SECURITY OK", "MILESTONE: GFX3D OK", "MILESTONE: RISCV POWER OK", "MILESTONE: NETWORK OK", "MILESTONE: VIRTIO NET OK", "MILESTONE: RISCV POLYGLOT OK", "MILESTONE: RISCV PROCCTL OK", "MILESTONE: RISCV GUI OK", "MILESTONE: RISCV DESKTOP FRAME OK", "MILESTONE: USERS OK", "MILESTONE: TCP OK", "MILESTONE: DNS OK", "MILESTONE: FOLDERS OK", "MILESTONE: BZPKG OK", "MILESTONE: PERMISSIONS OK", "MILESTONE: REPO OK", "MILESTONE: KEY EVENTS OK", "MILESTONE: MIXER OK", "MILESTONE: BOOT SPLASH OK (", "[desktop] tidied", "MILESTONE: VIRTIO INPUT OK", "MILESTONE: VIRTIO SND OK", "MILESTONE: VIRTIO SND STREAM OK", "MILESTONE: VIRTIO SND CAPTURE OK", "MILESTONE: RISCV BOOT OK", "BUITENZORG RISCV READY")
     Write-Host "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
+    if ((Test-Path (Join-Path $root "kernel\target\doom\riscv64\DOOM.ELF")) -and (Test-Path (Join-Path $root "kernel\target\doom\FREEDOOM.WAD"))) {
+        Assert-Markers -Log $log -Markers @("MILESTONE: DOOM OK")
+        Write-Host "smoke [riscv64]: DOOM ran through the C runtime"
+    }
     # The file the kernel wrote to /disk must be inside the image file.
     # (QEMU must be gone first: it holds the image open.)
     $p.WaitForExit(15000) | Out-Null

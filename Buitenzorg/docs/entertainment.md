@@ -84,6 +84,18 @@ when it ends). `Buitenzorg.Game.GameView` turns it on while its loop runs,
 `Buitenzorg.Media.MediaPlayer` while it plays; other programs call
 `Buitenzorg.App.Session.KeepAwake(true / false)`.
 
+
+## Video files: WebM, MKV, MP4, MOV
+
+Video plays AVI (Motion JPEG + PCM) and, through `Buitenzorg.Media.Movie`,
+Matroska / WebM and MP4 / QuickTime files: **VP8** (a port of the RFC 6386
+reference decoder, bit-exact with ffmpeg) or Motion JPEG pictures, and Opus,
+Vorbis, MP3 or PCM sound. Two original clips ship on every image:
+`/disk/KEBUN.WEB` (VP8 + Opus) and `/disk/SENJA.MP4` (Motion JPEG + MP3).
+H.264 / H.265 / VP9 / AV1 video and AAC sound are recognised and reported as
+not decoded (H.264 and AAC are patent-encumbered; the others are larger
+decoders still to come). FAT keeps 8.3 names: a WebM file is `NAME.WEB`.
+
 ---
 
 ← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

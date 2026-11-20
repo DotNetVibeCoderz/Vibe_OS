@@ -329,13 +329,17 @@ const CAP_QUEUE: usize = 48_000 * 2 * 4;
 /// Buffers drained (tests).
 pub static CAPTURE_FILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
-/// Whether this card records (AC'97 does; HD Audio input is not driven yet).
+/// Whether this card records (AC'97's PCM-in, or an HD Audio input path).
 pub fn can_capture() -> bool {
-    DEVICE.lock().is_some()
+    DEVICE.lock().is_some() || super::hda::can_capture()
 }
 
 /// Start recording from the codec's record source (the microphone, 0 dB).
 pub fn capture_start() -> bool {
+    if DEVICE.lock().is_none() {
+        CAPTURED.lock().clear();
+        return super::hda::capture_start();
+    }
     let mut g = DEVICE.lock();
     let Some(d) = g.as_mut() else { return false };
     CAPTURED.lock().clear();
@@ -366,6 +370,9 @@ pub fn capture_start() -> bool {
 }
 
 pub fn capture_stop() {
+    if DEVICE.lock().is_none() {
+        return super::hda::capture_stop();
+    }
     if let Some(d) = DEVICE.lock().as_mut() {
         outb(d.nabm + PI_CR, 0);
         d.capturing = false;
@@ -376,7 +383,16 @@ pub fn capture_stop() {
 /// the queue and hand them back to it (LVI follows).
 pub fn capture_pump() {
     let Some(mut g) = DEVICE.try_lock() else { return };
-    let Some(d) = g.as_mut() else { return };
+    let Some(d) = g.as_mut() else {
+        drop(g);
+        let mut q = CAPTURED.lock();
+        let pages = super::hda::capture_pump(&mut q);
+        CAPTURE_FILLS.fetch_add(pages, core::sync::atomic::Ordering::Relaxed);
+        while q.len() > CAP_QUEUE {
+            q.pop_front();
+        }
+        return;
+    };
     if !d.capturing {
         return;
     }

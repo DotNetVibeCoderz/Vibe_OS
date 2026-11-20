@@ -68,8 +68,11 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
                  -device virtio-gpu-pci -audiodev none,id=vsnd -device virtio-sound-pci,audiodev=vsnd
                  -monitor tcp:127.0.0.1:4481,server,nowait) ;;
   esac
+  # the NVMe boot carries Intel HD Audio with a line-in codec instead of AC'97
+  local audio=(-device AC97,audiodev=snd0)
+  [ "$media" = nvme ] && audio=(-device intel-hda -device hda-duplex,audiodev=snd0)
   timeout --foreground 450 "$qemu" "${drive[@]}" "${selftest[@]}" \
-    -m 512M -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
+    -m 512M -audiodev none,id=snd0 "${audio[@]}" \
     -display none -serial "file:$log" -no-reboot &
   local pid=$!
   # Give the kernel time to reach READY, then stop QEMU ourselves.
@@ -325,6 +328,11 @@ if grep -qF "Hello from C#" "$root/dist/boot-ide.log"; then
 fi
 require "$root/dist/boot-ide.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"
 echo "smoke [ide]: all milestones present (2 CPUs, ring-3 on the AP)"
+# DOOM (scripts/fetch-doom + build-doom; not in CI): the C runtime + SDL2 subset
+if [ -f "$root/kernel/target/doom/x86_64/DOOM.ELF" ] && [ -f "$root/kernel/target/doom/FREEDOOM.WAD" ]; then
+  require "$root/dist/boot-ide.log" "MILESTONE: SDL FRAMES OK" "MILESTONE: DOOM OK"
+  echo "smoke [ide]: DOOM (doomgeneric + Freedoom) ran demo1 through the C runtime"
+fi
 
 # Uniprocessor regression: the same process/thread tests on one CPU.
 boot ide1 "$root/dist/boot-ide1.log"
@@ -355,6 +363,10 @@ for media in ahci nvme usb; do
   if [ "$media" = ahci ]; then
     require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"       "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse"
     echo "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
+  fi
+  if [ "$media" = nvme ]; then
+    require "$root/dist/boot-nvme.log" "[hda] input:" "MILESTONE: AUDIO STREAM OK" "MILESTONE: AUDIO CAPTURE OK"
+    echo "smoke [nvme]: Intel HD Audio: mixer stream out, line-in recorded through the input stream"
   fi
   case "$media" in
     ahci) on="ahci0" ;;
@@ -514,6 +526,10 @@ if [ -n "$qemu_arm" ] && [ -n "$arm_fw" ] && [ -f "$root/dist/buitenzorg-arm64.i
     require "$log" "Hello from C#!" "MILESTONE: ARM64 CSHARP OK" "MILESTONE: MATANG OK" "MILESTONE: HEAP OK" "MILESTONE: STATICS OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: BCL3 OK" "MILESTONE: ASYNC OK" "MILESTONE: GCMEM OK" "MILESTONE: ARM64 MULTIPROC OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "frames leaked: 0" "from /disk"       "MILESTONE: BCL OK" "MILESTONE: PROCCTL OK" "MILESTONE: CALC OK" "MILESTONE: GAME OK" "MILESTONE: UI OK"       "MILESTONE: DRAW OK" "MILESTONE: ARM64 DESKTOP FRAME OK" "MILESTONE: ARM64 SMP SCHED OK"
   fi
   echo "smoke [arm64]: ARM64 kernel via Limine: live DTB, PL011, GICv3 + timer, paging + heap + address spaces, threads + EL0 programs, C# apps, preemptive processes + threads, virtio-mmio disk + GPU + net, PL031, PSCI, shared syscalls, C# GUI apps + interactive desktop, 2 CPUs (PSCI)"
+  if [ -f "$root/kernel/target/doom/aarch64/DOOM.ELF" ] && [ -f "$root/kernel/target/doom/FREEDOOM.WAD" ]; then
+    require "$log" "MILESTONE: DOOM OK"
+    echo "smoke [arm64]: DOOM ran through the C runtime"
+  fi
 else
   skip "smoke [arm64]: skipped (needs qemu-system-aarch64, AAVMF/edk2 firmware and dist/buitenzorg-arm64.img)"
 fi
@@ -586,6 +602,10 @@ if [ -n "$qemu_rv" ] && [ -n "$rv_code" ] && [ -f "$root/dist/buitenzorg-riscv64
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "MILESTONE: HELLO KERNEL OK" "loader=limine" "loader DTB: parsed" "MILESTONE: DTB OK" "MILESTONE: RISCV MEMORY OK" "MILESTONE: MEMORY OK" "MILESTONE: RISCV ASPACE OK" "MILESTONE: RISCV CONTEXT OK" "MILESTONE: RISCV TIMER OK" "Hello from U-mode" "MILESTONE: RISCV UMODE OK" "Hello from Rust on RISC-V" "MILESTONE: RISCV ELF OK" "MILESTONE: RISCV USERMEM OK" "MILESTONE: RISCV MULTIPROC OK" "MILESTONE: RISCV THREAD OK" "MILESTONE: RISCV SYNC OK" "MILESTONE: RISCV PROCESSES OK" "MILESTONE: CRASH REPORT OK" "MILESTONE: DEBUGGER OK" "MILESTONE: APP PROFILER OK" "MILESTONE: CLR OK" "MILESTONE: CLR GUI OK" "MILESTONE: MANAGED UI OK" "MILESTONE: MANAGED APPS OK" "Studio: 36 checks, 0 failed" "MILESTONE: TERMINAL TABS OK" "MILESTONE: SHELL SCRIPT OK" "MILESTONE: MEDIA KEYS OK" "MILESTONE: GAMEPAD OK" "HelloGui: live clock ticked" "Hello from managed C# on Buitenzorg (RustCLR)!" "checks=515 failures=" "checks=35 failures=0" "MILESTONE: RISCV SMP OK (2 harts" "MILESTONE: RISCV SMP SCHED OK" "MILESTONE: RISCV RTC OK" "MILESTONE: VIRTIO BLK OK (virtio-mmio" "MILESTONE: RISCV DISK OK" "MILESTONE: RISCV PLIC OK" "user programs from /disk" "MILESTONE: VIRTIO GPU OK" "MILESTONE: SECURITY OK" "MILESTONE: GFX3D OK" "MILESTONE: RISCV POWER OK" "MILESTONE: NETWORK OK" "MILESTONE: VIRTIO NET OK" "MILESTONE: RISCV POLYGLOT OK" "MILESTONE: RISCV PROCCTL OK" "MILESTONE: RISCV GUI OK" "MILESTONE: RISCV DESKTOP FRAME OK" "MILESTONE: USERS OK" "MILESTONE: TCP OK" "MILESTONE: DNS OK" "MILESTONE: FOLDERS OK" "MILESTONE: BZPKG OK" "MILESTONE: PERMISSIONS OK" "MILESTONE: REPO OK" "MILESTONE: KEY EVENTS OK" "MILESTONE: MIXER OK" "MILESTONE: BOOT SPLASH OK (" "[desktop] tidied" "MILESTONE: VIRTIO INPUT OK" "MILESTONE: VIRTIO SND OK" "MILESTONE: VIRTIO SND STREAM OK" "MILESTONE: VIRTIO SND CAPTURE OK" "MILESTONE: RISCV BOOT OK" "BUITENZORG RISCV READY"
   echo "smoke [riscv64]: RISC-V kernel via Limine: S-mode under OpenSBI, live DTB, NS16550, Sv48 paging + heap + address spaces, SBI timer, context switch, U-mode programs + ECALL, ELF programs as preemptive processes + threads + futexes, PLIC, Goldfish RTC, virtio-mmio /disk + GPU + input + net, shared syscalls + window system, JS/TS/Python, interactive desktop, 2 harts (SBI HSM)"
+  if [ -f "$root/kernel/target/doom/riscv64/DOOM.ELF" ] && [ -f "$root/kernel/target/doom/FREEDOOM.WAD" ]; then
+    require "$log" "MILESTONE: DOOM OK"
+    echo "smoke [riscv64]: DOOM ran through the C runtime"
+  fi
   needle="$(grep -a -o 'RISCV.TXT = BZRISCV[^[:cntrl:]]*' "$log" | head -1 | sed 's/^RISCV.TXT = //')"
   if [ -z "$needle" ] || ! grep -a -q -F "$needle" "$root/dist/buitenzorg-riscv64.img"; then
     echo "SMOKE TEST FAILED: RISC-V /disk write not found in the image ('$needle')"; exit 1

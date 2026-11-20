@@ -59,7 +59,7 @@ fn midi(d: &[u8]) -> Option<(crate::flac::Info, Vec<u8>)> {
 }
 
 /// MP3 (and MP1/MP2) to 16-bit PCM, at most two channels.
-fn mp3(d: &[u8]) -> Option<(crate::flac::Info, Vec<u8>)> {
+pub(crate) fn mp3(d: &[u8]) -> Option<(crate::flac::Info, Vec<u8>)> {
     if !nanomp3::detect(d) {
         return None;
     }

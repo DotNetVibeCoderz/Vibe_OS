@@ -287,8 +287,13 @@ pub mod sysno {
     /// 48 kHz stereo 16-bit PCM copied; STOP -> 0; QUEUED -> milliseconds
     /// recorded and not read yet. Needs the `microphone` permission.
     pub const AUDIO_READ: u64 = 69;
+    /// Read part of a file (large game / media data a program reads in pieces):
+    /// `a0` = NUL-terminated path, `a1` = buffer, `a2` = `offset << 24 |
+    /// length` (length < 16 MiB, at most 4 MiB is read per call). Returns the
+    /// bytes read: fewer at the end of the file, 0 past it.
+    pub const FS_READ_AT: u64 = 70;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 70;
+    pub const COUNT: u64 = 71;
 }
 
 /// Operations of [`sysno::AUDIO_READ`].
@@ -1054,8 +1059,9 @@ mod tests {
         assert_eq!(sysno::CLIPBOARD, 67);
         assert_eq!(sysno::FS_APPEND, 68);
         assert_eq!(sysno::AUDIO_READ, 69);
+        assert_eq!(sysno::FS_READ_AT, 70);
         assert_eq!(audio_read_op::QUEUED, 3);
-        assert_eq!(sysno::COUNT, 70);
+        assert_eq!(sysno::COUNT, 71);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1075,7 +1081,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 70, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 71, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

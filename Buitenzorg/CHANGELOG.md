@@ -13,6 +13,31 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Added -- video files, DOOM, HD Audio microphone (2026-11-20)
+
+- **Video files:** Matroska / WebM and MP4 / QuickTime are demuxed in the
+  host (clrhost `movie.rs`) and played by Video through
+  `Buitenzorg.Media.Movie`. Pictures: **VP8** -- `vp8.rs`, a Rust port of the
+  RFC 6386 reference decoder ("dixie"), checked bit-exact against ffmpeg on
+  every frame of seven test clips -- or Motion JPEG. Sound: Opus and Vorbis
+  (repackaged as an Ogg stream for the existing decoders), MP3, PCM. H.264 /
+  AAC are reported as not decoded (patent-encumbered). Clips on every image:
+  `KEBUN.WEB` (VP8 + Opus), `SENJA.MP4` (Motion JPEG + MP3).
+- **C programs and DOOM:** `userland/c` is a C runtime (crt0, a small libc
+  with files, heap and printf, an SDL2 subset) built with zig. DOOM
+  (doomgeneric, GPL-2.0, its SDL2 backend unchanged) with the Freedoom IWAD
+  runs on x86-64, ARM64 and RISC-V: `doom` in the Terminal, keyboard or
+  gamepad. Fetched and built by `scripts/fetch-doom.*` / `build-doom.*`
+  (pinned SHA-256s; nothing GPL in the repository); the self-test boot plays
+  40 frames of demo1 (`MILESTONE: DOOM OK`).
+- New syscall **`FS_READ_AT` (70)**: part of a file, so a program reads a
+  large file in pieces instead of the kernel holding it whole
+  (`FatVolume::read_range`, `vfs::read_at`).
+- **Microphone on Intel HD Audio:** an input path (ADC <- mixer / selector <-
+  microphone or line-in pin, bias, unmuted) on the first input stream; the
+  recorder and `AUDIO_READ` work on HDA machines. The smoke test's NVMe boot
+  now uses `intel-hda` + `hda-duplex` and requires playback and capture.
+
 ### Added -- media, games and 3D (2026-11-20)
 
 - **2D game engine** in `Buitenzorg.Game` (`Engine.cs`): sprites from pixel-art
