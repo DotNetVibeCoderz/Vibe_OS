@@ -61,7 +61,9 @@ window's client area, (0, 0) top-left.
 | `line(x1, y1, x2, y2, c)` | line |
 | `circle(cx, cy, r, c)` / `ring(cx, cy, r, c)` | filled circle / outline |
 | `text(x, y, s, c [, style])` | text; style 0 normal, 1 bold, 2 heading (24 px) |
-| `textwidth(s [, style])`, `lineheight([style])` | text metrics (the font is monospaced) |
+| `textwidth(s [, style])`, `lineheight([style])` | text metrics in the desktop font |
+| `font(family [, bold])` | a TrueType face id (0 = not installed) -- see [fonts.md](fonts.md) |
+| `textfont(x, y, s, color, id, size)`, `measure(s, id, size)` | text in that face at any pixel size, and its width |
 | `button(x, y, w, h, label)` | a button; true when it was clicked |
 | `input(x, y, w, id [, placeholder])` | a text field: click to focus, type, Backspace; Enter / Tab / Esc leave it (Enter also reaches `key()`); returns its text |
 | `setinput(id, text)`, `focus(id)` | set a field's text / give it the keyboard (`focus("")` = none) |

@@ -38,6 +38,7 @@ mod fat;
 mod framebuffer;
 mod gfx;
 mod icons;
+mod font;
 mod ipc;
 mod keyboard;
 mod limine;
@@ -305,6 +306,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         // The managed C# path (RustCLR) next to the native one (bflat).
         clr::boot_demo("ARM64");
         app::doom_self_test();
+        app::llm_self_test();
         show_desktop();
     } else {
         // the network (DHCP waits), Ethernet, USB, the wallpaper, the random
@@ -1059,6 +1061,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         }
         // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
         gfx3d::self_test();
+        compute::self_test();
     }
 
     let method = fdt
@@ -1108,6 +1111,10 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
                 "[kernel] MILESTONE: RPI4 V3D OK (V3D {}.{}: {} core(s), {} slice(s) x {} QPUs, TFU {}, L3C {}, MMU {}, {} MHz)",
                 v.version / 10, v.version % 10, v.cores, v.slices, v.qpus_per_slice, v.tfu, v.l3c, v.mmu, v.clock_hz / 1_000_000
             );
+            // steps 2b-2d: V3D draws for the 3D API (gfx3d's self-test decides)
+            println!("{}", platform::virt::v3d_draw::install_gfx3d());
+            // GPU compute: GEMV for the AI subsystem on the QPUs
+            println!("{}", platform::virt::v3d_compute::install());
         }
     }
 
@@ -1116,6 +1123,10 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         mouse::set_bounds(fb.width, fb.height);
         theme::set_default();
         let n = icons::load();
+        font::load_all();
+        if st {
+            font::self_test();
+        }
         // a normal boot loads the wallpaper behind the desktop
         let wp = st && wallpaper::set_official("nature").is_ok();
         println!("[arm64] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);

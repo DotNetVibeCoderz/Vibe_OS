@@ -1034,7 +1034,19 @@ dengan gamepad USB; video diputar dengan A/V sync; browser membuka halaman
 HTTPS; adegan 3D bertekstur ≥30 fps lewat rasterizer software dan lewat
 virtio-gpu.
 
-## 🔤 Font & Tipografi (permintaan 2026-11-19, dikerjakan setelah Multimedia)
+## 🔤 Font & Tipografi (permintaan 2026-11-19, dikerjakan setelah Multimedia) -- ✓ 2026-11-20
+
+**Status ✓ (2026-11-20):** mesin fon `font.rs` (ttf-parser + ab_glyph_rasterizer,
+bukan fontdue: fontdue menyiapkan semua glyph saat memuat -- terlalu lambat di
+TCG; kerning `kern` + GPOS, fon variabel, posisi seperempat piksel, cache 3
+MiB), Plus Jakarta Sans (desktop) + JetBrains Mono (terminal) disertakan,
+syscall `FONT_OP` 71 + draw op 14 + setting 10/11, Buitenzorg.UI mengukur teks
+sungguhan, katalog 13 keluarga + `font install` (HTTPS lewat app Pengaturan,
+SHA-256 dicek kernel) + `bz font install [--device]`, halaman Pengaturan > Fon,
+`font()`/`textfont()`/`measure()` di skrip UI. **Belum:** hinting, shaping
+(skrip kanan-ke-kiri / kompleks), emoji berwarna, TTF di program C# native
+(bflat) dan C.
+
 
 Kondisi sekarang: satu font bitmap monospace (`noto-sans-mono-bitmap`) dalam
 tiga gaya (16 px, tebal 16 px, tebal 24 px), dipakai kernel dan app lewat draw
@@ -1054,6 +1066,110 @@ op. Tujuan: font TrueType/OpenType sungguhan plus pengelola font ala
   lisensi lain minta persetujuan; dari PC `bz font install --from-pc`.
 - **Pengaturan**: font sistem + font terminal/editor dipilih di Pengaturan.
 - Perkiraan: 3-4 sesi kerja.
+
+## 🎯 GPU: 3D di Raspberry Pi + Komputasi ML / LLM (permintaan 2026-11-20)
+
+Dua lanjutan jalur GPU yang sudah ada: Intel UHD 620 sudah me-render 3D lewat
+render engine (`intel_render.rs`, backend `gfx3d` native), virgl di QEMU, dan
+V3D Pi 4 baru sampai langkah 2a (MMU GPU + job render-only CLEAR, terverifikasi
+di papan). AI (`ai.rs`, `compute.rs`) masih CPU: `Backend::Gpu` di compute API
+masih kosong.
+
+### A. Render 3D lewat V3D di Raspberry Pi 4
+
+Target: Ruang 3D / Panen Buah 3D / glTF di Pi digambar GPU, bukan rasterizer
+software (sekarang Pi paling lambat untuk 3D).
+
+- **2b — binning + segitiga:** control list binning (CL1: tile binning mode,
+  tile state data, `VERTEX_ARRAY_PRIMS`) + render (RCL) dari daftar tile hasil
+  binning; shader **QPU** kecil buatan tangan: coordinate/vertex shader
+  pass-through (posisi sudah di screen space dari vertex stage CPU, seperti
+  virgl/Intel) + fragment shader warna flat; shader record (GL shader state)
+  + atribut. Verifikasi: satu segitiga oranye, dibaca balik piksel per piksel
+  (pola yang sama dengan `gpu render` Intel langkah 3b). Referensi: Mesa
+  `src/broadcom/` (v3dv/vc5 packet + QPU encoding, mirror chromium) dan Linux
+  `drivers/gpu/drm/v3d`.
+- **2c — Gouraud + depth + tekstur:** varyings (warna per-vertex), Z buffer
+  (depth test LESS, clear lewat RCL), tekstur (TMU, sampler nearest/wrap),
+  blending alpha, uji alpha (kill texel alpha 0) -- kemampuan yang sama dengan
+  backend software agar `gfx3d::run_self_test` bisa dipakai apa adanya.
+- **2d — backend `gfx3d` native:** `gfx3d::install_native` seperti Intel
+  (create/clear/texture/draw/read), clip-space + viewport transform di GPU
+  (perspektif benar), fallback otomatis ke software bila self-test gagal ->
+  `MILESTONE: GFX3D NATIVE OK (V3D ...)` di papan; Ruang 3D / Panen Buah 3D
+  lebih cepat terukur (fps sebelum/sesudah dicatat).
+- **2e — present desktop lewat V3D (opsional):** salin/komposisi frame dengan
+  TFU/TLB seperti blitter Intel (langkah 2b Intel), bila menghemat CPU di Pi.
+- **Catatan uji:** QEMU `raspi4b` tidak memodelkan V3D, jadi setiap langkah
+  hanya terverifikasi di papan (foto layar + `dmesg v3d`, pola yang sama dengan
+  laptop). Pi 5 (V3D 7.1) menyusul setelah Pi 5 boot (R5).
+- **Status 2026-11-20:** 2b-2d **terverifikasi di Pi 4** (`GFX3D NATIVE OK
+  (V3D 4.2 ...)` saat boot, `gpu v3d` 3/3 cek 3D, Ruang 3D di GPU). Uji
+  pertama macet di shader tekstur: harus ada `thrsw` antara memulai lookup TMU
+  dan `ldtmu` (seperti Mesa); job yang macet kini me-reset V3D. Belum: 2e
+  (`gpu on`) belum diuji, uji alpha (texel alpha 0 tetap tergambar), depth
+  antar-job, ukur fps sebelum/sesudah.
+
+### B. GPU untuk ML / LLM (compute)
+
+Target: inferensi model (LLM + CV) memakai GPU bila ada, CPU sebagai fallback,
+lewat satu API -- `compute.rs` `Backend::Gpu` diisi sungguhan.
+
+- **Lapisan compute generik:** buffer GPU (alokasi, map, salin), dispatch
+  kernel dengan ukuran grid, fence/tunggu, dan antrean per proses; syscall
+  `COMPUTE_OP` (ABI append-only) + pustaka managed `Buitenzorg.Compute`
+  (tensor: matmul, add, mul, softmax, RMSNorm, RoPE, SiLU, attention) dengan
+  implementasi CPU yang sama persis sebagai referensi (hasil dibandingkan per
+  elemen dalam toleransi).
+- **Backend Intel Gen9 (laptop):** GPGPU lewat render engine yang sudah jalan
+  -- `PIPELINE_SELECT` GPGPU, `MEDIA_VFE_STATE`, `GPGPU_WALKER`, kernel EU
+  (dimulai dari matmul/GEMV f32 tangan, lalu kuantisasi int8 / Q4 untuk LLM);
+  memakai GGTT pool dan aturan invalidasi cache yang sudah ditemukan di 3D.
+- **Backend V3D (Pi 4):** compute shader QPU lewat CSD bila tersedia di V3D
+  4.2, atau user-mode QPU job (seperti `py-videocore6` / Mesa `v3d` compute);
+  GEMV f32 dulu.
+- **Backend virgl / virtio-gpu (QEMU):** compute shader GL 4.3 lewat virgl
+  (bila host mendukung) untuk menguji API di QEMU tanpa papan.
+- **LLM sungguhan:** pembaca **GGUF** (header, tensor info, kuantisasi Q4_0 /
+  Q8_0), model kecil (mis. TinyLlama / Qwen kecil dalam batas RAM) dari Model
+  Manager (`model.rs`, Hugging Face), tokenizer BPE, loop inferensi
+  (KV-cache), sampling; `ask` / API AI memakai GPU bila ada. Ukur token/detik
+  CPU vs GPU di laptop dan Pi.
+- **Verifikasi:** self-test compute (matmul acak, GPU vs CPU dalam toleransi)
+  -> `MILESTONE: COMPUTE GPU OK (backend ...)`; di QEMU tanpa GPU compute,
+  fallback CPU harus jalan dan dilaporkan jujur.
+- **Urutan:** API + CPU referensi -> Intel GEMV -> GGUF + LLM kecil di CPU ->
+  LLM di GPU Intel -> V3D -> virgl.
+- **Status 2026-11-20:** urutan diubah karena papan Pi tersedia.
+  - Selesai: syscall `COMPUTE_OP` (72) dengan buffer per proses, GEMV, dan
+    backend referensi CPU di kernel (`MILESTONE: COMPUTE OK`).
+  - Selesai: backend **V3D** (kernel QPU lewat CSD, dibuat dengan assembler
+    py-videocore6). **Belum diuji di papan.**
+  - Selesai: **LLM GGUF** di `CLRHOST.ELF` (`llm.rs`: F32/F16/Q8_0/Q4_0,
+    llama + GQA + KV cache, tokenizer SentencePiece). Identik dengan
+    referensi numpy; matriksnya di GPU bila ada backend.
+    `/disk/STORIES.GGU` + shell `llm`, `MILESTONE: LLM OK`.
+  - Belum: backend Intel dan virgl, GEMV langsung pada bobot kuantisasi,
+    API managed `Buitenzorg.AI`, `ask` memakai LLM ini, unduh dari Model
+    Manager.
+
+### C. Perbaikan RustNetRuntime (RustCLR)
+
+Masalah di runtime managed diperbaiki **langsung di repo
+`C:\experiment\VibeCoding\Vibe_Runtime\RustNetRuntime`** (commit + push di
+sana, lalu naikkan pin `rev` di `userland/clrhost/Cargo.toml`), bukan
+di-workaround di app. Yang terbuka sekarang:
+
+- **`Thread.Join` macet** saat dipanggil ketika thread target sedang selesai
+  (ditemukan di self-test Pengaturan, 2026-11-20: thread server sudah keluar,
+  Join baru kembali setelah 30 detik atau tidak sama sekali; pola yang sama di
+  MWeb/MUnduh lolos). Self-test itu sementara menunggu flag selesai; perbaiki
+  di RustCLR (jalur `JoinHandle::join` / drop worker / safepoint), lalu
+  kembalikan ke `Join`.
+- Celah RustBCL yang ditemui app (dicatat di CLAUDE.md: `MemoryStream`,
+  `BinaryWriter`, `string.Split(string)`, `List.RemoveAll`, format string
+  `ToString("X")`/`"F1"`, `Array.Clone`, ...) diisi di RustBCL agar app tidak
+  perlu jalan memutar.
 
 ## 🏛️ v1.0 — "Buitenzorg" · Stable Release (x86-64) — *sedang berjalan*
 Stabilkan API & ABI, security hardening, dokumentasi + tutorial, debugger +

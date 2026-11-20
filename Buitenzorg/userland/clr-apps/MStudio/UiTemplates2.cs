@@ -403,5 +403,35 @@ while (running()) {
 }
 """),
             ("README.TXT", Readme("Timer Pomodoro", "Waktu dari ticks() (milidetik sejak program mulai)."))),
+
+        // ---------------- fonts ----------------
+        new Template("js-ui-font", "JavaScript UI", "Grafis", "Pameran Fon",
+            "Fon TrueType sistem: font(), textfont() dan measure() -- ukuran bebas, tebal, monospace.", "MAIN.JS",
+            ("MAIN.JS", """
+// Pameran fon: fon TrueType dari kernel -- font(keluarga, tebal) memberi id,
+// textfont(x, y, teks, warna, id, ukuran) menggambar, measure(teks, id, ukuran) mengukur
+window("Pameran Fon", 460, 300);
+let sans = font("Plus Jakarta Sans");
+let tebal = font("Plus Jakarta Sans", true);
+let mono = font("JetBrains Mono");
+let ukuran = 18;
+while (running()) {
+  clear(0x14201A);
+  if (sans == 0) {
+    text(24, 24, "Fon TrueType belum terpasang (ketik: font list)", 0xE5484D, 1);
+  } else {
+    textfont(24, 16, "Kebun Raya Bogor", 0xFFFFFF, tebal, 30);
+    let w = measure("Kebun Raya Bogor", tebal, 30);
+    rect(24, 58, w, 3, 0x7CC4A4, 1);
+    textfont(24, 78, "Ukuran " + ukuran + " px: rusa tutul di halaman istana", 0xD9E8DD, sans, ukuran);
+    textfont(24, 136, "for (let i = 0; i < 3; i++) print(i);", 0xF3C969, mono, 14);
+    text(24, 172, "lebar judul: " + w + " px", 0x9CC9D9, 0);
+  }
+  if (button(24, 220, 120, 40, "Kecil")) { ukuran = max(10, ukuran - 2); }
+  if (button(156, 220, 120, 40, "Besar")) { ukuran = min(40, ukuran + 2); }
+  present();
+}
+"""),
+            ("README.TXT", Readme("Pameran Fon", "Fon dipasang dengan 'font install NAMA' di Terminal atau halaman Fon di Pengaturan."))),
     };
 }

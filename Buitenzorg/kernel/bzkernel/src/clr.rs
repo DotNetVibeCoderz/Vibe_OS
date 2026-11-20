@@ -57,7 +57,8 @@ fn host_image() -> Result<alloc::sync::Arc<alloc::vec::Vec<u8>>, &'static str> {
 /// (`CLRHOST.ELF <file>`, see userland/clrhost/src/scriptui.rs).
 pub fn script_for(target: &str) -> Option<alloc::string::String> {
     let lower = target.to_ascii_lowercase();
-    let script = lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".py") || lower.ends_with(".csx");
+    // UI scripts, and GGUF language models (the LLM in CLRHOST.ELF: llm.rs)
+    let script = lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".py") || lower.ends_with(".csx") || lower.ends_with(".ggu") || lower.ends_with(".gguf");
     (script && target.starts_with('/')).then(|| alloc::string::String::from(target))
 }
 

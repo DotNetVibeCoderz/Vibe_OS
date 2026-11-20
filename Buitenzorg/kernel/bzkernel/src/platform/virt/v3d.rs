@@ -31,7 +31,7 @@
 //! through `probe_read32` and an absent block is reported, not faulted on.
 
 use alloc::{format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::arch::aarch64::exceptions::probe_read32;
@@ -75,6 +75,8 @@ fn power_on(f: &crate::dtb::Fdt) -> String {
         return String::from("mapping pm / asb failed");
     };
     let Some(grafx) = probe_read32(pm_va + PM_GRAFX) else { return format!("PM at {:#x} does not answer", pm.0) };
+    PM_VA.store(pm_va, Ordering::Relaxed);
+    ASB_VA.store(asb_va, Ordering::Relaxed);
     if grafx & PM_V3DRSTN == 0 {
         w(pm_va, PM_GRAFX, PM_PASSWORD | (grafx & 0x00FF_FFFF) | PM_V3DRSTN);
     }
@@ -97,18 +99,51 @@ fn power_on(f: &crate::dtb::Fdt) -> String {
         if acks[1] { "on" } else { "NO ACK" }
     )
 }
+/// The SoC power manager and the V3D AXI bridges (for `reset`).
+static PM_VA: AtomicU64 = AtomicU64::new(0);
+static ASB_VA: AtomicU64 = AtomicU64::new(0);
+/// GPU resets after a hung or faulted job.
+pub(super) static RESETS: AtomicU32 = AtomicU32::new(0);
+
+/// Reset a hung V3D as Linux bcm2835-power does for GRAFX_V3D: stop the AXI
+/// bridges (slave, then master), pulse the V3D reset in PM_GRAFX, restart
+/// the bridges. Every V3D register is at its reset value afterwards.
+fn hw_reset() -> bool {
+    let (pm, asb) = (PM_VA.load(Ordering::Relaxed), ASB_VA.load(Ordering::Relaxed));
+    if pm == 0 || asb == 0 {
+        return false;
+    }
+    let mut ok = true;
+    for reg in [ASB_V3D_S_CTRL, ASB_V3D_M_CTRL] {
+        let v = r(asb, reg);
+        w(asb, reg, PM_PASSWORD | (v & 0x00FF_FFFF) | ASB_REQ_STOP);
+        ok &= wait_us(1000, || r(asb, reg) & ASB_ACK != 0);
+    }
+    let g = r(pm, PM_GRAFX) & 0x00FF_FFFF;
+    w(pm, PM_GRAFX, PM_PASSWORD | (g & !PM_V3DRSTN));
+    wait_us(10, || false);
+    w(pm, PM_GRAFX, PM_PASSWORD | g | PM_V3DRSTN);
+    wait_us(10, || false);
+    for reg in [ASB_V3D_M_CTRL, ASB_V3D_S_CTRL] {
+        let v = r(asb, reg);
+        w(asb, reg, PM_PASSWORD | (v & !ASB_REQ_STOP & 0x00FF_FFFF));
+        ok &= wait_us(1000, || r(asb, reg) & ASB_ACK == 0);
+    }
+    ok
+}
+
 const DOMAIN_V3D: u32 = 10;
 const CLOCK_V3D: u32 = 5;
 
 // hub registers
-const HUB_IDENT0: u64 = 0x08;
-const HUB_IDENT1: u64 = 0x0c;
-const HUB_IDENT2: u64 = 0x10;
-const HUB_IDENT3: u64 = 0x14;
+pub(super) const HUB_IDENT0: u64 = 0x08;
+pub(super) const HUB_IDENT1: u64 = 0x0c;
+pub(super) const HUB_IDENT2: u64 = 0x10;
+pub(super) const HUB_IDENT3: u64 = 0x14;
 // core registers
-const CTL_IDENT0: u64 = 0x00;
-const CTL_IDENT1: u64 = 0x04;
-const CTL_IDENT2: u64 = 0x08;
+pub(super) const CTL_IDENT0: u64 = 0x00;
+pub(super) const CTL_IDENT1: u64 = 0x04;
+pub(super) const CTL_IDENT2: u64 = 0x08;
 
 /// What was found: version * 10 + revision (42 = V3D 4.2), 0 = none.
 static VERSION: AtomicU32 = AtomicU32::new(0);
@@ -221,73 +256,75 @@ pub fn init(f: &crate::dtb::Fdt) -> Option<Info> {
 // ---- step 2a: MMU + render-only jobs ---------------------------------------
 
 // hub registers
-const MMUC_CONTROL: u64 = 0x1000;
-const MMUC_ENABLE: u32 = 1 << 0;
-const MMUC_FLUSH: u32 = 1 << 1;
-const MMUC_FLUSHING: u32 = 1 << 2;
-const MMU_CTL: u64 = 0x1200;
-const MMU_PT_PA_BASE: u64 = 0x1204;
-const MMU_VIO_ID: u64 = 0x122c;
-const MMU_ILLEGAL_ADDR: u64 = 0x1230;
-const MMU_VIO_ADDR: u64 = 0x1234;
-const MMU_DEBUG_INFO: u64 = 0x1238;
-const MMU_TLB_CLEAR: u32 = 1 << 2;
-const MMU_TLB_CLEARING: u32 = 1 << 7;
-const HUB_INT_STS: u64 = 0x50;
+pub(super) const MMUC_CONTROL: u64 = 0x1000;
+pub(super) const MMUC_ENABLE: u32 = 1 << 0;
+pub(super) const MMUC_FLUSH: u32 = 1 << 1;
+pub(super) const MMUC_FLUSHING: u32 = 1 << 2;
+pub(super) const MMU_CTL: u64 = 0x1200;
+pub(super) const MMU_PT_PA_BASE: u64 = 0x1204;
+pub(super) const MMU_VIO_ID: u64 = 0x122c;
+pub(super) const MMU_ILLEGAL_ADDR: u64 = 0x1230;
+pub(super) const MMU_VIO_ADDR: u64 = 0x1234;
+pub(super) const MMU_DEBUG_INFO: u64 = 0x1238;
+pub(super) const MMU_TLB_CLEAR: u32 = 1 << 2;
+pub(super) const MMU_TLB_CLEARING: u32 = 1 << 7;
+pub(super) const HUB_INT_STS: u64 = 0x50;
 // core registers
-const CTL_SLCACTL: u64 = 0x24;
-const CTL_L2TCACTL: u64 = 0x30;
-const CTL_L2TFLSTA: u64 = 0x34;
-const CTL_L2TFLEND: u64 = 0x38;
-const CTL_INT_STS: u64 = 0x50;
-const CTL_INT_CLR: u64 = 0x58;
-const CTL_INT_MSK_CLR: u64 = 0x64;
-const INT_FRDONE: u32 = 1 << 0;
-const INT_FLDONE: u32 = 1 << 1;
-const INT_OUTOMEM: u32 = 1 << 2;
-const INT_GMPV: u32 = 1 << 5;
-const INT_CSDDONE: u32 = 1 << 7;
-const CLE_CT1CS: u64 = 0x104;
-const CLE_CT1EA: u64 = 0x10c;
-const CLE_CT1CA: u64 = 0x114;
-const CLE_PCS: u64 = 0x130;
-const CLE_RFC: u64 = 0x138;
-const CLE_CT1QBA: u64 = 0x164;
-const CLE_CT1QEA: u64 = 0x16c;
+pub(super) const CTL_SLCACTL: u64 = 0x24;
+pub(super) const CTL_L2TCACTL: u64 = 0x30;
+pub(super) const CTL_L2TFLSTA: u64 = 0x34;
+pub(super) const CTL_L2TFLEND: u64 = 0x38;
+pub(super) const CTL_INT_STS: u64 = 0x50;
+pub(super) const CTL_INT_CLR: u64 = 0x58;
+pub(super) const CTL_INT_MSK_CLR: u64 = 0x64;
+pub(super) const INT_FRDONE: u32 = 1 << 0;
+pub(super) const INT_FLDONE: u32 = 1 << 1;
+pub(super) const INT_OUTOMEM: u32 = 1 << 2;
+pub(super) const INT_GMPV: u32 = 1 << 5;
+pub(super) const INT_CSDDONE: u32 = 1 << 7;
+pub(super) const CLE_CT1CS: u64 = 0x104;
+pub(super) const CLE_CT1EA: u64 = 0x10c;
+pub(super) const CLE_CT1CA: u64 = 0x114;
+pub(super) const CLE_PCS: u64 = 0x130;
+pub(super) const CLE_RFC: u64 = 0x138;
+pub(super) const CLE_CT1QBA: u64 = 0x164;
+pub(super) const CLE_CT1QEA: u64 = 0x16c;
 
-const PTE_WRITEABLE: u32 = 1 << 29;
-const PTE_VALID: u32 = 1 << 28;
+pub(super) const PTE_WRITEABLE: u32 = 1 << 29;
+pub(super) const PTE_VALID: u32 = 1 << 28;
 /// GPU pages below this stay unmapped (the hardware treats address 0 as "none").
-const FIRST_PAGE: u32 = 0x100;
+pub(super) const FIRST_PAGE: u32 = 0x100;
 /// 4 MiB page table: one 32-bit entry per 4 KiB page of the 4 GiB GPU space.
-const PT_PAGES: usize = 1024;
+pub(super) const PT_PAGES: usize = 1024;
 
-struct Mmu {
+pub(super) struct Mmu {
     pt: *mut u32,
+    pt_phys: u64,
+    scratch: u64,
     pa_bits: u32,
 }
 
-struct Gpu {
-    hub: u64,
-    core: u64,
-    mmu: Option<Mmu>,
-    next_page: u32,
+pub(super) struct Gpu {
+    pub(super) hub: u64,
+    pub(super) core: u64,
+    pub(super) mmu: Option<Mmu>,
+    pub(super) next_page: u32,
 }
 
 unsafe impl Send for Gpu {}
 
-static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
+pub(super) static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
 
-fn r(base: u64, off: u64) -> u32 {
+pub(super) fn r(base: u64, off: u64) -> u32 {
     unsafe { ((base + off) as *const u32).read_volatile() }
 }
-fn w(base: u64, off: u64, v: u32) {
+pub(super) fn w(base: u64, off: u64, v: u32) {
     unsafe { ((base + off) as *mut u32).write_volatile(v) }
 }
-fn elapsed_us(t0: u64) -> u64 {
+pub(super) fn elapsed_us(t0: u64) -> u64 {
     (crate::arch::cpu::timestamp() - t0) * 1_000_000 / crate::arch::cpu::counter_hz().max(1)
 }
-fn wait_us(us: u64, mut done: impl FnMut() -> bool) -> bool {
+pub(super) fn wait_us(us: u64, mut done: impl FnMut() -> bool) -> bool {
     let t0 = crate::arch::cpu::timestamp();
     while !done() {
         if elapsed_us(t0) > us {
@@ -300,22 +337,73 @@ fn wait_us(us: u64, mut done: impl FnMut() -> bool) -> bool {
 
 /// Memory the CPU and the GPU share: frames of our own, consecutive in GPU
 /// address space (`va`), not necessarily in physical memory.
-struct Buffer {
-    va: u32,
-    frames: Vec<(u64, *mut u8)>,
+pub(super) struct Buffer {
+    pub(super) va: u32,
+    pub(super) frames: Vec<(u64, *mut u8)>,
 }
 
 impl Buffer {
-    fn write(&self, off: usize, bytes: &[u8]) {
+    pub(super) fn write(&self, off: usize, bytes: &[u8]) {
         for (k, b) in bytes.iter().enumerate() {
             let o = off + k;
             unsafe { self.frames[o / 4096].1.add(o % 4096).write_volatile(*b) };
         }
     }
-    fn word(&self, off: usize) -> u32 {
+    /// Copy bytes in, a page at a time.
+    pub(super) fn write_bytes(&self, off: usize, data: &[u8]) {
+        let mut done = 0;
+        while done < data.len() {
+            let o = off + done;
+            let n = (4096 - o % 4096).min(data.len() - done);
+            unsafe { core::ptr::copy_nonoverlapping(data.as_ptr().add(done), self.frames[o / 4096].1.add(o % 4096), n) };
+            done += n;
+        }
+    }
+    /// Copy bytes out, a page at a time.
+    pub(super) fn read_bytes(&self, off: usize, out: &mut [u8]) {
+        let mut done = 0;
+        while done < out.len() {
+            let o = off + done;
+            let n = (4096 - o % 4096).min(out.len() - done);
+            unsafe { core::ptr::copy_nonoverlapping(self.frames[o / 4096].1.add(o % 4096) as *const u8, out.as_mut_ptr().add(done), n) };
+            done += n;
+        }
+    }
+    /// Copy 32-bit words in, a page at a time (`off` 4-byte aligned).
+    pub(super) fn write_words(&self, off: usize, words: &[u32]) {
+        let mut done = 0;
+        while done < words.len() {
+            let o = off + done * 4;
+            let n = ((4096 - o % 4096) / 4).min(words.len() - done);
+            unsafe { core::ptr::copy_nonoverlapping(words.as_ptr().add(done), self.frames[o / 4096].1.add(o % 4096) as *mut u32, n) };
+            done += n;
+        }
+    }
+    /// Copy 32-bit words out, a page at a time.
+    pub(super) fn read_words(&self, off: usize, out: &mut [u32]) {
+        let mut done = 0;
+        while done < out.len() {
+            let o = off + done * 4;
+            let n = ((4096 - o % 4096) / 4).min(out.len() - done);
+            unsafe { core::ptr::copy_nonoverlapping(self.frames[o / 4096].1.add(o % 4096) as *const u32, out.as_mut_ptr().add(done), n) };
+            done += n;
+        }
+    }
+    /// Clean + invalidate only the pages covering `[off, off + len)`.
+    pub(super) fn sync_range(&self, off: usize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        for p in off / 4096..=(off + len - 1) / 4096 {
+            if let Some(&(_, va)) = self.frames.get(p) {
+                crate::arch::cpu::dma_sync(va as u64, 4096);
+            }
+        }
+    }
+    pub(super) fn word(&self, off: usize) -> u32 {
         unsafe { (self.frames[off / 4096].1.add(off % 4096) as *const u32).read_volatile() }
     }
-    fn fill(&self, v: u32) {
+    pub(super) fn fill(&self, v: u32) {
         for &(_, va) in &self.frames {
             for k in 0..1024 {
                 unsafe { (va as *mut u32).add(k).write_volatile(v) };
@@ -323,7 +411,7 @@ impl Buffer {
         }
     }
     /// Clean + invalidate the CPU caches (before the GPU reads, after it wrote).
-    fn sync(&self) {
+    pub(super) fn sync(&self) {
         for &(_, va) in &self.frames {
             crate::arch::cpu::dma_sync(va as u64, 4096);
         }
@@ -331,7 +419,7 @@ impl Buffer {
 }
 
 impl Gpu {
-    fn mmu_flush(&self) -> bool {
+    pub(super) fn mmu_flush(&self) -> bool {
         w(self.hub, MMUC_CONTROL, MMUC_FLUSH | MMUC_ENABLE);
         let a = wait_us(100_000, || r(self.hub, MMUC_CONTROL) & MMUC_FLUSHING == 0);
         w(self.hub, MMU_CTL, r(self.hub, MMU_CTL) | MMU_TLB_CLEAR);
@@ -340,7 +428,7 @@ impl Gpu {
     }
 
     /// Page table + scratch page, MMU on (`v3d_mmu_set_page_table`).
-    fn bring_up(&mut self, out: &mut Vec<String>) -> bool {
+    pub(super) fn bring_up(&mut self, out: &mut Vec<String>) -> bool {
         if self.mmu.is_some() {
             return true;
         }
@@ -358,6 +446,20 @@ impl Gpu {
         unsafe { core::ptr::write_bytes(pt_va, 0, PT_PAGES * 4096) };
         crate::arch::cpu::dma_sync(pt_va as u64, PT_PAGES * 4096);
         let Some((scratch, _)) = crate::memory::alloc_dma_frame() else { return false };
+        let flushed = self.program_mmu(pt_phys, scratch);
+        out.push(format!(
+            "  page table at {:#x} (4 MiB), MMU_CTL {:#010x}, MMU flush {}",
+            pt_phys,
+            r(self.hub, MMU_CTL),
+            if flushed { "ok" } else { "TIMED OUT" }
+        ));
+        self.mmu = Some(Mmu { pt: pt_va as *mut u32, pt_phys, scratch, pa_bits });
+        true
+    }
+
+    /// Point the MMU at the page table, set the core's cache flush range and
+    /// interrupt mask (after bring-up and after every reset).
+    fn program_mmu(&self, pt_phys: u64, scratch: u64) -> bool {
         w(self.hub, MMU_PT_PA_BASE, (pt_phys >> 12) as u32);
         // enable; abort + interrupt on invalid PTEs, write violations, cap exceeded
         w(self.hub, MMU_CTL, 1 | (1 << 16) | (1 << 18) | (1 << 19) | (1 << 10) | (1 << 11) | (1 << 25) | (1 << 26));
@@ -365,23 +467,40 @@ impl Gpu {
         w(self.hub, MMUC_CONTROL, MMUC_ENABLE);
         let flushed = self.mmu_flush();
         // whole-cache L2T flushes; core interrupts unmasked (the GIC does not
-        // route V3D's line -- completion is polled in INT_STS)
+        // route the V3D line -- completion is polled in INT_STS)
         w(self.core, CTL_L2TFLSTA, 0);
         w(self.core, CTL_L2TFLEND, !0);
         w(self.core, CTL_INT_CLR, 0xFF);
         w(self.core, CTL_INT_MSK_CLR, INT_FRDONE | INT_FLDONE | INT_OUTOMEM | INT_GMPV | INT_CSDDONE);
-        out.push(format!(
-            "  page table at {:#x} (4 MiB), MMU_CTL {:#010x}, MMU flush {}",
-            pt_phys,
-            r(self.hub, MMU_CTL),
-            if flushed { "ok" } else { "TIMED OUT" }
-        ));
-        self.mmu = Some(Mmu { pt: pt_va as *mut u32, pa_bits });
-        true
+        flushed
+    }
+
+    /// Recover from a hung or faulted job: hardware reset, then the MMU again
+    /// (the page table in memory is unchanged, so every buffer stays mapped).
+    pub(super) fn reset(&mut self) -> bool {
+        RESETS.fetch_add(1, Ordering::Relaxed);
+        let bridges = hw_reset();
+        let mmu = match self.mmu.as_ref() {
+            Some(m) => self.program_mmu(m.pt_phys, m.scratch),
+            None => true,
+        };
+        bridges && mmu
+    }
+
+    /// Error / debug registers for a dump (ERRSTAT, FDBGO/B/R/S).
+    pub(super) fn debug_regs(&self) -> String {
+        format!(
+            "ERRSTAT {:#x} FDBG O {:#x} B {:#x} R {:#x} S {:#x}",
+            r(self.core, 0xf20),
+            r(self.core, 0xf04),
+            r(self.core, 0xf08),
+            r(self.core, 0xf0c),
+            r(self.core, 0xf10)
+        )
     }
 
     /// `pages` fresh zeroed frames mapped at consecutive GPU addresses.
-    fn alloc(&mut self, pages: usize) -> Option<Buffer> {
+    pub(super) fn alloc(&mut self, pages: usize) -> Option<Buffer> {
         let mmu = self.mmu.as_ref()?;
         let limit = 1u64 << mmu.pa_bits.min(40);
         let first = self.next_page;
@@ -414,9 +533,29 @@ impl Gpu {
         Some(b)
     }
 
+    /// Map `pages` of existing, physically contiguous memory (not owned:
+    /// a staging surface or the framebuffer) at consecutive GPU addresses.
+    pub(super) fn map_contig(&mut self, phys: u64, pages: usize) -> Option<u32> {
+        let mmu = self.mmu.as_ref()?;
+        if phys + (pages as u64) * 4096 > 1u64 << mmu.pa_bits.min(40) {
+            return None;
+        }
+        let first = self.next_page;
+        if first as usize + pages >= PT_PAGES * 1024 {
+            return None;
+        }
+        self.next_page += pages as u32;
+        for k in 0..pages {
+            unsafe { mmu.pt.add(first as usize + k).write_volatile(((phys >> 12) + k as u64) as u32 | PTE_WRITEABLE | PTE_VALID) };
+        }
+        crate::arch::cpu::dma_sync(unsafe { mmu.pt.add(first as usize) } as u64, pages * 4);
+        self.mmu_flush();
+        Some(first << 12)
+    }
+
     /// Unmap and free a buffer (the test's buffers are freed in reverse order,
     /// so the GPU address space is reused).
-    fn free(&mut self, b: Buffer) {
+    pub(super) fn free(&mut self, b: Buffer) {
         let Some(mmu) = self.mmu.as_ref() else { return };
         let first = (b.va >> 12) as usize;
         for k in 0..b.frames.len() {
@@ -434,7 +573,7 @@ impl Gpu {
 
     /// Run a render control list `[start, end)` on CT1 and wait for the frame.
     /// Returns the GPU time in microseconds.
-    fn run_render(&mut self, start: u32, end: u32, out: &mut Vec<String>) -> Option<u64> {
+    pub(super) fn run_render(&mut self, start: u32, end: u32, out: &mut Vec<String>) -> Option<u64> {
         // flush L2T and invalidate the slice caches (`v3d_invalidate_caches`)
         w(self.core, CTL_L2TCACTL, 1);
         w(self.core, CTL_SLCACTL, 0x0F0F_0F0F);
@@ -462,6 +601,9 @@ impl Gpu {
                 r(self.hub, MMU_VIO_ADDR),
                 r(self.hub, MMU_VIO_ID)
             ));
+            out.push(format!("  {}", self.debug_regs()));
+            let ok = self.reset();
+            out.push(format!("  V3D reset {}", if ok { "done" } else { "INCOMPLETE (bridges did not answer)" }));
             return None;
         }
         w(self.core, CTL_INT_CLR, 0xFF);
@@ -470,20 +612,20 @@ impl Gpu {
 }
 
 /// Control-list bytes: packets are an opcode byte + little-endian bit fields.
-struct Cl {
-    bytes: Vec<u8>,
+pub(super) struct Cl {
+    pub(super) bytes: Vec<u8>,
 }
 
 impl Cl {
-    fn op(&mut self, code: u8, body: &[u8]) {
+    pub(super) fn op(&mut self, code: u8, body: &[u8]) {
         self.bytes.push(code);
         self.bytes.extend_from_slice(body);
     }
-    fn op64(&mut self, code: u8, v: u64) {
+    pub(super) fn op64(&mut self, code: u8, v: u64) {
         self.op(code, &v.to_le_bytes());
     }
     /// STORE_TILE_BUFFER_GENERAL (V3D 4.1+): low 64 bits of fields + address.
-    fn store(&mut self, fields: u64, address: u32) {
+    pub(super) fn store(&mut self, fields: u64, address: u32) {
         let mut b = [0u8; 12];
         b[..8].copy_from_slice(&fields.to_le_bytes());
         b[8..].copy_from_slice(&address.to_le_bytes());
@@ -561,7 +703,7 @@ pub fn self_test() -> Vec<String> {
         }
         return out;
     };
-    out.push(format!("V3D {}.{} self-test (step 2a: MMU + render-only clear jobs)", version() / 10, version() % 10));
+    out.push(format!("V3D {}.{} self-test (step 2a: MMU + render-only clear jobs; 2b/2c: 3D)", version() / 10, version() % 10));
     if !gpu.bring_up(&mut out) {
         out.push(String::from("  the MMU did not come up; nothing ran"));
         return out;
@@ -622,6 +764,16 @@ pub fn self_test() -> Vec<String> {
     gpu.free(image);
     gpu.free(scratch);
     gpu.free(cl);
+    drop(guard);
+    // steps 2b / 2c: binning + shaders, colour, depth, texture
+    out.push(String::from("V3D 3D (steps 2b/2c: binning job, QPU shaders, varyings, depth, texture)"));
+    let (pass, total) = super::v3d_draw::self_test(&mut out);
+    out.push(format!("  {}/{} 3D checks correct", pass, total));
+    if pass == total {
+        crate::println!("[kernel] MILESTONE: V3D 3D OK (binning + QPU shaders + depth + texture on the Pi's V3D)");
+        out.push(String::from("  MILESTONE: V3D 3D OK"));
+    }
+    out.extend(super::v3d_draw::report());
     out
 }
 

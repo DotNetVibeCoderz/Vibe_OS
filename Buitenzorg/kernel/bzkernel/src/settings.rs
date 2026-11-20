@@ -15,6 +15,8 @@ pub fn count(k: u64) -> u64 {
         key::ANIMATIONS | key::LARGE_CURSOR | key::CLOCK_24H => 2,
         key::TIMEZONE => crate::clock::ZONES.len() as u64,
         key::LANGUAGE => crate::clock::LANGUAGES.len() as u64,
+        key::UI_FONT => 1 + crate::font::families(false).len() as u64,
+        key::MONO_FONT => 1 + crate::font::families(true).len() as u64,
         _ => 0,
     }
 }
@@ -41,6 +43,8 @@ pub fn get(k: u64) -> u64 {
         key::LANGUAGE => crate::clock::language() as u64,
         key::CLOCK_24H => crate::clock::h24() as u64,
         key::CLOCK => crate::clock::local_unix().max(0) as u64,
+        key::UI_FONT => font_index(crate::font::ui_family(), false),
+        key::MONO_FONT => font_index(crate::font::mono_family(), true),
         _ => INVAL,
     }
 }
@@ -85,6 +89,10 @@ pub fn set(k: u64, v: u64) -> u64 {
             crate::clock::set_local(v as i64);
             true
         }
+        key::UI_FONT if v == 0 => crate::font::set_ui(None),
+        key::UI_FONT => crate::font::families(false).get(v as usize - 1).is_some_and(|f| crate::font::set_ui(Some(f))),
+        key::MONO_FONT if v == 0 => crate::font::set_mono(None),
+        key::MONO_FONT => crate::font::families(true).get(v as usize - 1).is_some_and(|f| crate::font::set_mono(Some(f))),
         _ => false,
     };
     if ok {
@@ -109,6 +117,29 @@ pub fn label(k: u64, index: usize, detail: bool) -> Option<&'static str> {
         }
         key::TIMEZONE => crate::clock::ZONES.get(index).map(|(n, d, _)| if detail { *d } else { *n }),
         key::LANGUAGE => crate::clock::LANGUAGES.get(index).map(|(c, n)| if detail { *c } else { *n }),
+        key::UI_FONT | key::MONO_FONT => {
+            let mono = k == key::MONO_FONT;
+            if index == 0 {
+                return Some(if detail { "built-in 8 x 16 bitmap font" } else { "Bitmap (Noto Sans Mono)" });
+            }
+            let family = *crate::font::families(mono).get(index - 1)?;
+            if !detail {
+                return Some(family);
+            }
+            let id = crate::font::find(family, false)?;
+            Some(match crate::font::info(id) {
+                Some((_, _, true, _)) => "monospace",
+                _ => "proportional",
+            })
+        }
         _ => None,
+    }
+}
+
+/// Index of a font family in its settings list (0 = the bitmap font).
+fn font_index(family: Option<&str>, mono: bool) -> u64 {
+    match family {
+        None => 0,
+        Some(f) => crate::font::families(mono).iter().position(|x| *x == f).map_or(0, |i| i as u64 + 1),
     }
 }

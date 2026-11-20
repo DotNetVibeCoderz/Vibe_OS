@@ -268,7 +268,7 @@ fn draw_inner(st: &mut State, permille: u32) {
         num[n] = b'0' + (pct % 10) as u8;
         num[n + 1] = b'%';
         let pct_s = core::str::from_utf8(&num[..n + 2]).unwrap_or("");
-        let pw = crate::gfx::text_width(pct_s, TextStyle::Strong);
+        let pw = crate::gfx::text_width_bitmap(pct_s, TextStyle::Strong);
         let ty = by + bh + 14;
         shadow_text(&mut c, bx, ty, status, DIM, bx + bw - pw - 16, TextStyle::Body);
         shadow_text(&mut c, bx + bw - pw, ty, pct_s, TEXT, bx + bw + 1, TextStyle::Strong);
@@ -372,14 +372,14 @@ fn compose_base(px: &mut [u32], w: usize, h: usize) -> (i32, i32, i32, i32) {
 
     // Footer.
     let foot = "Gravicode Studios  -  dipimpin oleh Kang Fadhil";
-    let fw = crate::gfx::text_width(foot, TextStyle::Body);
+    let fw = crate::gfx::text_width_bitmap(foot, TextStyle::Body);
     shadow_text(&mut c, (wi - fw) / 2, hi - 34, foot, rgb(0x7E, 0x9C, 0x8A), wi, TextStyle::Body);
     (bx, by, bw, bh)
 }
 
 fn shadow_text(c: &mut Canvas, x: i32, y: i32, s: &str, color: Color, max_x: i32, style: TextStyle) {
-    c.draw_text_styled(x + 1, y + 1, s, rgb(0, 0, 0), max_x + 1, style);
-    c.draw_text_styled(x, y, s, color, max_x, style);
+    c.draw_text_styled_bitmap(x + 1, y + 1, s, rgb(0, 0, 0), max_x + 1, style);
+    c.draw_text_styled_bitmap(x, y, s, color, max_x, style);
 }
 
 /// Coverage (0..=16) of a pill (rounded both ends, radius h/2) at a pixel,

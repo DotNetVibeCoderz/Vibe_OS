@@ -21,6 +21,10 @@ x25519-dalek = { version = "2", default-features = false, features = ["static_se
 ed25519-dalek = { version = "2", default-features = false }
 chacha20 = { version = "0.9", default-features = false }
 poly1305 = { version = "0.8", default-features = false }
+# TrueType / OpenType fonts (font.rs): outlines, metrics, kerning (kern + GPOS
+# pair adjustment), variable-font axes; coverage rasterizer
+ttf-parser = { version = "0.25", default-features = false, features = ["opentype-layout", "variable-fonts", "no-std-float"] }
+ab_glyph_rasterizer = { version = "0.1", default-features = false, features = ["libm"] }
 noto-sans-mono-bitmap = { version = "0.3", default-features = false, features = [
     "regular",
     "bold",

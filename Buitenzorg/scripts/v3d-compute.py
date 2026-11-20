@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""V3D 4.2 (Raspberry Pi 4) compute kernels for the kernel's compute layer.
+
+Writes kernel/bzkernel/src/platform/virt/v3d_compute_kernels.rs. The kernels
+are assembled with py-videocore6's assembler (Idein, MIT) -- a V3D 4.2 QPU
+assembler whose examples run on the Pi 4 -- so pass the path of its `src`
+directory (the folder holding `_videocore6`):
+
+    python scripts/v3d-compute.py PATH/py-videocore6/src
+
+Dispatch follows py-videocore6's driver: a compute-shader (CSD) job with
+workgroup (1, 1, 1), 16 invocations, 8 batches -> one 16-lane thread on each
+of the 8 QPUs; every thread reads the same uniforms and finds its share of
+the work from its QPU number (tidx >> 2 & 15).
+
+GEMV  y[r] = sum_c W[r][c] * x[c]  (f32, W row-major with `stride` bytes per row)
+  uniforms: groups per thread, cols / 64, W, x, y, stride, 16 * stride,
+            7 * 16 * stride, 8 * 64, 64
+  rows must be a multiple of 128 (8 threads x 16 rows), cols of 64.
+  Thread q takes row groups q, q + 8, ...; for each row the 16 lanes sum
+  columns c = 16 k + lane (eight TMU loads in flight), a rotate butterfly
+  leaves the row total in every lane, lane j keeps row j, and the 16 row
+  results of a group are written with one TMU store.
+"""
+import os
+import sys
+
+
+# The assembler's @qpu decorator injects the instruction names (nop, mov,
+# rf, tmua, loop, ...) into this module's globals while a kernel assembles.
+# flake8: noqa: F821
+
+def gemv(asm):
+    reg_groups, reg_k, reg_w, reg_x, reg_y, reg_stride = rf[0], rf[1], rf[2], rf[3], rf[4], rf[5]
+    reg_s16, reg_gskip, reg_ystep, reg_c64 = rf[6], rf[7], rf[8], rf[9]
+    reg_acc, reg_pw, reg_px, reg_cnt, reg_eidx, reg_j, reg_res, reg_rl = (
+        rf[10], rf[11], rf[12], rf[13], rf[14], rf[15], rf[16], rf[17])
+
+    for reg in [reg_groups, reg_k, reg_w, reg_x, reg_y, reg_stride, reg_s16, reg_gskip, reg_ystep, reg_c64]:
+        nop(sig=ldunifrf(reg))
+
+    # r2 = QPU number, r1 = lane * 4
+    tidx(r0)
+    shr(r0, r0, 2)
+    band(r2, r0, 0b1111)
+    eidx(r1)
+    mov(reg_eidx, r1)
+    shl(r1, r1, 2)
+    add(reg_x, reg_x, r1)           # x0 = x + lane * 4
+    add(reg_w, reg_w, r1)           # W + lane * 4
+    add(reg_y, reg_y, r1)           # y + lane * 4
+    umul24(r0, r2, reg_s16)         # first group of this thread
+    add(reg_w, reg_w, r0)
+    shl(r0, r2, 6)
+    add(reg_y, reg_y, r0)           # y + QPU * 64
+
+    # one thread switch before the loops (py-videocore6's TMU read recipe:
+    # afterwards reads need no thread switch and eight can be in flight)
+    nop(sig=thrsw)
+    nop()
+    nop()
+
+    with loop as lg:
+        bxor(reg_j, 1, 1)           # j = 0
+        bxor(reg_res, 1, 1)
+        mov(reg_rl, -16)
+        with loop as lr:
+            mov(reg_pw, reg_w)
+            mov(reg_px, reg_x)
+            mov(reg_cnt, reg_k)
+            bxor(reg_acc, 1, 1)
+            with loop as lk:
+                for _ in range(4):
+                    mov(tmua, reg_pw).add(reg_pw, reg_pw, reg_c64)
+                    mov(tmua, reg_px).add(reg_px, reg_px, reg_c64)
+                for _ in range(4):
+                    nop(sig=ldtmu(r0))
+                    nop(sig=ldtmu(r1))
+                    nop().fmul(r2, r0, r1)
+                    fadd(reg_acc, reg_acc, r2)
+                sub(reg_cnt, reg_cnt, 1, cond='pushz')
+                lk.b(cond='anyna')
+                nop()
+                nop()
+                nop()
+            # every lane gets the row total (cyclic butterfly)
+            mov(r0, reg_acc)
+            for s in (8, 4, 2, 1):
+                nop()               # a rotate's source must not be written just before
+                rotate(r1, r0, s)
+                fadd(r0, r0, r1)
+            sub(null, reg_eidx, reg_j, cond='pushz')
+            mov(reg_res, r0, cond='ifa')        # lane j keeps row j
+            add(reg_w, reg_w, reg_stride)
+            add(reg_j, reg_j, 1)
+            add(reg_rl, reg_rl, 1, cond='pushz')
+            lr.b(cond='anyna')
+            nop()
+            nop()
+            nop()
+        mov(tmud, reg_res)
+        mov(tmua, reg_y)
+        tmuwt()
+        add(reg_y, reg_y, reg_ystep)
+        add(reg_w, reg_w, reg_gskip)            # skip the other threads' groups
+        sub(reg_groups, reg_groups, 1, cond='pushz')
+        lg.b(cond='anyna')
+        nop()
+        nop()
+        nop()
+
+    # end of program (py-videocore6's sequence)
+    barrierid(syncb, sig=thrsw)
+    nop()
+    nop()
+    nop(sig=thrsw)
+    nop(sig=thrsw)
+    nop()
+    nop()
+    nop(sig=thrsw)
+    nop()
+    nop()
+    nop()
+
+
+KERNELS = [('GEMV', gemv)]
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    sys.path.insert(0, sys.argv[1])
+    from _videocore6 import assembler as a  # noqa
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = os.path.join(root, 'kernel', 'bzkernel', 'src', 'platform', 'virt', 'v3d_compute_kernels.rs')
+    lines = [
+        '//! V3D 4.2 compute kernels (Raspberry Pi 4), generated by scripts/v3d-compute.py',
+        '//! with py-videocore6\'s assembler -- edit the script, not this file.',
+        '',
+    ]
+    for name, f in KERNELS:
+        words = a.assemble(a.qpu(f))
+        lines.append(f'/// {len(words)} instructions.')
+        lines.append(f'pub const {name}: [u64; {len(words)}] = [')
+        for wd in words:
+            lines.append(f'    0x{int(wd):016x},')
+        lines.append('];')
+        lines.append('')
+    open(out, 'w', newline='\n').write('\n'.join(lines))
+    print('wrote', out)
+
+
+if __name__ == '__main__':
+    main()

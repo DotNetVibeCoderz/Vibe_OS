@@ -92,6 +92,7 @@ static class Device
                 ["pi", "update", var kernel, .. var rest] => WithDevice(t => PiUpdate(t, kernel, rest)),
                 ["pi", ..] => Fail("usage: bz pi update <kernel8.img> [--expect TEXT]... [--run CMD]... [--no-promote] [--wait SECONDS]"),
                 ["kill", var pid] when uint.TryParse(pid, out var p) => WithDevice(t => Kill(t, p)),
+                ["font", "install", var font, .. var rest] when rest.Contains("--device") => WithDevice(t => FontToDevice(t, font, rest)),
                 ["prof", .. var rest] when rest.Length > 0 => WithDevice(t => Prof(t, rest)),
                 ["gdb-check", .. var rest] => WithDevice(t => GdbCheck.Check(new BzdpDebugDevice(Client(t)), rest)),
                 // `bz build` holds the device's shell until the PC has compiled (20 s+ on a busy machine)
@@ -194,6 +195,26 @@ static class Device
         File.WriteAllBytes(local, data);
         Console.WriteLine($"{remote} -> {local} ({data.Length} bytes)");
         return 0;
+    }
+
+    /// <summary>`bz font install NAME --device`: download on the PC (SHA-256 checked),
+    /// push each file to the device and install it there with `font add`.</summary>
+    static int FontToDevice(Target t, string name, string[] rest)
+    {
+        var opts = rest.ToList();
+        int ci = opts.IndexOf("--catalog");
+        var catalog = FontCli.FindCatalog(ci >= 0 && ci + 1 < opts.Count ? opts[ci + 1] : null);
+        if (catalog == null) return Fail("no font catalog: run inside the Buitenzorg tree or pass --catalog <catalog.txt>");
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bz", "fonts");
+        var got = FontCli.Fetch(FontCli.Load(catalog), name, dir, opts.Contains("--accept-license"), out var err);
+        if (got == null) return Fail(err!);
+        int rc = 0;
+        foreach (var (s, path) in got)
+        {
+            Upload(t, path, "/disk/FONTS/DOWNLOAD.TMP");
+            rc |= Exec(t, $"font add /disk/FONTS/DOWNLOAD.TMP {s.File} {s.Sha256}");
+        }
+        return rc;
     }
 
     static int Exec(Target t, string line)

@@ -198,12 +198,27 @@ impl<'a> Canvas<'a> {
         raster.width() as i32
     }
 
-    /// Draw a string; long text is clipped at `max_x`.
+    /// Draw a string in the monospace font on the 8 x 16 cell grid; long
+    /// text is clipped at `max_x`.
     pub fn draw_text(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32) {
+        if let Some((id, px)) = crate::font::mono() {
+            if !self.rows_visible(y, 16) {
+                return;
+            }
+            let (placed, _) = crate::font::layout(id, px, text, glyph_width() as i32);
+            let base = y + (16 - crate::font::ascent(id, px) - (px as i32 / 5)) / 2 + crate::font::ascent(id, px);
+            self.draw_glyph_run(x, base, &placed, color, max_x);
+            return;
+        }
+        self.draw_text_bitmap(x, y, text, color, max_x);
+    }
+
+    /// [`Canvas::draw_text`] in the bitmap font (never allocates).
+    pub fn draw_text_bitmap(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32) {
         // The console font is TextStyle::Body: same rasters, and its path
         // has the glyph cache (window text used to go pixel by pixel here).
         if matches!(FONT_WEIGHT, FontWeight::Regular) && FONT_HEIGHT.val() == 16 {
-            self.draw_text_styled(x, y, text, color, max_x, TextStyle::Body);
+            self.draw_text_styled_bitmap(x, y, text, color, max_x, TextStyle::Body);
             return;
         }
         let mut cx = x;
@@ -256,15 +271,93 @@ pub fn line_height(style: TextStyle) -> i32 {
     h.val() as i32
 }
 
-/// Pixel width of `text` in `style`.
+impl TextStyle {
+    /// The UI font face + pixel size for this style (None = bitmap font).
+    fn ttf(self) -> Option<(u16, u32)> {
+        crate::font::for_style(!matches!(self, TextStyle::Body), matches!(self, TextStyle::Heading))
+    }
+}
+
+/// Pixel width of `text` in `style` (UI font when one is chosen).
 pub fn text_width(text: &str, style: TextStyle) -> i32 {
+    if let Some((id, px)) = style.ttf() {
+        return crate::font::measure(id, px, text);
+    }
+    text_width_bitmap(text, style)
+}
+
+/// Pixel width of `text` in the bitmap font (never allocates).
+pub fn text_width_bitmap(text: &str, style: TextStyle) -> i32 {
     let (w, h) = style.font();
     (text.chars().count() * get_raster_width(w, h)) as i32
 }
 
 impl<'a> Canvas<'a> {
-    /// Draw `text` in `style`, clipped at `max_x`. Returns the x after it.
+    /// Draw `text` in `style` (UI font when one is chosen), clipped at
+    /// `max_x`; `y` is the top of the style's line (16 or 24 px). Returns the
+    /// x after it.
     pub fn draw_text_styled(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32, style: TextStyle) -> i32 {
+        if let Some((id, px)) = style.ttf() {
+            let lh = line_height(style);
+            if !self.rows_visible(y, lh) {
+                return x + crate::font::measure(id, px, text).min((max_x - x).max(0));
+            }
+            let (placed, w) = crate::font::layout(id, px, text, 0);
+            let asc = crate::font::ascent(id, px);
+            // centre the face's ascent + (a fifth of the size for) descent in the line
+            let base = y + (lh - asc - px as i32 / 5) / 2 + asc;
+            self.draw_glyph_run(x, base, &placed, color, max_x);
+            return x + w.min((max_x - x).max(0));
+        }
+        self.draw_text_styled_bitmap(x, y, text, color, max_x, style)
+    }
+
+    /// Text of face `id` at `px` with its line's top at `y` (baseline at
+    /// `y` + ascent), clipped at `max_x`. Returns the width drawn.
+    pub fn draw_text_font(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32, id: u16, px: u32) -> i32 {
+        let (placed, w) = crate::font::layout(id, px, text, 0);
+        let base = y + crate::font::ascent(id, px);
+        self.draw_glyph_run(x, base, &placed, color, max_x);
+        w
+    }
+
+    /// Blend laid-out glyphs (pen offsets from `x`) on the baseline `base`.
+    pub fn draw_glyph_run(&mut self, x: i32, base: i32, placed: &[(i32, alloc::sync::Arc<crate::font::Glyph>)], color: Color, max_x: i32) {
+        let (cw, top, bot) = (self.width as i32, self.y0 as i32, self.y1 as i32);
+        let right = max_x.min(cw);
+        for (dx, g) in placed {
+            if g.w == 0 {
+                continue;
+            }
+            let gx = x + dx + g.left as i32;
+            if gx >= right {
+                break;
+            }
+            let gy = base - g.top as i32;
+            let (gw, gh) = (g.w as i32, g.h as i32);
+            let (cx0, cx1) = (gx.max(0), (gx + gw).min(right));
+            let (cy0, cy1) = (gy.max(top), (gy + gh).min(bot));
+            if cx0 >= cx1 || cy0 >= cy1 {
+                continue;
+            }
+            for py in cy0..cy1 {
+                let row = ((py - gy) * gw) as usize;
+                let base_i = self.at(0, py as usize);
+                for px in cx0..cx1 {
+                    let a = g.cov[row + (px - gx) as usize];
+                    if a == 0 {
+                        continue;
+                    }
+                    let i = base_i + px as usize;
+                    self.pixels[i] = if a == 255 { color } else { blend_px(self.pixels[i], color, a) };
+                }
+            }
+        }
+    }
+
+    /// [`Canvas::draw_text_styled`] in the bitmap font (never allocates: the
+    /// boot splash draws from inside `_print`).
+    pub fn draw_text_styled_bitmap(&mut self, x: i32, y: i32, text: &str, color: Color, max_x: i32, style: TextStyle) -> i32 {
         let (weight, height) = style.font();
         let gw = get_raster_width(weight, height) as i32;
         if !self.rows_visible(y, height.val() as i32) {

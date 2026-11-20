@@ -138,6 +138,7 @@ pub fn process_exited(pid: u64, code: u64) {
 fn destroy_when_home(space: aspace::Space) {
     // 3D contexts, meshes and textures do not live in the address space
     crate::gfx3d::release(space.id);
+    crate::compute::release(space.id);
     if task::wait_space_stopped(space.id) {
         aspace::destroy(space);
     } else {
@@ -222,6 +223,29 @@ pub fn doom_self_test() {
     } else {
         crate::println!("[doom] test failed: exit code {:#x} after {} ms", code, ms);
     }
+}
+
+/// Self-test of the local LLM (`userland/clrhost/src/llm.rs`) with the
+/// model on every image, `/disk/STORIES.GGU` (stories260K, llama, MIT): the
+/// tokenizer and greedy text against a numpy reference, then the same text
+/// with every matrix product through COMPUTE_OP -> `MILESTONE: LLM OK`
+/// (printed by the program).
+pub fn llm_self_test() {
+    if crate::vfs::stat("/disk/STORIES.GGU").is_err() {
+        crate::println!("[llm] /disk/STORIES.GGU not on this image: test skipped");
+        return;
+    }
+    let t0 = crate::arch::cpu::nanos();
+    match spawn_with_args("/disk/STORIES.GGU", "--selftest") {
+        Ok(pid) => {
+            let code = wait(pid);
+            if code != 0 {
+                crate::println!("[llm] self-test exit code {:#x}", code);
+            }
+        }
+        Err(e) => crate::println!("[llm] could not start: {}", e),
+    }
+    crate::println!("[llm] self-test took {} ms", (crate::arch::cpu::nanos() - t0) / 1_000_000);
 }
 
 pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {

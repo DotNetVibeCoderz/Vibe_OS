@@ -321,6 +321,7 @@ impl Ctx {
     /// Bring `color` up to date with the GPU picture.
     fn sync(&mut self) {
         if self.dirty {
+            let t0 = crate::arch::cpu::nanos();
             if let Some(t) = &self.gpu {
                 if let Err(e) = virgl::read(t, &mut self.color) {
                     crate::println!("[gfx3d] GPU read-back: {}", e);
@@ -332,6 +333,8 @@ impl Ctx {
                 }
             }
             self.dirty = false;
+            T_READ.fetch_add(crate::arch::cpu::nanos() - t0, Ordering::Relaxed);
+            N_READ.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -374,6 +377,37 @@ static USED: AtomicUsize = AtomicUsize::new(0);
 static DRAWS: AtomicU64 = AtomicU64::new(0);
 static TRIANGLES: AtomicU64 = AtomicU64::new(0);
 static PIXELS: AtomicU64 = AtomicU64::new(0);
+/// Where the time goes (ns, summed since `reset_timing`): the whole DRAW
+/// call, its vertex stage, the hand-over to a native backend, read-backs.
+static T_DRAW: AtomicU64 = AtomicU64::new(0);
+static T_VERTEX: AtomicU64 = AtomicU64::new(0);
+static T_SUBMIT: AtomicU64 = AtomicU64::new(0);
+static T_READ: AtomicU64 = AtomicU64::new(0);
+static N_DRAW: AtomicU64 = AtomicU64::new(0);
+static N_READ: AtomicU64 = AtomicU64::new(0);
+
+pub fn reset_timing() {
+    for a in [&T_DRAW, &T_VERTEX, &T_SUBMIT, &T_READ, &N_DRAW, &N_READ] {
+        a.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Average cost per DRAW and per read-back, for `gfx3d time`.
+pub fn timing_lines() -> Vec<alloc::string::String> {
+    use alloc::format;
+    let l = |a: &AtomicU64| a.load(Ordering::Relaxed);
+    let (nd, nr) = (l(&N_DRAW).max(1), l(&N_READ).max(1));
+    alloc::vec![
+        format!(
+            "waktu: {} draw, rata-rata {} us (vertex {} us, serah ke GPU {} us)",
+            l(&N_DRAW),
+            l(&T_DRAW) / nd / 1000,
+            l(&T_VERTEX) / nd / 1000,
+            l(&T_SUBMIT) / nd / 1000
+        ),
+        format!("waktu: {} baca-balik gambar, rata-rata {} us (termasuk job GPU yang tertunda)", l(&N_READ), l(&T_READ) / nr / 1000),
+    ]
+}
 
 fn reserve(bytes: usize) -> Result<(), &'static str> {
     let mut cur = USED.load(Ordering::Relaxed);
@@ -1105,7 +1139,9 @@ fn gpu_draw(c: &mut Ctx, m: &Mesh, d: &Draw) -> (u32, u32) {
 /// for virgl. A textured draw sends (u, v) instead of the lit color (the
 /// native kernels do not modulate yet).
 fn native_draw(c: &mut Ctx, m: &Mesh, d: &Draw, n: &Native, h: usize) -> (u32, u32) {
+    let t0 = crate::arch::cpu::nanos();
     let tv = vertex_stage(c, m, d);
+    T_VERTEX.fetch_add(crate::arch::cpu::nanos() - t0, Ordering::Relaxed);
     let (w, hh) = (c.w, c.h);
     let double = d.flags & fl::DOUBLE_SIDED != 0;
     let wire = d.flags & fl::WIREFRAME != 0;
@@ -1170,7 +1206,10 @@ fn native_draw(c: &mut Ctx, m: &Mesh, d: &Draw, n: &Native, h: usize) -> (u32, u
         blend: d.flags & fl::BLEND != 0,
         wire,
     };
-    if let Err(e) = (n.draw)(h, &out, tex, flags) {
+    let t1 = crate::arch::cpu::nanos();
+    let r = (n.draw)(h, &out, tex, flags);
+    T_SUBMIT.fetch_add(crate::arch::cpu::nanos() - t1, Ordering::Relaxed);
+    if let Err(e) = r {
         crate::println!("[gfx3d] {} draw: {}", n.name, e);
         return (0, 0);
     }
@@ -1193,7 +1232,10 @@ pub fn draw(owner: u64, id: u32, mesh: u32, tex: u32, flags: u32, color: u32, mo
         },
     };
     let d = Draw { flags, color, model, view_proj, tex: t.as_deref() };
+    let t0 = crate::arch::cpu::nanos();
     let r = draw_into(&mut c.lock(), &m, &d);
+    T_DRAW.fetch_add(crate::arch::cpu::nanos() - t0, Ordering::Relaxed);
+    N_DRAW.fetch_add(1, Ordering::Relaxed);
     DRAWS.fetch_add(1, Ordering::Relaxed);
     TRIANGLES.fetch_add(r.0 as u64, Ordering::Relaxed);
     PIXELS.fetch_add(r.1 as u64, Ordering::Relaxed);

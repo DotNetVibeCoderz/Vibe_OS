@@ -137,6 +137,8 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::FS_LIST
             | sysno::FS_READ
             | sysno::FS_READ_AT
+            | sysno::FONT_OP
+            | sysno::COMPUTE_OP
             | sysno::FS_WRITE
             | sysno::FS_APPEND
             | sysno::FS_OP
@@ -324,7 +326,8 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
                 2 => crate::gfx::TextStyle::Heading,
                 _ => crate::gfx::TextStyle::Body,
             };
-            ((crate::gfx::text_width("M", style) as u64) << 32) | crate::gfx::line_height(style) as u64
+            // the grid cell (bitmap / monospace font): proportional text is measured with FONT_OP
+            ((crate::gfx::text_width_bitmap("M", style) as u64) << 32) | crate::gfx::line_height(style) as u64
         }
         sysno::SETTING => sys_setting(a0, a1, a2),
         sysno::HW_BOARD => crate::hwio::board(a0, a1),
@@ -387,6 +390,8 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_LIST => sys_fs_list(a0, a1, a2),
         sysno::FS_READ => sys_fs_read(a0, a1, a2),
         sysno::FS_READ_AT => sys_fs_read_at(a0, a1, a2),
+        sysno::FONT_OP => sys_font_op(a0, a1, a2),
+        sysno::COMPUTE_OP => sys_compute_op(a0, a1, a2),
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
         sysno::FS_APPEND => sys_fs_append(a0, a1, a2),
@@ -644,6 +649,162 @@ fn sys_fs_op(op: u64, path_ptr: u64, a2: u64) -> u64 {
 }
 
 /// FS_READ_AT: part of a file (`a2` = offset << 24 | length).
+/// COMPUTE_OP: `a0` = operation | handle << 8 (see `bz_abi::compute_op`).
+/// Data moves through a 64 KiB kernel bounce buffer (never a slice over
+/// user memory).
+fn sys_compute_op(a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::compute_op as o;
+    let owner = task::current_space().id;
+    let (op, h) = (a0 & 0xFF, a0 >> 8);
+    let err = |e: &str| {
+        crate::println!("[compute] pid {}: {}", owner, e);
+        syserr::INVAL
+    };
+    match op {
+        o::INFO => {
+            let (kind, ra, ca, name) = crate::compute::info();
+            if a1 != 0 {
+                let n = (name.len() + 1).min(a2 as usize);
+                if n == 0 || !user_write(a1, n as u64) {
+                    return syserr::INVAL;
+                }
+                for (k, b) in name.bytes().chain(core::iter::once(0)).take(n).enumerate() {
+                    unsafe { ((a1 + k as u64) as *mut u8).write_volatile(b) };
+                }
+            }
+            kind | (ra as u64) << 16 | (ca as u64) << 32
+        }
+        o::ALLOC => match crate::compute::alloc(owner, a1 as usize) {
+            Ok(id) => id,
+            Err(e) => err(e),
+        },
+        o::FREE => {
+            if crate::compute::free(owner, h) {
+                0
+            } else {
+                syserr::INVAL
+            }
+        }
+        o::WRITE | o::READ => {
+            let (off, len) = ((a2 >> 32) as usize, (a2 & 0xFFFF_FFFF) as usize);
+            let ok = if op == o::WRITE { user_read(a1, len as u64) } else { user_write(a1, len as u64) };
+            if !ok {
+                return syserr::INVAL;
+            }
+            const CHUNK: usize = 64 << 10;
+            let mut buf = alloc::vec![0u8; CHUNK.min(len.max(1))];
+            let mut done = 0;
+            while done < len {
+                let n = (len - done).min(CHUNK);
+                let user = (a1 + done as u64) as *mut u8;
+                let r = if op == o::WRITE {
+                    unsafe { core::ptr::copy_nonoverlapping(user as *const u8, buf.as_mut_ptr(), n) };
+                    crate::compute::write(owner, h, off + done, &buf[..n])
+                } else {
+                    let r = crate::compute::read(owner, h, off + done, &mut buf[..n]);
+                    if r.is_ok() {
+                        unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), user, n) };
+                    }
+                    r
+                };
+                if let Err(e) = r {
+                    return err(e);
+                }
+                done += n;
+            }
+            len as u64
+        }
+        o::GEMV => {
+            let (x, y) = (a1 & 0xFFFF_FFFF, a1 >> 32);
+            let (rows, cols) = ((a2 & 0xFFFF_FFFF) as u32, (a2 >> 32) as u32);
+            match crate::compute::gemv(owner, h, x, y, rows, cols) {
+                Ok(us) => us,
+                Err(e) => err(e),
+            }
+        }
+        _ => syserr::NOSYS,
+    }
+}
+
+/// FONT_OP: `a0` = operation | face id << 8 | pixel size << 24.
+fn sys_font_op(a0: u64, a1: u64, a2: u64) -> u64 {
+    use bz_abi::font_op as o;
+    let (op, id, px) = (a0 & 0xFF, (a0 >> 8) & 0xFFFF, ((a0 >> 24) & 0xFF) as u32);
+    let face = || crate::font::resolve(id as u32);
+    match op {
+        o::COUNT => crate::font::count() as u64,
+        o::INFO => {
+            let Some((family, bold, mono, file)) = crate::font::info(id as u16) else { return syserr::INVAL };
+            if a2 < 128 || !user_write(a1, a2) {
+                return syserr::INVAL;
+            }
+            let text = alloc::format!("{}\t{}\t{}\t{}", family, if bold { "Bold" } else { "Regular" }, mono as u8, file);
+            let n = text.len().min(a2 as usize - 1);
+            let out = a1 as *mut u8;
+            for (i, b) in text.bytes().take(n).enumerate() {
+                unsafe { out.add(i).write_volatile(b) };
+            }
+            unsafe { out.add(n).write_volatile(0) };
+            n as u64
+        }
+        o::FIND => {
+            let Some(family) = read_user_path_checked(a1) else { return syserr::INVAL };
+            crate::font::find(&family, a2 != 0).map_or(syserr::INVAL, |id| id as u64)
+        }
+        o::METRICS => match face().and_then(|f| crate::font::metrics(f, px.max(4))) {
+            Some((asc, desc, line)) => asc as u64 & 0xFFFF | (desc as u64 & 0xFFFF) << 16 | (line as u64) << 32,
+            None => syserr::INVAL,
+        },
+        o::MEASURE => {
+            let Some(f) = face() else { return syserr::INVAL };
+            if a2 > 64 * 1024 || !user_read(a1, a2) {
+                return syserr::INVAL;
+            }
+            let bytes = copy_user_bytes(a1, a2 as usize);
+            let text = alloc::string::String::from_utf8_lossy(&bytes);
+            crate::font::measure(f, px.max(4), &text) as u64
+        }
+        o::INSTALL => {
+            let Some(req) = read_user_path_checked(a1) else { return syserr::INVAL };
+            let mut parts = req.split('\n');
+            let (Some(src), Some(file)) = (parts.next(), parts.next()) else { return syserr::INVAL };
+            let hex = parts.next().unwrap_or("").trim();
+            let mut want = [0u8; 32];
+            let sha = if hex.is_empty() {
+                None
+            } else {
+                if hex.len() != 64 {
+                    return syserr::INVAL;
+                }
+                for i in 0..32 {
+                    match u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16) {
+                        Ok(b) => want[i] = b,
+                        Err(_) => return syserr::INVAL,
+                    }
+                }
+                Some(&want)
+            };
+            let Ok(data) = crate::vfs::read(src.trim()) else { return syserr::INVAL };
+            match crate::font::install(file.trim(), &data, sha) {
+                Ok(ids) => {
+                    let _ = crate::vfs::remove(src.trim());
+                    ids.len() as u64
+                }
+                Err(e) => {
+                    crate::println!("[font] install {}: {}", file.trim(), e);
+                    syserr::INVAL
+                }
+            }
+        }
+        o::REMOVE => {
+            let Some(file) = read_user_path_checked(a1) else { return syserr::INVAL };
+            crate::font::remove_file(file.trim()).map_or(syserr::INVAL, |n| n as u64)
+        }
+        o::GENERATION => crate::font::generation(),
+        _ => syserr::INVAL,
+    }
+}
+
 fn sys_fs_read_at(path_ptr: u64, buf_ptr: u64, a2: u64) -> u64 {
     let (offset, len) = (a2 >> 24, (a2 & 0xFF_FFFF).min(4 << 20));
     if len == 0 || !user_write(buf_ptr, len) {
@@ -1475,7 +1636,7 @@ fn sys_win_cmd(win_id: u64, cmd_ptr: u64) -> u64 {
             Err(_) => syserr::INVAL,
         };
     }
-    let has_text = cmd.op == bz_abi::draw_op::DRAW_TEXT || cmd.op == bz_abi::draw_op::DRAW_TEXT_STYLED;
+    let has_text = cmd.op == bz_abi::draw_op::DRAW_TEXT || cmd.op == bz_abi::draw_op::DRAW_TEXT_STYLED || cmd.op == bz_abi::draw_op::DRAW_TEXT_FONT;
     let text_buf = if has_text {
         if cmd.text_len == 0 || cmd.text_len > 4096 {
             return syserr::INVAL;

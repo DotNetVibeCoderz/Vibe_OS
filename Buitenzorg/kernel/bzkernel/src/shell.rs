@@ -138,8 +138,8 @@ pub fn command_names() -> Vec<&'static str> {
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "lsusb", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
-    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "bg", "saver", "cursor", "anim", "tone",
-    "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "shutdown", "restart", "sleep", "bz",
+    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
+    "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
 ];
 
 // ---- command lines: quoting, variables, globs, pipes, redirection ----------
@@ -1132,6 +1132,16 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "theme" => theme_cmd(args.first().copied()),
         "ws" => ws_cmd(args.first().copied()),
         "run" => run_cmd(args.first().copied(), &args[args.len().min(1)..]),
+        "llm" => {
+            // llm [MODEL.GGU] [prompt...] [--steps N] [--temp T] [--cpu|--gpu]:
+            // the local language model (CLRHOST.ELF llm.rs), default the tiny
+            // TinyStories model on every image
+            let (model, rest) = match args.first() {
+                Some(m) if m.to_ascii_lowercase().ends_with(".ggu") || m.to_ascii_lowercase().ends_with(".gguf") => (*m, &args[1..]),
+                _ => ("/disk/STORIES.GGU", &args[..]),
+            };
+            run_cmd(Some(model), rest)
+        }
         "ps" => (ps_cmd(), Effect::None),
         "free" => (free_cmd(), Effect::None),
         "uptime" => (vec![uptime_line()], Effect::None),
@@ -1140,6 +1150,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             Err(e) => (vec![format!("layar: {}", e)], Effect::None),
         },
         "top" => (top_cmd(), Effect::None),
+        "font" | "fon" => (crate::font::command(&args), Effect::None),
         "crash" | "crashes" => (crash_cmd(args.first().copied()), Effect::None),
         "dbg" | "debug" => (crate::debug::command(&args), Effect::None),
         "gdbserver" => (crate::gdbstub::command(&args), Effect::None),
@@ -1215,6 +1226,18 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             (crate::appprof::command(&args), Effect::None)
         }
         "prof" | "profile" => prof_cmd(args.first().copied()),
+        "compute" => {
+            // compute [gpu|ref|test]: the GPU compute backend (GEMV for AI)
+            match args.first().copied() {
+                Some("gpu") => crate::compute::set_enabled(true),
+                Some("ref") | Some("cpu") => crate::compute::set_enabled(false),
+                Some("test") => {
+                    crate::compute::self_test();
+                }
+                _ => {}
+            }
+            (crate::compute::report(), Effect::None)
+        }
         "gfx3d" | "3d" => {
             // gfx3d [test]: the 3D API's resources, or its self-test
             let mut out = Vec::new();
@@ -1223,6 +1246,13 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
                 out.push(String::from(if ok { "self-test 3D: OK (lihat log serial)" } else { "self-test 3D GAGAL (lihat log serial)" }));
             }
             match args.first().copied() {
+                Some("time") => {
+                    out.extend(crate::gfx3d::timing_lines());
+                    if args.get(1) == Some(&"reset") {
+                        crate::gfx3d::reset_timing();
+                        out.push(String::from("waktu direset"));
+                    }
+                }
                 Some("sw") => {
                     crate::virtio::virgl::set_enabled(false);
                     crate::gfx3d::set_native(false);
@@ -1304,7 +1334,9 @@ fn gpu_info() -> Vec<String> {
         {
             let v = crate::platform::virt::v3d::version();
             if v != 0 {
-                return vec![format!("gpu: V3D {}.{} (Raspberry Pi 4) -- 'gpu v3d' runs GPU jobs (MMU + render control list)", v / 10, v % 10)];
+                let mut out = vec![format!("gpu: V3D {}.{} (Raspberry Pi 4) -- 'gpu v3d' runs the self-test, 'gpu on' / 'gpu cpu' switch presenting", v / 10, v % 10)];
+                out.extend(crate::platform::virt::v3d_draw::report());
+                return out;
             }
         }
         vec![String::from("gpu: no GPU driver here (Intel graphics on PCs, V3D on a Raspberry Pi 4)")]
@@ -1336,7 +1368,14 @@ fn gpu_cmd(arg: Option<&str>) -> Vec<String> {
             None => gpu_info(),
             #[cfg(target_arch = "aarch64")]
             Some("v3d") => crate::platform::virt::v3d::self_test(),
-            Some(_) => vec![String::from("gpu blit/render/on/cpu: PCs with Intel graphics; 'gpu v3d' on a Raspberry Pi 4")],
+            #[cfg(target_arch = "aarch64")]
+            Some("on") => vec![format!("gpu: {}", crate::platform::virt::v3d_draw::enable_present())],
+            #[cfg(target_arch = "aarch64")]
+            Some("cpu") | Some("off") => {
+                crate::platform::virt::v3d_draw::disable_present();
+                vec![String::from("gpu: the desktop is presented by the CPU")]
+            }
+            Some(_) => vec![String::from("gpu blit/render/on/cpu: PCs with Intel graphics; 'gpu v3d' / 'gpu on' / 'gpu cpu' on a Raspberry Pi 4")],
         }
     }
 }
@@ -1646,7 +1685,7 @@ fn run_cmd(arg: Option<&str>, app_args: &[&str]) -> (Vec<String>, Effect) {
     // a UI script by any path: `run MAIN.JS`, `run /disk/PROYEK/X/MAIN.PY`
     let lower = name.to_ascii_lowercase();
     let resolved;
-    let name = if lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".py") || lower.ends_with(".csx") {
+    let name = if lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".py") || lower.ends_with(".csx") || lower.ends_with(".ggu") || lower.ends_with(".gguf") {
         resolved = resolve(Some(name));
         resolved.as_str()
     } else {

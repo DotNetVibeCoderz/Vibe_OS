@@ -61,7 +61,9 @@ jendela, (0, 0) kiri atas.
 | `line(x1, y1, x2, y2, c)` | garis |
 | `circle(cx, cy, r, c)` / `ring(cx, cy, r, c)` | lingkaran penuh / garis lingkaran |
 | `text(x, y, s, c [, gaya])` | teks; gaya 0 biasa, 1 tebal, 2 judul (24 px) |
-| `textwidth(s [, gaya])`, `lineheight([gaya])` | ukuran teks (font monospace) |
+| `textwidth(s [, gaya])`, `lineheight([gaya])` | ukuran teks dalam fon desktop |
+| `font(keluarga [, tebal])` | id fon TrueType (0 = belum terpasang) -- lihat [fonts.id.md](fonts.id.md) |
+| `textfont(x, y, s, warna, id, ukuran)`, `measure(s, id, ukuran)` | teks dengan fon itu di ukuran piksel berapa pun, dan lebarnya |
 | `button(x, y, w, h, label)` | tombol; true saat diklik |
 | `input(x, y, w, id [, placeholder])` | kolom teks: klik untuk fokus, ketik, Backspace; Enter / Tab / Esc keluar (Enter juga sampai ke `key()`); mengembalikan teksnya |
 | `setinput(id, teks)`, `focus(id)` | isi teks sebuah kolom / beri dia keyboard (`focus("")` = tidak ada) |

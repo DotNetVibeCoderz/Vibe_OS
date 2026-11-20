@@ -292,8 +292,86 @@ pub mod sysno {
     /// length` (length < 16 MiB, at most 4 MiB is read per call). Returns the
     /// bytes read: fewer at the end of the file, 0 past it.
     pub const FS_READ_AT: u64 = 70;
+    /// TrueType / OpenType fonts (see [`font_op`]): `a0` = operation | face
+    /// id << 8 | pixel size << 24; `a1`, `a2` depend on the operation.
+    pub const FONT_OP: u64 = 71;
+    /// GPU compute (see [`compute_op`]): `a0` = operation | handle << 8;
+    /// `a1`, `a2` depend on the operation.
+    pub const COMPUTE_OP: u64 = 72;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 71;
+    pub const COUNT: u64 = 73;
+}
+
+/// Operations of [`sysno::COMPUTE_OP`] (the low 8 bits of `a0`). Buffers
+/// belong to the calling process and are freed when it exits.
+pub mod compute_op {
+    /// The backend new buffers use -> kind ([`super::compute_kind`]) | row
+    /// alignment << 16 | column alignment << 32; `a1` = buffer (or 0), `a2` =
+    /// its length: receives the backend name, NUL-terminated.
+    pub const INFO: u64 = 0;
+    /// Allocate `a1` bytes -> handle.
+    pub const ALLOC: u64 = 1;
+    /// Copy into buffer `handle`: `a1` = source, `a2` = offset << 32 | length.
+    pub const WRITE: u64 = 2;
+    /// Copy out of buffer `handle`: `a1` = destination, `a2` = offset << 32 | length.
+    pub const READ: u64 = 3;
+    /// Free buffer `handle`.
+    pub const FREE: u64 = 4;
+    /// `y[r] = sum_c W[r][c] x[c]` (f32, W row-major): `a0` = op | W << 8,
+    /// `a1` = x | y << 32, `a2` = rows | cols << 32 (multiples of the INFO
+    /// alignments) -> GPU microseconds.
+    pub const GEMV: u64 = 5;
+}
+
+/// Backend kinds reported by [`compute_op::INFO`].
+pub mod compute_kind {
+    /// The kernel's CPU reference: correct but slower than computing in the
+    /// program itself -- use it only to test the path.
+    pub const REFERENCE: u64 = 0;
+    /// Broadcom V3D (Raspberry Pi 4) QPUs.
+    pub const V3D: u64 = 1;
+    /// virtio-gpu 3D (virgl) compute shaders.
+    pub const VIRGL: u64 = 2;
+    /// Intel Gen9 execution units.
+    pub const INTEL: u64 = 3;
+}
+
+/// Operations of [`sysno::FONT_OP`] (the low 8 bits of `a0`). A face id is
+/// 1.. for a registered face, or one of the `font_id` aliases.
+pub mod font_op {
+    /// Number of face slots (ids 1..=n; removed faces answer `INVAL` to INFO).
+    pub const COUNT: u64 = 0;
+    /// Describe face `id`: `a1` = buffer, `a2` = its length (>= 128) ->
+    /// bytes written: `family TAB Regular|Bold TAB mono 0/1 TAB file`.
+    pub const INFO: u64 = 1;
+    /// Find a face: `a1` = NUL-terminated family, `a2` = 1 for bold -> id
+    /// (the other weight when that one is missing) or `INVAL`.
+    pub const FIND: u64 = 2;
+    /// Metrics of `id` at `px` -> ascent | descent << 16 | line height << 32 (pixels).
+    pub const METRICS: u64 = 3;
+    /// Width of UTF-8 text (`a1` = pointer, `a2` = length) in `id` at `px`, kerned.
+    pub const MEASURE: u64 = 4;
+    /// Install a font: `a1` = NUL-terminated request `SOURCE` LF `FILE.TTF` LF `SHA256`
+    /// (a downloaded file, its 8.3 name in /disk/FONTS, the expected SHA-256 in
+    /// hex or empty) -> faces registered. The source is deleted. Needs `system`.
+    pub const INSTALL: u64 = 5;
+    /// Remove `/disk/FONTS/<a1>` (NUL-terminated 8.3 name) -> faces removed. Needs `system`.
+    pub const REMOVE: u64 = 6;
+    /// A number that changes whenever text looks different (fonts added or
+    /// removed, another UI / monospace font): drop cached measurements.
+    pub const GENERATION: u64 = 7;
+}
+
+/// Face-id aliases for [`font_op`] and [`draw_op::DRAW_TEXT_FONT`].
+pub mod font_id {
+    /// The UI font in the toolkit's body / strong / heading weight.
+    pub const UI: u64 = 0xFFF0;
+    /// The UI font, bold.
+    pub const UI_BOLD: u64 = 0xFFF1;
+    /// The UI font for headings (bold).
+    pub const UI_HEADING: u64 = 0xFFF2;
+    /// The monospace font.
+    pub const MONO: u64 = 0xFFFE;
 }
 
 /// Operations of [`sysno::AUDIO_READ`].
@@ -486,6 +564,12 @@ pub mod setting_key {
     /// Local date and time as seconds since 1970-01-01 *local* midnight
     /// (GET reads it, SET sets the clock).
     pub const CLOCK: u64 = 9;
+    /// Font of the desktop's text (an index: 0 = the bitmap font, then the
+    /// installed families; NAME = the family).
+    pub const UI_FONT: u64 = 10;
+    /// Font of the terminal and text windows (0 = bitmap, then the installed
+    /// monospace families).
+    pub const MONO_FONT: u64 = 11;
 }
 
 /// Queries of the [`sysno::HW_BOARD`] syscall.
@@ -731,6 +815,11 @@ pub mod draw_op {
     /// Blend a translucent rounded rectangle: `color`, `_pad` bits 0-15 =
     /// radius, bits 16-23 = alpha (0-255) -- shadows, overlays, focus rings.
     pub const BLEND_ROUND_RECT: u64 = 13;
+    /// Draw UTF-8 text in a font: `_pad` = face id (bits 0-15, or a
+    /// [`font_id`] alias) | pixel size << 16 (bits 16-23). `y` is the top of
+    /// the line (baseline at y + ascent); `w` > 0 clips the text at x + w;
+    /// `h` > 0 puts every character in a cell `h` px wide (a monospace grid).
+    pub const DRAW_TEXT_FONT: u64 = 14;
 }
 
 /// Process/task descriptor for the PROC_LIST syscall (v0.9 "Serbuk").
@@ -1060,8 +1149,12 @@ mod tests {
         assert_eq!(sysno::FS_APPEND, 68);
         assert_eq!(sysno::AUDIO_READ, 69);
         assert_eq!(sysno::FS_READ_AT, 70);
+        assert_eq!(sysno::FONT_OP, 71);
+        assert_eq!(sysno::COMPUTE_OP, 72);
+        assert_eq!(compute_op::GEMV, 5);
+        assert_eq!(compute_kind::INTEL, 3);
         assert_eq!(audio_read_op::QUEUED, 3);
-        assert_eq!(sysno::COUNT, 71);
+        assert_eq!(sysno::COUNT, 73);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1081,7 +1174,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 71, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 73, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

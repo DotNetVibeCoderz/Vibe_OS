@@ -39,6 +39,7 @@ mod fat;
 mod framebuffer;
 mod gfx;
 mod icons;
+mod font;
 mod ipc;
 mod keyboard;
 mod logo;
@@ -236,6 +237,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     clr::boot_demo("x86-64");
     // C programs: DOOM through userland/c (when the image carries it)
     app::doom_self_test();
+    app::llm_self_test();
 
     // v1.0 hardening: syscalls must refuse user pointers the caller does not
     // own (kernel addresses, unmapped pages, ranges that overflow the user
@@ -247,6 +249,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     }
     // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
     gfx3d::self_test();
+    compute::self_test();
 
     // v1.0: instrumented profiler self-test — verifies zone timing records
     // exact call counts and correct relative costs (deterministic, not sampled).
@@ -319,6 +322,7 @@ fn fast_boot() -> ! {
     boot::phase("mount");
     clock::load();
     let icons = icons::load();
+    font::load_all();
     boot::phase("icons");
     net::init([10, 0, 0, 1]);
     let t_dev = interrupts::ticks();
@@ -428,6 +432,7 @@ fn boot_background() {
             if !vfs::mounts().iter().any(|m| m == "/disk" || m == "disk") && mount_disk_volume() {
                 clock::load();
                 icons::load();
+                font::load_all();
                 wm::present_now();
             }
         },
@@ -1921,6 +1926,8 @@ fn dahan_demo() {
     disk_persist_demo();
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).
     let n_icons = icons::load();
+    font::load_all();
+    font::self_test();
     if n_icons > 0 {
         println!("[kernel] MILESTONE: ICONS OK ({} app icons loaded from /disk/ICONS.BIN)", n_icons);
     } else {

@@ -24,6 +24,14 @@ pub mod hdmi_audio;
 #[cfg(target_arch = "aarch64")]
 pub mod v3d;
 #[cfg(target_arch = "aarch64")]
+pub mod v3d_compute;
+#[cfg(target_arch = "aarch64")]
+pub mod v3d_compute_kernels;
+#[cfg(target_arch = "aarch64")]
+pub mod v3d_draw;
+#[cfg(target_arch = "aarch64")]
+pub mod v3d_shaders;
+#[cfg(target_arch = "aarch64")]
 pub mod tryboot;
 #[cfg(target_arch = "riscv64")]
 pub mod uart16550;

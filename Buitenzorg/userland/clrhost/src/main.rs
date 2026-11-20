@@ -41,6 +41,8 @@ mod vp8;
 mod vp8_tables;
 mod movie;
 mod movieapi;
+mod fontapi;
+mod llm;
 /// The kernel's JS/TS/Python interpreter (same source), for UI scripts.
 #[path = "../../../kernel/bzkernel/src/script.rs"]
 #[allow(dead_code)]
@@ -127,6 +129,11 @@ extern "C" fn clr_main() -> ! {
         sys::exit(2);
     };
     let prog_args: Vec<String> = words.map(String::from).collect();
+    // A GGUF language model: the local LLM (llm.rs).
+    if llm::is_model(&path) {
+        threads::install();
+        llm::run(&path, prog_args);
+    }
     // A JavaScript / TypeScript / Python file: a UI script (scriptui.rs).
     if scriptui::is_script(&path) {
         scriptui::run(&path, prog_args);

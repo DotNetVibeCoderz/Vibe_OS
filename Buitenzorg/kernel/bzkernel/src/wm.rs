@@ -1022,6 +1022,25 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
             let (radius, alpha) = ((cmd._pad & 0xFFFF) as i32, ((cmd._pad >> 16) & 0xFF) as u8);
             blend_rounded(&mut c, cmd.x, cmd.y, cmd.w, cmd.h, radius, cmd.color, alpha)
         }
+        bz_abi::draw_op::DRAW_TEXT_FONT => {
+            let text = text.ok_or("draw_text without text")?;
+            let px = ((cmd._pad >> 16) & 0xFF).max(4);
+            let max_x = if cmd.w > 0 { cmd.x + cmd.w } else { cw as i32 };
+            match crate::font::resolve(cmd._pad & 0xFFFF) {
+                Some(id) if cmd.h > 0 => {
+                    let (placed, _) = crate::font::layout(id, px, text, cmd.h);
+                    c.draw_glyph_run(cmd.x, cmd.y + crate::font::ascent(id, px), &placed, cmd.color, max_x);
+                }
+                Some(id) => {
+                    c.draw_text_font(cmd.x, cmd.y, text, cmd.color, max_x, id, px);
+                }
+                // no such face (or the bitmap font chosen): the nearest bitmap style
+                None => {
+                    let style = if px >= 20 { gfx::TextStyle::Heading } else { gfx::TextStyle::Body };
+                    c.draw_text_styled_bitmap(cmd.x, cmd.y, text, cmd.color, max_x, style);
+                }
+            }
+        }
         _ => return Err("unknown draw op"),
     }
     Ok(())
@@ -2753,6 +2772,7 @@ fn theme_key(th: &theme::Theme) -> u64 {
     for c in [th.taskbar_bg, th.win_border, th.accent, th.text, th.title_text, th.win_title_active, th.win_title_inactive, th.shadow, th.cursor] {
         k = gfx::mix(k, c as u64);
     }
+    k = gfx::mix(k, crate::font::generation());
     gfx::mix(gfx::mix(k, th.glass as u64), th.dark as u64)
 }
 

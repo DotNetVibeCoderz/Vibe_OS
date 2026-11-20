@@ -39,6 +39,7 @@ mod fat;
 mod framebuffer;
 mod gfx;
 mod icons;
+mod font;
 mod ipc;
 mod keyboard;
 mod limine;
@@ -292,6 +293,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         // The managed C# path (RustCLR): C# on RISC-V, where bflat has no target.
         clr::boot_demo("RISC-V");
         app::doom_self_test();
+        app::llm_self_test();
         gpu_self_test(info);
         show_desktop();
     } else {
@@ -1012,6 +1014,7 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
         }
         // G3: the 3D rasterizer behind Buitenzorg.Graphics3D, checked offscreen.
         gfx3d::self_test();
+        compute::self_test();
     }
 
     if power::init("") {
@@ -1029,6 +1032,10 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
         mouse::set_bounds(fb.width, fb.height);
         theme::set_default();
         let n = icons::load();
+        font::load_all();
+        if st {
+            font::self_test();
+        }
         // a normal boot loads the wallpaper behind the desktop
         let wp = st && wallpaper::set_official("nature").is_ok();
         println!("[riscv] window system: {}x{}, {} app icons, wallpaper 'nature' loaded: {}", fb.width, fb.height, n, wp);

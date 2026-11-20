@@ -176,4 +176,5 @@ jobs:
           dotnet run --project sdk/bz -c Release -- dap --selftest
           dotnet run --project sdk/bz -c Release -- debug --selftest
           dotnet run --project sdk/bz -c Release -- repo --selftest
+          dotnet run --project sdk/bz -c Release -- font --selftest
           dotnet run --project sdk/bz -c Release -- build-server --selftest

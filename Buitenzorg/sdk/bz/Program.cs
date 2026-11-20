@@ -27,6 +27,7 @@ return args switch
     ["repo", .. var rest] => RepoCli.Run(rest),
     ["publish", .. var rest] when rest.Length >= 1 => RepoCli.Run(["publish", .. rest]),
     ["build-server", .. var rest] => BuildServer.Run(rest),
+    ["font", .. var rest] => FontCli.Run(rest),
     ["app", ..] => Stub("app", "v0.10 'Buah' (package manager + registry)"),
     ["theme", ..] => Stub("theme", "v0.10 'Buah' (theme engine, 8 built-in styles)"),
     ["model", ..] => Stub("model", "v0.12 'Nalar' (Model Manager + Hugging Face gallery)"),
@@ -46,6 +47,8 @@ static int Help()
                                             build a .bzpkg from <dir>/app.manifest + <dir>/package/*
           bz repo serve DIR [--port N]      serve a package repository (INDEX.TXT + .bzpkg files)
           bz repo index DIR                 (re)write DIR/INDEX.TXT
+          bz font [search TEXT|info NAME]   the font catalog (assets/fonts/catalog.txt)
+          bz font install NAME [--device]   download (SHA-256 checked) to ~/.bz/fonts, or onto the device
           bz publish PKG [--repo DIR]       put a package into a repository folder (+ index)
           bz build-server [--port N]        compile C# for devices (they send .CS, get a .dll for RustCLR)
           bz inspect <file.bzpkg>           list and verify a package

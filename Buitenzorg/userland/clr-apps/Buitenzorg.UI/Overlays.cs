@@ -248,7 +248,7 @@ public sealed class NotificationCard : Control
     protected override Size MeasureOverride(Size a)
     {
         int w = Width > 0 ? Width : 260;
-        var lines = TextBlock.Wrap(N.Message, Math.Max(1, (w - Padding.Horizontal - 30) / Fonts.GlyphWidth(0)), true);
+        var lines = TextBlock.WrapPx(N.Message, Math.Max(1, w - Padding.Horizontal - 30), 0, true);
         return new Size(w, Padding.Vertical + 18 + lines.Count * 18);
     }
 
@@ -263,7 +263,7 @@ public sealed class NotificationCard : Control
         Icon.Draw(dc, kind, new Rect(r.X, r.Y + 1, 16, 16), c);
         dc.Text(r.X + 26, r.Y, N.Title, Theme.Text, 1);
         int y = r.Y + 20;
-        foreach (var l in TextBlock.Wrap(N.Message, Math.Max(1, (r.Width - 26) / Fonts.GlyphWidth(0)), true))
+        foreach (var l in TextBlock.WrapPx(N.Message, Math.Max(1, r.Width - 26), 0, true))
         {
             dc.Text(r.X + 26, y, l, Theme.TextMuted, 0);
             y += 18;

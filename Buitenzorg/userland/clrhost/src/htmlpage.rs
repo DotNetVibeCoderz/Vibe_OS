@@ -453,6 +453,16 @@ impl Lay<'_> {
     fn gw(&self, st: i32) -> i32 {
         self.m[(st * 2) as usize].max(1)
     }
+    /// Width of `s` as the page draws it: the kernel's UI font (proportional,
+    /// FONT_OP MEASURE) when it has one, else the monospace grid.
+    fn tw(&self, st: i32, s: &str) -> i32 {
+        if s.is_empty() {
+            return 0;
+        }
+        let px: u64 = if st == 2 { 21 } else { 14 };
+        let r = crate::sys::syscall(71, 4 | (0xFFF0 + st as u64) << 8 | px << 24, s.as_ptr() as u64, s.len() as u64);
+        if crate::sys::is_err(r) { s.chars().count() as i32 * self.gw(st) } else { r as i32 }
+    }
     fn lh(&self, st: i32) -> i32 {
         self.m[(st * 2 + 1) as usize].max(1)
     }
@@ -583,41 +593,63 @@ impl Lay<'_> {
 
     fn word(&mut self, w: &str) {
         let st = self.style();
-        let (gw, lh) = (self.gw(st), self.lh(st));
+        let lh = self.lh(st);
+        let space = self.tw(st, " ").max(1);
         let mut chars: Vec<char> = w.chars().collect();
-        let need = chars.len() as i32 * gw + if self.pending_space && self.x > self.left() { gw } else { 0 };
+        let need = self.tw(st, w) + if self.pending_space && self.x > self.left() { space } else { 0 };
         if self.x + need > self.right() && self.x > self.left() {
             self.end_line();
         }
+        let mut spaces = 0;
         if self.pending_space && self.x > self.left() {
-            self.x += gw;
+            self.x += space;
+            spaces = 1;
         }
         self.pending_space = false;
         let color = self.color();
-        let mut room = ((self.right() - self.x) / gw).max(1) as usize;
-        while chars.len() > room {
-            let head: String = chars[..room].iter().collect();
-            self.line.push(Item { kind: 0, x: self.x, y: 0, w: room as i32 * gw, h: lh, style: st, color, image: -1, href: self.href, text: head });
-            chars.drain(..room);
+        // a word wider than the line is split where it stops fitting
+        loop {
+            let room = self.right() - self.x;
+            let whole: String = chars.iter().collect();
+            if self.tw(st, &whole) <= room || chars.len() <= 1 {
+                break;
+            }
+            let mut n = 1;
+            while n < chars.len() {
+                let head: String = chars[..n + 1].iter().collect();
+                if self.tw(st, &head) > room {
+                    break;
+                }
+                n += 1;
+            }
+            let head: String = chars[..n].iter().collect();
+            let hw = self.tw(st, &head);
+            self.line.push(Item { kind: 0, x: self.x, y: 0, w: hw, h: lh, style: st, color, image: -1, href: self.href, text: head });
+            chars.drain(..n);
             self.end_line();
-            room = ((self.right() - self.x) / gw).max(1) as usize;
+            spaces = 0;
         }
         let text: String = chars.iter().collect();
-        let len = chars.len() as i32;
+        let width = self.tw(st, &text);
+        let x = self.x;
+        let href = self.href;
         if let Some(last) = self.line.last_mut() {
-            if last.kind == 0 && last.style == st && last.href == self.href && last.color == color && last.x + last.w <= self.x {
-                let pad = (self.x - (last.x + last.w)) / gw;
-                for _ in 0..pad {
+            if last.kind == 0 && last.style == st && last.href == href && last.color == color && last.x + last.w <= x {
+                for _ in 0..spaces {
                     last.text.push(' ');
                 }
                 last.text.push_str(&text);
-                last.w = last.text.chars().count() as i32 * gw;
-                self.x += len * gw;
+                let joined = last.text.clone();
+                let w = self.tw(st, &joined);
+                if let Some(last) = self.line.last_mut() {
+                    last.w = w;
+                }
+                self.x += width;
                 return;
             }
         }
-        self.line.push(Item { kind: 0, x: self.x, y: 0, w: len * gw, h: lh, style: st, color, image: -1, href: self.href, text });
-        self.x += len * gw;
+        self.line.push(Item { kind: 0, x: self.x, y: 0, w: width, h: lh, style: st, color, image: -1, href: self.href, text });
+        self.x += width;
     }
 }
 

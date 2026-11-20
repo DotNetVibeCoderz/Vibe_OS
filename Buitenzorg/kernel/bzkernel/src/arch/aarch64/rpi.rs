@@ -46,6 +46,13 @@ const RAM_TOP: u64 = 0xFC00_0000;
 const TABLES: usize = 8;
 /// Where the framebuffer is mapped Normal non-cacheable (TTBR1 root entry 257).
 const FB_WINDOW: u64 = 0xffff_8080_0000_0000;
+/// Physical address of the mailbox framebuffer (0 = none): the V3D copies frames into it.
+static FB_PHYS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Physical address of the framebuffer the firmware gave us (0 = none).
+pub fn framebuffer_phys() -> u64 {
+    FB_PHYS.load(core::sync::atomic::Ordering::Relaxed)
+}
 /// The VideoCore mailbox (BCM2711), seen through the device mapping the head
 /// puts over the peripherals.
 const MAILBOX: u64 = PHYS_OFFSET + 0xfe00_b880;
@@ -454,6 +461,7 @@ fn videocore_framebuffer(width: u32, height: u32) -> Option<boot::Framebuffer> {
     }
     let phys = (bus & 0x3FFF_FFFF) as u64;
     let len = (pitch as u64) * h as u64;
+    FB_PHYS.store(phys, core::sync::atomic::Ordering::Relaxed);
 
     // Map it in its own window: Normal non-cacheable (MAIR index 1), 2 MiB blocks.
     let tables = unsafe { core::ptr::addr_of_mut!(bz_rpi_tables.0) };

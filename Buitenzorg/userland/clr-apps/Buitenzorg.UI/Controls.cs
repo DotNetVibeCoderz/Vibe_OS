@@ -22,6 +22,32 @@ public class TextBlock : Control
     public TextAlignment TextAlignment { get => GetValue(TextAlignmentProperty); set => SetValue(TextAlignmentProperty, value); }
     public TextTrimming TextTrimming { get => GetValue(TextTrimmingProperty); set => SetValue(TextTrimmingProperty, value); }
 
+    /// <summary>Break text into lines no wider than <paramref name="maxWidth"/> pixels in
+    /// <paramref name="style"/> (word wrap; hard breaks on '\n'; a word wider than a line is split).</summary>
+    public static List<string> WrapPx(string text, int maxWidth, int style, bool wrap)
+    {
+        var lines = new List<string>();
+        foreach (var para in text.Split('\n'))
+        {
+            if (!wrap || maxWidth <= 0 || Fonts.Measure(para, style) <= maxWidth) { lines.Add(para); continue; }
+            int start = 0;
+            while (start < para.Length)
+            {
+                string rest = para.Substring(start);
+                int len = Math.Max(1, Fonts.Fit(rest, maxWidth, style));
+                if (len < rest.Length)
+                {
+                    int sp = rest.LastIndexOf(' ', len, len + 1);
+                    if (sp > 0) len = sp;
+                }
+                lines.Add(rest.Substring(0, len).TrimEnd());
+                start += len;
+                while (start < para.Length && para[start] == ' ') start++;
+            }
+        }
+        return lines;
+    }
+
     /// <summary>Break text into lines that fit <paramref name="maxChars"/> (word wrap, hard breaks on '\n').</summary>
     public static List<string> Wrap(string text, int maxChars, bool wrap)
     {
@@ -46,21 +72,23 @@ public class TextBlock : Control
         return lines;
     }
 
+    long _linesGen;
+
     protected override Size MeasureOverride(Size a)
     {
         int style = TextStyle;
-        int gw = Fonts.GlyphWidth(style);
         var pad = Padding;
-        int maxChars = Math.Max(1, (a.Width - pad.Horizontal) / gw);
+        int maxWidth = Math.Max(1, a.Width - pad.Horizontal);
         bool wrap = TextWrapping == TextWrapping.Wrap;
         string text = Text;
-        if (!ReferenceEquals(text, _linesText) || (wrap && maxChars != _linesChars) || style != _linesStyle || wrap != _linesWrap)
+        long gen = Fonts.Generation;
+        if (!ReferenceEquals(text, _linesText) || (wrap && maxWidth != _linesChars) || style != _linesStyle || wrap != _linesWrap || gen != _linesGen)
         {
-            _lines = Wrap(text, maxChars, wrap);
-            _linesText = text; _linesChars = maxChars; _linesStyle = style; _linesWrap = wrap;
+            _lines = WrapPx(text, maxWidth, style, wrap);
+            _linesText = text; _linesChars = maxWidth; _linesStyle = style; _linesWrap = wrap; _linesGen = gen;
         }
         int w = 0;
-        foreach (var l in _lines) w = Math.Max(w, l.Length * gw);
+        foreach (var l in _lines) w = Math.Max(w, Fonts.Measure(l, style));
         return new Size(w + pad.Horizontal, _lines.Count * (Fonts.LineHeight(style) + 2) - 2 + pad.Vertical);
     }
 
@@ -68,16 +96,18 @@ public class TextBlock : Control
     {
         base.Render(dc);
         int style = TextStyle;
-        int gw = Fonts.GlyphWidth(style), lh = Fonts.LineHeight(style) + 2;
+        int lh = Fonts.LineHeight(style) + 2;
         var r = ContentRect(Bounds);
         int y = r.Y;
-        int maxChars = Math.Max(0, r.Width / gw);
         foreach (var raw in _lines)
         {
             string line = raw;
-            if (TextTrimming == TextTrimming.CharacterEllipsis && line.Length > maxChars && maxChars > 1)
-                line = line.Substring(0, maxChars - 1) + "~";
-            int lw = line.Length * gw;
+            if (TextTrimming == TextTrimming.CharacterEllipsis && Fonts.Measure(line, style) > r.Width && r.Width > 0)
+            {
+                int n = Fonts.Fit(line, r.Width - Fonts.Measure("~", style), style);
+                line = (n > 0 ? line.Substring(0, n) : "") + "~";
+            }
+            int lw = Fonts.Measure(line, style);
             int x = TextAlignment == TextAlignment.Center ? r.X + (r.Width - lw) / 2 : TextAlignment == TextAlignment.Right ? r.Right - lw : r.X;
             dc.Text(x, y, line, Foreground, style);
             y += lh;
@@ -350,8 +380,7 @@ public sealed class ToggleSwitch : ToggleButton
     protected override Size MeasureOverride(Size a)
     {
         var s = base.MeasureOverride(a);
-        int gw = Fonts.GlyphWidth(0);
-        return new Size(Math.Max(s.Width, 44 + 10 + Math.Max(OnContent.Length, OffContent.Length) * gw), s.Height + 28);
+        return new Size(Math.Max(s.Width, 44 + 10 + Math.Max(Fonts.Measure(OnContent, 0), Fonts.Measure(OffContent, 0))), s.Height + 28);
     }
 
     protected override void ArrangeOverride(Rect b)
@@ -716,7 +745,32 @@ public class TextBox : Control
     }
 
     int Lh => Fonts.LineHeight(TextStyle) + 2;
-    int Gw => Fonts.GlyphWidth(TextStyle);
+
+    /// <summary>The text as shown (password characters instead of the real ones).</summary>
+    string Shown => PasswordChar != '\0' ? new string(PasswordChar, Text.Length) : Text;
+
+    /// <summary>Line <paramref name="line"/> of the shown text.</summary>
+    string ShownLine(int line)
+    {
+        var lines = Shown.Split('\n');
+        return line >= 0 && line < lines.Length ? lines[line] : "";
+    }
+
+    /// <summary>Pixel offset of column <paramref name="col"/> in a shown line, from where the
+    /// visible part starts (single-line boxes scroll by characters).</summary>
+    int ColX(string line, int col)
+    {
+        int from = AcceptsReturn ? 0 : Math.Min(_scrollX, line.Length);
+        col = Math.Max(from, Math.Min(col, line.Length));
+        return Fonts.MeasurePrefix(line.Substring(from), col - from, TextStyle);
+    }
+
+    /// <summary>The column nearest to <paramref name="dx"/> pixels into a line's visible part.</summary>
+    int ColAt(string line, int dx)
+    {
+        int from = AcceptsReturn ? 0 : Math.Min(_scrollX, line.Length);
+        return from + Fonts.IndexAt(line.Substring(from), dx, TextStyle);
+    }
 
     protected override Size MeasureOverride(Size a)
     {
@@ -807,7 +861,7 @@ public class TextBox : Control
     {
         var r = ContentRect(Bounds);
         int line = AcceptsReturn ? _scrollLine + Math.Max(0, (e.Y - r.Y) / Lh) : 0;
-        int col = Math.Max(0, (e.X - r.X + Gw / 2) / Gw + (AcceptsReturn ? 0 : _scrollX));
+        int col = ColAt(ShownLine(line), e.X - r.X);
         CaretIndex = IndexOf(line, col);
         _anchor = CaretIndex;
         _dragging = true;
@@ -823,7 +877,7 @@ public class TextBox : Control
     {
         var r = ContentRect(Bounds);
         int line = AcceptsReturn ? _scrollLine + Math.Max(0, (y - r.Y) / Lh) : 0;
-        int col = Math.Max(0, (x - r.X + Gw / 2) / Gw + (AcceptsReturn ? 0 : _scrollX));
+        int col = ColAt(ShownLine(line), x - r.X);
         return IndexOf(line, col);
     }
 
@@ -870,14 +924,16 @@ public class TextBox : Control
     {
         base.Render(dc);
         var r = ContentRect(Bounds);
-        int style = TextStyle, gw = Gw, lh = Lh;
-        string text = PasswordChar != '\0' ? new string(PasswordChar, Text.Length) : Text;
+        int style = TextStyle, lh = Lh;
+        string text = Shown;
+        var shownLines = text.Split('\n');
         var (cl, cc) = LineCol(CaretIndex);
-        int visibleCols = Math.Max(1, r.Width / gw), visibleLines = Math.Max(1, r.Height / lh);
+        int visibleLines = Math.Max(1, r.Height / lh);
         if (!AcceptsReturn)
         {
+            // keep the caret inside the box: scroll by whole characters
             if (cc < _scrollX) _scrollX = cc;
-            if (cc > _scrollX + visibleCols - 1) _scrollX = cc - visibleCols + 1;
+            while (_scrollX < cc && Fonts.Measure(text.Substring(_scrollX, cc - _scrollX), style) > r.Width - 3) _scrollX++;
         }
         else if (CaretIndex != _followedCaret || Text.Length != _followedLen)
         {
@@ -899,16 +955,19 @@ public class TextBox : Control
                 if (AcceptsReturn && (ln < _scrollLine || ln >= _scrollLine + visibleLines)) continue;
                 int from = ln == sl ? sc : 0;
                 int to = ln == el ? ec : IndexOf(ln, int.MaxValue) - IndexOf(ln, 0) + 1;
-                int sx = r.X + (from - (AcceptsReturn ? 0 : _scrollX)) * gw;
+                string lt = ln < shownLines.Length ? shownLines[ln] : "";
+                int sx = r.X + ColX(lt, from);
+                // a selected line break shows as a space-wide band
+                int ex = r.X + ColX(lt, to) + (to > lt.Length ? Fonts.Measure(" ", style) : 0);
                 int sy = r.Y + (AcceptsReturn ? (ln - _scrollLine) * lh : (r.Height - lh) / 2 + 1);
-                if (to > from) dc.FillRect(new Rect(sx, sy, (to - from) * gw, lh - 1), Theme.Stroke);
+                if (ex > sx) dc.FillRect(new Rect(sx, sy, ex - sx, lh - 1), Theme.Stroke);
             }
         }
         if (text.Length == 0 && Watermark.Length > 0 && !IsFocused)
             dc.Text(r.X, r.Y + (AcceptsReturn ? 0 : (r.Height - lh) / 2 + 1), Watermark, Theme.TextFaint, style);
         else
         {
-            var lines = text.Split('\n');
+            var lines = shownLines;
             int y = r.Y + (AcceptsReturn ? 0 : (r.Height - lh) / 2 + 1);
             for (int i = AcceptsReturn ? _scrollLine : 0; i < lines.Length && y < r.Bottom; i++)
             {
@@ -920,7 +979,7 @@ public class TextBox : Control
         }
         if (IsFocused && _caretOn && !IsReadOnly)
         {
-            int x = r.X + (cc - (AcceptsReturn ? 0 : _scrollX)) * gw;
+            int x = r.X + ColX(cl < shownLines.Length ? shownLines[cl] : "", cc);
             int y = r.Y + (AcceptsReturn ? (cl - _scrollLine) * lh : (r.Height - lh) / 2 + 1);
             dc.FillRect(new Rect(x, y, 2, lh - 2), Theme.Accent);
         }

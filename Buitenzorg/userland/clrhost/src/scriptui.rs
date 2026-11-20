@@ -67,6 +67,8 @@ const ROUND_RECT: u64 = 9;
 const GRADIENT_V: u64 = 10;
 const FILL_ROUND_GRADIENT_V: u64 = 11;
 const DRAW_TEXT_STYLED: u64 = 12;
+const DRAW_TEXT_FONT: u64 = 14;
+const FONT_OP: u64 = 71;
 
 // bz_abi::pointer_event kinds
 const EV_MOVE: u64 = 1;
@@ -133,6 +135,24 @@ fn nanos() -> u64 {
 fn sleep_ms(ms: u64) {
     let word: u32 = 0;
     sys::syscall(FUTEX_WAIT_TIMEOUT, &word as *const u32 as u64, 0, ms.max(1) * 1_000_000);
+}
+
+/// Width of `s` in face `id` (or a UI alias 0xFFF0 + style) at `px`; None
+/// when the kernel has no such face (the bitmap font is in use).
+fn font_measure(id: u64, px: u64, s: &str) -> Option<i64> {
+    if s.is_empty() {
+        return Some(0);
+    }
+    let r = sys::syscall(FONT_OP, 4 | (id & 0xFFFF) << 8 | (px & 0xFF) << 24, s.as_ptr() as u64, s.len() as u64);
+    (!sys::is_err(r)).then_some(r as i64)
+}
+
+/// A face by family name: `bold` picks the weight; 0 = not installed.
+fn font_find(family: &str, bold: bool) -> i64 {
+    let mut c: alloc::vec::Vec<u8> = family.bytes().filter(|&b| b != 0).collect();
+    c.push(0);
+    let r = sys::syscall(FONT_OP, 2, c.as_ptr() as u64, bold as u64);
+    if sys::is_err(r) { 0 } else { r as i64 }
 }
 
 fn metrics(style: u64) -> (i64, i64) {
@@ -401,7 +421,25 @@ impl Host for Ui {
                 }
                 nil
             }
-            "textwidth" => Value::Int(text_of(a, 0).chars().count() as i64 * metrics(int(a, 1).clamp(0, 2) as u64).0),
+            "textwidth" => {
+                let (s, style) = (text_of(a, 0), int(a, 1).clamp(0, 2) as u64);
+                let px = if style == 2 { 21 } else { 14 };
+                Value::Int(font_measure(0xFFF0 + style, px, &s).unwrap_or(s.chars().count() as i64 * metrics(style).0))
+            }
+            // fonts: font(family [, bold]) -> id (0 = not installed);
+            // textfont(x, y, s, color, id, size); measure(s, id, size)
+            "font" => Value::Int(font_find(&text_of(a, 0), a.get(1).is_some_and(|v| v.truthy()))),
+            "textfont" => {
+                let s = text_of(a, 2);
+                let (id, px) = (int(a, 4) as u64 & 0xFFFF, int(a, 5).clamp(4, 200) as u64);
+                self.draw(DRAW_TEXT_FONT, int(a, 0), int(a, 1), 0, 0, int(a, 3), id | px << 16, &s, 0);
+                nil
+            }
+            "measure" => {
+                let s = text_of(a, 0);
+                let (id, px) = (int(a, 1) as u64, int(a, 2).clamp(4, 200) as u64);
+                Value::Int(font_measure(id, px, &s).unwrap_or(s.chars().count() as i64 * px as i64 * 11 / 20))
+            }
             "lineheight" => Value::Int(metrics(int(a, 0).clamp(0, 2) as u64).1),
             "button" => {
                 let label = text_of(a, 4);

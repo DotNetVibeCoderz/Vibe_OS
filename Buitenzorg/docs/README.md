@@ -30,6 +30,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [Packages (`.bzpkg`)](packages.md) | `bz pack` on the host, `bz install/remove` on the device, the format and its safety rules. |
 | [Reading, a 3D maze, CHIP-8](entertainment.md) | Baca (EPUB/TXT), Labirin Kebun (ray-cast 3D), the CHIP-8 emulator with two original programs, game mode. |
 | [C programs, SDL2 and DOOM](c-programs.md) | The C runtime (`userland/c`) and its SDL2 subset; DOOM with Freedoom on all three architectures. |
+| [Fonts](fonts.md) | TrueType / OpenType fonts for the desktop, terminal and apps; choosing them, the catalog, `font` / `bz font install`. |
 | [Internet and the web browser](internet.md) | Peramban (HTTP/HTTPS), `nslookup`, and `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) for programs. |
 | [Sound and media](media.md) | Musik, Video and Gambar, the kernel mixer (a stream per program, per-app volume), WAV, MediaPlayer and PNG/JPEG/GIF pictures for programs. |
 | [Games and Buitenzorg.Game](games.md) | Ular, Ranjau, Bata, Balok, Kartu, and the 2D game framework (fixed-timestep loop, raw key events, particles, high scores). |
@@ -55,6 +56,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [System Services](system-services.md) | VFS, the service/init manager, async I/O, and networking. |
 | [Desktop Environment](desktop-environment.md) | Compositor, window manager, themes, workspaces, and the shell. |
 | [Graphics & Window System](window-system.md) | The rendering stack and window management. |
+| [GPU Compute & Local LLM](ai-compute.md) | GGUF language models on the device (`llm`), the `COMPUTE_OP` GEMV and the V3D compute backend. |
 | [AI Subsystem & Power](ai-power.md) | The local LLM / CV / GenAI subsystem, the Model Manager, and power management. |
 
 ## Planning & history (repo root)

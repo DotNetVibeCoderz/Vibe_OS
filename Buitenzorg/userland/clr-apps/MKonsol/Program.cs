@@ -280,19 +280,19 @@ public sealed class KonsolView : Control
             {
                 foreach (var run in T.Lines[i].Runs)
                 {
-                    if (run.Text.Length > 0) dc.Text(cx, y, run.Text, run.Color, Style);
+                    if (run.Text.Length > 0) dc.MonoText(cx, y, run.Text, run.Color, Style);
                     cx += run.Text.Length * gw;
                 }
             }
             else
             {
                 string p = _app.PromptText();
-                dc.Text(cx, y, p, PromptColor, Style);
+                dc.MonoText(cx, y, p, PromptColor, Style);
                 cx += p.Length * gw;
-                if (T.Busy) dc.Text(cx, y, "(berjalan ...)", 0x8A968E, Style);
+                if (T.Busy) dc.MonoText(cx, y, "(berjalan ...)", 0x8A968E, Style);
                 else
                 {
-                    dc.Text(cx, y, T.Input, Foreground, Style);
+                    dc.MonoText(cx, y, T.Input, Foreground, Style);
                     if (IsFocused && _caretOn) dc.FillRect(new Rect(cx + T.Caret * gw, y, 2, lh - 2), PromptColor);
                 }
             }

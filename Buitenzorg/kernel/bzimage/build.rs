@@ -281,7 +281,17 @@ fn limine_image_with(efi_name: &str, limine: &std::path::Path, kernel: &std::pat
         put(&boot, "limine.conf", conf.as_bytes())?;
         put(&root.create_dir("boot")?, "bzkernel", &kernel_elf)?;
         for (name, bytes) in files {
-            put(&root, &name.to_uppercase(), bytes)?;
+            // a /disk file may sit in one folder ("fonts/x.ttf")
+            match name.split_once('/') {
+                Some((dir, file)) => {
+                    let d = match root.open_dir(&dir.to_uppercase()) {
+                        Ok(d) => d,
+                        Err(_) => root.create_dir(&dir.to_uppercase())?,
+                    };
+                    put(&d, &file.to_uppercase(), bytes)?;
+                }
+                None => put(&root, &name.to_uppercase(), bytes)?,
+            }
         }
         // Files that keep their name and folder (the Raspberry Pi's).
         for (name, bytes) in raw {
@@ -631,6 +641,37 @@ fn main() {
         println!("cargo:rerun-if-changed={}", p.display());
         if let Ok(bytes) = std::fs::read(&p) {
             add_file(&mut builder, &mut files, "lagu3.fla".into(), bytes);
+        }
+        // a tiny language model for the LLM (clrhost llm.rs): stories260K,
+        // llama2.c's TinyStories model in GGUF (MIT, assets/models/README.md)
+        let p = manifest_dir().join("..").join("..").join("assets").join("models").join("stories260K.gguf");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "stories.ggu".into(), bytes);
+        }
+        // fonts (font.rs): /disk/FONTS -- Plus Jakarta Sans for the desktop,
+        // JetBrains Mono for text (SIL OFL 1.1, licences beside them), and
+        // the catalog `bz font install` reads
+        let fonts = manifest_dir().join("..").join("..").join("assets").join("fonts");
+        println!("cargo:rerun-if-changed={}", fonts.display());
+        for (src, dst) in [
+            ("PlusJakartaSans-Regular.ttf", "pjsans-r.ttf"),
+            ("PlusJakartaSans-Bold.ttf", "pjsans-b.ttf"),
+            ("JetBrainsMono-Regular.ttf", "jbmono-r.ttf"),
+            ("JetBrainsMono-Bold.ttf", "jbmono-b.ttf"),
+            ("OFL-PlusJakartaSans.txt", "pjsans.txt"),
+            ("OFL-JetBrainsMono.txt", "jbmono.txt"),
+            ("catalog.txt", "catalog.txt"),
+        ] {
+            if let Ok(bytes) = std::fs::read(fonts.join(src)) {
+                add_file(&mut builder, &mut files, format!("fonts/{}", dst), bytes);
+            }
+        }
+        // an 8 KB subset of JetBrains Mono renamed "Uji Mono": Pengaturan's
+        // self-test installs it from a local server (the real fonts made that
+        // test take 40 s under emulation)
+        if let Ok(bytes) = std::fs::read(fonts.join("uji-mono.ttf")) {
+            add_file(&mut builder, &mut files, "ujifont.ttf".into(), bytes);
         }
         // and an MP3 of it (title "Gerimis"), for the MP3 decoder
         let p = manifest_dir().join("..").join("..").join("assets").join("music").join("LAGU4.MP3");

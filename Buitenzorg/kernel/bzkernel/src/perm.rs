@@ -142,6 +142,7 @@ pub fn needed(nr: u64, a0: u64, me: u64) -> u32 {
         HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED => DEVICES,
         SHELL_RUN | USER_OP | PKG_SET => SYSTEM,
         SETTING if a0 == bz_abi::setting_op::SET => SYSTEM,
+        FONT_OP if matches!(a0 & 0xFF, bz_abi::font_op::INSTALL | bz_abi::font_op::REMOVE) => SYSTEM,
         PROC_KILL if a0 != me => SYSTEM,
         _ => 0,
     }
@@ -154,7 +155,7 @@ fn gated(nr: u64) -> bool {
     matches!(
         nr,
         NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE | AUDIO_SET_VOLUME | AUDIO_TONE | AUDIO_PLAY
-            | AUDIO_WRITE | AUDIO_READ | HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED | SHELL_RUN | USER_OP | PKG_SET | SETTING | PROC_KILL
+            | AUDIO_WRITE | AUDIO_READ | HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED | SHELL_RUN | USER_OP | PKG_SET | SETTING | PROC_KILL | FONT_OP
     )
 }
 

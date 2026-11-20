@@ -104,8 +104,18 @@ switch new contexts between software and GPU. `smoke-test.ps1` runs the
   with a 4 MiB page table, then two render-only jobs on the control list
   executor -- a render control list that clears a 256x128 image and stores
   it to memory, read back pixel by pixel by the CPU and shown at the top
-  right of the screen for 4 s (`MILESTONE: V3D RENDER OK`). Triangles need a
-  binning job and QPU shaders (next steps).
+  right of the screen for 4 s (`MILESTONE: V3D RENDER OK`).
+  Steps 2b-2d (**verified on a Pi 4**, 2026-11-20; 2e not yet): a binning job sorts the
+  triangles into tile lists, the render job runs hand-assembled QPU shaders
+  per tile (`scripts/v3d-shaders.py` -> `v3d_shaders.rs`), with colour per
+  vertex, depth, textures, blending and wireframe. When gfx3d's self-test
+  passes on V3D at boot (`MILESTONE: GFX3D NATIVE OK (V3D 4.2 ...)`), 3D apps
+  on the Pi draw on the GPU; otherwise they stay in software. `gpu v3d` also
+  runs three 3D checks (`MILESTONE: V3D 3D OK`), and `gpu on` / `gpu cpu`
+  switch presenting the desktop through V3D. Limits: depth lives only in the
+  tile buffer (a frame with more than 87,381 vertices is split and loses
+  depth between the parts), no alpha test (texels with alpha 0 are drawn),
+  textures are resampled to a power of two between 32 and 512.
 
 ## glTF models, physics and 3D sound
 

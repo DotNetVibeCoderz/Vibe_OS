@@ -219,9 +219,33 @@ public static class SyscallNumbers
 
     /// <summary>Read part of a file: a0 = NUL-terminated path, a1 = buffer, a2 = offset &lt;&lt; 24 | length (length &lt; 16 MiB, at most 4 MiB per call). Returns the bytes read (0 past the end).</summary>
     public const ulong FsReadAt = 70;
+    /// <summary>TrueType / OpenType fonts: a0 = operation | face id &lt;&lt; 8 | pixel size &lt;&lt; 24.</summary>
+    public const ulong FontOp = 71;
+    /// <summary>GPU compute: a0 = operation (<see cref="ComputeOp"/>) | handle &lt;&lt; 8.</summary>
+    public const ulong ComputeOp = 72;
 
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 71;
+    public const ulong Count = 73;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.ComputeOp"/> (mirrors <c>bz_abi::compute_op</c>).</summary>
+public static class ComputeOp
+{
+    public const ulong Info = 0;
+    public const ulong Alloc = 1;
+    public const ulong Write = 2;
+    public const ulong Read = 3;
+    public const ulong Free = 4;
+    public const ulong Gemv = 5;
+}
+
+/// <summary>Backend kinds of <see cref="ComputeOp.Info"/> (mirrors <c>bz_abi::compute_kind</c>).</summary>
+public static class ComputeKind
+{
+    public const ulong Reference = 0;
+    public const ulong V3d = 1;
+    public const ulong Virgl = 2;
+    public const ulong Intel = 3;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.Clipboard"/> (mirrors <c>bz_abi::clipboard_op</c>).</summary>

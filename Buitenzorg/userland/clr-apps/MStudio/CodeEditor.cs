@@ -640,7 +640,7 @@ public sealed class CodeEditor : Control
             if (err) dc.FillRect(new Rect(r.X + 2, y + 1, 4, lh - 4), Theme.Danger);
             if (_bps.Contains(i + 1)) dc.Ellipse(new Rect(r.X + 3, y + (lh - 10) / 2, 10, 10), Theme.Danger, true);
             if (i + 1 == _exec) dc.Text(r.X + 2, y, ">", Theme.Accent, 1);
-            dc.Text(r.X + gutter - (num.Length + 1) * gw, y, num, err ? Theme.Danger : i == _line ? Theme.Text : Theme.TextFaint, 0);
+            dc.MonoText(r.X + gutter - (num.Length + 1) * gw, y, num, err ? Theme.Danger : i == _line ? Theme.Text : Theme.TextFaint, 0);
             // the line's colored runs, cut to the visible columns
             string line = _lines[i];
             foreach (var s in Syntax.Line(line, _lang, ref inBlock))
@@ -648,7 +648,7 @@ public sealed class CodeEditor : Control
                 if (s.Kind == Tk.Plain && line.Substring(s.Start, s.Length).Trim().Length == 0) continue;
                 int a = Math.Max(s.Start, _left), b = Math.Min(s.Start + s.Length, _left + cols);
                 if (b <= a) continue;
-                dc.Text(textX + (a - _left) * gw, y, line.Substring(a, b - a), Syntax.Color(s.Kind, dark, Theme.Text), 0);
+                dc.MonoText(textX + (a - _left) * gw, y, line.Substring(a, b - a), Syntax.Color(s.Kind, dark, Theme.Text), 0);
             }
         }
         if (IsFocused && _caretOn)

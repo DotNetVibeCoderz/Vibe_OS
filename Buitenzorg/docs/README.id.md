@@ -29,6 +29,7 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 | [Paket (`.bzpkg`)](packages.id.md) | `bz pack` di host, `bz install/remove` di perangkat, format dan aturan keamanannya. |
 | [Membaca, labirin 3D, CHIP-8](entertainment.id.md) | Baca (EPUB/TXT), Labirin Kebun (3D ray-cast), emulator CHIP-8 dengan dua program orisinal, mode game. |
 | [Program C, SDL2 dan DOOM](c-programs.id.md) | Runtime C (`userland/c`) dan subset SDL2-nya; DOOM dengan Freedoom di ketiga arsitektur. |
+| [Fon](fonts.id.md) | Fon TrueType / OpenType untuk desktop, terminal dan app; memilihnya, katalog, `font` / `bz font install`. |
 | [Internet dan peramban web](internet.id.md) | Peramban (HTTP/HTTPS), `nslookup`, dan `Buitenzorg.Net` (DNS, TCP, TLS, HttpClient) untuk program. |
 | [Suara dan media](media.id.md) | Musik, Video dan Gambar, mixer kernel (stream per program, volume per aplikasi), WAV, MediaPlayer dan gambar PNG/JPEG/GIF untuk program. |
 | [Game dan Buitenzorg.Game](games.id.md) | Ular, Ranjau, Bata, Balok, Kartu, dan framework game 2D (loop fixed-timestep, event tombol mentah, partikel, skor tertinggi). |
@@ -53,6 +54,7 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 | [System Services](system-services.id.md) | VFS, service/init manager, async I/O, dan jaringan. |
 | [Desktop Environment](desktop-environment.id.md) | Compositor, window manager, tema, workspace, dan shell. |
 | [Graphics & Window System](window-system.id.md) | Stack rendering dan manajemen window. |
+| [Komputasi GPU & LLM Lokal](ai-compute.id.md) | Model bahasa GGUF di perangkat (`llm`), GEMV `COMPUTE_OP` dan backend compute V3D. |
 | [Subsistem AI & Power](ai-power.id.md) | Subsistem LLM / CV / GenAI lokal, Model Manager, dan power management. |
 
 ## Perencanaan & riwayat (root repo)

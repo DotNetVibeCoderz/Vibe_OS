@@ -17,6 +17,12 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int KeyEvent();
     [DllImport("buitenzorg")] internal static extern int KeyState(int code);
     [DllImport("buitenzorg")] internal static extern long TextMetrics(int style);
+    [DllImport("buitenzorg")] internal static extern long FontGeneration();
+    [DllImport("buitenzorg")] internal static extern long FontCount();
+    [DllImport("buitenzorg")] internal static extern string FontInfo(int id);
+    [DllImport("buitenzorg")] internal static extern long FontFind(string family, int bold);
+    [DllImport("buitenzorg")] internal static extern long FontMetrics(int id, int px);
+    [DllImport("buitenzorg")] internal static extern long FontMeasure(int id, int px, string text);
     [DllImport("buitenzorg")] internal static extern int IsInteractive();
 }
 
@@ -158,6 +164,43 @@ public static class Fonts
 {
     static readonly int[] _w = new int[3];
     static readonly int[] _h = new int[3];
+    // proportional measuring (the kernel's UI font): -1 = not asked yet,
+    // 0 = grid only (off the device, or the bitmap font chosen), 1 = proportional
+    static int _mode = -1;
+    static long _gen = -1, _checked;
+    static readonly Dictionary<string, int>[] _cache = { new Dictionary<string, int>(), new Dictionary<string, int>(), new Dictionary<string, int>() };
+
+    /// <summary>Face aliases of the kernel's font engine (FONT_OP): the UI font per style, the monospace font.</summary>
+    public const int UiFont = 0xFFF0, MonoFont = 0xFFFE;
+
+    /// <summary>Pixel size of the UI font for a style (the kernel's: 14 body / strong, 21 heading).</summary>
+    public static int Px(int style) => style == 2 ? 21 : 14;
+
+    /// <summary>Whether text in styles is drawn in a proportional font (a TrueType UI font
+    /// on the device). Off the device, or with the bitmap font chosen, text sits on the
+    /// monospace grid and <see cref="Measure"/> is characters x <see cref="GlyphWidth"/>.</summary>
+    public static bool Proportional { get { Refresh(); return _mode == 1; } }
+
+    /// <summary>Re-ask the kernel at most every half second whether fonts changed.</summary>
+    static void Refresh()
+    {
+        if (_mode == 0 && _gen == -2) return; // no font engine (off the device)
+        long now = Clock.Now;
+        if (_mode >= 0 && now - _checked < 500) return;
+        _checked = now;
+        long g;
+        try { g = Native.FontGeneration(); }
+        catch (Exception) { _mode = 0; _gen = -2; return; }
+        if (g == _gen && _mode >= 0) return;
+        _gen = g;
+        foreach (var c in _cache) c.Clear();
+        long m = -1;
+        try { m = Native.FontMeasure(UiFont, 14, "M"); } catch (Exception) { }
+        _mode = m > 0 ? 1 : 0;
+    }
+
+    /// <summary>The font generation (changes when fonts or the UI font change); -2 off the device.</summary>
+    public static long Generation { get { Refresh(); return _gen; } }
 
     /// <summary>Style index: 0 body (16 px), 1 strong (bold 16 px), 2 heading (bold 24 px).</summary>
     public static int StyleOf(FontWeight weight, int size) => size >= 20 ? 2 : weight == FontWeight.Bold ? 1 : 0;
@@ -172,9 +215,101 @@ public static class Fonts
         if (_w[style] <= 0) { _w[style] = style == 2 ? 12 : 8; _h[style] = style == 2 ? 24 : 16; }
     }
 
+    /// <summary>Width of one cell of the monospace grid (8 px; 12 px for headings).</summary>
     public static int GlyphWidth(int style) { Load(style); return _w[style]; }
     public static int LineHeight(int style) { Load(style); return _h[style]; }
-    public static int Measure(string text, int style) => text.Length * GlyphWidth(style);
+
+    /// <summary>Width of <paramref name="text"/> in a style's font, in pixels (kerned).</summary>
+    public static int Measure(string text, int style)
+    {
+        if (text.Length == 0) return 0;
+        style = style < 0 || style > 2 ? 0 : style;
+        if (!Proportional) return text.Length * GlyphWidth(style);
+        var cache = _cache[style];
+        if (cache.TryGetValue(text, out int w)) return w;
+        long m = -1;
+        try { m = Native.FontMeasure(UiFont + style, Px(style), text); } catch (Exception) { }
+        w = m >= 0 ? (int)m : text.Length * GlyphWidth(style);
+        if (cache.Count > 1500) cache.Clear();
+        cache[text] = w;
+        return w;
+    }
+
+    /// <summary>Width of the first <paramref name="count"/> characters.</summary>
+    public static int MeasurePrefix(string text, int count, int style)
+    {
+        if (count <= 0) return 0;
+        if (count >= text.Length) return Measure(text, style);
+        return Proportional ? Measure(text.Substring(0, count), style) : count * GlyphWidth(style);
+    }
+
+    /// <summary>How many leading characters fit in <paramref name="width"/> pixels.</summary>
+    public static int Fit(string text, int width, int style)
+    {
+        if (width <= 0 || text.Length == 0) return 0;
+        if (!Proportional) return Math.Min(text.Length, width / GlyphWidth(style));
+        if (Measure(text, style) <= width) return text.Length;
+        int lo = 0, hi = text.Length; // lo fits, hi does not
+        while (hi - lo > 1)
+        {
+            int mid = (lo + hi) / 2;
+            if (Measure(text.Substring(0, mid), style) <= width) lo = mid; else hi = mid;
+        }
+        return lo;
+    }
+
+    /// <summary>The character boundary nearest to <paramref name="x"/> pixels from the text's start.</summary>
+    public static int IndexAt(string text, int x, int style)
+    {
+        if (x <= 0 || text.Length == 0) return 0;
+        if (!Proportional) return Math.Min(text.Length, (x + GlyphWidth(style) / 2) / GlyphWidth(style));
+        int n = Fit(text, x, style);
+        if (n >= text.Length) return text.Length;
+        int a = MeasurePrefix(text, n, style), b = MeasurePrefix(text, n + 1, style);
+        return x - a <= b - x ? n : n + 1;
+    }
+
+    /// <summary>A face of the kernel's font engine by family (and weight); -1 when it is not installed.</summary>
+    public static int Find(string family, bool bold = false)
+    {
+        try { long id = Native.FontFind(family, bold ? 1 : 0); return id > 0 ? (int)id : -1; }
+        catch (Exception) { return -1; }
+    }
+
+    /// <summary>Width of text in face <paramref name="id"/> at <paramref name="px"/>; a guess off the device.</summary>
+    public static int MeasureIn(int id, int px, string text)
+    {
+        if (text.Length == 0) return 0;
+        long m = -1;
+        try { m = Native.FontMeasure(id, px, text); } catch (Exception) { }
+        return m >= 0 ? (int)m : text.Length * px * 11 / 20;
+    }
+
+    /// <summary>(ascent, descent, line height) of face <paramref name="id"/> at <paramref name="px"/>.</summary>
+    public static (int Ascent, int Descent, int Line) MetricsOf(int id, int px)
+    {
+        long m = -1;
+        try { m = Native.FontMetrics(id, px); } catch (Exception) { }
+        if (m < 0) return (px * 4 / 5, px / 5, px * 6 / 5);
+        return ((int)(m & 0xFFFF), (int)((m >> 16) & 0xFFFF), (int)(m >> 32));
+    }
+
+    /// <summary>Installed faces as (id, family, bold, monospace, file); empty off the device.</summary>
+    public static List<(int Id, string Family, bool Bold, bool Mono, string File)> Installed()
+    {
+        var list = new List<(int, string, bool, bool, string)>();
+        long n = 0;
+        try { n = Native.FontCount(); } catch (Exception) { return list; }
+        for (int id = 1; id <= n; id++)
+        {
+            string s = Native.FontInfo(id);
+            if (s.Length == 0) continue;
+            var f = s.Split('\t');
+            if (f.Length < 4) continue;
+            list.Add((id, f[0], f[1] == "Bold", f[2] == "1", f[3]));
+        }
+        return list;
+    }
 }
 
 /// <summary>Keys as KEY_READ delivers them (navigation keys are private-use characters).</summary>

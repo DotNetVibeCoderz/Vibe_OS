@@ -60,6 +60,12 @@ Keduanya dijaga selaras oleh test kontrak identik (`cargo test -p bz-abi` ↔
 | 37 | `NET_RECV` | handle | ptr `NetDatagram` + ruang payload | panjang payload; 0 = tidak ada (non-blocking, a2 = max) |
 | 38 | `NET_CLOSE` | handle | — | 0 = sukses |
 | 39 | `NET_INFO` | ptr `NetInfo` | — | 0 = sukses (alamat + status + counter) |
+| 40-69 | *(lihat tabel lengkap di [abi.md](abi.md), bahasa Inggris)* | | | |
+| 70 | `FS_READ_AT` | path NUL-terminated | buffer | byte terbaca dari offset `a2 >> 24`, maks `a2 & 0xFFFFFF` (maks 4 MiB per panggilan); lebih sedikit di akhir berkas, 0 setelahnya. Membaca berkas besar per bagian (runtime C memuat data game dengannya) |
+| 72 | `COMPUTE_OP` | operasi \| handle << 8 | sesuai operasi | Komputasi GPU (`bz_abi::compute_op`): INFO -> jenis \| perataan baris << 16 \| perataan kolom << 32 (`compute_kind`: 0 referensi CPU kernel, 1 V3D, 2 virgl, 3 Intel); ALLOC -> handle; WRITE / READ (a2 = offset << 32 \| panjang); FREE; GEMV (a0 = op \| W << 8, a1 = x \| y << 32, a2 = baris \| kolom << 32) -> mikrodetik GPU. Buffer milik proses, dibebaskan saat proses keluar. |
+| 71 | `FONT_OP` | operasi \| id fon << 8 \| ukuran piksel << 24 | sesuai operasi | Fon TrueType / OpenType (`bz_abi::font_op`): COUNT, INFO (`keluarga TAB Regular\|Bold TAB mono TAB berkas`), FIND (keluarga, bold) -> id, METRICS -> ascent \| descent << 16 \| tinggi baris << 32, MEASURE (teks) -> lebar, INSTALL (`SUMBER
+BERKAS
+SHA256`, perlu `system`), REMOVE (nama 8.3, perlu `system`), GENERATION. Alias id 0xFFF0 UI, 0xFFF1 UI tebal, 0xFFF2 judul UI, 0xFFFE monospace. Draw op 14 `DRAW_TEXT_FONT` menggambar dengan satu fon (`_pad` = id \| px << 16, `w` > 0 memotong, `h` > 0 = lebar sel monospace); setting 10 `UI_FONT` / 11 `MONO_FONT` memilih fon desktop |
 
 Error dikembalikan di rentang atas `u64`: `NOSYS = u64::MAX`, `INVAL = u64::MAX - 1`.
 

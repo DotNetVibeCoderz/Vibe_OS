@@ -9,7 +9,7 @@ public sealed class DrawingContext
 {
     // bz-abi draw_op
     const int FillRectOp = 0, TextOp = 1, ClearOp = 2, LineOp = 3, EllipseOp = 4, FillEllipseOp = 5, RectOp = 6;
-    const int FillRoundOp = 8, RoundOp = 9, GradientOp = 10, RoundGradientOp = 11, TextStyledOp = 12, BlendRoundOp = 13;
+    const int FillRoundOp = 8, RoundOp = 9, GradientOp = 10, RoundGradientOp = 11, TextStyledOp = 12, BlendRoundOp = 13, TextFontOp = 14;
 
     readonly int _win;
     readonly List<Rect> _clips = new List<Rect>();
@@ -140,8 +140,43 @@ public sealed class DrawingContext
         Op(fill ? FillEllipseOp : EllipseOp, r.X, r.Y, r.Width, r.Height, color);
     }
 
-    /// <summary>One line of text with its top-left at (x, y); trimmed to the clip.</summary>
+    /// <summary>One line of text in a style of the UI font with its top-left at (x, y);
+    /// characters outside the clip are left out.</summary>
     public void Text(int x, int y, string text, int color, int style = 0)
+    {
+        if (color < 0 || text.Length == 0) return;
+        if (!Fonts.Proportional) { MonoText(x, y, text, color, style); return; }
+        int lh = Fonts.LineHeight(style);
+        if (y < _clip.Y || y + lh > _clip.Bottom) return;
+        string s = text;
+        if (x < _clip.X)
+        {
+            // drop the characters that start left of the clip
+            int skip = Fonts.Fit(s, _clip.X - x, style);
+            if (skip > 0 && skip < s.Length && Fonts.MeasurePrefix(s, skip, style) < _clip.X - x) skip++;
+            if (skip >= s.Length) return;
+            x += Fonts.MeasurePrefix(s, skip, style);
+            s = s.Substring(skip);
+        }
+        int fit = Fonts.Fit(s, _clip.Right - x, style);
+        if (fit <= 0) return;
+        if (fit < s.Length) s = s.Substring(0, fit);
+        Op(TextStyledOp, x, y, 0, 0, color, style, 0, s);
+    }
+
+    /// <summary>Text in face <paramref name="font"/> (an id from <see cref="Fonts.Find"/>)
+    /// at <paramref name="px"/>, its line top at (x, y); clipped to the clip rectangle.</summary>
+    public void TextIn(int x, int y, string text, int color, int font, int px)
+    {
+        if (color < 0 || text.Length == 0 || font <= 0) return;
+        var m = Fonts.MetricsOf(font, px);
+        if (y + m.Ascent + m.Descent < _clip.Y || y > _clip.Bottom || x >= _clip.Right) return;
+        Op(TextFontOp, x, y, Math.Max(1, _clip.Right - x), 0, color, (font & 0xFFFF) | (Math.Min(200, Math.Max(4, px)) << 16), 0, text);
+    }
+
+    /// <summary>One line of text on the monospace grid (8 px cells; 12 px for the heading
+    /// size): code, terminals, tables of figures. Trimmed to the clip by cells.</summary>
+    public void MonoText(int x, int y, string text, int color, int style = 0)
     {
         if (color < 0 || text.Length == 0) return;
         int gw = Fonts.GlyphWidth(style), lh = Fonts.LineHeight(style);
@@ -153,6 +188,9 @@ public sealed class DrawingContext
         int n = Math.Min(fit, text.Length - skip);
         string s = skip == 0 && n == text.Length ? text : text.Substring(skip, n);
         if (style == 0) Op(TextOp, x, y, 0, 0, color, 0, 0, s);
+        else if (style == 2 && Fonts.Proportional)
+            // the big grid: the monospace font at 20 px in 12 px cells
+            Op(TextFontOp, x, y, Math.Max(1, _clip.Right - x), gw, color, Fonts.MonoFont | (20 << 16), 0, s);
         else Op(TextStyledOp, x, y, 0, 0, color, style, 0, s);
     }
 

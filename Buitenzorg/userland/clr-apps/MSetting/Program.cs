@@ -10,6 +10,9 @@ using AppAudio = Buitenzorg.App.Audio;
 using Users = Buitenzorg.App.Users;
 using UserAccount = Buitenzorg.App.UserAccount;
 using AppFiles = Buitenzorg.App.Files;
+using Buitenzorg.Text;
+using Buitenzorg.Net;
+using System.Text;
 
 namespace MSettings;
 
@@ -58,6 +61,136 @@ public static class SettingsApp
         public Func<UserAccount, string?> DeleteUser = null!;
         public Func<UserAccount, string, string, string?> SetPassword = null!;
         public Func<UserAccount, string, string?> SetAvatar = null!;
+        // Fon
+        public ListBox UiFonts = null!, MonoFonts = null!, Catalog = null!;
+        public TextBlock FontStatus = null!;
+        public FontPreview Preview = null!;
+        public Func<string, string?> InstallFont = null!;
+        public Func<string, string?> RemoveFont = null!;
+        public string CatalogPath = FontCatalog.DefaultPath;
+    }
+
+    /// <summary>Samples of the chosen fonts, drawn by the kernel's font engine.</summary>
+    public sealed class FontPreview : Control
+    {
+        public string UiFamily = "", MonoFamily = "";
+        public FontPreview() { Height = 118; }
+        protected override Size MeasureOverride(Size a) => new Size(Math.Min(a.Width, 420), 118);
+        public override void Render(DrawingContext dc)
+        {
+            var r = Bounds;
+            dc.FillRoundRect(r, 8, Theme.SurfaceLo);
+            int ui = Fonts.Find(UiFamily), uiBold = Fonts.Find(UiFamily, true), mono = Fonts.Find(MonoFamily);
+            int x = r.X + 14, y = r.Y + 10;
+            if (uiBold > 0) dc.TextIn(x, y, "Kebun Raya Bogor", Theme.Text, uiBold, 24); else dc.Text(x, y, "Kebun Raya Bogor", Theme.Text, 2);
+            if (ui > 0) dc.TextIn(x, y + 34, "Rusa tutul melompati pagar kebun, 1817.", Theme.TextMuted, ui, 15);
+            else dc.Text(x, y + 34, "Rusa tutul melompati pagar kebun, 1817.", Theme.TextMuted, 0);
+            if (mono > 0) dc.TextIn(x, y + 64, "fn main() { cetak(\"halo {}\", 42); }", Theme.Accent, mono, 14);
+            else dc.MonoText(x, y + 64, "fn main() { cetak(\"halo {}\", 42); }", Theme.Accent, 0);
+        }
+    }
+
+    /// <summary>The "Fon" page: the desktop and terminal font, a preview, and the catalog
+    /// of fonts to download (Buitenzorg.Text.FontInstaller).</summary>
+    static Control FontsPage(Parts parts)
+    {
+        var uiNames = AppSettings.Choices(AppSettings.UiFontKey);
+        var monoNames = AppSettings.Choices(AppSettings.MonoFontKey);
+        parts.Preview = new FontPreview();
+        void Sync()
+        {
+            int u = AppSettings.UiFont, m = AppSettings.MonoFont;
+            parts.Preview.UiFamily = u > 0 && u < uiNames.Count ? uiNames[u] : "";
+            parts.Preview.MonoFamily = m > 0 && m < monoNames.Count ? monoNames[m] : "";
+            parts.Preview.InvalidateVisual();
+        }
+        parts.UiFonts = Choice(uiNames, AppSettings.UiFont, AppSettings.UiFontKey);
+        parts.UiFonts.Height = 96;
+        parts.UiFonts.SelectionChanged += _ => Sync();
+        parts.MonoFonts = Choice(monoNames, AppSettings.MonoFont, AppSettings.MonoFontKey);
+        parts.MonoFonts.Height = 72;
+        parts.MonoFonts.SelectionChanged += _ => Sync();
+        Sync();
+
+        var catalog = FontCatalog.Load(parts.CatalogPath);
+        var names = FontCatalog.Names(catalog);
+        parts.FontStatus = new TextBlock(names.Count + " fon di katalog -- unduh lewat HTTPS, diperiksa SHA-256.").WithClass("faint");
+        parts.Catalog = new ListBox { Height = 120 };
+        void Refill()
+        {
+            var labels = new List<string>();
+            foreach (var n in names)
+            {
+                var st = FontCatalog.Styles(catalog, n);
+                string state = FontInstaller.IsInstalled(st[0].Family) ? "terpasang" : (st[0].Size / 1024) + " KiB";
+                labels.Add(st[0].Family + "  -  " + st[0].Licence + "  -  " + state);
+            }
+            int sel = parts.Catalog.SelectedIndex;
+            parts.Catalog.ItemsSource = labels;
+            parts.Catalog.SelectedIndex = sel;
+        }
+        Refill();
+        parts.InstallFont = name =>
+        {
+            parts.FontStatus.Text = "mengunduh " + name + " ...";
+            var err = FontInstaller.Install(name, parts.CatalogPath, true, line => parts.FontStatus.Text = line);
+            parts.FontStatus.Text = err ?? (name + " terpasang: pilih di daftar fon di atas.");
+            uiNames = AppSettings.Choices(AppSettings.UiFontKey);
+            monoNames = AppSettings.Choices(AppSettings.MonoFontKey);
+            parts.UiFonts.ItemsSource = uiNames;
+            parts.UiFonts.SelectedIndex = AppSettings.UiFont;
+            parts.MonoFonts.ItemsSource = monoNames;
+            parts.MonoFonts.SelectedIndex = AppSettings.MonoFont;
+            Refill();
+            return err;
+        };
+        parts.RemoveFont = name =>
+        {
+            var err = FontInstaller.Remove(name, parts.CatalogPath);
+            parts.FontStatus.Text = err ?? (name + " dihapus.");
+            uiNames = AppSettings.Choices(AppSettings.UiFontKey);
+            monoNames = AppSettings.Choices(AppSettings.MonoFontKey);
+            parts.UiFonts.ItemsSource = uiNames;
+            parts.UiFonts.SelectedIndex = AppSettings.UiFont;
+            parts.MonoFonts.ItemsSource = monoNames;
+            parts.MonoFonts.SelectedIndex = AppSettings.MonoFont;
+            Refill();
+            return err;
+        };
+        var install = new Button(new TextBlock("Pasang"));
+        install.Click += _ =>
+        {
+            int i = parts.Catalog.SelectedIndex;
+            if (i < 0) { parts.FontStatus.Text = "pilih fon di katalog dulu"; return; }
+            var st = FontCatalog.Styles(catalog, names[i]);
+            if (!FontCatalog.IsFree(st[0].Licence))
+            {
+                parts.FontStatus.Text = st[0].Family + " berlisensi " + st[0].Licence + ": dari Terminal, 'font install " + names[i] + " --accept-license' setelah membaca syaratnya.";
+                return;
+            }
+            parts.InstallFont(names[i]);
+        };
+        var remove = new Button(new TextBlock("Hapus")).WithClass("subtle");
+        remove.Click += _ =>
+        {
+            int i = parts.Catalog.SelectedIndex;
+            if (i >= 0) parts.RemoveFont(names[i]);
+        };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        row.Children.Add(install);
+        row.Children.Add(remove);
+        var body = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
+        body.Children.Add(new TextBlock("Fon desktop").WithClass("strong"));
+        body.Children.Add(parts.UiFonts);
+        body.Children.Add(new TextBlock("Fon terminal dan teks").WithClass("strong"));
+        body.Children.Add(parts.MonoFonts);
+        body.Children.Add(parts.Preview);
+        body.Children.Add(new TextBlock("Katalog fon").WithClass("strong"));
+        body.Children.Add(parts.Catalog);
+        body.Children.Add(row);
+        body.Children.Add(parts.FontStatus);
+        var scroll = new ScrollViewer { Content = body, Height = 330 };
+        return Page("Fon", "Fon TrueType untuk desktop dan terminal. Berlaku langsung.", scroll);
     }
 
     static readonly Dictionary<string, Bitmap?> _avatarCache = new Dictionary<string, Bitmap?>();
@@ -280,9 +413,11 @@ public static class SettingsApp
         var sound = Page("Suara", "Volume utama sistem.", parts.SoundStatus, volText, parts.Volume, beep);
 
         var users = UsersPage(w, parts);
+        var fonts = FontsPage(parts);
         var pages = new List<(string, IconKind, Control)>
         {
             ("Tampilan", IconKind.Sun, look),
+            ("Fon", IconKind.File, fonts),
             ("Wallpaper", IconKind.Leaf, paper),
             ("Screensaver", IconKind.Moon, saver),
             ("Suara", IconKind.Play, sound),
@@ -377,10 +512,100 @@ public static class SettingsApp
             foreach (var u in Users.List()) if (u.Name == Users.DefaultAdministrator) c.That(p.DeleteUser(u) != null, "the last administrator stays");
             p.AdminPassword.Text = "";
         }
-        p.Nav.SelectedIndex = 4;
+        FontChecks(c, p);
+        p.Nav.SelectedIndex = 5;
         w.RenderFrame();
         c.That(w.LastFrameOps > 30, "frame drew " + w.LastFrameOps + " ops");
         return c;
+    }
+
+    const int FontTestPort = 8093;
+
+    /// <summary>A tiny HTTP server for the font install test: /f.ttf = the given bytes.</summary>
+    static void ServeFont(TcpServer server, byte[] data, Func<bool> stop, Action done)
+    {
+        while (!stop())
+        {
+            var c = server.Accept(50);
+            if (c == null) continue;
+            try
+            {
+                c.TimeoutMs = 2000;
+                var buf = new byte[2048];
+                var req = new StringBuilder();
+                while (!req.ToString().Contains("\r\n\r\n"))
+                {
+                    int n = c.Read(buf, 0, buf.Length);
+                    if (n <= 0) break;
+                    req.Append(Encoding.ASCII.GetString(buf, 0, n));
+                }
+                bool ok = req.ToString().StartsWith("GET /f.ttf");
+                var h = Encoding.ASCII.GetBytes(ok ? "HTTP/1.1 200 OK\r\nContent-Length: " + data.Length + "\r\nConnection: close\r\n\r\n"
+                    : "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                c.Write(h, 0, h.Length);
+                if (ok) for (int o = 0; o < data.Length; o += 16384) c.Write(data, o, Math.Min(16384, data.Length - o));
+            }
+            catch (Exception) { }
+            c.Close();
+        }
+        server.Close();
+        done();
+    }
+
+    /// <summary>The Fon page: choices, switching the desktop font off and back, and the
+    /// whole install path (catalog -> HTTP download -> kernel SHA-256 check -> remove)
+    /// against a local server -- on the device only (it needs the font engine).</summary>
+    static void FontChecks(Checks c, Parts p)
+    {
+        int ui0 = AppSettings.UiFont, mono0 = AppSettings.MonoFont;
+        c.That(p.UiFonts.ItemCount >= 2 && p.MonoFonts.ItemCount >= 2, "fonts listed (" + p.UiFonts.ItemCount + " desktop, " + p.MonoFonts.ItemCount + " terminal)");
+        if (AppSettings.IsSimulated) return;
+        c.That(p.Catalog.ItemCount >= 10, "font catalog (" + p.Catalog.ItemCount + " families)");
+        // the desktop font: to the bitmap font and back; text measuring follows
+        int wide = Fonts.Measure("iiiiiiiiii", 0), wideW = Fonts.Measure("WWWWWWWWWW", 0);
+        c.That(ui0 > 0 && Fonts.Proportional && wide < wideW, "proportional desktop font (" + wide + " px vs " + wideW + " px)");
+        p.UiFonts.SelectedIndex = 0;
+        c.That(AppSettings.UiFont == 0, "desktop font: bitmap");
+        p.UiFonts.SelectedIndex = ui0;
+        c.That(AppSettings.UiFont == ui0, "desktop font restored");
+        // install from a local server: the catalog points at it with the real SHA-256
+        // (/disk/UJIFONT.TTF: an 8 KB subset of JetBrains Mono renamed "Uji Mono")
+        const string jb = "8f429b16956fcd08e0811964241428aef4627fb7d215e484282fc5fcaa7736f8";
+        var bytes = AppFiles.ReadAllBytes("/disk/UJIFONT.TTF");
+        if (bytes == null) { c.That(false, "/disk/UJIFONT.TTF"); return; }
+        string cat = AppFiles.ScratchDirectory + "/FONTCAT.TXT";
+        string url = "http://localhost:" + FontTestPort + "/f.ttf";
+        AppFiles.WriteAllText(cat, "ujimono\tUji Mono\tRegular\tUJIMONO.TTF\t" + bytes.Length + "\t" + jb + "\tOFL-1.1\t" + url + "\t\n"
+            + "ujisalah\tUji Salah\tRegular\tUJISALAH.TTF\t" + bytes.Length + "\t" + new string('0', 64) + "\tOFL-1.1\t" + url + "\t\n"
+            + "ujilisen\tUji Lisensi\tRegular\tUJILISEN.TTF\t" + bytes.Length + "\t" + jb + "\tUFL-1.0\t" + url + "\t\n");
+        bool stop = false, finished = false;
+        TcpServer? server = null;
+        try { server = new TcpServer(FontTestPort); } catch (Exception e) { c.That(false, "listen on " + FontTestPort + ": " + e.Message); }
+        if (server == null) return;
+        var th = new Thread(() => ServeFont(server, bytes, () => stop, () => finished = true));
+        th.Start();
+        try
+        {
+            var err = FontInstaller.Install("ujimono", cat);
+            c.That(err == null && AppFiles.Size(FontCatalog.Directory + "/UJIMONO.TTF") == bytes.Length, "font downloaded, SHA-256 checked, installed: " + (err ?? "ok"));
+            c.That(Fonts.Find("Uji Mono") > 0 && Fonts.MeasureIn(Fonts.Find("Uji Mono"), 16, "Uji") > 0, "the new family is registered and measures text");
+            err = FontInstaller.Install("ujisalah", cat);
+            c.That(err != null && AppFiles.Size(FontCatalog.Directory + "/UJISALAH.TTF") <= 0, "a wrong SHA-256 is refused: " + err);
+            err = FontInstaller.Install("ujilisen", cat);
+            c.That(err != null && err.Contains("UFL"), "another licence needs consent");
+            err = FontInstaller.Remove("ujimono", cat);
+            c.That(err == null && AppFiles.Size(FontCatalog.Directory + "/UJIMONO.TTF") <= 0 && Fonts.Find("Uji Mono") < 0, "font removed: " + (err ?? "ok"));
+        }
+        finally
+        {
+            // wait for the server to close, not with Join: on the device a Join
+            // that races the thread's exit stalled for 30 s or more (RustCLR, open)
+            stop = true;
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (!finished && waited.ElapsedMilliseconds < 5000) Thread.Sleep(10);
+            AppFiles.Delete(cat);
+        }
+        AppSettings.MonoFont = mono0;
     }
 }
 
@@ -388,6 +613,14 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        // `font install NAME` in the Terminal: download in the background, no window
+        int fi = Array.IndexOf(args, "--font-install");
+        if (fi >= 0 && fi + 1 < args.Length)
+        {
+            var err = FontInstaller.Install(args[fi + 1], null, true, line => Console.WriteLine("[font] " + line));
+            Console.WriteLine(err == null ? "[font] " + args[fi + 1] + ": terpasang -- font list, font ui / font mono" : "[font] " + args[fi + 1] + ": " + err);
+            return err == null ? 0 : 1;
+        }
         var app = new Application();
         if (Array.IndexOf(args, "--selftest") >= 0)
         {
@@ -395,7 +628,10 @@ public static class Program
             Console.WriteLine(c.ToString());
             return c.Ok ? 0 : 1;
         }
-        var (w, _) = SettingsApp.Build();
+        var (w, parts) = SettingsApp.Build();
+        // --page N opens another page (0 Tampilan, 1 Fon, ...)
+        int pi = Array.IndexOf(args, "--page");
+        if (pi >= 0 && pi + 1 < args.Length && int.TryParse(args[pi + 1], out int page)) parts.Nav.SelectedIndex = page;
         app.Run(w);
         return 0;
     }
