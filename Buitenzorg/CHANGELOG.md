@@ -13,6 +13,32 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Changed -- `ask` answers with the local GGUF model; RustCLR 8500b96 (2026-11-22)
+
+- **`ask PROMPT`** now runs the GGUF language model on every image
+  (`/disk/STORIES.GGU`, 48 new tokens; `--steps`, `--temp`, `--cpu`, `--gpu`
+  pass through) instead of the kernel's bigram toy. In a Terminal tab the
+  answer streams in as a foreground job (Ctrl+C stops it); through
+  `SHELL_RUN`, bz-link or ssh the shell waits and returns the answer (from
+  the program's log, `applog::text_of`). `ask --bigram`, or a medium without
+  the model, keeps the old model. `ask kernel` used to drop the first word of
+  the prompt and refuse a one-word one; fixed.
+- Self-test boot: `ask --cpu --steps 8 Once upon a time` must give the known
+  greedy continuation -> `MILESTONE: ASK OK` (smoke: x86, ARM64, RISC-V).
+- **RustCLR pin `187e842` -> `8500b96`** (Vibe_Runtime: .NET concurrency
+  surface, swappable scheduler, sharded heap, nanosecond Stopwatch,
+  RustNet.Concurrency, intrinsics). `CONFORM.DLL` rebuilt from that commit:
+  **575 checks** (was 515); the smoke tests require `checks=575 failures=`.
+- RustBCL now writes `System.Collections.Concurrent`, `System.Threading.Channels`,
+  `SemaphoreSlim` and `ThreadLocal<T>` in C# (`RustBCL.Concurrent.dll`, built
+  by its build script with the .NET SDK and embedded). clrhost turns on the
+  `managed` feature; without it the new Conformance stopped at
+  `could not resolve token` (`ConcurrentQueue<int>`). CI's build job installs
+  the .NET 10 SDK for it.
+- The NALAR boot demo types `ask --bigram kernel buitenzorg` into the
+  Terminal: a GGUF `ask` there would be a foreground job holding the tab while
+  the terminal self-test types into it.
+
 ### Added -- the OS's AI for app authors, Asisten AI, icons for every app (2026-11-21)
 
 - **`Buitenzorg.AI`** (in `BZAPP.DLL`): managed C# reaches the local

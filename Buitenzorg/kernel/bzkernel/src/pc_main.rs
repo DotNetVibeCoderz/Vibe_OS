@@ -1258,7 +1258,7 @@ fn nalar_demo() {
 
     // Show the AI + power CLI in the terminal window (for the desktop).
     if framebuffer::dimensions().is_some() {
-        for cmd in ["ask kernel buitenzorg", "bz model list", "bz power"] {
+        for cmd in ["ask --bigram kernel buitenzorg", "bz model list", "bz power"] {
             for c in cmd.chars() {
                 terminal::feed_char(c);
             }

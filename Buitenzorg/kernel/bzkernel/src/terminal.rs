@@ -454,6 +454,12 @@ fn run_line(tab_id: u32, line: &str) -> Effect {
     eff
 }
 
+/// A Terminal tab's command line is running (its programs' output goes to
+/// the tab).
+pub fn in_tab() -> bool {
+    RUNNING_TAB.load(Ordering::SeqCst) != 0
+}
+
 /// `run` / a program name started `pid`: a job of the running tab, if a tab
 /// command line is running (called by the shell).
 pub fn spawned(pid: u64) {
@@ -930,7 +936,13 @@ pub fn self_test(program: &str, expect: &str) -> bool {
     feed_char('\u{e}'); // Ctrl+N: tab 2
     type_line("echo [$X]\n");
     let (t1, t2) = (scrollback_of(0), scrollback_of(1));
-    ok.push(("variables are per tab", t1.iter().any(|l| l == "[]") && t2.iter().any(|l| l == "[dua]")));
+    let per_tab = t1.iter().any(|l| l == "[]") && t2.iter().any(|l| l == "[dua]");
+    if !per_tab {
+        let tail = |t: &[String]| t.iter().rev().take(6).rev().cloned().collect::<Vec<_>>().join(" | ");
+        crate::println!("[terminal] self-test: tab 1 ends: {}", tail(&t1));
+        crate::println!("[terminal] self-test: tab 2 ends: {}", tail(&t2));
+    }
+    ok.push(("variables are per tab", per_tab));
     type_line(&format!("run {} &\n", program));
     let started = scrollback_of(1).iter().any(|l| l.starts_with("[1] "));
     let ended = wait_for(120_000, || scrollback_of(1).iter().any(|l| l.starts_with("[1]  Selesai")));

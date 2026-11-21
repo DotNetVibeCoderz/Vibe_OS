@@ -236,7 +236,7 @@
     (`masisten`, 13 cek di rangkaian managed boot), template Studio (3),
     MagicAppGen (`managed-ai`, `js-ai`), VS Code / `bz new` (`ai-csharp`,
     `ai-js`).
-  - [ ] Backend Intel / virgl · [ ] `ask` memakai LLM ini
+  - [ ] Backend Intel / virgl · [x] `ask` memakai LLM ini (streaming di tab Terminal, jawaban utuh lewat `SHELL_RUN`/bz-link; `MILESTONE: ASK OK`, 2026-11-22)
 - [ ] LLM skala produksi (GGUF/ONNX + GPU/NPU) · inference scheduler · CV/GenAI audio/video · sandbox model · download nyata (multi-GB)
 - [x] Milestone: **LLM lokal jalan & "unduh" model dari galeri** (`AI OK`)
 

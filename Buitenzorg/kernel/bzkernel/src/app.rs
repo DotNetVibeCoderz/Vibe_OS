@@ -246,6 +246,17 @@ pub fn llm_self_test() {
         Err(e) => crate::println!("[llm] could not start: {}", e),
     }
     crate::println!("[llm] self-test took {} ms", (crate::arch::cpu::nanos() - t0) / 1_000_000);
+    // `ask` outside a Terminal tab: the shell runs the model, waits and
+    // returns its answer (greedy, so the continuation is known)
+    let t1 = crate::arch::cpu::nanos();
+    let (out, _) = crate::shell::run("ask --cpu --steps 8 Once upon a time");
+    let text = out.join(" ");
+    let ms = (crate::arch::cpu::nanos() - t1) / 1_000_000;
+    if text.contains("Once upon a time, there was a little") {
+        crate::println!("MILESTONE: ASK OK (shell ask -> STORIES.GGU, {} ms)", ms);
+    } else {
+        crate::println!("[ask] FAIL: unexpected answer: {}", text);
+    }
 }
 
 pub fn spawn_with_args(target: &str, args: &str) -> Result<u64, &'static str> {

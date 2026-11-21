@@ -57,6 +57,14 @@ pub fn on_exit(pid: u64, code: u64) {
     }
 }
 
+/// Everything kept of what `pid` printed (the last 8 KiB).
+pub fn text_of(pid: u64) -> Option<String> {
+    let logs = LOGS.lock();
+    let l = logs.iter().find(|l| l.pid == pid)?;
+    let bytes: Vec<u8> = l.text.iter().copied().collect();
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// `logs`, `logs NAME|PID [--since N]`.
 pub fn command(args: &[&str]) -> Vec<String> {
     let logs = LOGS.lock();

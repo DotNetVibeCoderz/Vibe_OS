@@ -18,6 +18,15 @@ run /disk/STORIES.GGU ...            # the same thing: a .ggu / .gguf file is a 
 The program prints the text as it is generated and then
 `N tokens in M ms (T tok/s, GPU V3D 4.2 QPU | CPU)`.
 
+**`ask PROMPT`** asks the same model (`/disk/STORIES.GGU`, 48 new tokens
+unless `--steps N`; `--temp`, `--cpu`, `--gpu` pass through). In a Terminal
+tab the answer streams into the tab as a foreground job (Ctrl+C stops it);
+from anywhere else (Studio and Konsol through `SHELL_RUN`, `bz run "ask ..."`,
+ssh) the shell waits for the model and returns its answer. `ask --bigram ...`,
+or a medium without the model file, uses the old bigram model in `ai.rs`. The
+self-test boot runs `ask --cpu --steps 8 Once upon a time` and requires the
+known greedy continuation (`MILESTONE: ASK OK`).
+
 `/disk/STORIES.GGU` is stories260K, the 260 000-parameter TinyStories model
 from llama2.c (MIT licence, `assets/models/README.md`). Larger llama models
 work too, for example `stories15M-q4_0.gguf` (19 MB) from
@@ -158,5 +167,4 @@ them.
   virgl (GL 4.3 compute shaders).
 - GEMV directly on quantised weights (Q4_0 / Q8_0 on the GPU).
 - Batched prompt processing.
-- A managed `Buitenzorg.AI` API over the engine; `ask` still uses the toy
-  bigram model in `ai.rs`.
+- Downloading models from the Model Manager (`bz model`) into `/disk`.

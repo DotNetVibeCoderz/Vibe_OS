@@ -1218,7 +1218,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             (vec![if ok { format!("nada {} Hz, {} ms", hz, ms) } else { String::from("tidak ada perangkat suara") }], Effect::None)
         }
         "settings" | "personalize" => (settings_show(), Effect::None),
-        "ask" | "ai" => (ai_ask(&args), Effect::Redraw),
+        "ask" | "ai" => ai_ask(&args),
         "vm" => vm_cmd(&args),
         "script" | "js" | "ts" | "py" => script_cmd(cmd, &args),
         "csx" | "csharp" => csx_cmd(&args),
@@ -1951,17 +1951,66 @@ fn settings_show() -> Vec<String> {
     ]
 }
 
-fn ai_ask(args: &[&str]) -> Vec<String> {
-    if args.len() < 2 {
-        return vec![String::from("ask: butuh prompt (mis. 'ask kernel')")];
+/// The local language model `ask` uses (the GGUF model on every image).
+pub const ASK_MODEL: &str = "/disk/STORIES.GGU";
+
+/// `ask [--bigram] [--steps N] [--temp T] [--cpu|--gpu] PROMPT`: the local
+/// GGUF language model (CLRHOST.ELF llm.rs) continues the prompt. Inside a
+/// Terminal tab the answer streams into the tab as a foreground job (Ctrl+C
+/// stops it); elsewhere (SHELL_RUN, bz-link, ssh) the shell waits and returns
+/// the answer. Without the model on the medium, or with `--bigram`, the old
+/// kernel bigram model (`ai.rs`) answers.
+fn ai_ask(args: &[&str]) -> (Vec<String>, Effect) {
+    let bigram = args.iter().any(|a| *a == "--bigram");
+    let rest: Vec<&str> = args.iter().copied().filter(|a| *a != "--bigram").collect();
+    let mut words: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--steps" | "--temp" => i += 1,
+            "--cpu" | "--gpu" | "--gpu-force" => {}
+            w => words.push(w),
+        }
+        i += 1;
     }
-    let prompt = args[1..].join(" ");
-    let full = format!("{} ", prompt);
-    let out = ai::llm_complete(&full, 48);
-    vec![
-        String::from("[nalar/LLM lokal - buitenzorg/nalar-bigram]"),
-        out,
-    ]
+    if words.is_empty() {
+        return (vec![String::from("ask: butuh prompt (mis. 'ask Once upon a time', 'ask --bigram kernel')")], Effect::None);
+    }
+    if bigram || crate::vfs::stat(ASK_MODEL).is_err() {
+        let out = ai::llm_complete(&format!("{} ", words.join(" ")), 48);
+        let mut lines = vec![String::from("[nalar/LLM lokal - buitenzorg/nalar-bigram]")];
+        if !bigram {
+            lines.push(format!("({} tidak ada di media ini: model bigram kernel yang menjawab)", ASK_MODEL));
+        }
+        lines.push(out);
+        return (lines, Effect::None);
+    }
+    let mut llm_args: Vec<&str> = rest.clone();
+    if !rest.contains(&"--steps") {
+        llm_args.extend(["--steps", "48"]);
+    }
+    if crate::terminal::in_tab() {
+        let (mut lines, fx) = run_cmd(Some(ASK_MODEL), &llm_args);
+        lines.insert(0, String::from("[ask] model GGUF lokal (STORIES.GGU); jawaban mengalir di bawah, Ctrl+C menghentikan"));
+        return (lines, fx);
+    }
+    match ask_capture(&llm_args.join(" ")) {
+        Ok(lines) => (lines, Effect::None),
+        Err(e) => (vec![format!("ask: {}", e)], Effect::None),
+    }
+}
+
+/// Run the GGUF model with `args` and wait for it: its output without the
+/// model-description line. `ask` outside a Terminal tab, and the boot check.
+pub fn ask_capture(args: &str) -> Result<Vec<String>, String> {
+    let pid = app::spawn_with_args(ASK_MODEL, args).map_err(String::from)?;
+    let code = app::wait(pid);
+    let text = crate::applog::text_of(pid).unwrap_or_default();
+    let mut lines: Vec<String> = text.lines().filter(|l| !l.starts_with("[llm] /")).map(String::from).collect();
+    if code != 0 {
+        lines.push(format!("ask: model selesai dengan kode {:#x}", code));
+    }
+    Ok(lines)
 }
 
 fn model_cmd(args: &[&str]) -> (Vec<String>, Effect) {

@@ -12,11 +12,11 @@ publish = false
 # the clock and the file access through Buitenzorg syscalls -- and, through
 # RustCLR's `threads` feature + `rustclr-thread`'s hooks, real threads.
 [dependencies]
-rustclr-metadata = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false }
-rustclr-gc = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false, features = ["threads"] }
-rustclr-core = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false, features = ["threads"] }
-rustclr-bcl = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false, features = ["libm-math", "threads"] }
-rustclr-thread = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "187e8425b2f9a167221a948d2e828645babc0319", default-features = false }
+rustclr-metadata = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "8500b9660a290a4f122d220a45c169da9d21dd2e", default-features = false }
+rustclr-gc = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "8500b9660a290a4f122d220a45c169da9d21dd2e", default-features = false, features = ["threads"] }
+rustclr-core = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "8500b9660a290a4f122d220a45c169da9d21dd2e", default-features = false, features = ["threads"] }
+rustclr-bcl = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "8500b9660a290a4f122d220a45c169da9d21dd2e", default-features = false, features = ["libm-math", "threads", "managed"] }
+rustclr-thread = { git = "https://github.com/DotNetVibeCoderz/Vibe_Runtime", rev = "8500b9660a290a4f122d220a45c169da9d21dd2e", default-features = false }
 linked_list_allocator = { version = "0.10", default-features = false }
 # images for managed apps (imgdecode.rs): PNG + JPEG decoders without std
 zune-png = { version = "0.4", default-features = false }

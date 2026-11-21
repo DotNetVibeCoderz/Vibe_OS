@@ -1166,8 +1166,9 @@ lewat satu API -- `compute.rs` `Backend::Gpu` diisi sungguhan.
     fungsi `ai*` untuk skrip UI (JS/TS/Python/C# script), app contoh
     **Asisten AI** (`masisten`), template di Studio (3), MagicAppGen
     (`managed-ai`, `js-ai`) dan VS Code / `bz new` (`ai-csharp`, `ai-js`).
+  - `ask` memakai LLM GGUF ini (2026-11-22; `MILESTONE: ASK OK`).
   - Belum: backend Intel dan virgl, GEMV langsung pada bobot kuantisasi,
-    `ask` memakai LLM ini, unduh dari Model Manager.
+    unduh dari Model Manager.
 
 ### C. Perbaikan RustNetRuntime (RustCLR)
 

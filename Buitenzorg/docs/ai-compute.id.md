@@ -18,6 +18,15 @@ run /disk/STORIES.GGU ...            # sama saja: berkas .ggu / .gguf adalah pro
 Program mencetak teks selagi dibuat, lalu
 `N tokens in M ms (T tok/s, GPU V3D 4.2 QPU | CPU)`.
 
+**`ask PROMPT`** bertanya ke model yang sama (`/disk/STORIES.GGU`, 48 token
+baru kecuali `--steps N`; `--temp`, `--cpu`, `--gpu` diteruskan). Di tab
+Terminal jawabannya mengalir ke tab sebagai job depan (Ctrl+C menghentikan);
+dari tempat lain (Studio dan Konsol lewat `SHELL_RUN`, `bz run "ask ..."`,
+ssh) shell menunggu model lalu mengembalikan jawabannya. `ask --bigram ...`,
+atau media tanpa berkas model, memakai model bigram lama di `ai.rs`. Boot
+self-test menjalankan `ask --cpu --steps 8 Once upon a time` dan mewajibkan
+lanjutan greedy yang sudah diketahui (`MILESTONE: ASK OK`).
+
 `/disk/STORIES.GGU` adalah stories260K, model TinyStories 260 ribu parameter
 dari llama2.c (lisensi MIT, `assets/models/README.md`). Model llama yang lebih
 besar juga jalan, misalnya `stories15M-q4_0.gguf` (19 MB) dari
@@ -158,5 +167,4 @@ Di C# script namanya `Ai.Load()`, `Ai.Start(...)`, `Ai.Next()`,
   (compute shader GL 4.3).
 - GEMV langsung pada bobot terkuantisasi (Q4_0 / Q8_0 di GPU).
 - Pemrosesan prompt per batch.
-- API managed `Buitenzorg.AI` di atas mesin ini; `ask` masih memakai model
-  bigram mainan di `ai.rs`.
+- Mengunduh model dari Model Manager (`bz model`) ke `/disk`.

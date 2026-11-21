@@ -59,6 +59,13 @@ jobs:
         working-directory: Buitenzorg/kernel
         run: cargo build --release -p bzkernel --target riscv64imac-unknown-none-elf
 
+      # RustBCL's build script compiles its C# half (RustBCL.Concurrent:
+      # System.Collections.Concurrent, Channels, SemaphoreSlim, ThreadLocal)
+      # with the .NET SDK; without one those types are missing on the device.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
       # The managed C# runtime: RustCLR as a ring-3 host (/disk/CLRHOST.ELF)
       # for every architecture; fetches RustCLR at the pinned commit.
       - name: Build managed runtime host (RustCLR)
