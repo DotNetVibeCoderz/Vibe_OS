@@ -70,24 +70,28 @@ with the `CompileCheck` function. Point `Buitenzorg.Root` at the repo, then use
 **Build ▸ Run** (or Jack's `BuildApp`/`RunApp`) to build the image and smoke-test
 it. To iterate on this exact app, run `build.ps1` from the project folder.
 
-## zerolib notes (heap works, no reclaiming GC yet)
+## zerolib notes
 
-Since v0.15 "Matang", **`new`, arrays, heap objects, and generics work** (a
-growing bump heap over `mmap`). Still unsupported:
+**`new`, arrays, heap objects and generics work**, on a heap with a
+**mark-sweep garbage collector** (the startup shim's `bzgc.rs`), and
+**exceptions work** (`throw` / `try` / `catch` / `finally` / `when` / `using`,
+dispatched by `bzeh.rs`; `bzexc.cs` is always compiled in). Notes:
 
 - **`static` reference fields, delegates and lambdas work** (since
   2026-11-06 the startup shim initializes the GC statics), but a
   `static readonly string` set from a literal crashes the compiler — use a
   `const string`.
 - **Casts, `is`/`as`, interfaces and arrays of references (`object[]`) work**
-  (since 2026-11-06 the shim implements the runtime's type checks), but there
-  are **no exceptions**: a failed cast ends the app with a message.
+  (since 2026-11-06 the shim implements the runtime's type checks). zerolib's
+  own checks do not throw: a failed cast, null dereference, out-of-range index
+  or division by zero ends the app with a message.
 - **Delegates/LINQ:** add `bzbcl3.cs` for `Func`/`Action`, `BzInterlocked`,
   `BzTimeSpan`, `BzGuid` and LINQ over `BzList<T>`.
 - **No `new string()` / `ToString()` / concat / `string ==`.** Build text in a
   `char[]` and draw with `Graphics.DrawChars` — see `CounterView` and
   `Buitenzorg.UI.UiText.Int`.
-- **No reclaiming GC yet** — memory is freed only when the app exits.
+- **The collector pauses while other threads run** (threads from
+  `bz_thread_create` / `BzTask`): the heap grows until they finish.
 
 Available libraries: `Buitenzorg.Drawing` (`bzgfx.cs`), `Buitenzorg.UI`
 (`bzui.cs`), `Buitenzorg.Audio` (`bzaudio.cs`), and `Buitenzorg.Bcl`

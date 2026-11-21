@@ -1,18 +1,25 @@
 # Build the v0.4 "Tunas" milestone program: compile hello.cs (C#) to a
 # freestanding static ELF that runs in ring 3 on Buitenzorg.
 #
-# Pipeline: bflat (C# -> object, zerolib) + rustc (startup/PAL shim -> object)
-# then rust-lld links both into a no-interpreter static ELF.
+# Pipeline: `bflat build-il` (C# -> IL, zerolib) + the upstream ILCompiler
+# (IL -> object with unwind + exception-clause tables, which bflat leaves out
+# for zerolib) + rustc (startup/PAL shim with the garbage collector and the
+# exception dispatcher -> object), then rust-lld links them into a
+# no-interpreter static ELF. Every program gets bzexc.cs (System.Exception
+# and friends).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "userland\hello-csharp"
 # a private bflat copy whose zerolib is patched (scripts/prepare-bflat.ps1)
 $bflat = & (Join-Path $PSScriptRoot "prepare-bflat.ps1") | Select-Object -Last 1
+$ilc = & (Join-Path $PSScriptRoot "prepare-ilc.ps1") | Select-Object -Last 1
+$zerolib = Join-Path (Split-Path -Parent $bflat) "lib\linux\x64\zerolib.dll"
 
 $lld = Get-ChildItem "$env:USERPROFILE\.rustup\toolchains\nightly-*\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe" |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $lld) { throw "rust-lld not found (install rust nightly)" }
 
+New-Item -ItemType Directory -Force (Join-Path $dir "il") | Out-Null
 Push-Location $dir
 try {
     Write-Host "==> rustc: bzstart.rs -> bzstart.o (freestanding shim)"
@@ -61,14 +68,21 @@ try {
         @{src=@("pthread.cs");           elf="pthread.elf"},
         @{src=@("smpfs.cs");             elf="smpfs.elf"},
         @{src=@("smpproc.cs");           elf="smpproc.elf"},
-        @{src=@("proctest.cs", "bzbcl.cs", "bzbcl2.cs"); elf="proctest.elf"}
+        @{src=@("proctest.cs", "bzbcl.cs", "bzbcl2.cs"); elf="proctest.elf"},
+        @{src=@("exc.cs");               elf="exc.elf"},
+        @{src=@("gc.cs");                elf="gc.elf"}
     )
     foreach ($prog in $programs) {
         $obj = [IO.Path]::ChangeExtension($prog.elf, ".o")
-        Write-Host "==> bflat: $($prog.src -join ', ') -> $obj (zerolib)"
-        & $bflat build @($prog.src) --stdlib:zero --os:linux --arch:x64 -c -Os `
-            --no-debug-info --no-reflection --no-stacktrace-data -o $obj
+        # IL goes to il/<name>.dll: the file name becomes the symbol prefix
+        $il = "il/" + [IO.Path]::ChangeExtension($prog.elf, ".dll")
+        Write-Host "==> bflat build-il: $($prog.src -join ', ') -> $il (zerolib)"
+        & $bflat build-il @($prog.src) "bzexc.cs" --stdlib:zero -O -o $il
         if ($LASTEXITCODE -ne 0) { throw "bflat failed for $($prog.elf)" }
+        Write-Host "==> ilc: $il -> $obj"
+        & $ilc $il $zerolib --systemmodule:zerolib --targetos:linux --targetarch:x64 `
+            --Os --reflectiondata:none --directpinvoke:libSystem.Native -o $obj
+        if ($LASTEXITCODE -ne 0) { throw "ilc failed for $($prog.elf)" }
 
         Write-Host "==> rust-lld: link -> $($prog.elf)"
         & $lld -flavor gnu -o $prog.elf -T user.ld --static --no-dynamic-linker `

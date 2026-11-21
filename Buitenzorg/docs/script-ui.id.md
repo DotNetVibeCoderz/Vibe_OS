@@ -82,6 +82,8 @@ Ditambah yang dimiliki semua skrip: `str`, `len`, `abs`, `min`, `max`, `chr`,
 untuk form `int(s)` (juga `parseInt`, `Number`), `indexOf(s, bagian)` (-1 =
 tidak ada), `trim`, `upper`, `lower`.
 
+**AI bawaan OS:** `aiload([berkas])`, `aistart(awal, token[, suhu*1000])` + `ainext()` (satu potongan per frame, `""` = selesai), `aigenerate(...)`, `aibackend()`, `aiinfo(n)`, `aispeed()` -- model bahasa lokal; di C# script `Ai.Load()` / `Ai.Start()` / `Ai.Next()` / ... Rincian dan template: [ai-compute.id.md](ai-compute.id.md#untuk-pembuat-aplikasi).
+
 ## Subset bahasa
 
 Interpreternya kecil: bilangan bulat dan string (tanpa pecahan: kalikan 100),

@@ -12,6 +12,11 @@
 
 use core::panic::PanicInfo;
 
+/// The collected managed heap (RhpNewFast / RhpNewArray).
+mod bzgc;
+/// Exception dispatch (RhpThrowEx / RhpRethrow).
+mod bzeh;
+
 // Buitenzorg syscall numbers (mirror of bz_abi::sysno).
 const SYS_DEBUG_WRITE: u64 = 1;
 // Board I/O (Raspberry Pi 4; NOSYS elsewhere): see bz-abi `HW_*`.
@@ -127,9 +132,51 @@ extern "C" {
     fn __managed__Main(argc: i32, argv: *const *const u8) -> i32;
     /// The module's ReadyToRun header (ILC emits one per compilation).
     static __ReadyToRunHeader: u8;
-    /// zerolib's object allocator (MethodTable -> zeroed object).
-    fn RhpNewFast(mt: *const u8) -> *mut u8;
 }
+
+/// `new T()`: a zeroed object of the MethodTable's base size on the collected
+/// heap, its MethodTable pointer in the first word. (zerolib's own export is
+/// renamed by tools/ZerolibPatch.)
+#[no_mangle]
+pub unsafe extern "C" fn RhpNewFast(mt: *const u8) -> *mut u8 {
+    let size = (*(mt as *const MethodTable)).base_size as usize;
+    let obj = bzgc::alloc(size);
+    if obj.is_null() {
+        fatal(b"Unhandled exception: System.OutOfMemoryException\n");
+    }
+    *(obj as *mut *const u8) = mt;
+    obj
+}
+
+/// `new T[len]` (and strings): base size + len x component size; the length
+/// in the word after the MethodTable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn RhpNewArray(mt: *const u8, len: isize) -> *mut u8 {
+    let t = &*(mt as *const MethodTable);
+    if !(0..=0x7fff_ffff).contains(&len) {
+        fatal(b"Unhandled exception: System.OverflowException (array length)\n");
+    }
+    let size = (t.base_size as usize).saturating_add(t.component_size as usize * len as usize);
+    if size > 1 << 31 {
+        fatal(b"Unhandled exception: System.OutOfMemoryException\n");
+    }
+    let obj = bzgc::alloc(size);
+    if obj.is_null() {
+        fatal(b"Unhandled exception: System.OutOfMemoryException\n");
+    }
+    *(obj as *mut *const u8) = mt;
+    *(obj.add(8) as *mut u32) = len as u32;
+    obj
+}
+
+/// The stack-buffer guard ILC puts next to `stackalloc` buffers; checked on
+/// return (a mismatch calls RhpFallbackFailFast).
+#[no_mangle]
+pub static mut __security_cookie: usize = 0x2B99_2DDF_A232;
+
+/// Polled by compiled code at GC safe points (never set: no suspension).
+#[no_mangle]
+pub static mut RhpTrapThreads: u32 = 0;
 
 // Freestanding C runtime intrinsics the compiler emits for struct/buffer
 // zeroing and copies. Needed once apps use larger stackalloc/structs.
@@ -179,6 +226,16 @@ pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
         i += 1;
     }
     0
+}
+
+/// LLVM turns "scan to the NUL" loops into strlen calls.
+#[no_mangle]
+pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
+    let mut n = 0;
+    while core::ptr::read_volatile(s.add(n)) != 0 {
+        n += 1;
+    }
+    n
 }
 
 /// zerolib Console.Write → SystemNative_Log(buffer, length).
@@ -251,20 +308,21 @@ static HEAP_COMMITTED: AtomicUsize = AtomicUsize::new(0);
 static HEAP_CHUNKS: AtomicUsize = AtomicUsize::new(0);
 static HEAP_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Report managed-heap statistics into `out` (5 x u64):
-/// [allocated, committed, chunks, allocation count, current chunk free bytes].
+/// Report heap statistics into `out` (5 x u64): [allocated in total,
+/// committed, blocks / chunks in use, allocation count, committed bytes not
+/// holding live objects]. The collector's own figures: `bz_gc_stats`.
 #[no_mangle]
 pub unsafe extern "C" fn bz_heap_stats(out: *mut u64) {
     if out.is_null() {
         return;
     }
-    let cap = HEAP_CAP.load(HeapOrd::Relaxed);
-    let off = HEAP_OFF.load(HeapOrd::Relaxed);
-    out.write_volatile(HEAP_ALLOCATED.load(HeapOrd::Relaxed) as u64);
-    out.add(1).write_volatile(HEAP_COMMITTED.load(HeapOrd::Relaxed) as u64);
-    out.add(2).write_volatile(HEAP_CHUNKS.load(HeapOrd::Relaxed) as u64);
-    out.add(3).write_volatile(HEAP_ALLOC_COUNT.load(HeapOrd::Relaxed) as u64);
-    out.add(4).write_volatile(cap.saturating_sub(off) as u64);
+    // the managed (collected) heap, plus what the malloc family took
+    let g = bzgc::summary();
+    out.write_volatile((g[0] + HEAP_ALLOCATED.load(HeapOrd::Relaxed)) as u64);
+    out.add(1).write_volatile((g[1] + HEAP_COMMITTED.load(HeapOrd::Relaxed)) as u64);
+    out.add(2).write_volatile((g[2] + HEAP_CHUNKS.load(HeapOrd::Relaxed)) as u64);
+    out.add(3).write_volatile((g[3] + HEAP_ALLOC_COUNT.load(HeapOrd::Relaxed)) as u64);
+    out.add(4).write_volatile(g[4] as u64);
 }
 
 #[no_mangle]
@@ -432,6 +490,7 @@ extern "C" fn bz_thread_body(ctx: *const u64) -> ! {
         let arg = *ctx.add(1);
         let f: extern "C" fn(u64) = core::mem::transmute(entry);
         f(arg);
+        bzgc::THREADS.fetch_sub(1, HeapOrd::AcqRel);
         syscall2(SYS_THREAD_EXIT, 0, 0);
     }
     loop {}
@@ -489,6 +548,8 @@ pub unsafe extern "C" fn bz_thread_create(entry: u64, arg: u64) -> u64 {
     *ctx = entry;
     *ctx.add(1) = arg;
     let stack_top = base + STACK;
+    // counted from here: the collector does not run while threads exist
+    bzgc::THREADS.fetch_add(1, HeapOrd::AcqRel);
     let tid = syscall3(
         SYS_THREAD_CREATE,
         bz_thread_trampoline as *const () as u64,
@@ -496,6 +557,7 @@ pub unsafe extern "C" fn bz_thread_create(entry: u64, arg: u64) -> u64 {
         stack_top,
     );
     if tid >= u64::MAX - 1 {
+        bzgc::THREADS.fetch_sub(1, HeapOrd::AcqRel);
         0
     } else {
         tid
@@ -833,6 +895,14 @@ pub unsafe extern "C" fn bz_spawn_mutex_worker(ctx: u64) -> u64 {
 /// Exit the calling thread (does not return).
 #[no_mangle]
 pub unsafe extern "C" fn bz_thread_exit(code: u64) -> ! {
+    // a worker leaving early: no longer counted (the collector waits for 0)
+    let mut n = bzgc::THREADS.load(HeapOrd::Acquire);
+    while n > 0 {
+        match bzgc::THREADS.compare_exchange_weak(n, n - 1, HeapOrd::AcqRel, HeapOrd::Acquire) {
+            Ok(_) => break,
+            Err(now) => n = now,
+        }
+    }
     syscall2(SYS_THREAD_EXIT, code, 0);
     loop {}
 }
@@ -896,6 +966,9 @@ pub unsafe extern "C" fn bz_init_statics() {
 pub unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
         "mov x29, #0",
+        "mov x9, sp",
+        "adrp x10, BZ_STACK_TOP",
+        "str x9, [x10, :lo12:BZ_STACK_TOP]", // the collector scans the stack up to here
         "bl {init}",
         "adrp x1, PROG_NAME",
         "add x1, x1, :lo12:PROG_NAME", // argv[0]
@@ -920,6 +993,7 @@ pub unsafe extern "C" fn _start() -> ! {
 pub unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
         "xor ebp, ebp",
+        "mov [rip + BZ_STACK_TOP], rsp", // the collector scans the stack up to here
         "and rsp, -16",
         "call {init}",                  // GC statics before any managed code
         "lea rdi, [rip + PROG_NAME]",  // argv[0]

@@ -27,6 +27,7 @@
     <ProjectReference Include="..\MUnduh\MUnduh.csproj" />
     <ProjectReference Include="..\MKonsol\MKonsol.csproj" />
     <ProjectReference Include="..\MRekam\MRekam.csproj" />
+    <ProjectReference Include="..\MAsisten\MAsisten.csproj" />
     <ProjectReference Include="..\MImage\MImage.csproj" />
     <ProjectReference Include="..\MPaint\MPaint.csproj" />
     <ProjectReference Include="..\MPiano\MPiano.csproj" />

@@ -67,6 +67,13 @@ static class Program
 
     static async void Handler() { await Task.Yield(); _voids++; }
 
+    static async Task<int> Failing(int code)
+    {
+        await Task.Yield();
+        if (code > 0) throw new InvalidOperationException("async failure");
+        return 0;
+    }
+
     static async Task<int> Main2()
     {
         // 1. a chain that suspends on a pending task and resumes when it completes
@@ -110,6 +117,13 @@ static class Program
         Check(_voids == 2, "async void handlers ran to completion");
         var pending = Sum(50);
         Check(pending.Result == 1275, "Task.Result on a pending task pumps the loop until it is done");
+
+        // 7. an exception escaping an async method faults its task; await rethrows it
+        var failing = Failing(3);
+        bool caught = false;
+        try { await failing; }
+        catch (InvalidOperationException) { caught = true; }
+        Check(caught && failing.IsFaulted, "await on a faulted task throws its exception");
         return 1;
     }
 
@@ -121,7 +135,7 @@ static class Program
         Check(ran, "BzAsync.Run pumped the program to completion");
         if (_fails == 0)
         {
-            BzDebug.WriteLine("MILESTONE: ASYNC OK (native C#: async Task / Task<T> / void, await, Yield, Delay, WhenAll, WhenAny, Task.Run, Result)");
+            BzDebug.WriteLine("MILESTONE: ASYNC OK (native C#: async Task / Task<T> / void, await, Yield, Delay, WhenAll, WhenAny, Task.Run, Result, exceptions through await)");
             return 0;
         }
         BzDebug.WriteLine("async: checks FAILED");

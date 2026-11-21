@@ -160,7 +160,7 @@ Tambahkan **`bzbcl.cs` dan `bzbcl2.cs`** ke daftar sumber app untuk memakai ini.
 | `System.Net.Http` | `BzHttp` | `BzHttp.BuildGet(host, path, buf)` — *lapisan pesan saja, TCP belum ada* |
 | `System.Threading.Tasks` | `BzTask`, `BzMutex` | `BzTask.Run(&Worker, arg)` — body-nya **function pointer**, bukan delegate |
 | `System.Timers` | `BzTimer` | `timer.Start(); if (timer.Poll()) { ... }` (di-poll dari loop app) |
-| `GC` | `BzGC` | `BzGC.GetAllocatedBytes()` — `Collect()` mengembalikan `false` (heap bump-only) |
+| `GC` | `BzGC` | `BzGC.Collect()` · `BzGC.CollectionCount()` · `BzGC.LiveBytes()` (kolektor mark-sweep; dilewati selama thread lain berjalan) |
 | `Pkg` | `BzPkg` | `BzPkg.List(32)` · `BzPkg.Install(pkg)` |
 
 Pemakaian nyata ada di suite app: `clock.cs` (BzDateTime),
@@ -190,7 +190,8 @@ Lihat kode nyata di `userland/hello-csharp/` (`calc.cs`, `game2048.cs`,
 
 ## ⚠️ Batasan zerolib (penulis app wajib baca)
 
-App freestanding memakai zerolib (belum ada GC penuh). Yang **tidak** berfungsi:
+App freestanding memakai zerolib, dengan kolektor mark-sweep dan dispatcher
+exception di shim startup ([csharp-userland.id.md](csharp-userland.id.md)). Yang **tidak** berfungsi:
 
 - **`static readonly string` yang diisi literal** membuat compiler crash (ILC
   tak bisa menyusun string versi zerolib) → pakai `const string` atau lokal.
@@ -198,9 +199,13 @@ App freestanding memakai zerolib (belum ada GC penuh). Yang **tidak** berfungsi:
   `char[]` / `stackalloc` lalu `Graphics.DrawChars`.
 - **`string == string`** butuh `op_Equality` (tak ada) → banding by-reference
   atau char demi char.
-- **Belum ada GC yang mereklamasi memori dan belum ada exception** (`throw`
-  menghentikan program; cast gagal atau store array yang salah menghentikannya
-  dengan baris `Unhandled exception: ...`).
+- **Pemeriksaan zerolib sendiri tidak melempar exception**: dereferensi null,
+  indeks array di luar batas, pembagian dengan nol, cast gagal, atau store
+  array yang salah menghentikan program dengan baris `Unhandled exception: ...`
+  alih-alih exception yang bisa ditangkap. `throw` / `try` / `catch` /
+  `finally` / `when` / `using` berfungsi.
+- **Tidak ada koleksi selama thread lain berjalan**: selama thread dari
+  `bz_thread_create` / `BzTask` hidup, heap hanya tumbuh.
 - **Tidak ada `System.Func`/`List<T>`/LINQ dari CoreLib** — pakai `bzbcl3.cs`.
 - **Variance** interface generik (`IEnumerable<Derived>` sebagai
   `IEnumerable<Base>`) dan default interface method belum didukung.

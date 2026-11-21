@@ -53,7 +53,7 @@ const CATEGORIES: [Category; 6] = [
         leaf: gfx::rgb(0x7F, 0xB3, 0xE0),
         // Interactive managed apps (RustCLR + Buitenzorg.UI, every architecture);
         // the native boot-demo programs stay reachable from the terminal (`run calc`).
-        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas"), ("mstudio", "Studio"), ("mweb", "Peramban")],
+        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas"), ("mstudio", "Studio"), ("mweb", "Peramban"), ("masisten", "Asisten AI")],
     },
     Category {
         name: "Multimedia",
@@ -164,7 +164,6 @@ fn icon_name(name: &str) -> &str {
         "mxox" => "xox",
         "mclock" | "hellogui" => "clock",
         "mtasks" => "taskmgr",
-        "munduh" => "store",
         "mimage" => "imgview",
         "mpiano" => "piano",
         "mpaint" => "paint",

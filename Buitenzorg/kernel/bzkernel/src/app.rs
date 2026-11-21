@@ -301,6 +301,8 @@ fn builtin_app_file(name: &str) -> Option<&'static str> {
         "crashme" => Some("CRASHME.ELF"),
         "bcl3" => Some("BCL3.ELF"),
         "async" => Some("ASYNC.ELF"),
+        "exc" => Some("EXC.ELF"),
+        "gc" => Some("GC.ELF"),
         "gcmem" => Some("GCMEM.ELF"),
         "bcl" => Some("BCL.ELF"),
         "bcl2" => Some("BCL2.ELF"),

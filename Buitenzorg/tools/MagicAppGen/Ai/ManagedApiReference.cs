@@ -77,6 +77,27 @@ internal static class ManagedApiReference
         "  new SerialPort(port 2..5, baud = 115200): Open(), Write(byte[] | string), Read(byte[]) -> count, Close()\n" +
         "Native C# equivalent: bzhw.cs (namespace Buitenzorg.Devices) with fixed byte buffers.";
 
+    public const string Ai =
+        "namespace Buitenzorg.AI (inside BZAPP.DLL) - the OS's built-in AI, all on the machine (no network). Off the device a\n" +
+        "simulated model answers, so --selftest runs on a PC.\n" +
+        "  LanguageModel.Load(string? path = null, Accelerator accel = Accelerator.Auto) -> LanguageModel? (null: LanguageModel.LastError)\n" +
+        "    default path LanguageModel.DefaultPath = /disk/STORIES.GGU (stories260K: short English children's stories);\n" +
+        "    any llama-architecture GGUF (F32/F16/Q8_0/Q4_0) works. Accelerator.Gpu = the COMPUTE_OP GPU backend, Cpu = never.\n" +
+        "  m.Generate(string prompt, int maxTokens = 48, double temperature = 0, int seed = 0) -> string (continuation only;\n" +
+        "    temperature 0 = greedy = always the same text)\n" +
+        "  var g = m.Begin(prompt, maxTokens, temperature); string? piece = g.Next() (null = done); g.IsDone; g.Text\n" +
+        "    -> call Next() from a DispatcherTimer tick so the answer appears while it is written\n" +
+        "  foreach (string piece in m.Stream(prompt, maxTokens)) ...; m.CountTokens(text)\n" +
+        "  m.Path, Layers, Dimension, Heads, Vocabulary, ContextLength (512), Parameters, Backend (\"CPU\"/GPU name), OnGpu,\n" +
+        "    IsSimulated, LastTokens, LastPromptTokens, LastMilliseconds, LastTokensPerSecond; m.Dispose()\n" +
+        "  Vision.Edges(int[] argb, w, h) / Grayscale(argb, w, h) -> int[]; Vision.Histogram(argb, bins) -> int[];\n" +
+        "    Vision.Sharpness(argb, w, h) -> 0..255.  ComputeDevice.Name (\"\" = CPU only).\n" +
+        "SCRIPTS: UI scripts (they call window(...), started with `run /disk/X.JS`) have aiload([path]),\n" +
+        "  aistart(prompt, tokens[, temperature*1000]) + ainext() (\"\" = done, call once per frame), aigenerate(prompt, tokens[, t]),\n" +
+        "  aibackend(), aiinfo(6 = parameters, 0 layers, 5 context), aispeed() (tokens/s). C# script: Ai.Load(), Ai.Start(..),\n" +
+        "  Ai.Next(), Ai.Generate(..), Ai.Backend(), Ai.Speed(). Console scripts (`script js`) do NOT have these.\n" +
+        "Template: managed-ai (C#), js-ai (UI script). Guide docs/ai-compute.md.";
+
     public const string Scripts =
         "SCRIPTS (Python / JavaScript / TypeScript) run on the in-kernel interpreter (kernel script.rs). On the device:\n" +
         "  script py /disk/NAME.PY   |   script js /disk/NAME.JS   |   script ts /disk/NAME.TS  (aliases py/js/ts)\n" +

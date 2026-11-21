@@ -2,7 +2,9 @@
 # Build & deploy a Buitenzorg desktop app template (Linux / macOS).
 #
 # Compiles app.cs against the Buitenzorg.UI / .Drawing library sources with
-# bflat (--stdlib:zero), links it with the bzstart shim into a static ELF, and
+# `bflat build-il` (--stdlib:zero, the repo's patched zerolib) and the
+# upstream ILCompiler (unwind + exception tables, for try/catch), links it with
+# the bzstart shim (garbage collector + exception dispatcher) into a static ELF, and
 # deploys it as userland/hello-csharp/userapp.elf — which the kernel image
 # embeds as /disk/USERAPP.ELF, launchable in the OS with `run myapp`.
 #
@@ -21,8 +23,11 @@ if [ -z "$root" ]; then
     root="$d"
 fi
 ul="$root/userland/hello-csharp"
-bflat="$root/tools/bflat/bflat"
-[ -x "$bflat" ] || { echo "bflat not found at $bflat (run scripts/quickstart.sh first)." >&2; exit 1; }
+[ -x "$root/tools/bflat/bflat" ] || { echo "bflat not found under tools/bflat (run scripts/quickstart.sh first)." >&2; exit 1; }
+# the private bflat copy with the patched zerolib, and ILCompiler 8.0.26
+bflat="$("$root/scripts/prepare-bflat.sh" | tail -1)"
+ilc="$("$root/scripts/prepare-ilc.sh" | tail -1)"
+zerolib="$(dirname "$bflat")/lib/linux/x64/zerolib.dll"
 lld="$(command -v rust-lld || true)"
 [ -n "$lld" ] || lld="$(find "$HOME/.rustup/toolchains" -name rust-lld -type f 2>/dev/null | head -n1)"
 [ -n "$lld" ] || { echo "rust-lld not found (install the rust nightly toolchain)." >&2; exit 1; }
@@ -36,11 +41,14 @@ if [ ! -f "$ul/bzstart.o" ] || [ "$ul/bzstart.rs" -nt "$ul/bzstart.o" ]; then
         --target x86_64-unknown-none -C panic=abort -C opt-level=2 -o bzstart.o bzstart.rs )
 fi
 
-libpaths=""; for l in $libs; do libpaths="$libpaths $ul/$l"; done
+libpaths=""; for l in $libs bzexc.cs; do libpaths="$libpaths $ul/$l"; done
 
-echo "==> bflat: app.cs + [$libs] -> userapp.o"
-"$bflat" build "$here/app.cs" $libpaths --stdlib:zero --os:linux --arch:x64 -c -Os \
-    --no-debug-info --no-reflection --no-stacktrace-data -o "$here/userapp.o"
+echo "==> bflat build-il: app.cs + [$libs] -> il/userapp.dll"
+mkdir -p "$here/il"
+"$bflat" build-il "$here/app.cs" $libpaths --stdlib:zero -O -o "$here/il/userapp.dll"
+echo "==> ilc: userapp.dll -> userapp.o"
+"$ilc" "$here/il/userapp.dll" "$zerolib" --systemmodule:zerolib --targetos:linux --targetarch:x64 \
+    --Os --reflectiondata:none --directpinvoke:libSystem.Native -o "$here/userapp.o"
 
 echo "==> rust-lld: link -> userapp.elf"
 "$lld" -flavor gnu -o "$here/userapp.elf" -T "$ul/user.ld" \

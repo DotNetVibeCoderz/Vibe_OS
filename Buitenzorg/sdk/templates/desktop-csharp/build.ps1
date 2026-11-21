@@ -1,7 +1,9 @@
 # Build & deploy a Buitenzorg desktop app template (Windows / PowerShell).
 #
 # Compiles app.cs against the Buitenzorg.UI / .Drawing library sources with
-# bflat (--stdlib:zero), links it with the bzstart shim into a static ELF, and
+# `bflat build-il` (--stdlib:zero, the repo's patched zerolib) and the
+# upstream ILCompiler (unwind + exception tables, for try/catch), links it with
+# the bzstart shim (garbage collector + exception dispatcher) into a static ELF, and
 # deploys it as userland/hello-csharp/userapp.elf — which the kernel image
 # embeds as /disk/USERAPP.ELF, launchable in the OS with `run myapp`.
 #
@@ -27,8 +29,11 @@ if (-not $RepoRoot) {
     $RepoRoot = $d
 }
 $ul = Join-Path $RepoRoot "userland\hello-csharp"
-$bflat = Join-Path $RepoRoot "tools\bflat\bflat.exe"
-if (-not (Test-Path $bflat)) { throw "bflat not found at $bflat (run scripts/quickstart.ps1 first)." }
+if (-not (Test-Path (Join-Path $RepoRoot "tools\bflat\bflat.exe"))) { throw "bflat not found under tools\bflat (run scripts/quickstart.ps1 first)." }
+# the private bflat copy with the patched zerolib, and ILCompiler 8.0.26
+$bflat = & (Join-Path $RepoRoot "scripts\prepare-bflat.ps1") | Select-Object -Last 1
+$ilc = & (Join-Path $RepoRoot "scripts\prepare-ilc.ps1") | Select-Object -Last 1
+$zerolib = Join-Path (Split-Path -Parent $bflat) "lib\linux\x64\zerolib.dll"
 $lld = Get-ChildItem "$env:USERPROFILE\.rustup\toolchains\nightly-*\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe" |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $lld) { throw "rust-lld not found (install the rust nightly toolchain)." }
@@ -45,13 +50,18 @@ if (-not (Test-Path $bzstart) -or (Get-Item (Join-Path $ul "bzstart.rs")).LastWr
 }
 
 # Full paths to the library sources this app pulls in.
-$libPaths = $Libs | ForEach-Object { Join-Path $ul $_ }
+$libPaths = @($Libs + "bzexc.cs") | ForEach-Object { Join-Path $ul $_ }
 $appCs = Join-Path $here "app.cs"
 
-Write-Host "==> bflat: app.cs + [$($Libs -join ', ')] -> userapp.o"
-& $bflat build $appCs @libPaths --stdlib:zero --os:linux --arch:x64 -c -Os `
-    --no-debug-info --no-reflection --no-stacktrace-data -o (Join-Path $here "userapp.o")
+Write-Host "==> bflat build-il: app.cs + [$($Libs -join ', ')] -> il\userapp.dll"
+New-Item -ItemType Directory -Force (Join-Path $here "il") | Out-Null
+$il = Join-Path $here "il\userapp.dll"
+& $bflat build-il $appCs @libPaths --stdlib:zero -O -o $il
 if ($LASTEXITCODE -ne 0) { throw "bflat failed" }
+Write-Host "==> ilc: userapp.dll -> userapp.o"
+& $ilc $il $zerolib --systemmodule:zerolib --targetos:linux --targetarch:x64 `
+    --Os --reflectiondata:none --directpinvoke:libSystem.Native -o (Join-Path $here "userapp.o")
+if ($LASTEXITCODE -ne 0) { throw "ilc failed" }
 
 Write-Host "==> rust-lld: link -> userapp.elf"
 & $lld -flavor gnu -o (Join-Path $here "userapp.elf") -T (Join-Path $ul "user.ld") `

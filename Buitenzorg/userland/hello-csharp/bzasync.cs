@@ -10,12 +10,13 @@
 // `Task.WhenAny` wait for several tasks, and `await` on a task that is not
 // done yet parks the method until the task completes.
 //
-// Needs bzbcl3.cs (Action / Func) and the shim's RhpByRefAssignRef (copying a
+// Needs bzbcl3.cs (Action / Func), bzexc.cs (System.Exception) and the shim's RhpByRefAssignRef (copying a
 // state machine struct that holds references). Two zerolib limits shape it:
 // a delegate cannot be bound to an *interface* method, so continuations go
-// through the small `MoveNextRunner` class; and there are no exceptions
-// (nothing can throw), so a task never faults -- `SetException` only records
-// that it was called.
+// through the small `MoveNextRunner` class. An exception that escapes an
+// async method faults its task (`SetException`); `await`, `.Result` and
+// `Wait()` throw it again (the exception itself, not an AggregateException).
+// `async void` methods have no task: their exception is dropped.
 //
 // Not here: tasks on other threads (`Task.Run` queues work on the loop, like
 // a browser's setTimeout(0)), cancellation tokens, ValueTask, IAsyncEnumerable.
@@ -26,16 +27,9 @@ using Buitenzorg;
 
 namespace System
 {
-    /// <summary>zerolib has no exception types; the async builders name this one.</summary>
-    /// <summary>zerolib lacks it too; `params` needs it.</summary>
+    /// <summary>zerolib lacks it too; `params` needs it. (System.Exception and
+    /// the other exception types are in bzexc.cs.)</summary>
     public sealed class ParamArrayAttribute : Attribute { public ParamArrayAttribute() { } }
-
-    public class Exception
-    {
-        public string Message;
-        public Exception() { Message = ""; }
-        public Exception(string message) { Message = message; }
-    }
 }
 
 namespace System.Runtime.CompilerServices
@@ -157,7 +151,10 @@ namespace System.Threading.Tasks
         public TaskAwaiter GetAwaiter() => new TaskAwaiter(this);
 
         /// <summary>Block (pumping the event loop) until the task is done.</summary>
-        public void Wait() { BzAsync.RunUntil(this); }
+        public void Wait() { BzAsync.RunUntil(this); ThrowIfFaulted(); }
+
+        /// <summary>Throw the exception that faulted this task (await / Result / Wait).</summary>
+        internal void ThrowIfFaulted() { if (_error != null) throw _error; }
 
         static Task _completed;
         public static Task CompletedTask
@@ -241,6 +238,7 @@ namespace System.Threading.Tasks
             get
             {
                 if (!IsCompleted) Wait();
+                ThrowIfFaulted();
                 return _result;
             }
         }
@@ -281,7 +279,7 @@ namespace System.Threading.Tasks
         readonly Task _task;
         public TaskAwaiter(Task task) { _task = task; }
         public bool IsCompleted => _task.IsCompleted;
-        public void GetResult() { }
+        public void GetResult() { _task.ThrowIfFaulted(); }
         public void OnCompleted(Action continuation) => _task.OnDone(continuation);
         public void UnsafeOnCompleted(Action continuation) => _task.OnDone(continuation);
     }

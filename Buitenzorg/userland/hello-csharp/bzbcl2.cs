@@ -961,59 +961,69 @@ namespace Buitenzorg
     // GC (System)
     // =====================================================================
 
-    /// <summary>Managed-heap statistics (System.GC). The ring-3 heap is a growable
-    /// bump allocator, so <see cref="Collect"/> reclaims nothing — it is present so
-    /// code written against it keeps working once a real collector lands. The
-    /// numbers below are real measurements from the allocator, not estimates.</summary>
+    /// <summary>The managed heap (System.GC): a non-moving mark-sweep collector in
+    /// the startup shim (bzgc.rs). It collects on its own when enough has been
+    /// allocated since the last collection; <see cref="Collect"/> runs one now.
+    /// While the program has other threads alive a collection is skipped (the
+    /// heap grows instead) -- see bzgc.rs.</summary>
     public static class BzGC
     {
         [DllImport("*")] static extern unsafe void bz_heap_stats(ulong* outp);
+        [DllImport("*")] static extern unsafe void bz_gc_stats(ulong* outp);
+        [DllImport("*")] static extern ulong bz_gc_collect();
+        [DllImport("*")] static extern void bz_gc_disable(ulong on);
 
-        /// <summary>Total bytes handed out by the allocator since start-up.</summary>
-        public static unsafe ulong GetAllocatedBytes()
+        static unsafe ulong Heap(int i)
         {
             ulong* s = stackalloc ulong[5];
             bz_heap_stats(s);
-            return s[0];
+            return s[i];
         }
 
-        /// <summary>Bytes currently mapped for the managed heap.</summary>
-        public static unsafe ulong GetTotalMemory()
+        static unsafe ulong Gc(int i)
         {
-            ulong* s = stackalloc ulong[5];
-            bz_heap_stats(s);
-            return s[1];
+            ulong* s = stackalloc ulong[8];
+            bz_gc_stats(s);
+            return s[i];
         }
 
-        /// <summary>Number of heap chunks mapped so far (each is at least 1 MiB).</summary>
-        public static unsafe ulong ChunkCount()
-        {
-            ulong* s = stackalloc ulong[5];
-            bz_heap_stats(s);
-            return s[2];
-        }
+        /// <summary>Total bytes handed out since start-up (GC.GetTotalAllocatedBytes).</summary>
+        public static ulong GetAllocatedBytes() => Heap(0);
+
+        /// <summary>Bytes of memory committed for the heaps.</summary>
+        public static ulong GetTotalMemory() => Heap(1);
+
+        /// <summary>Heap blocks (64 KiB) and malloc chunks in use.</summary>
+        public static ulong ChunkCount() => Heap(2);
 
         /// <summary>Number of allocations served.</summary>
-        public static unsafe ulong AllocationCount()
-        {
-            ulong* s = stackalloc ulong[5];
-            bz_heap_stats(s);
-            return s[3];
-        }
+        public static ulong AllocationCount() => Heap(3);
 
-        /// <summary>Bytes still free in the current chunk before it must grow.</summary>
-        public static unsafe ulong FreeInChunk()
-        {
-            ulong* s = stackalloc ulong[5];
-            bz_heap_stats(s);
-            return s[4];
-        }
+        /// <summary>Committed bytes not holding live objects.</summary>
+        public static ulong FreeInChunk() => Heap(4);
 
-        /// <summary>No-op: the bump heap has no reclaiming collector yet. Returns
-        /// false so callers can tell that nothing was collected.</summary>
-        public static bool Collect() => false;
+        /// <summary>Bytes in live objects after the last collection (and since).</summary>
+        public static ulong LiveBytes() => Gc(1);
 
-        /// <summary>Always 0 — there are no generations.</summary>
+        /// <summary>Bytes reclaimed by every collection so far.</summary>
+        public static ulong FreedBytes() => Gc(2);
+
+        /// <summary>Collections run (GC.CollectionCount).</summary>
+        public static ulong CollectionCount() => Gc(0);
+
+        /// <summary>Collections skipped because other threads were alive.</summary>
+        public static ulong SkippedCount() => Gc(5);
+
+        /// <summary>Pause of the last collection in microseconds.</summary>
+        public static ulong LastPauseMicroseconds() => Gc(3);
+
+        /// <summary>Collect now. False when it was skipped (other threads alive).</summary>
+        public static bool Collect() => bz_gc_collect() != 0;
+
+        /// <summary>Stop (true) or resume (false) automatic collections.</summary>
+        public static void SetEnabled(bool on) => bz_gc_disable(on ? 0UL : 1UL);
+
+        /// <summary>Always 0 -- there are no generations.</summary>
         public static int MaxGeneration => 0;
     }
 

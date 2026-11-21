@@ -395,9 +395,24 @@ fn ret_string(i: &mut Interpreter, s: &str) -> ExecResult<Option<Value>> {
 /// ("" lists the mounts).
 fn fs_list(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let path = cstr(&string(i, a, 0));
-    // bz_abi::FsEntry: 24-byte name + u64 is_dir.
-    let mut buf = alloc::vec![0u8; 32 * 128];
-    let n = sys::syscall(FS_LIST, path.as_ptr() as u64, buf.as_mut_ptr() as u64, 128);
+    // bz_abi::FsEntry: 24-byte name + u64 is_dir. A full buffer may mean more
+    // entries: retry bigger (the Pi's /disk root alone has ~120 files, and a
+    // 128-entry cap hid folders created after them).
+    // A kernel older than that limit refuses max > 128: keep the last answer.
+    let mut cap = 128usize;
+    let mut best: Option<(alloc::vec::Vec<u8>, u64)> = None;
+    let (buf, n) = loop {
+        let mut buf = alloc::vec![0u8; 32 * cap];
+        let n = sys::syscall(FS_LIST, path.as_ptr() as u64, buf.as_mut_ptr() as u64, cap as u64);
+        if sys::is_err(n) {
+            break best.unwrap_or((buf, n));
+        }
+        if (n as usize) < cap || cap >= 4096 {
+            break (buf, n);
+        }
+        best = Some((buf, n));
+        cap *= 2;
+    };
     let mut out = String::new();
     if !sys::is_err(n) {
         for e in buf.chunks(32).take(n as usize) {

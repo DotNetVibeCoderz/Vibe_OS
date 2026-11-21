@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # Build the v0.4 "Tunas" milestone program: compile hello.cs (C#) to a
 # freestanding static ELF that runs in ring 3 on Buitenzorg.
-# Pipeline: bflat (C# -> object, zerolib) + rustc (shim) then rust-lld links.
+# Pipeline: `bflat build-il` (C# -> IL, zerolib) + the upstream ILCompiler
+# (IL -> object with unwind + exception-clause tables, which bflat leaves out
+# for zerolib) + rustc (startup/PAL shim with the garbage collector and the
+# exception dispatcher -> object), then rust-lld links them. Every program
+# gets bzexc.cs (System.Exception and friends).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 dir="$root/userland/hello-csharp"
 # a private bflat copy whose zerolib is patched (scripts/prepare-bflat.sh)
 bflat="$("$root/scripts/prepare-bflat.sh" | tail -1)"
+ilc="$("$root/scripts/prepare-ilc.sh" | tail -1)"
+zerolib="$(dirname "$bflat")/lib/linux/x64/zerolib.dll"
 
 lld="$(ls "$HOME"/.rustup/toolchains/nightly-*/lib/rustlib/*/bin/rust-lld 2>/dev/null | head -1)"
 [ -n "$lld" ] || { echo "rust-lld not found (install rust nightly)"; exit 1; }
 
 cd "$dir"
+mkdir -p il
 echo "==> rustc: bzstart.rs -> bzstart.o (freestanding shim)"
 rustc +nightly --edition 2021 --crate-type staticlib --emit obj \
     --target x86_64-unknown-none -C panic=abort -C opt-level=2 \
@@ -20,9 +27,11 @@ rustc +nightly --edition 2021 --crate-type staticlib --emit obj \
 # name:sources (space-separated); apps that use Buitenzorg.Drawing add bzdraw.cs
 build_prog() {
     local elf="$1"; shift
-    echo "==> bflat: $* -> $elf.o"
-    "$bflat" build "$@" --stdlib:zero --os:linux --arch:x64 -c -Os \
-        --no-debug-info --no-reflection --no-stacktrace-data -o "$elf.o"
+    echo "==> bflat build-il: $* -> il/$elf.dll"
+    "$bflat" build-il "$@" bzexc.cs --stdlib:zero -O -o "il/$elf.dll"
+    echo "==> ilc: il/$elf.dll -> $elf.o"
+    "$ilc" "il/$elf.dll" "$zerolib" --systemmodule:zerolib --targetos:linux --targetarch:x64 \
+        --Os --reflectiondata:none --directpinvoke:libSystem.Native -o "$elf.o"
     echo "==> rust-lld: link -> $elf.elf"
     "$lld" -flavor gnu -o "$elf.elf" -T user.ld --static --no-dynamic-linker \
         -e _start "$elf.o" bzstart.o
@@ -66,3 +75,5 @@ build_prog pthread pthread.cs
 build_prog smpfs smpfs.cs
 build_prog smpproc smpproc.cs
 build_prog proctest proctest.cs bzbcl.cs bzbcl2.cs
+build_prog exc exc.cs
+build_prog gc gc.cs

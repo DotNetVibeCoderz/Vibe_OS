@@ -6,7 +6,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 bflat_home="$root/tools/bflat"
 patched="$root/kernel/target/bflat-patched"
-patch_version="2"   # bump whenever tools/ZerolibPatch changes what it does
+patch_version="7"   # bump whenever tools/ZerolibPatch changes what it does
 marker="$patched/ZEROLIB_PATCH"
 current="$(cat "$marker" 2>/dev/null || true)"
 if [ ! -x "$patched/bflat" ] || [ "$current" != "$patch_version" ]; then
@@ -19,6 +19,8 @@ if [ ! -x "$patched/bflat" ] || [ "$current" != "$patch_version" ]; then
             "$bflat_home/lib/linux/$a/zerolib.dll" "$patched/lib/linux/$a/zerolib.dll" >&2 \
             || { rm -rf "$patched"; echo "ZerolibPatch failed ($a)" >&2; exit 1; }
     done
+    # the reference assembly the C# compiler sees (System.IDisposable for `using`)
+    dotnet run --project "$root/tools/ZerolibPatch" -c Release --         "$bflat_home/ref/zerolib.dll" "$patched/ref/zerolib.dll" >&2         || { rm -rf "$patched"; echo "ZerolibPatch failed (ref)" >&2; exit 1; }
     echo "$patch_version" > "$marker"
 fi
 echo "$patched/bflat"

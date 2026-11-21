@@ -623,7 +623,7 @@ Lihat docs/packages.md.
     static readonly string[] Order = { "C# script", "C# script UI", "JavaScript", "JavaScript UI", "TypeScript", "TypeScript UI", "Python", "Python UI", "Skrip shell", "C#", "Paket", "JSON" };
 
     /// <summary>Every template (console and UI), grouped by language.</summary>
-    public static readonly Template[] Catalog = All.Concat(UiTemplates.All).Concat(UiTemplates2.All).Concat(CsxTemplates.All)
+    public static readonly Template[] Catalog = All.Concat(UiTemplates.All).Concat(UiTemplates2.All).Concat(CsxTemplates.All).Concat(AiTemplates.All)
         .OrderBy(t => Array.IndexOf(Order, t.Language) < 0 ? 99 : Array.IndexOf(Order, t.Language))
         .ToArray();
 

@@ -13,6 +13,114 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Added -- the OS's AI for app authors, Asisten AI, icons for every app (2026-11-21)
+
+- **`Buitenzorg.AI`** (in `BZAPP.DLL`): managed C# reaches the local
+  language model and the vision functions.
+  - `LanguageModel.Load(path?, Accelerator)` with `Generate`, streamed
+    `Begin(...).Next()` and `Stream(...)`, `CountTokens`, plus model facts and
+    the speed of the last run.
+  - `Vision.Edges / Grayscale / Histogram / Sharpness`; `ComputeDevice.Name`.
+  - Off the device a deterministic simulated model answers, so `--selftest`
+    runs on a PC.
+  - Host side: `clrhost/src/aiapi.rs`, 13 natives. `llm.rs` gained a
+    token-by-token `Stream`; `generate` is built on it, and the boot's
+    `LLM OK` check still compares exact tokens.
+- **UI scripts** (JS/TS/Python/C# script) have `aiload`, `aistart` +
+  `ainext`, `aigenerate`, `aibackend`, `aiinfo`, `aispeed` (C# script:
+  `Ai.*`).
+- **Asisten AI** (`run masisten`, Start menu Kantor): streams the model's
+  story with its speed and backend; a vision tab shows edges, grayscale, a
+  brightness histogram and sharpness for the photos on `/disk`. Its 13-check
+  self-test is part of the boot's managed suite.
+- **Templates:**
+  - Studio: three AI templates (JS, Python, C# script); the catalog grew to
+    56.
+  - MagicAppGen: `managed-ai` and `js-ai`. Jack has `GetApiReference("ai")`,
+    and Run starts any script that calls `window(` with `run`.
+  - VS Code / `bz new`: `ai-csharp` and `ai-js`. `bz new` now fills
+    `__APPNAME__`, `__NAME83__` and `__BZROOT__` in template files and file
+    names.
+- **App icons:** 15 apps that only had a coloured letter tile now have an
+  icon: Musik, Video, Perekam, Ular, Ranjau, Bata, Balok, Kartu, Konsol,
+  Unduhan, Baca, Labirin, CHIP-8, Lompat Kodok and Asisten AI. They are
+  drawn by `scripts/make-icons.py` (Pillow, no image generator), in the
+  style of the earlier ones. `ICONS.BIN` now has 38 icons.
+- **Marketing:** `docs/marketing/09-local-ai.png` and `10-crafted.png`.
+
+### Fixed -- managed apps saw at most 128 files of a folder (2026-11-21)
+
+- `FS_LIST` refused `max` above 128, and clrhost asked for exactly 128. The
+  Raspberry Pi's `/disk` root holds about 120 files, so anything created after
+  them was invisible to managed apps: Musik's library check failed on the Pi
+  only.
+- The kernel now accepts up to 4096 entries. Smaller requests behave as before.
+- clrhost retries with a doubled buffer while the answer comes back full, and
+  keeps the last good answer if an older kernel refuses the larger size.
+- Musik's check now reports each step when it fails.
+
+### Fixed -- `Thread.Join` stalling in managed apps (2026-11-21)
+
+- Joining a thread that had just finished could take 30 s or more on the
+  device; Pengaturan's font test worked around it with a flag.
+- **Cause:** clrhost's heap, not RustCLR. `linked_list_allocator` walks its
+  whole free list on every allocation and every free. An exiting thread drops
+  its copy of the interpreter (thousands of frees) before it marks itself
+  done. On a fragmented heap that took minutes: a PC replay of 160k small
+  strings took 265 s, against 0.55 s with the system allocator.
+- **Fix:** `clrhost/src/heap.rs` now serves blocks up to 4 KiB from 28 size
+  classes (free lists in 64 KiB slabs). Only larger blocks use the list
+  allocator. The same replay takes 0.39 s.
+- RustCLR's Conformance (515) and ModernSyntax (35) pass on that allocator.
+- Pengaturan's test is back to a plain `Thread.Join`, and it now checks that
+  the join returns within 5 s.
+
+### Added -- native C#: a reclaiming garbage collector and exceptions (2026-11-21)
+
+- **Garbage collector** (`userland/hello-csharp/bzgc.rs`, in the startup
+  shim): a non-moving mark-sweep collector behind `RhpNewFast` /
+  `RhpNewArray`. It replaces the bump heap, which freed nothing until the
+  program exited.
+  - Memory: reserved address space, committed in 64 KiB blocks. Small
+    blocks hold one size class (16 B .. 8 KiB) with allocated and mark
+    bitmaps; larger objects take a run of whole blocks.
+  - Roots, found conservatively: data + bss, plus the stack and the
+    callee-saved registers. Arrays are scanned only when their MethodTable
+    says they hold references.
+  - Collections are skipped while the program has other threads alive.
+  - `BzGC.Collect()` now really collects, with new statistics
+    (`CollectionCount`, `LiveBytes`, `FreedBytes`, `SkippedCount`, ...).
+  - `gc.cs` (`MILESTONE: GC OK`, x86-64 + ARM64): 128 MiB of garbage, 18
+    collections, 187 MiB freed, peak committed 14 MiB, live data intact.
+- **Exceptions** (`bzeh.rs`): `try` / `catch (T)` / `catch ... when` /
+  `finally` / `using` / `throw;` all work, as do exceptions thrown inside
+  catch and finally blocks, in generic code, through delegates and on
+  worker threads.
+  - Dispatch runs in two passes over DWARF CFI and NativeAOT's clause
+    tables.
+  - `bzexc.cs` (System.Exception and the usual types) is compiled into
+    every program.
+  - `await`, `.Result` and `Wait()` rethrow the exception of a faulted task.
+  - `exc.cs` (`MILESTONE: EXCEPTIONS OK`, x86-64 + ARM64) runs 13 checks.
+  - zerolib's own checks (null, bounds, division by zero, failed casts)
+    still end the program instead of throwing.
+- **New native build pipeline:** `bflat build-il` (C# -> IL) + the upstream
+  **ILCompiler 8.0.26**. bflat switches the unwind and exception-clause
+  tables off for zerolib; the upstream compiler emits them.
+  `scripts/prepare-ilc.*` takes it from the NuGet cache or downloads it into
+  `kernel/target/ilc`, SHA-256 pinned. The ILC flags include
+  `--directpinvoke:libSystem.Native`, which bflat passed implicitly.
+  - The four build scripts, the `desktop-csharp` SDK template and
+    MagicAppGen's native builder now use it.
+  - `tools/ZerolibPatch` now also adds `System.IDisposable` (`using`),
+    renames zerolib's `RhpNewFast` / `RhpNewArray`, patches the reference
+    assembly too, and drops the unused mscorlib reference Cecil adds (the
+    C# compiler then found no core library).
+  - The shim gained `strlen` and `__security_cookie` (ILC's stack guard);
+    `user.ld` keeps `.eh_frame` and has a `PT_TLS` segment.
+  - Program symbols keep their `<program>_` prefix (the IL goes to
+    `il/<name>.dll`), and `crash.rs` skips ILC's `_lsda` labels.
+
 ### Added -- GPU compute and a local LLM (2026-11-20)
 
 - **`COMPUTE_OP` (syscall 72, `COUNT` 73):** GPU buffers + GEMV for programs

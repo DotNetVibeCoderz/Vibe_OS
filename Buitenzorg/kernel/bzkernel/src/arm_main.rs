@@ -827,7 +827,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     };
     let frames0 = memory::frames_in_use();
-    for name in ["hello", "matang", "heap", "statics", "bcl3", "async", "gcmem", "bcl", "proctest"] {
+    for name in ["hello", "matang", "heap", "statics", "bcl3", "async", "exc", "gc", "gcmem", "bcl", "proctest"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ({} bytes, from {}) ---", name, image.len(), if from_disk.get() { "/disk" } else { "a Limine module" });
         match app::spawn_image(name, &image) {

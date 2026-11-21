@@ -1,6 +1,6 @@
 # Buitenzorg OS — marketing images
 
-Eight visuals for posts, slides and the project page (1536×1024 PNG; 04 and 05 updated 2026-11-20). They
+Ten visuals for posts, slides and the project page (1536×1024 PNG; 04 and 05 updated 2026-11-20, 09 and 10 added 2026-11-21). They
 were generated with GPT Image (Rodin MCP) from prompts that list only
 features that are finished and verified. **They are illustrations, not
 screenshots:** the window contents are artistic. For real screenshots of the
@@ -16,12 +16,15 @@ OS, use the images in [`docs/img`](../img).
 | ![](06-connectivity.png) `06-connectivity.png` | **Connected, securely** | Its own network stack: Ethernet/DHCP/DNS, TCP, TLS 1.3, HTTP, WebSocket, downloads, SSH server |
 | ![](07-security.png) `07-security.png` | **Secure by design** | Per-app permissions (broker at the syscall boundary), Ed25519-signed packages, isolated address spaces, validated syscall pointers |
 | ![](08-real-hardware.png) `08-real-hardware.png` | **Runs on real hardware** | A physical laptop (Intel UHD 620 3D, HD Audio, I219 Ethernet) and a Raspberry Pi 4 (HDMI, USB, Ethernet) |
+| ![](09-local-ai.png) `09-local-ai.png` | **AI on your machine** | A local GGUF language model (stories260K on every image) behind the COMPUTE_OP API, with a GPU backend for the Raspberry Pi 4 (V3D, not yet verified on the board) and an exact CPU reference; vision (Sobel edges, histogram); the Asisten AI app; Buitenzorg.AI for C# and `ai*` functions for JS/Python/C# script UI scripts; templates in Studio, MagicAppGen and `bz new`. The tokens/s figure in the window is artistic |
+| ![](10-crafted.png) `10-crafted.png` | **Crafted down to the pixel** | TrueType/OpenType fonts with kerning and subpixel placement; 3D on the GPU of the Intel laptop and the Raspberry Pi 4 (V3D); native C# with a reclaiming GC and exceptions; app icons for every app |
 
 Suggested one-liners:
 
 - *Buitenzorg OS — a hybrid, AI-native operating system grown like a garden: a Rust kernel underneath, C# and scripts on top.*
 - *From a PC laptop to a Raspberry Pi 4 and RISC-V: one OS, one app model.*
 - *Write it on your PC, save, and watch it reload on the device.*
+- *An AI assistant that never leaves your machine.*
 
 ---
 

@@ -33,7 +33,7 @@ dotnet run
 | Kind | Built with | On the device | Started by |
 | --- | --- | --- | --- |
 | **Managed C#** (recommended for UI) | `dotnet build` against `userland/clr-apps/Buitenzorg.App` / `Buitenzorg.UI` | `/disk/NAME.DLL` (RustCLR: GC, LINQ, lambdas…) | `run name` |
-| **Native C#** | bflat `--stdlib:zero` + the `bzstart.rs` shim + rust-lld (x64, or arm64 with the patched bflat) | `/disk/NAME.ELF` (no GC, zerolib rules) | `run name` |
+| **Native C#** | `bflat build-il --stdlib:zero` (patched zerolib) + ILCompiler 8.0.26 + the `bzstart.rs` shim + rust-lld (x64 or arm64) | `/disk/NAME.ELF` (mark-sweep GC + exceptions, zerolib rules) | `run name` |
 | **Script** (Python / TypeScript / JavaScript) | a subset check + copy | `/disk/NAME.PY` / `.TS` / `.JS` | `script py /disk/NAME.PY` |
 
 `NAME` is the 8.3 upper-case device name (a managed project's `<AssemblyName>`).

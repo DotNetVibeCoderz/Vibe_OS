@@ -82,6 +82,8 @@ Plus what every script has: `str`, `len`, `abs`, `min`, `max`, `chr`, `ord`,
 `int(s)` (also `parseInt`, `Number`), `indexOf(s, part)` (-1 = none), `trim`,
 `upper`, `lower`.
 
+**The OS's AI:** `aiload([file])`, `aistart(prompt, tokens[, temperature*1000])` + `ainext()` (one piece per frame, `""` = done), `aigenerate(...)`, `aibackend()`, `aiinfo(n)`, `aispeed()` -- the local language model; in C# script `Ai.Load()` / `Ai.Start()` / `Ai.Next()` / ... Details and templates: [ai-compute.md](ai-compute.md#for-app-authors).
+
 ## Language subset
 
 The interpreter is small: integers and strings (no floats: scale by 100 for

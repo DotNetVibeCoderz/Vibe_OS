@@ -9,8 +9,11 @@
 // fails to compile ("Expected method 'ThrowOverflowException' not found on type
 // '[zerolib]Internal.Runtime.CompilerHelpers.ThrowHelpers'").
 //
-// It also renames zerolib's RhpStelemRef export (see below) on every
-// architecture: the startup shim implements the real covariant array store.
+// It also renames zerolib's RhpStelemRef, RhpNewFast and RhpNewArray exports
+// (see below) on every architecture: the startup shim implements the real
+// covariant array store and allocates objects on its collected heap.
+//
+// It also adds System.IDisposable (`using`) when zerolib lacks it.
 //
 // This tool reads a zerolib.dll, adds each missing helper to that class with
 // the IL body of an existing one (zerolib has no exception machinery: every
@@ -87,6 +90,30 @@ foreach (var name in wanted)
     added++;
 }
 
+// `using (x) { }` needs System.IDisposable, which the C# compiler only looks
+// for in the core library: add the interface when zerolib lacks it.
+int addedTypes = 0;
+if (module.GetType("System.IDisposable") is null)
+{
+    var disposable = new TypeDefinition("System", "IDisposable",
+        TypeAttributes.Public | TypeAttributes.Interface | TypeAttributes.Abstract);
+    var dispose = new MethodDefinition("Dispose",
+        MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual |
+        MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+        // `void` as decoded from an existing signature (ELEMENT_TYPE_VOID):
+        // module.TypeSystem.Void would reference mscorlib (zerolib is not
+        // recognised as a core library), and the TypeDefinition System.Void
+        // would be written as a class type, which the C# compiler rejects.
+        source.ReturnType);
+    disposable.Methods.Add(dispose);
+    module.Types.Add(disposable);
+    addedTypes++;
+    Console.WriteLine("System.IDisposable: added");
+}
+
+// The shim also allocates every managed object (RhpNewFast / RhpNewArray) on
+// the heap its garbage collector manages (zerolib's versions call malloc).
+string[] shimExports = ["RhpStelemRef", "RhpNewFast", "RhpNewArray"];
 // zerolib's RhpStelemRef (`array[i] = obj` on a reference-type array)
 // fail-fasts unless obj's type is exactly the element type, so `object[]`,
 // base-class and interface arrays could not hold anything else. The startup
@@ -102,15 +129,21 @@ foreach (var type in module.Types)
             if (attr.AttributeType.Name != "RuntimeExportAttribute" || attr.ConstructorArguments.Count != 1)
                 continue;
             var arg = attr.ConstructorArguments[0];
-            if (arg.Value as string != "RhpStelemRef")
+            if (arg.Value is not string name || !shimExports.Contains(name))
                 continue;
-            attr.ConstructorArguments[0] = new CustomAttributeArgument(arg.Type, "RhpStelemRef_zerolib");
+            attr.ConstructorArguments[0] = new CustomAttributeArgument(arg.Type, name + "_zerolib");
             renamed++;
         }
     }
 }
-Console.WriteLine($"RhpStelemRef: {(renamed > 0 ? "export renamed to RhpStelemRef_zerolib" : "not found")}");
+Console.WriteLine($"shim exports: {renamed} of {shimExports.Length} renamed to <name>_zerolib");
 
+// Cecil can add an unused mscorlib reference when it looks for the core
+// library; the C# compiler takes the assembly without references as corlib,
+// so a stray one makes it report "System.Object is not defined".
+var usedScopes = module.GetTypeReferences().Select(t => t.Scope).OfType<AssemblyNameReference>().Select(r => r.Name).ToHashSet();
+foreach (var r in module.AssemblyReferences.Where(r => !usedScopes.Contains(r.Name)).ToList())
+    module.AssemblyReferences.Remove(r);
 module.Write(args[1]);
-Console.WriteLine($"wrote {args[1]} ({added} helper(s) added, {renamed} export(s) renamed)");
+Console.WriteLine($"wrote {args[1]} ({added} helper(s) added, {addedTypes} type(s) added, {renamed} export(s) renamed)");
 return 0;

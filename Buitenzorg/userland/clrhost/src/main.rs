@@ -42,6 +42,7 @@ mod vp8_tables;
 mod movie;
 mod movieapi;
 mod fontapi;
+mod aiapi;
 mod llm;
 /// The kernel's JS/TS/Python interpreter (same source), for UI scripts.
 #[path = "../../../kernel/bzkernel/src/script.rs"]

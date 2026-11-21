@@ -163,7 +163,7 @@ Add **both `bzbcl.cs` and `bzbcl2.cs`** to the app's source list to use these.
 | `System.Net.Http` | `BzHttp` | `BzHttp.BuildGet(host, path, buf)` — *message layer only, no TCP yet* |
 | `System.Threading.Tasks` | `BzTask`, `BzMutex` | `BzTask.Run(&Worker, arg)` — the body is a **function pointer**, not a delegate |
 | `System.Timers` | `BzTimer` | `timer.Start(); if (timer.Poll()) { ... }` (polled from the app loop) |
-| `GC` | `BzGC` | `BzGC.GetAllocatedBytes()` — `Collect()` returns `false` (bump-only heap) |
+| `GC` | `BzGC` | `BzGC.Collect()` · `BzGC.CollectionCount()` · `BzGC.LiveBytes()` (mark-sweep collector; skipped while other threads run) |
 | `Pkg` | `BzPkg` | `BzPkg.List(32)` · `BzPkg.Install(pkg)` |
 
 Real usage lives in the suite apps: `clock.cs` (BzDateTime),
@@ -193,7 +193,8 @@ See the real code in `userland/hello-csharp/` (`calc.cs`, `game2048.cs`,
 
 ## ⚠️ zerolib limitations (app authors must read)
 
-Freestanding apps use zerolib (no full GC yet). What does **not** work:
+Freestanding apps use zerolib, with a mark-sweep collector and an exception
+dispatcher in the startup shim ([csharp-userland.md](csharp-userland.md)). What does **not** work:
 
 - **`static readonly string` initialized from a literal** crashes the compiler
   (ILC cannot pre-build zerolib's string) → use a `const string` or a local.
@@ -201,8 +202,12 @@ Freestanding apps use zerolib (no full GC yet). What does **not** work:
   a `char[]` / `stackalloc` and use `Graphics.DrawChars`.
 - **`string == string`** needs `op_Equality` (absent) → compare by reference or
   char by char.
-- **No reclaiming GC and no exceptions** (`throw` ends the program; a failed
-  cast or a wrong array store ends it with an `Unhandled exception: ...` line).
+- **zerolib's own checks do not throw**: a null dereference, an array index out
+  of range, a division by zero, a failed cast or a wrong array store ends the
+  program with an `Unhandled exception: ...` line instead of a catchable
+  exception. `throw` / `try` / `catch` / `finally` / `when` / `using` do work.
+- **No collection while other threads run**: with threads from
+  `bz_thread_create` / `BzTask` alive the heap only grows.
 - **No `System.Func`/`List<T>`/LINQ from CoreLib** — use `bzbcl3.cs` (below).
 - Generic interface **variance** (`IEnumerable<Derived>` as
   `IEnumerable<Base>`) and default interface methods are not resolved.

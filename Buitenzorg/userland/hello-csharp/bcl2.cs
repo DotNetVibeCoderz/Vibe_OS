@@ -267,10 +267,13 @@ unsafe class Bcl2Demo
             big[199999] = 7;
             ulong after = BzGC.GetAllocatedBytes();
             ok &= BzDebug.Assert(after >= before + 200000, "gc allocation accounted");
-            ok &= BzDebug.Assert(BzGC.GetTotalMemory() >= after, "gc committed >= allocated");
+            ok &= BzDebug.Assert(BzGC.GetTotalMemory() >= 200000, "gc committed");
             ok &= BzDebug.Assert(BzGC.ChunkCount() >= 1, "gc chunk count");
             ok &= BzDebug.Assert(BzGC.AllocationCount() > 0, "gc allocation count");
-            ok &= BzDebug.Assert(!BzGC.Collect(), "gc collect is a no-op (bump heap)");
+            ulong runs = BzGC.CollectionCount(), skips = BzGC.SkippedCount();
+            bool collected = BzGC.Collect();
+            ok &= BzDebug.Assert(collected ? BzGC.CollectionCount() == runs + 1 : BzGC.SkippedCount() == skips + 1, "gc collect");
+            ok &= BzDebug.Assert(big[199999] == 7, "gc keeps a live array");
             Num("BCL2: heap allocated KiB=", (long)(after / 1024));
             Num("BCL2: heap committed KiB=", (long)(BzGC.GetTotalMemory() / 1024));
         }

@@ -62,11 +62,24 @@ public sealed class AppProject
         _ => $"/disk/{Name83}.{ScriptLang.ToUpperInvariant()}",
     };
 
+    /// <summary>A script that opens a window (`window(`): started with `run`, which gives
+    /// it the UI host (and the OS's AI functions), not the in-kernel interpreter.</summary>
+    public bool IsUiScript
+    {
+        get
+        {
+            if (Kind != AppKind.Script) return false;
+            try { return File.ReadAllText(MainFile).Contains("window("); } catch { return false; }
+        }
+    }
+
     /// <summary>The shell command line that starts the deployed app.</summary>
     public string RunCommand(string args = "")
     {
         var a = string.IsNullOrWhiteSpace(args) ? "" : " " + args.Trim();
-        return Kind == AppKind.Script ? $"script {ScriptLang} {RemotePath}{a}" : $"run {LaunchName}{a}";
+        if (Kind != AppKind.Script) return $"run {LaunchName}{a}";
+        // a UI script (it opens a window) runs in its own process: `run FILE`
+        return IsUiScript ? $"run {RemotePath}{a}" : $"script {ScriptLang} {RemotePath}{a}";
     }
 
     public static AppProject? Open(string dir)

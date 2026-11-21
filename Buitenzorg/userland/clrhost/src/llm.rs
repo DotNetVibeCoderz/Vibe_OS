@@ -829,31 +829,72 @@ fn sample(logits: &[f32], temp: f32, rng: &mut Rng) -> u32 {
     (logits.len() - 1) as u32
 }
 
+/// A generation in progress, one token per [`Stream::next`] -- what the app
+/// natives (`aiapi.rs`) and the script functions use to show text as it
+/// arrives instead of after the whole run.
+pub struct Stream {
+    toks: Vec<u32>,
+    tok: u32,
+    pos: usize,
+    steps: usize,
+    temp: f32,
+    rng: Rng,
+    pub generated: usize,
+    pub prompt_tokens: usize,
+    pub t0: u64,
+    pub done: bool,
+}
+
+impl Stream {
+    /// Reset the model's cache and tokenize `prompt` (with BOS).
+    pub fn begin(m: &mut Model, prompt: &str, steps: usize, temp: f32, seed: u64) -> Stream {
+        m.reset();
+        let toks = m.encode(prompt, true);
+        let tok = toks[0];
+        Stream { prompt_tokens: toks.len(), toks, tok, pos: 0, steps, temp, rng: Rng(seed | 1), generated: 0, t0: now_ms(), done: false }
+    }
+
+    /// Run the model up to the next generated token and return its text (may
+    /// be empty for a partial UTF-8 byte); None once the run is over (`steps`
+    /// tokens, end of sequence or the context is full).
+    pub fn next(&mut self, m: &mut Model) -> Result<Option<Vec<u8>>, String> {
+        while !self.done {
+            if self.generated >= self.steps || self.pos >= m.seq {
+                self.done = true;
+                break;
+            }
+            m.forward(self.tok, self.pos)?;
+            self.pos += 1;
+            if self.pos < self.toks.len() {
+                self.tok = self.toks[self.pos];
+                continue;
+            }
+            self.tok = sample(&m.logits, self.temp, &mut self.rng);
+            if self.tok == m.eos {
+                self.done = true;
+                break;
+            }
+            self.generated += 1;
+            return Ok(Some(m.decode(self.tok)));
+        }
+        Ok(None)
+    }
+
+    pub fn elapsed_ms(&self) -> u64 {
+        now_ms() - self.t0
+    }
+}
+
 /// Generate up to `steps` tokens after `prompt`; `emit` gets each piece of
 /// text as it is produced. Returns (generated tokens, prompt tokens, ms).
 pub fn generate(m: &mut Model, prompt: &str, steps: usize, temp: f32, seed: u64, emit: &mut dyn FnMut(&[u8])) -> Result<(Vec<u32>, usize, u64), String> {
-    m.reset();
-    let toks = m.encode(prompt, true);
-    let t0 = now_ms();
-    let mut rng = Rng(seed | 1);
+    let mut st = Stream::begin(m, prompt, steps, temp, seed);
     let mut out = Vec::new();
-    let mut tok = toks[0];
-    let mut pos = 0;
-    while pos + 1 < toks.len() + steps && pos < m.seq {
-        m.forward(tok, pos)?;
-        if pos + 1 < toks.len() {
-            tok = toks[pos + 1];
-        } else {
-            tok = sample(&m.logits, temp, &mut rng);
-            if tok == m.eos {
-                break;
-            }
-            out.push(tok);
-            emit(&m.decode(tok));
-        }
-        pos += 1;
+    while let Some(piece) = st.next(m)? {
+        out.push(st.tok);
+        emit(&piece);
     }
-    Ok((out, toks.len(), now_ms() - t0))
+    Ok((out, st.prompt_tokens, st.elapsed_ms()))
 }
 
 fn now_ms() -> u64 {

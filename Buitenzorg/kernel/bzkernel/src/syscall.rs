@@ -413,7 +413,9 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
 }
 
 fn sys_fs_list(path_ptr: u64, buf_ptr: u64, max: u64) -> u64 {
-    if max == 0 || max > 128 {
+    // Up to 4096 entries (a FAT32 root or folder can hold that many; the old
+    // limit of 128 hid the files after it -- the Pi's /disk root has ~120).
+    if max == 0 || max > 4096 {
         return syserr::INVAL;
     }
     if !user_write(buf_ptr, max * core::mem::size_of::<bz_abi::FsEntry>() as u64) {

@@ -80,6 +80,66 @@ uploads every matrix once (Q/K/V fused into one, gate/up into one). Each
 token then costs one GEMV per matrix and layer plus the output matrix, and
 attention, norms and sampling stay on the CPU.
 
+## For app authors
+
+The model and the vision functions are available to applications, not only to
+the shell. Everything runs on the machine; the model file is loaded once per
+process and shared by every caller in it.
+
+**C# (managed): `Buitenzorg.AI`**, in `BZAPP.DLL` (`userland/clr-apps/Buitenzorg.App/Ai.cs`):
+
+```csharp
+using Buitenzorg.AI;
+
+var m = LanguageModel.Load();               // /disk/STORIES.GGU; null -> LanguageModel.LastError
+string text = m.Generate("Once upon a time", maxTokens: 48);      // temperature 0 = always the same
+var g = m.Begin("The cat", maxTokens: 64, temperature: 0.8);
+string? piece = g.Next();                    // call from a DispatcherTimer; null = done
+foreach (var p in m.Stream("A dog", 20)) { } // the IEnumerable form
+Console.WriteLine($"{m.Backend}: {m.LastTokensPerSecond:0} tokens/s, {m.Parameters} parameters");
+
+int[] edges = Vision.Edges(argb, w, h);      // also Grayscale, Histogram(argb, bins), Sharpness
+```
+
+`LanguageModel.Load(path, Accelerator.Cpu | Gpu | Auto)` picks the backend
+(`Gpu` = the `COMPUTE_OP` GPU backend even when it was not chosen
+automatically). Off the device (`dotnet X.dll --selftest`) a deterministic
+simulated model answers, so app self-tests run on a PC. The host side is
+`userland/clrhost/src/aiapi.rs` (natives `AiLoad`/`AiBegin`/`AiNext`/...;
+long work runs inside `interp.blocking`, so other managed threads keep going).
+
+**UI scripts (JavaScript / TypeScript / Python / C# script).** A script that
+opens a window (`window(...)`, started with `run FILE`) has:
+
+| function | |
+|---|---|
+| `aiload([file])` | open a model (default `/disk/STORIES.GGU`); a negative number on failure |
+| `aistart(prompt, tokens[, temperature*1000])` + `ainext()` | stream: one `ainext()` per frame, `""` = done |
+| `aigenerate(prompt, tokens[, temperature*1000])` | the whole continuation at once |
+| `aibackend()`, `aiinfo(n)`, `aispeed()` | backend name; 0 layers, 4 vocabulary, 5 context, 6 parameters, 7 on GPU; tokens/s of the last run |
+
+In C# script they are `Ai.Load()`, `Ai.Start(...)`, `Ai.Next()`,
+`Ai.Generate(...)`, `Ai.Backend()`, `Ai.Info(n)`, `Ai.Speed()`. Console
+scripts (`script js FILE`) run in the kernel's interpreter and do not have
+them.
+
+**Templates and a sample app:**
+
+- **Asisten AI** (`run masisten`, Start menu Kantor; `userland/clr-apps/MAsisten`):
+  a story writer that streams the model's answer with its speed and backend,
+  plus a vision tab (edges, grayscale, brightness histogram, sharpness) on the
+  photos on `/disk`. Its self-test (13 checks: streamed text = `Generate`, the
+  known greedy continuation, token counts, Sobel/histogram) runs in the boot's
+  managed suite.
+- **Studio:** *Penulis Cerita AI* (JS), *Pelengkap Kalimat AI* (Python), *Cerita AI* (C# script), group "AI".
+- **MagicAppGen:** `managed-ai` (C# window) and `js-ai` (UI script); Jack
+  knows the API (`GetApiReference("ai")`). MagicAppGen's Run starts any
+  script that calls `window(` with `run`.
+- **VS Code / `bz new`:** `ai-csharp`, `ai-js`. `bz new` now fills
+  `__APPNAME__`, `__NAME83__` and `__BZROOT__` in a template's files and
+  file names, which is what lets a managed template reference the libraries of
+  your checkout.
+
 ## Self-tests
 
 - `MILESTONE: COMPUTE OK (reference: ...; GPU backend: ...)`: every kernel,

@@ -49,7 +49,7 @@ Both are held in lockstep by identical contract tests (`cargo test -p bz-abi` �
 | 26 | `AUDIO_PLAY` | ptr to i16 stereo PCM | length in bytes (u64) | 0 = success |
 | 27 | `PKG_LIST` | ptr `PkgInfo[]` | max count (u64) | entries written |
 | 28 | `PKG_SET` | name ptr | name len (u64) | 0 = success (a2 = 1 install / 0 remove) |
-| 29 | `FS_LIST` | path ptr (NUL-term) | ptr `FsEntry[]` | entries written (a2 = max; empty path = list mounts) |
+| 29 | `FS_LIST` | path ptr (NUL-term) | ptr `FsEntry[]` | entries written (a2 = max, at most 4096 -- 128 before 2026-11-21; empty path = list mounts) |
 | 30 | `FS_READ` | path ptr (NUL-term) | out buffer ptr | bytes read (a2 = max bytes; 0 = none) |
 | 31 | `IS_INTERACTIVE` | — | — | 1 in an interactive session (desktop up), 0 during headless boot demos |
 | 32 | `FS_WRITE` | path ptr (NUL-term) | source buffer ptr | bytes written (a2 = byte count; 0 = failed/read-only) |

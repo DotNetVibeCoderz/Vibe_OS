@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the ARM64 user programs (multi-arch M3): the same C# sources, compiled
-# by bflat for linux-arm64 (zerolib) and linked with the aarch64 build of the
+# for linux-arm64 (zerolib; bflat build-il + the upstream ILCompiler, see
+# build-hello-csharp.sh) and linked with the aarch64 build of the
 # bzstart.rs shim (SVC #0 syscalls) into static ELFs at 0x400000 under
 # userland/hello-csharp/arm64/. bzimage puts them on dist/buitenzorg-arm64.img
 # and the ARM64 kernel loads them from /disk (virtio-blk).
@@ -13,12 +14,14 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 dir="$root/userland/hello-csharp"
 bflat="$("$root/scripts/prepare-bflat.sh" | tail -1)"
+ilc="$("$root/scripts/prepare-ilc.sh" | tail -1)"
+zerolib="$(dirname "$bflat")/lib/linux/arm64/zerolib.dll"
 
 lld="$(ls "$HOME"/.rustup/toolchains/nightly-*/lib/rustlib/*/bin/rust-lld 2>/dev/null | head -1)"
 [ -n "$lld" ] || { echo "rust-lld not found (install rust nightly)"; exit 1; }
 
 cd "$dir"
-mkdir -p arm64
+mkdir -p arm64/il
 echo "==> rustc: bzstart.rs -> arm64/bzstart.o (aarch64 shim)"
 rustc +nightly --edition 2021 --crate-type staticlib --emit obj \
     --target aarch64-unknown-none -C panic=abort -C opt-level=2 \
@@ -26,9 +29,10 @@ rustc +nightly --edition 2021 --crate-type staticlib --emit obj \
 
 build_prog() {
     local elf="$1"; shift
-    echo "==> bflat (linux-arm64): $* -> arm64/$elf.o"
-    "$bflat" build "$@" --stdlib:zero --os:linux --arch:arm64 -c -Os \
-        --no-debug-info --no-reflection --no-stacktrace-data -o "arm64/$elf.o"
+    echo "==> bflat build-il + ilc (linux-arm64): $* -> arm64/$elf.o"
+    "$bflat" build-il "$@" bzexc.cs --stdlib:zero -O -o "arm64/il/$elf.dll"
+    "$ilc" "arm64/il/$elf.dll" "$zerolib" --systemmodule:zerolib --targetos:linux --targetarch:arm64 \
+        --Os --reflectiondata:none --directpinvoke:libSystem.Native -o "arm64/$elf.o"
     "$lld" -flavor gnu -o "arm64/$elf.elf" -T user.ld --static --no-dynamic-linker \
         -e _start "arm64/$elf.o" arm64/bzstart.o
     echo "==> arm64/$elf.elf: $(stat -c%s "arm64/$elf.elf" 2>/dev/null || stat -f%z "arm64/$elf.elf") bytes"
@@ -52,3 +56,5 @@ build_prog g2048 game2048.cs bzui.cs bzgfx.cs
 build_prog ui ui.cs bzui.cs bzgfx.cs
 build_prog draw draw.cs bzgfx.cs
 build_prog xox xox.cs
+build_prog exc exc.cs
+build_prog gc gc.cs

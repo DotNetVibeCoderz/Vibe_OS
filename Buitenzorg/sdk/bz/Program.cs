@@ -16,7 +16,7 @@ return args switch
     [] or ["help"] or ["--help"] or ["-h"] => Help(),
     ["version"] or ["--version"] => Version(),
     ["new", var template, var name] => NewProject(template, name),
-    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, js-app, ts-app, python-app)"),
+    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, ai-csharp, js-app, ts-app, python-app, ai-js)"),
     ["manifest", "validate", var path] => ValidateManifest(path),
     ["manifest", ..] => Fail("usage: bz manifest validate <path-to-app.manifest>"),
     ["pack", .. var rest] when rest.Length >= 1 => Pack(rest),
@@ -102,6 +102,7 @@ static int NewProject(string template, string name)
         return Fail($"directory already exists: {target}");
 
     CopyTree(source, target);
+    Personalize(target, name, Path.GetFullPath(Path.Combine(templateRoot, "..", "..")));
 
     // Personalize the manifest.
     var manifestPath = Path.Combine(target, "app.manifest");
@@ -323,6 +324,30 @@ static string? FindTemplateRoot()
         }
     }
     return null;
+}
+
+/// Fill a copied template's placeholders, in file names and text files:
+/// __APPNAME__ (the name given), __NAME83__ (its 8.3 upper-case form: the
+/// file name on /disk and a managed app's assembly name) and __BZROOT__ (this
+/// Buitenzorg checkout, which managed templates reference libraries from).
+static void Personalize(string target, string name, string bzRoot)
+{
+    var app = Path.GetFileName(Path.TrimEndingDirectorySeparator(name));
+    var n83 = new string(app.ToUpperInvariant().Where(c => c is >= 'A' and <= 'Z' or >= '0' and <= '9').ToArray());
+    if (n83.Length == 0 || char.IsDigit(n83[0])) n83 = "APP" + n83;
+    if (n83.Length > 8) n83 = n83[..8];
+    string Fill(string s) => s.Replace("__APPNAME__", app).Replace("__NAME83__", n83).Replace("__BZROOT__", bzRoot);
+    var text = new[] { ".cs", ".csproj", ".md", ".js", ".ts", ".py", ".csx", ".json", ".manifest", ".txt", ".ps1", ".sh" };
+    foreach (var file in Directory.GetFiles(target, "*", SearchOption.AllDirectories))
+    {
+        var path = file;
+        var renamed = Path.Combine(Path.GetDirectoryName(file)!, Fill(Path.GetFileName(file)));
+        if (renamed != file) { File.Move(file, renamed); path = renamed; }
+        if (!text.Contains(Path.GetExtension(path).ToLowerInvariant())) continue;
+        var s = File.ReadAllText(path);
+        var f = Fill(s);
+        if (f != s) File.WriteAllText(path, f);
+    }
 }
 
 static void CopyTree(string source, string target)

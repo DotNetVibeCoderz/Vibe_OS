@@ -115,6 +115,8 @@ struct Ui {
     /// last looked at; `reload` = it changed, the program restarts
     watch: Option<(String, u64, u64)>,
     reload: bool,
+    /// the language model of `ai*` (aiapi handle; 0 = none loaded yet)
+    ai: i64,
 }
 
 /// FNV-1a of a file's bytes (`--watch` compares it once a second).
@@ -492,6 +494,43 @@ impl Host for Ui {
                 self.focus = if id.is_empty() { None } else { Some(id) };
                 nil
             }
+            // the OS's language model (aiapi.rs): `aiload([path])` -> handle or a
+            // negative error; `aigenerate(prompt, steps[, temp/1000])` -> text;
+            // `aistart(...)` + `ainext()` -> one piece per call, "" at the end
+            // (one call per frame shows the text as it arrives)
+            "aiload" => {
+                let path = if a.is_empty() { String::from(crate::aiapi::DEFAULT_MODEL) } else { text_of(a, 0) };
+                match crate::aiapi::load(&path, 0) {
+                    Ok(h) => {
+                        self.ai = h;
+                        Value::Int(h)
+                    }
+                    Err((code, msg)) => {
+                        sys::print(&format!("[ai] {}\n", msg));
+                        Value::Int(code)
+                    }
+                }
+            }
+            "aigenerate" | "aistart" => {
+                if self.ai == 0 {
+                    self.ai = crate::aiapi::load(crate::aiapi::DEFAULT_MODEL, 0).unwrap_or(-1);
+                }
+                let (prompt, steps) = (text_of(a, 0), if a.len() > 1 { int(a, 1) } else { 48 });
+                let temp = if a.len() > 2 { int(a, 2) } else { 0 };
+                let seed = nanos() as i64;
+                if name == "aistart" {
+                    Value::Int(crate::aiapi::begin(self.ai, &prompt, steps, temp, seed).map_or(-1, |n| n as i64))
+                } else {
+                    Value::Str(crate::aiapi::generate(self.ai, &prompt, steps, temp, seed).unwrap_or_default())
+                }
+            }
+            "ainext" => Value::Str(crate::aiapi::next(self.ai).unwrap_or_default()),
+            "aiinfo" => Value::Int(crate::aiapi::info(self.ai, int(a, 0))),
+            "aibackend" => Value::Str(crate::aiapi::text(self.ai, 1)),
+            "aispeed" => {
+                let (n, ms) = (crate::aiapi::info(self.ai, 8), crate::aiapi::info(self.ai, 9));
+                Value::Int(if n > 0 { n * 1000 / ms.max(1) } else { 0 })
+            }
             "arg" => Value::Str(self.args.get(int(a, 0).max(0) as usize).cloned().unwrap_or_default()),
             "argcount" => Value::Int(self.args.len() as i64),
             _ => return None,
@@ -537,6 +576,9 @@ impl crate::csx::Host for CsUi<'_> {
     fn call(&mut self, name: &str, args: &[crate::csx::Value]) -> Option<Result<crate::csx::Value, String>> {
         let short = if let Some(m) = name.strip_prefix("Ui.") {
             m.to_ascii_lowercase()
+        } else if let Some(m) = name.strip_prefix("Ai.") {
+            // `Ai.Generate(...)` -> `aigenerate`
+            alloc::format!("ai{}", m.to_ascii_lowercase())
         } else if name == "Environment.TickCount" {
             String::from("ticks")
         } else {
@@ -598,6 +640,7 @@ pub fn run(path: &str, mut args: Vec<String>) -> ! {
         rng: t0 | 1,
         args,
         fields: BTreeMap::new(),
+        ai: 0,
         focus: None,
         debug: debug.is_some(),
         watch: if watch { Some((String::from(path), file_hash(path), t0)) } else { None },

@@ -1,0 +1,10 @@
+{
+  "id": "com.example.aijs",
+  "name": "AI Script",
+  "type": "desktop",
+  "language": "javascript",
+  "version": "0.1.0",
+  "entry": "main.js",
+  "permissions": [],
+  "theme": "system"
+}

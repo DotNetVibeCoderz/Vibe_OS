@@ -598,11 +598,15 @@ public static class SettingsApp
         }
         finally
         {
-            // wait for the server to close, not with Join: on the device a Join
-            // that races the thread's exit stalled for 30 s or more (RustCLR, open)
+            // Join the server thread. It used to stall 30 s or more on the device:
+            // an exiting thread frees its copy of the interpreter, and clrhost's
+            // linked-list heap walked every free block for each free (fixed with
+            // size classes in clrhost/src/heap.rs).
             stop = true;
             var waited = System.Diagnostics.Stopwatch.StartNew();
-            while (!finished && waited.ElapsedMilliseconds < 5000) Thread.Sleep(10);
+            th.Join();
+            long joinMs = waited.ElapsedMilliseconds;
+            c.That(finished && joinMs < 5000, "server thread joined in " + joinMs + " ms");
             AppFiles.Delete(cat);
         }
         AppSettings.MonoFont = mono0;

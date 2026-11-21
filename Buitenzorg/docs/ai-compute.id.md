@@ -82,6 +82,65 @@ setiap matriks sekali (Q/K/V digabung jadi satu, gate/up jadi satu).
 Setiap token lalu butuh satu GEMV per matriks per lapisan plus matriks
 keluaran; attention, norm dan sampling tetap di CPU.
 
+## Untuk pembuat aplikasi
+
+Model dan fungsi penglihatan bisa dipakai aplikasi, tidak hanya dari shell.
+Semuanya berjalan di mesin ini; berkas model dimuat sekali per proses dan
+dipakai bersama oleh semua pemanggil di proses itu.
+
+**C# (managed): `Buitenzorg.AI`**, di `BZAPP.DLL` (`userland/clr-apps/Buitenzorg.App/Ai.cs`):
+
+```csharp
+using Buitenzorg.AI;
+
+var m = LanguageModel.Load();               // /disk/STORIES.GGU; null -> LanguageModel.LastError
+string text = m.Generate("Once upon a time", maxTokens: 48);      // suhu 0 = selalu sama
+var g = m.Begin("The cat", maxTokens: 64, temperature: 0.8);
+string? piece = g.Next();                    // panggil dari DispatcherTimer; null = selesai
+foreach (var p in m.Stream("A dog", 20)) { } // bentuk IEnumerable
+Console.WriteLine($"{m.Backend}: {m.LastTokensPerSecond:0} token/detik, {m.Parameters} parameter");
+
+int[] edges = Vision.Edges(argb, w, h);      // juga Grayscale, Histogram(argb, bins), Sharpness
+```
+
+`LanguageModel.Load(path, Accelerator.Cpu | Gpu | Auto)` memilih backend
+(`Gpu` = backend GPU `COMPUTE_OP` walaupun tidak terpilih otomatis). Di luar
+perangkat (`dotnet X.dll --selftest`) model simulasi yang deterministik
+menjawab, jadi uji mandiri aplikasi jalan di PC. Sisi host:
+`userland/clrhost/src/aiapi.rs` (native `AiLoad`/`AiBegin`/`AiNext`/...; kerja
+panjang berjalan di dalam `interp.blocking`, jadi thread managed lain tetap
+jalan).
+
+**Skrip UI (JavaScript / TypeScript / Python / C# script).** Skrip yang
+membuka jendela (`window(...)`, dijalankan dengan `run BERKAS`) punya:
+
+| fungsi | |
+|---|---|
+| `aiload([berkas])` | buka model (bawaan `/disk/STORIES.GGU`); bilangan negatif bila gagal |
+| `aistart(awal, token[, suhu*1000])` + `ainext()` | bertahap: satu `ainext()` per frame, `""` = selesai |
+| `aigenerate(awal, token[, suhu*1000])` | seluruh lanjutan sekaligus |
+| `aibackend()`, `aiinfo(n)`, `aispeed()` | nama backend; 0 lapisan, 4 kosakata, 5 konteks, 6 parameter, 7 di GPU; token/detik putaran terakhir |
+
+Di C# script namanya `Ai.Load()`, `Ai.Start(...)`, `Ai.Next()`,
+`Ai.Generate(...)`, `Ai.Backend()`, `Ai.Info(n)`, `Ai.Speed()`. Skrip konsol
+(`script js BERKAS`) berjalan di interpreter kernel dan tidak memilikinya.
+
+**Template dan aplikasi contoh:**
+
+- **Asisten AI** (`run masisten`, menu Start Kantor; `userland/clr-apps/MAsisten`):
+  penulis cerita yang menampilkan jawaban model kata demi kata beserta
+  kecepatan dan backend-nya, plus tab penglihatan (tepi, abu-abu, histogram
+  kecerahan, ketajaman) atas foto di `/disk`. Uji mandirinya (13 pemeriksaan:
+  teks bertahap = `Generate`, lanjutan greedy yang sudah diketahui, jumlah
+  token, Sobel/histogram) ikut di rangkaian managed saat boot.
+- **Studio:** *Penulis Cerita AI* (JS), *Pelengkap Kalimat AI* (Python), *Cerita AI* (C# script), kelompok "AI".
+- **MagicAppGen:** `managed-ai` (jendela C#) dan `js-ai` (skrip UI); Jack
+  mengenal API-nya (`GetApiReference("ai")`). Run di MagicAppGen menjalankan
+  skrip yang memanggil `window(` dengan `run`.
+- **VS Code / `bz new`:** `ai-csharp`, `ai-js`. `bz new` kini mengisi
+  `__APPNAME__`, `__NAME83__` dan `__BZROOT__` di isi dan nama berkas template,
+  sehingga template managed bisa merujuk pustaka di checkout Anda.
+
 ## Uji mandiri
 
 - `MILESTONE: COMPUTE OK (reference: ...; GPU backend: ...)`: setiap kernel,

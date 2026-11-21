@@ -29,7 +29,7 @@
 | AI/Power | v0.12 | Nalar | Subsistem AI-native + Hugging Face; power (shutdown/restart/sleep) | ✅ Selesai |
 | VM | v0.13 | Lapis | Virtualization (VMM tipe-2 + virtio + snapshot) | ✅ Selesai |
 | Polyglot | v0.14 | Babel | JS/TS + Python runtime (interpreter bersama) | ✅ Selesai |
-| Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Jalur managed (RustCLR) lengkap: GC reklamasi, async/await, EH ✓; jalur native (bflat): async/await ✓, GC reklamasi + EH belum |
+| Runtime | v0.15 | Matang | Managed runtime C#: PAL + heap + model memori GC + Buitenzorg.Bcl | 🟡 Jalur managed (RustCLR) lengkap: GC reklamasi, async/await, EH ✓; jalur native (bflat): async/await ✓, GC reklamasi ✓, EH ✓ (2026-11-21) |
 | Rilis | v0.16 | Panen | Drawing + UI + audio + preloaded suite 8 app + optimization pass | ✅ Selesai |
 | **Rilis** | **v1.0** | **Buitenzorg** | **Stable release x86-64** | ✅ **Rilis 2026-11-05** (PC fisik: Dell Latitude 7290; Hyper-V nyata belum diuji) |
 | DevEx | pra/pasca-v1.0 | — | Developer Workstation: IDE, terminal, package manager, debug & deploy remote | ⏳ Rencana |
@@ -242,10 +242,15 @@ sama (fib) di JS/TS/Python jalan berdampingan app C# — semua cetak fib(10)=55.
 > array referensi ✓ (2026-11-06):** shim mengimplementasikan `RhTypeCast_*`,
 > dispatch interface dan `RhpStelemRef` kovarian; `bzbcl3.cs` (Func/Action,
 > Interlocked, TimeSpan, Guid lewat syscall `RANDOM`, LINQ generik OrderBy/
-> GroupBy/Distinct) → `MILESTONE: BCL3 OK`. **Exception:** format tabel EH
-> NativeAOT sudah dipetakan (klausa, funclet, `.eh_frame`), tetapi bflat mematikan
-> `EmitEHInfo` untuk zerolib — perlu bflat yang dibangun dari source (butuh
-> token GitHub `read:packages` untuk paket BFlat.Compiler).
+> GroupBy/Distinct) → `MILESTONE: BCL3 OK`. **Exception ✓ (2026-11-21):** bflat
+> mematikan `EmitEHInfo` untuk zerolib, jadi program kini dikompilasi `bflat
+> build-il` (C# → IL) + **ILCompiler 8.0.26 upstream** (IL → kode dengan
+> `.eh_frame`, LSDA, tabel klausa; `scripts/prepare-ilc.*`, SHA-256 dipatok);
+> dispatcher dua tahap di shim (`bzeh.rs`: unwinder CFI DWARF, klausa bertipe /
+> filter / finally / fault, funclet, `throw;`, exception di dalam catch dan
+> finally) → `exc.cs`, 13 cek, `MILESTONE: EXCEPTIONS OK` di x86-64 dan ARM64;
+> `bzexc.cs` (System.Exception + tipe umum) ikut di setiap program, `await`
+> melempar ulang exception task yang gagal.
 > **Dua jalur C# (status 2026-11-19):** jalur **managed** RustCLR (`CLRHOST.ELF`,
 > sejak 2026-11-02) sudah memberi C# lengkap -- GC mark-sweep yang mereklamasi,
 > try/catch/finally, async/await, thread, LINQ, reflection (Conformance 515 cek).
@@ -253,8 +258,15 @@ sama (fib) di JS/TS/Python jalan berdampingan app C# — semua cetak fib(10)=55.
 > (2026-11-19):** `bzasync.cs` (Task/Task<T>, builder, awaiter, event loop
 > `BzAsync`: Yield/Delay/WhenAll/WhenAny/Task.Run) → `MILESTONE: ASYNC OK`; ikut
 > memperbaiki bug lama shim (flag MethodTable 0x20 = "punya pointer GC", bukan
-> optional fields). **Sisa jalur native:** GC yang mereklamasi memori, exception
-> unwinding (try/catch), thread pool.
+> optional fields). **GC yang mereklamasi ✓ (2026-11-21):** `bzgc.rs`,
+> mark-sweep tak-memindah di balik `RhpNewFast`/`RhpNewArray` (blok 64 KiB,
+> kelas ukuran 16 B .. 8 KiB, objek besar = deretan blok; root konservatif =
+> data/bss + stack + register callee-saved; array dipindai hanya bila
+> MethodTable berisi referensi) → `gc.cs`: 128 MiB sampah, 18 koleksi, 187 MiB
+> dibebaskan, puncak commit 14 MiB, `MILESTONE: GC OK` di x86-64 dan ARM64;
+> `BzGC.Collect()` sungguhan. **Sisa jalur native:** koleksi saat thread lain
+> hidup (sekarang dilewati), pemeriksaan zerolib (null/indeks/bagi nol/cast)
+> sebagai exception yang bisa ditangkap, thread pool.
 > **Increment 1 ✓:** fondasi **PAL memori** — syscall user `MMAP/MPROTECT/MUNMAP`
 > (ABI 13–15, arena `memory.rs`), diverifikasi dari C# ring-3 (`matang.cs`).
 >
@@ -1149,9 +1161,13 @@ lewat satu API -- `compute.rs` `Backend::Gpu` diisi sungguhan.
     llama + GQA + KV cache, tokenizer SentencePiece). Identik dengan
     referensi numpy; matriksnya di GPU bila ada backend.
     `/disk/STORIES.GGU` + shell `llm`, `MILESTONE: LLM OK`.
+  - Selesai (2026-11-21): API managed **`Buitenzorg.AI`** (`LanguageModel`
+    Generate / Begin().Next() / Stream, `Vision.Edges/Grayscale/Histogram`),
+    fungsi `ai*` untuk skrip UI (JS/TS/Python/C# script), app contoh
+    **Asisten AI** (`masisten`), template di Studio (3), MagicAppGen
+    (`managed-ai`, `js-ai`) dan VS Code / `bz new` (`ai-csharp`, `ai-js`).
   - Belum: backend Intel dan virgl, GEMV langsung pada bobot kuantisasi,
-    API managed `Buitenzorg.AI`, `ask` memakai LLM ini, unduh dari Model
-    Manager.
+    `ask` memakai LLM ini, unduh dari Model Manager.
 
 ### C. Perbaikan RustNetRuntime (RustCLR)
 
@@ -1160,12 +1176,14 @@ Masalah di runtime managed diperbaiki **langsung di repo
 sana, lalu naikkan pin `rev` di `userland/clrhost/Cargo.toml`), bukan
 di-workaround di app. Yang terbuka sekarang:
 
-- **`Thread.Join` macet** saat dipanggil ketika thread target sedang selesai
-  (ditemukan di self-test Pengaturan, 2026-11-20: thread server sudah keluar,
-  Join baru kembali setelah 30 detik atau tidak sama sekali; pola yang sama di
-  MWeb/MUnduh lolos). Self-test itu sementara menunggu flag selesai; perbaiki
-  di RustCLR (jalur `JoinHandle::join` / drop worker / safepoint), lalu
-  kembalikan ke `Join`.
+- **`Thread.Join` macet ✓ diperbaiki (2026-11-21).** Penyebabnya bukan RustCLR
+  melainkan heap clrhost: `linked_list_allocator` menelusuri seluruh daftar
+  lubang pada setiap alokasi dan pelepasan, dan thread yang keluar melepas
+  salinan interpreternya (ribuan free) sebelum menandai dirinya selesai. Pada
+  heap yang terfragmentasi itu makan puluhan detik (replay di PC: 265 s).
+  `clrhost/src/heap.rs` kini memakai 28 kelas ukuran (<= 4 KiB) di atas
+  allocator daftar (replay yang sama 0,39 s); self-test Pengaturan kembali ke
+  `Join` biasa dan memeriksa Join < 5 s.
 - Celah RustBCL yang ditemui app (dicatat di CLAUDE.md: `MemoryStream`,
   `BinaryWriter`, `string.Split(string)`, `List.RemoveAll`, format string
   `ToString("X")`/`"F1"`, `Array.Clone`, ...) diisi di RustBCL agar app tidak

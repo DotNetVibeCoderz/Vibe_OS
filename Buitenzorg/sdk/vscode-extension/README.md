@@ -8,7 +8,7 @@ pipeline yang sama dengan yang membangun app suite bawaan.
 
 | Perintah | Fungsi | Status |
 |----------|--------|--------|
-| **New Project (pick template)** | scaffold via `bz new <template> <name>` dengan **pemilih template** (desktop-csharp, console-csharp, js-app, ts-app, python-app) | ✅ berfungsi |
+| **New Project (pick template)** | scaffold via `bz new <template> <name>` dengan **pemilih template** (desktop-csharp, console-csharp, ai-csharp, js-app, ts-app, python-app, ai-js) | ✅ berfungsi |
 | **Build & Run in QEMU** | build app C# + image kernel, lalu boot di QEMU (loop dev) | ✅ berfungsi |
 | **Deploy (build image + smoke test)** | `build.ps1` + `smoke-test.ps1` (verifikasi 4 media) | ✅ berfungsi |
 | **Debug Kernel (QEMU + GDB server)** | boot QEMU ditahan dengan server GDB (`-s -S`) di `:1234` untuk di-attach | ✅ GDB kernel-level |

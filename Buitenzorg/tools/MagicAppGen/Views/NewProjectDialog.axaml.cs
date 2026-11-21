@@ -42,7 +42,9 @@ public partial class NewProjectDialog : Window
         if (t is null) { TargetText.Text = RunText.Text = NoteText.Text = ""; return; }
         TargetText.Text = $"/disk/{n83}.{t.Artifact}";
         RunText.Text = t.Kind == AppKind.Script
-            ? $"script {t.Artifact.ToLowerInvariant()} /disk/{n83}.{t.Artifact}"
+            ? (t.Files.Values.Any(f => f.Contains("window("))
+                ? $"run /disk/{n83}.{t.Artifact}"
+                : $"script {t.Artifact.ToLowerInvariant()} /disk/{n83}.{t.Artifact}")
             : $"run {n83.ToLowerInvariant()}";
         NoteText.Text = t.Kind switch
         {

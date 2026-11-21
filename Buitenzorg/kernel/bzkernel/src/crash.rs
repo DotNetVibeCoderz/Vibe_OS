@@ -85,7 +85,10 @@ fn parse(image: &[u8]) -> Option<Syms> {
             }
             let end = strtab.get(name..).and_then(|r| r.iter().position(|&c| c == 0)).map(|n| name + n);
             let Some(raw) = end.and_then(|e| core::str::from_utf8(&strtab[name..e]).ok()) else { continue };
-            if raw.is_empty() || raw.starts_with('$') || raw.starts_with(".L") {
+            if raw.is_empty() || raw.starts_with('$') || raw.starts_with(".L")
+                // ILC's exception-table labels (`_lsda0<method>`) sit in the text
+                // segment too and would shadow the methods they describe
+                || raw.starts_with("_lsda") {
                 continue; // ARM mapping symbols, local labels
             }
             funcs.push((value, sz, demangle(raw)));

@@ -656,6 +656,176 @@ public static class ProjectTemplates
                     "SpiDevice.TransferFullDuplex, SerialPort (UART2-5). Guide: docs/raspberry-pi-io.md."),
             }, AppKind.Managed));
 
+        list.Add(new ProjectTemplate("managed-ai", "AI lokal (Buitenzorg.AI)", "C#",
+            "Jendela yang memakai model bahasa bawaan OS (GGUF, GPU bila ada): jawaban tampil kata demi kata, plus deteksi tepi gambar. Tanpa internet.",
+            new Dictionary<string, string>
+            {
+                ["__NAME83__.csproj"] = ManagedCsproj("the OS's local language model + vision with Buitenzorg.AI", "Buitenzorg.UI"),
+                ["Program.cs"] = """
+                // __APPNAME__ -- the OS's built-in AI from C#, made with MagicAppGen.
+                // Buitenzorg.AI (in BZAPP.DLL): LanguageModel.Load() opens /disk/STORIES.GGU
+                // (a small story model) on the GPU compute backend when there is one, else
+                // the CPU; Begin(...).Next() yields the answer piece by piece. Vision.Edges /
+                // Grayscale / Histogram work on int[] ARGB pixels. Nothing leaves the machine.
+                // On the PC (dotnet ... --selftest) a simulated model answers.
+
+                using Buitenzorg.AI;
+                using Buitenzorg.UI;
+
+                namespace __NAME83__;
+
+                public sealed class AiWindow
+                {
+                    public readonly Window W;
+                    public readonly LanguageModel? Model;
+                    public readonly TextBox Prompt = new TextBox { Watermark = "Once upon a time" };
+                    public readonly TextBlock Answer = new TextBlock("") { TextWrapping = TextWrapping.Wrap };
+                    readonly TextBlock _status = new TextBlock("");
+                    readonly DispatcherTimer _timer = new DispatcherTimer(30);
+                    Generation? _gen;
+
+                    public AiWindow(bool headless = false)
+                    {
+                        W = new Window("__APPNAME__", 520, 380, headless);
+                        Model = LanguageModel.Load();
+                        _status.Text = Model == null
+                            ? "Model tidak ada: " + LanguageModel.LastError
+                            : $"{Model.Parameters / 1000} ribu parameter di {Model.Backend}";
+
+                        var write = new Button(new TextBlock("Tulis"), _ => Start()).WithClass("accent");
+                        var root = new DockPanel { Margin = new Thickness(20) };
+                        root.Children.Add(new TextBlock("__APPNAME__").WithClass("eyebrow").DockTo(Dock.Top));
+                        root.Children.Add(Prompt.DockTo(Dock.Top));
+                        root.Children.Add(write.DockTo(Dock.Top));
+                        root.Children.Add(_status.WithClass("faint").DockTo(Dock.Bottom));
+                        root.Children.Add(new ScrollViewer { Content = Answer, Margin = new Thickness(0, 10, 0, 0) });
+                        W.Content = root;
+
+                        // one piece per tick: the text appears while it is written
+                        _timer.Tick += () => Step();
+                        Application.Current?.Apply(W);
+                        W.UpdateLayout();
+                    }
+
+                    public void Start()
+                    {
+                        if (Model == null) return;
+                        string p = Prompt.Text.Trim().Length == 0 ? "Once upon a time" : Prompt.Text.Trim();
+                        Answer.Text = p;
+                        _gen = Model.Begin(p, maxTokens: 64);
+                        _timer.Start();
+                    }
+
+                    public bool Step()
+                    {
+                        var piece = _gen?.Next();
+                        if (piece == null)
+                        {
+                            _timer.Stop();
+                            if (_gen != null && Model != null)
+                                _status.Text = $"{Model.LastTokens} token, {(int)Model.LastTokensPerSecond} token/detik di {Model.Backend}";
+                            _gen = null;
+                            return false;
+                        }
+                        Answer.Text += piece;
+                        return true;
+                    }
+
+                    public static Checks SelfTest()
+                    {
+                        var c = new Checks("__APPNAME__");
+                        var a = new AiWindow(headless: true);
+                        c.That(a.Model != null, "model loaded: " + (a.Model?.Backend ?? LanguageModel.LastError));
+                        a.Prompt.Text = "Once upon a time";
+                        a.Start();
+                        while (a.Step()) { }
+                        c.That(a.Answer.Text.Length > "Once upon a time".Length, "answer: " + a.Answer.Text);
+                        // vision: a white square on black -> bright edges on its border
+                        var px = new int[16 * 16];
+                        for (int y = 4; y < 12; y++) for (int x = 4; x < 12; x++) px[y * 16 + x] = 0xFFFFFF;
+                        var e = Vision.Edges(px, 16, 16);
+                        c.That((e[4 * 16 + 8] & 0xFF) > 100 && (e[8 * 16 + 8] & 0xFF) == 0, "Sobel edges");
+                        return c;
+                    }
+                }
+
+                public static class Program
+                {
+                    public static int Main(string[] args)
+                    {
+                        var app = new Application();
+                        if (Array.IndexOf(args, "--selftest") >= 0)
+                        {
+                            var c = AiWindow.SelfTest();
+                            Console.WriteLine(c.ToString());
+                            return c.Ok ? 0 : 1;
+                        }
+                        app.Run(new AiWindow().W);
+                        return 0;
+                    }
+                }
+                """,
+                ["app.manifest"] = Manifest("managedai", "__APPNAME__", "desktop", "csharp"),
+                ["README.md"] = ManagedReadme("local AI app",
+                    "Buitenzorg.AI: LanguageModel.Load(path?, Accelerator.Auto|Cpu|Gpu) -> Generate(prompt, maxTokens, temperature), " +
+                    "Begin(...).Next() (streamed, null at the end), Stream(...) (IEnumerable<string>), CountTokens, Backend/OnGpu, " +
+                    "LastTokensPerSecond; Vision.Edges/Grayscale/Histogram/Sharpness; ComputeDevice.Name. " +
+                    "The default model is /disk/STORIES.GGU (stories260K, English children's stories). Guide: docs/ai-compute.md."),
+            }, AppKind.Managed));
+
+        list.Add(new ProjectTemplate("js-ai", "Skrip JavaScript ber-UI dengan AI", "JavaScript",
+            "Jendela skrip JS yang memakai model bahasa bawaan OS: aistart + ainext menulis cerita kata demi kata. Dijalankan dengan `run`.",
+            new Dictionary<string, string>
+            {
+                ["main.js"] = """
+                // __APPNAME__ -- a JavaScript UI script using the OS's language model, made with MagicAppGen.
+                // Device: run /disk/__NAME83__.JS  (a UI script runs in its own window, not with `script js`)
+                // AI: aiload([file]), aistart(prompt, tokens[, temperature/1000]) + ainext() ("" = done),
+                //     aigenerate(prompt, tokens[, temperature/1000]), aibackend(), aiinfo(6) = parameters, aispeed().
+                window("__APPNAME__", 520, 360);
+                aiload();
+                let story = "";
+                let writing = false;
+                let info = aibackend() + ", " + aiinfo(6) + " parameters";
+
+                while (running()) {
+                  clear(0x14201A);
+                  text(20, 14, "__APPNAME__", 0xFFFFFF, 2);
+                  let prompt = input(20, 56, 360, "prompt", "Once upon a time");
+                  if ((button(392, 52, 108, 36, "Write") || key() == 10) && !writing) {
+                    if (len(trim(prompt)) == 0) { prompt = "Once upon a time"; }
+                    story = prompt;
+                    aistart(prompt, 60);
+                    writing = true;
+                  }
+                  if (writing) {
+                    let piece = ainext();
+                    if (piece == "") { writing = false; info = aispeed() + " tokens/s on " + aibackend(); }
+                    else { story = story + piece; }
+                  }
+                  // 58 characters per line
+                  let y = 108;
+                  let pos = 0;
+                  while (pos < len(story)) {
+                    text(20, y, substr(story, pos, 58), 0xF0FFE0, 1);
+                    pos = pos + 58;
+                    y = y + 20;
+                  }
+                  text(20, 330, info, 0xF3C969, 1);
+                  present();
+                }
+                """,
+                ["app.manifest"] = Manifest("jsai", "__APPNAME__", "desktop", "javascript"),
+                ["README.md"] = ScriptReadme("JavaScript", "js") + """
+
+
+                    This one is a **UI script**: it opens a window, so it starts with
+                    `run /disk/__NAME83__.JS` (MagicAppGen's Run does that for any script that calls
+                    `window(`). The AI functions come from the OS's language model; see
+                    docs/script-ui.md and docs/ai-compute.md.
+                    """,
+            }, AppKind.Script));
+
         // ---- 9-11. scripts (in-kernel interpreter) ---------------------------
         list.Add(new ProjectTemplate("python", "Skrip Python", "Python",
             "Untuk interpreter kernel: `script py /disk/NAMA.PY`. Bilangan bulat, string, fungsi, perulangan.",

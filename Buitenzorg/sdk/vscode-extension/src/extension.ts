@@ -39,7 +39,7 @@ function ps(script: string): string {
   return isWin ? `pwsh -File ${script}` : `bash ${script}`;
 }
 
-const TEMPLATES = ["desktop-csharp", "console-csharp", "js-app", "ts-app", "python-app"];
+const TEMPLATES = ["desktop-csharp", "console-csharp", "ai-csharp", "js-app", "ts-app", "python-app", "ai-js"];
 
 export function activate(context: vscode.ExtensionContext): void {
   const out = vscode.window.createOutputChannel("Buitenzorg");

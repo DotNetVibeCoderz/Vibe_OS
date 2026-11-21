@@ -553,6 +553,7 @@ pub fn register(interp: &mut Interpreter) {
     crate::pix::register(interp);
     crate::movieapi::register(interp);
     crate::fontapi::register(interp);
+    crate::aiapi::register(interp);
 }
 
 /// `TlsVersion(long id)` -> "TLSv1_3 TLS13_AES_128_GCM_SHA256" once open.

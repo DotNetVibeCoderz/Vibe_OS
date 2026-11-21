@@ -9,7 +9,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $bflatHome = Join-Path $root "tools\bflat"
 $patched = Join-Path $root "kernel\target\bflat-patched"
 $bflat = Join-Path $patched "bflat.exe"
-$patchVersion = "2"   # bump whenever tools/ZerolibPatch changes what it does
+$patchVersion = "7"   # bump whenever tools/ZerolibPatch changes what it does
 $marker = Join-Path $patched "ZEROLIB_PATCH"
 $current = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { "" }
 if (-not (Test-Path $bflat) -or $current -ne $patchVersion) {
@@ -22,6 +22,10 @@ if (-not (Test-Path $bflat) -or $current -ne $patchVersion) {
             (Join-Path $bflatHome "lib\linux\$a\zerolib.dll") (Join-Path $patched "lib\linux\$a\zerolib.dll") | Write-Host
         if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $patched; throw "ZerolibPatch failed ($a)" }
     }
+    # the reference assembly the C# compiler sees (System.IDisposable for `using`)
+    & dotnet run --project (Join-Path $root "tools\ZerolibPatch") -c Release -- `
+        (Join-Path $bflatHome "ref\zerolib.dll") (Join-Path $patched "ref\zerolib.dll") | Write-Host
+    if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $patched; throw "ZerolibPatch failed (ref)" }
     Set-Content -Path $marker -Value $patchVersion -Encoding ascii
 }
 $bflat

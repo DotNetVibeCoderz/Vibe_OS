@@ -19,8 +19,8 @@ public sealed record BuildResult(bool Ok, string Message, IReadOnlyList<DeployFi
 /// <summary>
 /// Builds an <see cref="AppProject"/> into <c>&lt;project&gt;/out</c> without
 /// touching the Buitenzorg checkout:
-/// native C# = bflat --stdlib:zero + rust-lld with the bzstart shim (x64, or
-/// arm64 with the patched bflat copy the ARM64 build script prepares);
+/// native C# = bflat build-il (patched zerolib) + the upstream ILCompiler +
+/// rust-lld with the bzstart shim (x64 or arm64);
 /// managed C# = dotnet build, the assembly copied as NAME.DLL (plus
 /// BZAPP.DLL / BZUI.DLL when asked); scripts = a subset check and a copy.
 /// </summary>
@@ -115,13 +115,17 @@ public sealed class ProjectBuilder
     {
         bool arm = _settings.NativeArch.Equals("arm64", StringComparison.OrdinalIgnoreCase);
         var userland = Path.Combine(Root, "userland", "hello-csharp");
-        var bflat = arm
-            ? Path.Combine(Root, "kernel", "target", "bflat-arm64", OperatingSystem.IsWindows() ? "bflat.exe" : "bflat")
-            : Path.Combine(Root, "tools", "bflat", OperatingSystem.IsWindows() ? "bflat.exe" : "bflat");
+        // the private bflat copy with the patched zerolib (scripts/prepare-bflat.*)
+        // compiles C# to IL; the upstream ILCompiler (scripts/prepare-ilc.*) turns
+        // it into code with the unwind + exception tables the shim's dispatcher needs
+        var patched = Path.Combine(Root, "kernel", "target", "bflat-patched");
+        var bflat = Path.Combine(patched, OperatingSystem.IsWindows() ? "bflat.exe" : "bflat");
         if (!File.Exists(bflat))
-            return BuildResult.Fail(arm
-                ? "the patched ARM64 bflat is missing: run scripts/build-hello-csharp-arm64.ps1 once (it prepares kernel/target/bflat-arm64)"
-                : "bflat not found under <repo>/tools/bflat (run scripts/quickstart.ps1, or set the Buitenzorg root in Settings)");
+            return BuildResult.Fail("the patched bflat is missing: run scripts/prepare-bflat.ps1 (or .sh) once (it makes kernel/target/bflat-patched)");
+        var ilc = FindIlc();
+        if (ilc is null)
+            return BuildResult.Fail("ILCompiler 8.0.26 is missing: run scripts/prepare-ilc.ps1 (or .sh) once");
+        var zerolib = Path.Combine(patched, "lib", "linux", arm ? "arm64" : "x64", "zerolib.dll");
         var lld = FindRustLld();
         if (lld is null) return BuildResult.Fail("rust-lld not found (install the rust nightly toolchain)");
 
@@ -140,13 +144,22 @@ public sealed class ProjectBuilder
 
         var sources = NativeSources(p.Dir, userland);
         Directory.CreateDirectory(p.OutDir);
-        var obj = Path.Combine(cache, $"{p.Name83}-{Guid.NewGuid():N}.o");
+        var tag = Guid.NewGuid().ToString("N");
+        var obj = Path.Combine(cache, $"{p.Name83}-{tag}.o");
+        // the IL file's name becomes the symbol prefix (crash reports, the debugger)
+        var ilDir = Path.Combine(cache, tag);
+        Directory.CreateDirectory(ilDir);
+        var il = Path.Combine(ilDir, p.Name83.ToLowerInvariant() + ".dll");
         var elf = Path.Combine(p.OutDir, p.Name83 + ".ELF");
-        _log($"[build] bflat {(arm ? "arm64" : "x64")}: {sources.Count} source(s)");
-        var (cc, co) = Run(bflat, "build " + string.Join(' ', sources.Select(s => $"\"{s}\"")) +
-                                  $" --stdlib:zero --os:linux --arch:{(arm ? "arm64" : "x64")} -c -Os --no-debug-info " +
-                                  $"--no-reflection --no-stacktrace-data -o \"{obj}\"", userland, ct);
+        _log($"[build] bflat build-il + ilc {(arm ? "arm64" : "x64")}: {sources.Count} source(s)");
+        var (cc, co) = Run(bflat, "build-il " + string.Join(' ', sources.Select(s => $"\"{s}\"")) +
+                                  $" --stdlib:zero -O -o \"{il}\"", userland, ct);
         if (cc != 0) return BuildResult.Fail("COMPILE ERRORS:\n" + Tail(co));
+        var (ic, io) = Run(ilc, $"\"{il}\" \"{zerolib}\" --systemmodule:zerolib --targetos:linux " +
+                                $"--targetarch:{(arm ? "arm64" : "x64")} --Os --reflectiondata:none " +
+                                $"--directpinvoke:libSystem.Native -o \"{obj}\"", userland, ct);
+        try { Directory.Delete(ilDir, true); } catch { }
+        if (ic != 0) return BuildResult.Fail("COMPILE ERRORS (ilc):\n" + Tail(io));
         try
         {
             var (lc, lo) = Run(lld, $"-flavor gnu -o \"{elf}\" -T \"{Path.Combine(userland, "user.ld")}\" " +
@@ -164,6 +177,10 @@ public sealed class ProjectBuilder
         var mine = Directory.GetFiles(projectDir, "*.cs").Select(Path.GetFullPath).ToList();
         var all = string.Concat(mine.Select(File.ReadAllText));
         var sources = new List<string>(mine);
+        // System.Exception and friends: every native program gets them
+        var exc = Path.GetFullPath(Path.Combine(userland, "bzexc.cs"));
+        if (File.Exists(exc) && !mine.Any(m => Path.GetFileName(m).Equals("bzexc.cs", StringComparison.OrdinalIgnoreCase)))
+            sources.Add(exc);
         void Need(string marker, params string[] files)
         {
             if (!all.Contains(marker)) return;
@@ -181,6 +198,21 @@ public sealed class ProjectBuilder
         Need("Buitenzorg.Devices", "bzhw.cs", "bzbcl.cs");
         Need("using Buitenzorg;", "bzbcl.cs", "bzbcl2.cs");
         return sources;
+    }
+
+    /// <summary>ILCompiler 8.0.26: the NuGet cache, else what scripts/prepare-ilc.* downloaded.</summary>
+    public string? FindIlc()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var rid = OperatingSystem.IsWindows() ? "win-x64" : "linux-x64";
+        var exe = OperatingSystem.IsWindows() ? "ilc.exe" : "ilc";
+        foreach (var c in new[]
+        {
+            Path.Combine(home, ".nuget", "packages", $"runtime.{rid}.microsoft.dotnet.ilcompiler", "8.0.26", "tools", exe),
+            Path.Combine(Root, "kernel", "target", "ilc", "8.0.26", "tools", exe),
+        })
+            if (File.Exists(c)) return c;
+        return null;
     }
 
     public static string? FindRustLld()

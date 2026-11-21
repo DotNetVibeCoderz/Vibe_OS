@@ -250,16 +250,18 @@ public sealed class MusikApp
 
         // the library: a song in an album folder is found, the search narrows the list
         string album = Files.ScratchDirectory + "/MUSIK";
-        Files.CreateDirectory(album);
-        Files.CreateDirectory(album + "/KEBUN");
-        Files.WriteAllBytes(album + "/KEBUN/UJIALBUM.WAV", wav);
+        bool mk1 = Files.CreateDirectory(album);
+        bool mk2 = Files.CreateDirectory(album + "/KEBUN");
+        bool wrote = Files.WriteAllBytes(album + "/KEBUN/UJIALBUM.WAV", wav);
+        int listed = Files.List(album + "/KEBUN").Count;
         var lib = new MusikApp(headless: true);
         lib.Scan();
         bool inAlbum = lib.Library.Exists(t => t.Path.ToUpperInvariant().EndsWith("/MUSIK/KEBUN/UJIALBUM.WAV"));
         bool sorted = true;
         for (int i = 1; i < lib.Library.Count; i++) if (string.Compare(lib.Library[i - 1].Title, lib.Library[i].Title, StringComparison.OrdinalIgnoreCase) > 0) sorted = false;
         lib.Filter("ujialbum");
-        c.That(inAlbum && sorted && lib.Tracks.Count == 1 && lib.Library.Count >= 1, "library: album folder scanned, sorted, search finds 1 of " + lib.Library.Count);
+        c.That(inAlbum && sorted && lib.Tracks.Count == 1 && lib.Library.Count >= 1, "library: album folder scanned, sorted, search finds 1 of " + lib.Library.Count
+               + (inAlbum && sorted ? "" : " (mkdir " + mk1 + "/" + mk2 + ", written " + wrote + ", " + listed + " in KEBUN, in album " + inAlbum + ", sorted " + sorted + ", found " + lib.Tracks.Count + ")"));
         lib.Filter("");
         Files.Delete(album + "/KEBUN/UJIALBUM.WAV");
         Files.Delete(album + "/KEBUN");

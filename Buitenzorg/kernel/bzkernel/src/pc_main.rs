@@ -604,6 +604,14 @@ fn matang_demo() {
         Ok(code) => println!("[kernel] async app exited (code {})", code),
         Err(e) => println!("[kernel] async app not run: {}", e),
     }
+    // Native C# runtime: exceptions (bzeh.rs dispatcher over ILC's unwind and
+    // clause tables) and a reclaiming mark-sweep GC (bzgc.rs).
+    for name in ["exc", "gc"] {
+        match app::run_named(name) {
+            Ok(code) => println!("[kernel] {} app exited (code {})", name, code),
+            Err(e) => println!("[kernel] {} app not run: {}", name, e),
+        }
+    }
 
     // Increment 5: the GC memory model — lazy reserve (mmap PROT_NONE) + commit
     // on demand (mprotect), so the .NET GC's up-front heap reservation works.

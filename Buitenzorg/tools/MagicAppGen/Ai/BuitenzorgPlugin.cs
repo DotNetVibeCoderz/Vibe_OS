@@ -34,12 +34,13 @@ public sealed class BuitenzorgPlugin
         "drawing, ui, audio, bcl, syscalls, gotchas. MANAGED C# (dotnet build, RustCLR): managed (Buitenzorg.App), " +
         "managed-ui (Buitenzorg.UI toolkit), devices (Buitenzorg.Devices GPIO/I2C/SPI/UART). SCRIPTS: scripts " +
         "(the Python/JS/TS subset). DEVICE: deploy (how apps reach a device).")]
-    public string GetApiReference([Description("drawing|ui|audio|bcl|syscalls|gotchas|managed|managed-ui|devices|scripts|deploy")] string library)
+    public string GetApiReference([Description("drawing|ui|audio|bcl|syscalls|gotchas|managed|managed-ui|devices|ai|scripts|deploy")] string library)
         => library.ToLowerInvariant() switch
         {
             "managed" or "buitenzorg.app" => ManagedApiReference.App,
             "managed-ui" or "buitenzorg.ui" => ManagedApiReference.Ui,
             "devices" or "buitenzorg.devices" or "gpio" => ManagedApiReference.Devices,
+            "ai" or "buitenzorg.ai" or "llm" or "ml" or "vision" => ManagedApiReference.Ai,
             "scripts" or "python" or "js" or "ts" or "javascript" or "typescript" => ManagedApiReference.Scripts,
             "deploy" => ManagedApiReference.Deploy,
             "drawing" =>
@@ -143,8 +144,8 @@ public sealed class BuitenzorgPlugin
                 "                     delegate)/Wait/WhenAll/Yield, BzMutex(int* state) Lock/Unlock\n" +
                 "    Timers         new BzTimer(intervalTicks) Start/Stop/Poll/Remaining/Count/AutoReset —\n" +
                 "                     POLLED from the app loop; ring 3 has no signal delivery\n" +
-                "    GC             BzGC.GetAllocatedBytes/GetTotalMemory/ChunkCount/AllocationCount;\n" +
-                "                     Collect() returns FALSE — the heap is bump-only, nothing is reclaimed\n" +
+                "    GC             BzGC.Collect()/CollectionCount/LiveBytes/FreedBytes/SkippedCount/SetEnabled +\n" +
+                "                     GetAllocatedBytes/GetTotalMemory — a mark-sweep collector (skipped while threads run)\n" +
                 "    Pkg            BzPkg.List(max)/Count/Find/Search/IsInstalled/Install/Remove",
             "syscalls" =>
                 "Shim wrappers (bzstart.rs): bz_win_create/bz_win_cmd/bz_win_present, bz_key_read, " +
@@ -153,7 +154,9 @@ public sealed class BuitenzorgPlugin
             _ =>
                 "zerolib gotchas: (1) `static` reference fields, delegates and lambdas WORK (the shim initializes " +
                 "the GC statics), but `static readonly string X = \"...\"` crashes the compiler - use const string. " +
-                "(2) NO reclaiming GC and NO exceptions (throw / a failed cast ends the program). (3) casts, is/as, " +
+                "(2) a mark-sweep GC reclaims memory (not while other threads run); throw/try/catch/finally/when/using WORK " +
+                "(System.Exception + the usual types come from bzexc.cs, always compiled in), but zerolib's own checks " +
+                "(null, index, divide by zero, failed cast) end the program instead of throwing. (3) casts, is/as, " +
                 "pattern matching, interface calls and object[] / Base[] / IFoo[] arrays WORK; System.Func/Action and " +
                 "LINQ come from bzbcl3.cs (BzList<T>.Where/Select/OrderBy/GroupBy/Distinct..., BzInterlocked, " +
                 "BzTimeSpan, BzGuid). (4) NO new string()/ToString()/concat/" +
