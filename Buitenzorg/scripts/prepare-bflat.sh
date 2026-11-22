@@ -6,7 +6,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 bflat_home="$root/tools/bflat"
 patched="$root/kernel/target/bflat-patched"
-patch_version="7"   # bump whenever tools/ZerolibPatch changes what it does
+patch_version="8"   # bump whenever tools/ZerolibPatch changes what it does
 marker="$patched/ZEROLIB_PATCH"
 current="$(cat "$marker" 2>/dev/null || true)"
 if [ ! -x "$patched/bflat" ] || [ "$current" != "$patch_version" ]; then

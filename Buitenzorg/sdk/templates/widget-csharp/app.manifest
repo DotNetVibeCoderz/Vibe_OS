@@ -1,0 +1,10 @@
+{
+  "id": "com.example.widget",
+  "name": "Widget",
+  "type": "widget",
+  "language": "csharp",
+  "version": "0.1.0",
+  "entry": "__NAME83__.DLL",
+  "permissions": [],
+  "theme": "system"
+}

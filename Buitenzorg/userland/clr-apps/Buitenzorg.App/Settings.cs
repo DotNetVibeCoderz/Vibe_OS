@@ -27,10 +27,11 @@ internal static class SettingsNative
 public static class Settings
 {
     public const int ThemeKey = 0, WallpaperKey = 1, ScreensaverKey = 2, ScreensaverDelayKey = 3, AnimationsKey = 4, LargeCursorKey = 5,
-        TimeZoneKey = 6, LanguageKey = 7, Clock24HourKey = 8, ClockKey = 9, UiFontKey = 10, MonoFontKey = 11;
+        TimeZoneKey = 6, LanguageKey = 7, Clock24HourKey = 8, ClockKey = 9, UiFontKey = 10, MonoFontKey = 11,
+        ResolutionKey = 12, UiScaleKey = 13, IconPackKey = 14;
 
     static bool _sim;
-    static readonly int[] SimValues = { 10, 0, 0, 12, 1, 0, 0, 0, 1, 0, 2, 1 };
+    static readonly int[] SimValues = { 10, 0, 0, 12, 1, 0, 0, 0, 1, 0, 2, 1, 2, 0, 0 };
     static long _simAdjust;
     static readonly string[][] SimNames =
     {
@@ -43,6 +44,9 @@ public static class Settings
         Array.Empty<string>(), Array.Empty<string>(),
         new[] { "Bitmap (Noto Sans Mono)", "JetBrains Mono", "Plus Jakarta Sans" },
         new[] { "Bitmap (Noto Sans Mono)", "JetBrains Mono" },
+        new[] { "800x600", "1024x768", "1280x720", "1280x800", "1366x768", "1440x900", "1600x900", "1920x1080" },
+        new[] { "100 %", "110 %", "125 %" },
+        new[] { "bawaan", "daun" },
     };
     static readonly int[] SimZoneMinutes = { 420, 480, 540, 0, 480, 420, 540, 600, 330, 240, 60, -300 };
 
@@ -107,6 +111,13 @@ public static class Settings
     public static int UiFont { get => Get(UiFontKey); set => Set(UiFontKey, value); }
     /// <summary>The terminal's font: an index into <c>Choices(MonoFontKey)</c>, 0 = the bitmap font.</summary>
     public static int MonoFont { get => Get(MonoFontKey); set => Set(MonoFontKey, value); }
+    /// <summary>The screen resolution: an index into <c>Choices(ResolutionKey)</c> ("1280x720");
+    /// kept on /disk, it takes effect at the next start (std VGA displays).</summary>
+    public static int Resolution { get => Get(ResolutionKey); set => Set(ResolutionKey, value); }
+    /// <summary>Text size of the desktop and apps: an index into <c>Choices(UiScaleKey)</c> (100 / 110 / 125 %).</summary>
+    public static int UiScale { get => Get(UiScaleKey); set => Set(UiScaleKey, value); }
+    /// <summary>Icon pack: an index into <c>Choices(IconPackKey)</c>, 0 = the built-in icons, then /disk/ICONS/*.BIN.</summary>
+    public static int IconPack { get => Get(IconPackKey); set => Set(IconPackKey, value); }
 }
 
 /// <summary>Date, time and region: the time zone, the interface language, 12/24-hour clock,

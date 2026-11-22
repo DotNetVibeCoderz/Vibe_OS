@@ -275,7 +275,7 @@ pub fn user_mmap(size: u64, prot: u64) -> u64 {
 /// unmapped and `prot` grants access, a fresh zeroed frame is mapped (commit).
 /// This makes the GC's reserve-then-commit heap growth work.
 pub fn user_mprotect(addr: u64, size: u64, prot: u64) -> u64 {
-    if size == 0 || addr % 4096 != 0 {
+    if size == 0 || addr % 4096 != 0 || overlaps_shared(addr, size) {
         return bz_abi::syserr::INVAL;
     }
     let count = (size + 4095) / 4096;
@@ -308,9 +308,57 @@ pub fn user_mprotect(addr: u64, size: u64, prot: u64) -> u64 {
     r
 }
 
+/// Ranges of user memory the kernel reads behind the program's back (window
+/// surfaces): (space, address, bytes). MUNMAP / MPROTECT refuse them, so a
+/// program cannot free frames the compositor is still reading.
+static SHARED: spin::Mutex<alloc::vec::Vec<(u64, u64, u64)>> = spin::Mutex::new(alloc::vec::Vec::new());
+
+fn overlaps_shared(addr: u64, size: u64) -> bool {
+    let id = crate::aspace::current_id();
+    SHARED.lock().iter().any(|&(sp, a, n)| sp == id && addr < a + n && a < addr + size)
+}
+
+/// Map `pages` fresh zeroed pages into the calling process (read/write, from
+/// its mmap arena) and return their address and frames; the range is
+/// pinned (see `SHARED`) until the space is destroyed.
+pub fn user_map_shared(pages: u64) -> Option<(u64, alloc::vec::Vec<u64>)> {
+    if pages == 0 {
+        return None;
+    }
+    let base = with_arena(|a| {
+        let base = a.next;
+        a.next += pages * 4096;
+        base
+    })?;
+    if base + pages * 4096 > USER_MMAP_LIMIT {
+        return None;
+    }
+    let flags = Flags { write: true, user: true, exec: false };
+    let frames = with_ctx(|ctx| -> Result<alloc::vec::Vec<u64>, &'static str> {
+        let mut v = alloc::vec::Vec::new();
+        for i in 0..pages {
+            let phys = ctx.frames.alloc().ok_or("out of frames")?;
+            unsafe { core::ptr::write_bytes(phys_to_virt(phys) as *mut u8, 0, 4096) };
+            paging::map(&mut ctx.mapper, &mut ctx.frames, base + i * 4096, phys, flags)?;
+            v.push(phys);
+        }
+        crate::arch::cpu::flush_tlb();
+        Ok(v)
+    })
+    .ok()?;
+    with_arena(|a| a.pages.extend((0..pages).map(|i| base + i * 4096)));
+    SHARED.lock().push((crate::aspace::current_id(), base, pages * 4096));
+    Some((base, frames))
+}
+
+/// Space `id` is being destroyed: forget its pinned ranges.
+pub fn shared_release(id: u64) {
+    SHARED.lock().retain(|&(sp, _, _)| sp != id);
+}
+
 /// SYS_MUNMAP handler: unmap pages in `[addr, addr+size)`.
 pub fn user_munmap(addr: u64, size: u64) -> u64 {
-    if size == 0 || addr % 4096 != 0 {
+    if size == 0 || addr % 4096 != 0 || overlaps_shared(addr, size) {
         return bz_abi::syserr::INVAL;
     }
     let count = (size + 4095) / 4096;

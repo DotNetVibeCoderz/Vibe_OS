@@ -73,6 +73,7 @@ pub fn init() {
             idt.debug.set_handler_addr(x86_64::VirtAddr::new(bz_db_entry as *const () as u64));
         }
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.divide_error.set_handler_fn(divide_error_handler);
         idt.general_protection_fault
             .set_handler_fn(general_protection_handler);
         unsafe {
@@ -258,10 +259,61 @@ extern "x86-interrupt" fn general_protection_handler(frame: InterruptStackFrame,
     );
 }
 
-extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: PageFaultErrorCode) {
+/// A program that registered a handler for this kind of fault (FAULT_HANDLER,
+/// e.g. the native C# runtime turning a null dereference into a
+/// NullReferenceException) continues there as if the faulting instruction had
+/// called it: the return address pushed on its stack is the fault address + 1,
+/// so an unwinder looking up `return - 1` finds the faulting method. False when
+/// there is no handler or the user stack cannot take the return address.
+fn redirect_to_handler(frame: &mut InterruptStackFrame, kind: u64) -> bool {
+    let pid = crate::task::current_space().id;
+    if pid == 0 {
+        return false;
+    }
+    let Some(handler) = crate::process::fault_handler(pid, kind) else { return false };
+    let rip = frame.instruction_pointer.as_u64();
+    let sp = frame.stack_pointer.as_u64().wrapping_sub(8);
+    if sp >= crate::memory::USER_ADDR_MAX || !matches!(crate::arch::paging::user_access(sp), Some((true, true))) {
+        return false;
+    }
+    unsafe {
+        (sp as *mut u64).write_volatile(rip + 1);
+        frame.as_mut().update(|f| {
+            f.stack_pointer = x86_64::VirtAddr::new(sp);
+            f.instruction_pointer = x86_64::VirtAddr::new(handler);
+        });
+    }
+    FAULTS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Ring-3 faults handed to the program's own handler (FAULT_HANDLER).
+pub static FAULTS_REDIRECTED: AtomicU64 = AtomicU64::new(0);
+
+extern "x86-interrupt" fn divide_error_handler(mut frame: InterruptStackFrame) {
+    if from_user(&frame) {
+        if redirect_to_handler(&mut frame, bz_abi::fault_kind::DIVIDE) {
+            return;
+        }
+        crate::task::kernel_enter();
+        kill_faulting_program("divide error", &frame, None);
+    }
+    panic!("EXCEPTION: divide error
+{:#?}", frame);
+}
+
+extern "x86-interrupt" fn page_fault_handler(mut frame: InterruptStackFrame, code: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
     if from_user(&frame) {
         let addr = Cr2::read().ok(); // read on the faulting CPU, before moving
+        // a load or store through null (+ a field offset): the program's
+        // NullReferenceException handler, when it has one
+        if addr.is_some_and(|a| a.as_u64() < 0x10000)
+            && !code.contains(PageFaultErrorCode::INSTRUCTION_FETCH)
+            && redirect_to_handler(&mut frame, bz_abi::fault_kind::NULL_REFERENCE)
+        {
+            return;
+        }
         crate::task::kernel_enter(); // ending a program is kernel work
         println!("[kernel] page fault address {:?} ({:?})", addr, code);
         let what = if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {

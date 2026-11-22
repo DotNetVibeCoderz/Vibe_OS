@@ -93,6 +93,9 @@ mod appnet;
 mod rng;
 mod ssh;
 mod wm;
+mod notify;
+mod search;
+mod vsync;
 mod gfx3d;
 mod bootmode;
 
@@ -314,6 +317,17 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     if crate::bootmode::selftest() {
         desktop::ensure_session_windows();
         shell::script_self_test();
+        notify::self_test();
+        search::self_test();
+        vsync::self_test();
+        settings::self_test();
+        theme::self_test();
+        icons::self_test();
+        if wm::self_test() {
+            println!("[kernel] MILESTONE: DESKTOP SHELL OK (start menu + launcher + icons)");
+        } else {
+            println!("[kernel] desktop shell self-test failed");
+        }
         desktop::hotkey_self_test();
         usb::hid::pad_self_test();
         virtio::snd::stream_self_test();
@@ -761,6 +775,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         ("sync", "RISCV SYNC OK (futex-backed mutex under contention: FUTEX_WAIT blocks, FUTEX_WAKE resumes, mutual exclusion held)"),
         ("proc", "RISCV PROCCTL OK (shared syscalls from U-mode: FS_WRITE + FS_READ on /disk, PROC_SPAWN of /disk/HELLO.ELF with arguments, PROC_WAIT)"),
         ("gui", "RISCV GUI OK (a RISC-V app drew a window through the shared window manager: WIN_CREATE / WIN_CMD / WIN_PRESENT, CLOCK_RTC, FB_INFO)"),
+        ("surface", "SURFACE OK (a RISC-V app drew into zero-copy shared window buffers, flipped them on vblank (WIN_CTL SURFACE / SURFACE_PRESENT / VSYNC_WAIT), the buffers stayed pinned, and a window went full screen and back)"),
     ] {
         let Some(image) = find(name) else { continue };
         let ok = run_program(name, &image) == Some(0);
@@ -1033,6 +1048,7 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
         theme::set_default();
         let n = icons::load();
         font::load_all();
+        theme::load_packages();
         if st {
             font::self_test();
         }

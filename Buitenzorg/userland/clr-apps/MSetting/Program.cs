@@ -52,6 +52,7 @@ public static class SettingsApp
         public ListBox Nav = null!, Themes = null!, Wallpapers = null!, Savers = null!;
         public Slider Delay = null!, Volume = null!;
         public ToggleSwitch Animations = null!, Cursor = null!;
+        public ComboBox Resolution = null!, Scale = null!, Icons = null!;
         public TextBlock DelayText = null!, SoundStatus = null!;
         // Pengguna
         public ListBox Accounts = null!;
@@ -370,12 +371,26 @@ public static class SettingsApp
         // Tampilan
         var themeIds = AppSettings.Choices(AppSettings.ThemeKey);
         parts.Themes = Choice(themeIds.ConvertAll(ThemeLabel), AppSettings.Theme, AppSettings.ThemeKey);
-        parts.Themes.Height = 230;
+        parts.Themes.Height = 150;
         parts.Animations = new ToggleSwitch("", AppSettings.Animations) { OnContent = "Animasi jendela nyala", OffContent = "Animasi jendela mati", Padding = new Thickness(0) };
         parts.Animations.IsCheckedChanged += t => AppSettings.Animations = t.IsChecked;
         parts.Cursor = new ToggleSwitch("", AppSettings.LargeCursor) { OnContent = "Kursor besar", OffContent = "Kursor normal", Padding = new Thickness(0) };
         parts.Cursor.IsCheckedChanged += t => AppSettings.LargeCursor = t.IsChecked;
-        var look = Page("Tampilan", "Tema berlaku langsung untuk seluruh desktop.", parts.Themes, parts.Animations, parts.Cursor);
+        parts.Resolution = new ComboBox(AppSettings.Choices(AppSettings.ResolutionKey), AppSettings.Resolution) { Width = 130 };
+        parts.Resolution.SelectionChanged += cb => { if (cb.SelectedIndex >= 0 && cb.SelectedIndex != AppSettings.Resolution) AppSettings.Resolution = cb.SelectedIndex; };
+        parts.Scale = new ComboBox(AppSettings.Choices(AppSettings.UiScaleKey), AppSettings.UiScale) { Width = 110 };
+        parts.Scale.SelectionChanged += cb => { if (cb.SelectedIndex >= 0 && cb.SelectedIndex != AppSettings.UiScale) AppSettings.UiScale = cb.SelectedIndex; };
+        var screenRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        screenRow.Children.Add(new TextBlock("Resolusi"));
+        screenRow.Children.Add(parts.Resolution);
+        screenRow.Children.Add(new TextBlock("Ukuran teks"));
+        screenRow.Children.Add(parts.Scale);
+        parts.Icons = new ComboBox(AppSettings.Choices(AppSettings.IconPackKey), AppSettings.IconPack) { Width = 110 };
+        parts.Icons.SelectionChanged += cb => { if (cb.SelectedIndex >= 0 && cb.SelectedIndex != AppSettings.IconPack) AppSettings.IconPack = cb.SelectedIndex; };
+        var iconRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        iconRow.Children.Add(new TextBlock("Paket ikon"));
+        iconRow.Children.Add(parts.Icons);
+        var look = Page("Tampilan", "Tema dan ukuran teks berlaku langsung; resolusi setelah komputer dimulai ulang.", parts.Themes, screenRow, iconRow, parts.Animations, parts.Cursor);
 
         // Wallpaper
         var wpNames = AppSettings.Choices(AppSettings.WallpaperKey);
@@ -456,6 +471,22 @@ public static class SettingsApp
         var (w, p) = Build(headless: true);
         int themes = p.Themes.ItemCount, papers = p.Wallpapers.ItemCount, savers = p.Savers.ItemCount;
         c.That(themes >= 2 && papers >= 1 && savers >= 2, "choices listed (" + themes + " themes, " + papers + " wallpapers, " + savers + " screensavers)");
+        // screen: resolutions listed (not changed: it would apply at the next start), text scale round trip
+        c.That(p.Resolution.Items.Count >= 4 && p.Resolution.SelectedIndex >= 0, "resolutions listed (" + p.Resolution.Items.Count + ")");
+        int scale0 = AppSettings.UiScale;
+        p.Scale.SelectedIndex = 1;
+        bool scaled = AppSettings.UiScale == 1;
+        p.Scale.SelectedIndex = scale0;
+        c.That(scaled && AppSettings.UiScale == scale0, "text scale 110 % and back");
+        int icons0 = AppSettings.IconPack;
+        if (p.Icons.Items.Count > 1)
+        {
+            p.Icons.SelectedIndex = 1;
+            bool packed = AppSettings.IconPack == 1;
+            p.Icons.SelectedIndex = icons0;
+            c.That(packed && AppSettings.IconPack == icons0, "icon pack " + p.Icons.Items[1] + " and back");
+        }
+        else c.That(p.Icons.Items.Count == 1, "only the built-in icons");
 
         // theme: pick another through the list, read it back, restore
         int theme0 = AppSettings.Theme;

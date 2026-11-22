@@ -84,6 +84,21 @@ tidak ada), `trim`, `upper`, `lower`.
 
 **AI bawaan OS:** `aiload([berkas])`, `aistart(awal, token[, suhu*1000])` + `ainext()` (satu potongan per frame, `""` = selesai), `aigenerate(...)`, `aibackend()`, `aiinfo(n)`, `aispeed()` -- model bahasa lokal; di C# script `Ai.Load()` / `Ai.Start()` / `Ai.Next()` / ... Rincian dan template: [ai-compute.id.md](ai-compute.id.md#untuk-pembuat-aplikasi).
 
+**Permainan dan OS:**
+
+| Fungsi | Gunanya |
+|---|---|
+| `keydown(nama)` | apakah tombol sedang ditekan (`"left"`, `"right"`, `"up"`, `"down"`, `"space"`, `"enter"`, `"esc"`, `"shift"`, `"a"`..`"z"`, `"0"`..`"9"`, atau scancode set-1) -- beberapa tombol sekaligus |
+| `sprite(x, y, baris, skala, c [, c2])` | gambar piksel: baris dipisah `\|`, `#`/`X` = c, `o`/`+` = c2, lainnya transparan; setiap deret satu persegi |
+| `hit(x1, y1, w1, h1, x2, y2, w2, h2)`, `near(x1, y1, x2, y2, r)` | apakah dua persegi bertumpuk / dua titik berjarak <= r |
+| `sound(hz [, ms])` (`beep`) | nada, diantrekan |
+| `notify(judul, isi)` | notifikasi (toast + pusat notifikasi) |
+| `vsync()` | tunggu vertical blank berikutnya |
+| `fullscreen(on)` | jendela memakai seluruh layar (atau mengembalikannya); hasilnya lebar baru |
+
+`bz new game-js` (dan kembarannya `bz new game-csharp`) memulai permainan
+kecil dengan fungsi ini. Panduan: [games.id.md](games.id.md).
+
 ## Subset bahasa
 
 Interpreternya kecil: bilangan bulat dan string (tanpa pecahan: kalikan 100),

@@ -41,6 +41,28 @@ pub const MAX_PX: u32 = 200;
 /// UI text sizes: body / strong lines are 16 px tall, headings 24 px.
 const UI_BODY_PX: u32 = 14;
 const UI_HEADING_PX: u32 = 21;
+/// Text scale of the UI fonts in percent (the UI_SCALE setting).
+static SCALE_PCT: AtomicU32 = AtomicU32::new(100);
+
+/// The UI text scale choices (percent).
+pub const SCALES: [u32; 3] = [100, 110, 125];
+
+/// Set the UI text scale (percent, one of [`SCALES`]); the glyph caches key
+/// by pixel size, and the generation makes frame caches redraw.
+pub fn set_scale(pct: u32) -> bool {
+    if !SCALES.contains(&pct) {
+        return false;
+    }
+    if SCALE_PCT.swap(pct, Ordering::Relaxed) != pct {
+        bump();
+    }
+    true
+}
+
+/// The UI text scale (percent).
+pub fn scale() -> u32 {
+    SCALE_PCT.load(Ordering::Relaxed)
+}
 /// The monospace cell (the bitmap font's): 8 px wide.
 const MONO_CELL: f32 = 8.0;
 
@@ -373,7 +395,8 @@ pub fn for_style(bold: bool, heading: bool) -> Option<(u16, u32)> {
         return None;
     }
     let id = if bold || heading { (v >> 16) as u16 } else { (v & 0xFFFF) as u16 };
-    Some((id, if heading { UI_HEADING_PX } else { UI_BODY_PX }))
+    let px = if heading { UI_HEADING_PX } else { UI_BODY_PX };
+    Some((id, (px * scale() + 50) / 100))
 }
 
 /// (monospace font id, pixel size) or None for the bitmap font.

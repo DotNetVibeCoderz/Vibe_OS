@@ -77,6 +77,24 @@ internal static class ManagedApiReference
         "  new SerialPort(port 2..5, baud = 115200): Open(), Write(byte[] | string), Read(byte[]) -> count, Close()\n" +
         "Native C# equivalent: bzhw.cs (namespace Buitenzorg.Devices) with fixed byte buffers.";
 
+    public const string Game =
+        "namespace Buitenzorg.Game (BZGAME.DLL; csproj references Buitenzorg.Game) - 2D games on Buitenzorg.UI.\n" +
+        "  abstract class GameView : Control  ctor(int fieldWidth, int fieldHeight, int rate = 60)\n" +
+        "    protected abstract void Update();  protected abstract void Draw(DrawingContext dc, Rect field);\n" +
+        "    Input Input; double Dt; bool Paused (P toggles); long Frames; Start()/Stop() (real-time loop, keeps the screen awake); Step(int n) for tests\n" +
+        "    Sx(x)/Sy(y)/Sl(len)/SRect(x, y, w, h): playfield units -> pixels; Banner(dc, field, title, subtitle)\n" +
+        "  Input: IsDown(key), WasPressed(key), WasReleased(key), AnyDown(params), AnyPressed(params), Axis(neg, pos, neg2, pos2) -> -1/0/1\n" +
+        "  key codes: RawKey.Left/Right/Up/Down/Space/Enter/Escape/A..Z/D0..D9/F1..F12/PadA/PadB/PadUp... (Buitenzorg.UI)\n" +
+        "  GameHost.Build(string title, GameView view, int width, int height, Control? top = null, bool headless = false) -> Window (RawKeys on)\n" +
+        "  Rng(ulong seed): Next(n), Range(lo, hiInclusive), NextU64(); Collide.Rects(ax, ay, aw, ah, bx, by, bw, bh), Collide.Circles(Vec2 a, ra, Vec2 b, rb)\n" +
+        "  Particles: Burst(rng, x, y, count, color, speed, life), Update(dt), Draw(dc, ox, oy); Sfx.Tone(hz, ms), Sfx.Score(), Sfx.Lose()\n" +
+        "  HighScores(string name, bool load): Add(score, save), Best, Scores; GameEnv.Interactive (never Session.IsInteractive directly)\n" +
+        "  Engine.cs: Canvas2D (int[] pixels drawn by natives), Sprite.FromStrings(rows, palette), SpriteSheet, Animation, TileMap (Hits, Move, IsSolid),\n" +
+        "    Body, Camera2D, Scene/SceneGame, PixelFont, SaveData (NAME.SAV), GameMusic.\n" +
+        "  Tests: window.DispatchKeyEvent(RawKey.X, pressed), window.SimulateKeyEvents(\"p\"), view.Step(n), window.RenderFrame(), window.LastFrameOps.\n" +
+        "UI scripts (JS/TS/Python/C# script): keydown(name), sprite(x, y, rows, scale, color[, color2]), hit(...8 ints), near(x1, y1, x2, y2, r),\n" +
+        "  sound(hz, ms), random(n), vsync(), fullscreen(on). Guide: docs/games.md.\n";
+
     public const string Ai =
         "namespace Buitenzorg.AI (inside BZAPP.DLL) - the OS's built-in AI, all on the machine (no network). Off the device a\n" +
         "simulated model answers, so --selftest runs on a PC.\n" +

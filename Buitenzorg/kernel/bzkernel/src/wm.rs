@@ -299,6 +299,44 @@ pub struct AppCanvas {
     /// Bumped by every change to what the window shows (draws, blits,
     /// presents): the compositor's damage tracking compares it.
     pub gen: u64,
+    /// A shared-memory surface the program draws into directly (WIN_CTL
+    /// SURFACE): when set, the compositor shows it instead of `pixels`.
+    pub surface: Option<Surface>,
+}
+
+/// Two buffers of `w x h` pixels in frames mapped into the program's address
+/// space (WIN_CTL SURFACE). The compositor reads the shown one through the
+/// kernel's physical-memory map -- no copy into the kernel first. The frames
+/// belong to the program's address space (freed with it); `detach_surfaces`
+/// lets go of them before that happens.
+pub struct Surface {
+    frames: Vec<u64>,
+    /// Bytes per buffer (rounded up to whole pages).
+    buf_bytes: usize,
+    /// Buffer the compositor shows (0 or 1).
+    shown: usize,
+    /// Its address in the program.
+    pub va: u64,
+}
+
+impl Surface {
+    /// Copy `out.len()` pixels of row `row` from column `col` of the shown
+    /// buffer (`w` pixels per row).
+    fn copy_row(&self, w: i32, row: usize, col: usize, out: &mut [u32]) {
+        let mut off = self.shown * self.buf_bytes + (row * w as usize + col) * 4;
+        let mut done = 0;
+        while done < out.len() {
+            let Some(&frame) = self.frames.get(off / 4096) else { return };
+            let in_page = off % 4096;
+            let take = ((4096 - in_page) / 4).min(out.len() - done);
+            let src = (crate::memory::phys_to_virt(frame) + in_page as u64) as *const u32;
+            // SAFETY: the frame is mapped in the kernel's physical map and
+            // stays allocated while the surface is attached (see Surface).
+            unsafe { core::ptr::copy_nonoverlapping(src, out[done..].as_mut_ptr(), take) };
+            done += take;
+            off += take * 4;
+        }
+    }
 }
 
 /// A window's canvas, shared between the window list and in-flight composes.
@@ -452,7 +490,36 @@ struct Wm {
     /// The on-screen display (volume, screenshot): text, level 0..=100 or -1
     /// for none, and the tick it disappears at.
     osd: Option<(String, i32, u64)>,
+    /// (window id, tick) of the last title-bar press, for double-click
+    /// maximize.
+    last_title: (u32, u64),
+    /// Power action waiting for the confirmation dialog (1 shutdown, 2 restart).
+    confirm: Option<u8>,
+    /// Window open / close animations in flight.
+    anims: Vec<Anim>,
+    /// The action center (notifications) is open.
+    center_open: bool,
+    /// Start-menu search: the query, its results, the highlighted one.
+    search: String,
+    results: Vec<crate::search::Hit>,
+    sel: usize,
+    /// The window in exclusive full screen, with the geometry and state to
+    /// restore.
+    fullscreen: Option<(u32, (i32, i32, i32, i32), WinState)>,
 }
+
+/// A window opening (grows in, the window itself shows when it ends) or
+/// closing (shrinks and fades out): a ghost of its frame.
+#[derive(Clone)]
+struct Anim {
+    id: u32,
+    rect: (i32, i32, i32, i32),
+    start: u64,
+    opening: bool,
+}
+
+/// Length of a window animation (timer ticks, 18.2 per second): ~0.22 s.
+const ANIM_TICKS: u64 = 4;
 
 static WM: Mutex<Option<Wm>> = Mutex::new(None);
 
@@ -483,8 +550,341 @@ pub fn init(width: usize, height: usize) {
         last_icon: (usize::MAX, 0),
         ctx_menu: None,
         osd: None,
+        last_title: (0, 0),
+        confirm: None,
+        anims: Vec::new(),
+        center_open: false,
+        search: String::new(),
+        results: Vec::new(),
+        sel: 0,
+        fullscreen: None,
     });
 }
+
+/// Every Start-menu and desktop entry as (launch name or @action, label):
+/// what the global search looks through.
+pub fn app_catalog() -> Vec<(&'static str, &'static str)> {
+    let mut v: Vec<(&'static str, &'static str)> = Vec::new();
+    for i in 0..CATEGORIES.len() {
+        let apps: &'static [(&'static str, &'static str)] = CATEGORIES[i].apps;
+        v.extend_from_slice(apps);
+    }
+    v.extend_from_slice(&DESKTOP);
+    v.extend_from_slice(&CTX_ITEMS);
+    v
+}
+
+/// Does the shell take the keyboard now (the Start menu's search box, the
+/// power confirmation)? Then the desktop loop sends keys to `shell_key`.
+pub fn takes_keys() -> bool {
+    WM.lock().as_ref().is_some_and(|w| w.start_open || w.confirm.is_some())
+}
+
+/// A key for the shell (see `takes_keys`). Returns true when the search
+/// query changed (the caller then runs the search and `set_results`).
+pub fn shell_key(c: char) -> bool {
+    let mut g = WM.lock();
+    let Some(wm) = g.as_mut() else { return false };
+    if let Some(code) = wm.confirm {
+        match c {
+            '\n' | '\r' => {
+                wm.pending_power = code;
+                wm.confirm = None;
+            }
+            '\u{1b}' => wm.confirm = None,
+            _ => {}
+        }
+        return false;
+    }
+    if !wm.start_open {
+        return false;
+    }
+    let up = char::from_u32(crate::keyboard::NAV_FIRST as u32).unwrap_or('\0');
+    let down = char::from_u32(crate::keyboard::NAV_FIRST as u32 + 1).unwrap_or('\0');
+    match c {
+        '\u{1b}' => {
+            wm.close_start();
+            false
+        }
+        '\u{8}' => wm.search.pop().is_some(),
+        '\n' | '\r' => {
+            if let Some(h) = wm.results.get(wm.sel) {
+                wm.pending = Some(h.action.clone());
+                wm.close_start();
+            }
+            false
+        }
+        c if c == up => {
+            wm.sel = wm.sel.saturating_sub(1);
+            false
+        }
+        c if c == down => {
+            if wm.sel + 1 < wm.results.len() {
+                wm.sel += 1;
+            }
+            false
+        }
+        c if !c.is_control() && (c as u32) < crate::keyboard::NAV_FIRST as u32 && wm.search.len() < 40 => {
+            wm.search.push(c);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The Start menu's search query.
+pub fn search_text() -> String {
+    WM.lock().as_ref().map(|w| w.search.clone()).unwrap_or_default()
+}
+
+/// Results for the current query (computed by the desktop loop, outside the
+/// window-manager lock: the search reads the disk).
+pub fn set_results(results: Vec<crate::search::Hit>) {
+    if let Some(wm) = WM.lock().as_mut() {
+        wm.results = results;
+        wm.sel = 0;
+    }
+}
+
+/// Open or close the action center.
+pub fn toggle_center() {
+    if let Some(wm) = WM.lock().as_mut() {
+        wm.center_open = !wm.center_open;
+        wm.start_open = false;
+        if wm.center_open {
+            crate::notify::mark_all_read();
+        }
+    }
+}
+
+/// WIN_CTL (see `bz_abi::win_ctl`): full screen, shared-memory surfaces,
+/// vblank waits. `a0` = op | window id << 8. The window must belong to the
+/// caller (kernel callers may use any).
+pub fn win_ctl(a0: u64, a1: u64) -> u64 {
+    use bz_abi::{syserr, win_ctl as op};
+    let opn = a0 & 0xFF;
+    let id = (a0 >> 8) as u32;
+    match opn {
+        op::VSYNC_WAIT => return crate::vsync::wait(),
+        op::VSYNC_INFO => return crate::vsync::info(),
+        _ => {}
+    }
+    let caller = crate::aspace::current_id();
+    let canvas = {
+        let g = WM.lock();
+        let Some(wm) = g.as_ref() else { return syserr::INVAL };
+        match wm.windows.iter().find(|w| w.id == id && (caller == 0 || w.owner == caller)).and_then(|w| w.canvas.clone()) {
+            Some(c) => c,
+            None => return syserr::INVAL,
+        }
+    };
+    match opn {
+        op::FULLSCREEN => set_fullscreen(id, a1 != 0),
+        op::SURFACE => create_surface(&canvas),
+        op::SURFACE_PRESENT => {
+            let mut c = canvas.lock();
+            match c.surface.as_mut() {
+                Some(s) => {
+                    s.shown = (a1 & 1) as usize;
+                    c.gen += 1;
+                    0
+                }
+                None => syserr::INVAL,
+            }
+        }
+        op::SURFACE_SIZE => {
+            let c = canvas.lock();
+            c.w as u64 | (c.h as u64) << 16
+        }
+        _ => syserr::NOSYS,
+    }
+}
+
+/// Map two client-sized buffers into the caller and show them from then on.
+fn create_surface(canvas: &SharedCanvas) -> u64 {
+    let (w, h, existing) = {
+        let c = canvas.lock();
+        (c.w, c.h, c.surface.as_ref().map(|s| s.va))
+    };
+    if let Some(va) = existing {
+        return va;
+    }
+    let buf_bytes = ((w as usize * h as usize * 4) + 4095) & !4095;
+    let Some((va, frames)) = crate::memory::user_map_shared((2 * buf_bytes / 4096) as u64) else {
+        return bz_abi::syserr::INVAL;
+    };
+    let mut c = canvas.lock();
+    c.surface = Some(Surface { frames, buf_bytes, shown: 0, va });
+    c.gen += 1;
+    va
+}
+
+/// Exclusive full screen for window `id` on / off. Returns the client size.
+pub fn set_fullscreen(id: u32, on: bool) -> u64 {
+    let mut g = WM.lock();
+    let Some(wm) = g.as_mut() else { return bz_abi::syserr::INVAL };
+    let (sw, sh) = (wm.width, wm.height);
+    let Some(idx) = wm.windows.iter().position(|w| w.id == id) else { return bz_abi::syserr::INVAL };
+    let Some(canvas) = wm.windows[idx].canvas.clone() else { return bz_abi::syserr::INVAL };
+    if canvas.lock().surface.is_some() {
+        return bz_abi::syserr::INVAL; // a surface keeps its size: go full screen first
+    }
+    let resize = |cw: i32, ch: i32| {
+        let mut c = canvas.lock();
+        if c.w != cw || c.h != ch {
+            c.w = cw;
+            c.h = ch;
+            c.pixels = vec![0; (cw * ch) as usize];
+            if c.front.is_some() {
+                c.front = Some(vec![0; (cw * ch) as usize]);
+            }
+            c.gen += 1;
+        }
+    };
+    if on {
+        if let Some((other, _, _)) = wm.fullscreen {
+            if other != id {
+                drop(g);
+                set_fullscreen(other, false);
+                return set_fullscreen(id, true);
+            }
+        }
+        if wm.fullscreen.is_none() {
+            let w = &wm.windows[idx];
+            wm.fullscreen = Some((id, (w.x, w.y, w.w, w.h), w.state));
+        }
+        let w = &mut wm.windows[idx];
+        // the client area covers the screen; frame and title lie outside it
+        w.x = -BORDER;
+        w.y = -(BORDER + TITLE_H);
+        w.w = sw + 2 * BORDER;
+        w.h = sh + TITLE_H + 2 * BORDER;
+        w.state = WinState::Normal;
+        w.workspace = wm.workspace;
+        resize(sw, sh);
+        wm.focus(id);
+        wm.start_open = false;
+        wm.center_open = false;
+        wm.ctx_menu = None;
+        crate::println!("[wm] window {} in full screen ({}x{})", id, sw, sh);
+        sw as u64 | (sh as u64) << 16
+    } else {
+        let Some((fid, (x, y, ww, wh), state)) = wm.fullscreen else {
+            let c = canvas.lock();
+            return c.w as u64 | (c.h as u64) << 16;
+        };
+        if fid != id {
+            return bz_abi::syserr::INVAL;
+        }
+        wm.fullscreen = None;
+        let w = &mut wm.windows[idx];
+        w.x = x;
+        w.y = y;
+        w.w = ww;
+        w.h = wh;
+        w.state = state;
+        let (cw, ch) = ((ww - 2 * BORDER).max(1), (wh - TITLE_H - 2 * BORDER).max(1));
+        resize(cw, ch);
+        cw as u64 | (ch as u64) << 16
+    }
+}
+
+/// The window in full screen now, if any (tests, `gpu`).
+pub fn fullscreen_window() -> Option<u32> {
+    WM.lock().as_ref().and_then(|w| w.fs_window().map(|w| w.id))
+}
+
+/// Process `space` is going away: windows showing its surfaces keep the
+/// last frame in their own pixels and stop reading its memory (the frames
+/// are freed with the address space).
+pub fn detach_surfaces(space: u64) {
+    let canvases: Vec<SharedCanvas> = {
+        let g = WM.lock();
+        let Some(wm) = g.as_ref() else { return };
+        wm.windows.iter().filter(|w| w.owner == space).filter_map(|w| w.canvas.clone()).collect()
+    };
+    for c in canvases {
+        let mut c = c.lock();
+        if let Some(s) = c.surface.take() {
+            let w = c.w;
+            let mut px = vec![0u32; (c.w * c.h) as usize];
+            for row in 0..c.h as usize {
+                s.copy_row(w, row, 0, &mut px[row * w as usize..(row + 1) * w as usize]);
+            }
+            c.pixels = px;
+            c.front = None;
+            c.gen += 1;
+        }
+    }
+}
+
+/// Is the power confirmation dialog up? (tests)
+pub fn confirm_pending() -> Option<u8> {
+    WM.lock().as_ref().and_then(|w| w.confirm)
+}
+
+/// Window animations in flight (tests).
+pub fn animations_running() -> usize {
+    WM.lock().as_ref().map_or(0, |w| w.anims.len())
+}
+
+/// The power confirmation dialog: (panel, confirm button, cancel button).
+fn confirm_rects(width: i32, height: i32) -> ((i32, i32, i32, i32), (i32, i32, i32, i32), (i32, i32, i32, i32)) {
+    let (w, h) = (380, 150);
+    let (x, y) = ((width - w) / 2, (height - TASKBAR_H - h) / 2);
+    let ok = (x + w - 20 - 130, y + h - 50, 130, 32);
+    let cancel = (x + w - 20 - 130 - 12 - 100, y + h - 50, 100, 32);
+    ((x, y, w, h), ok, cancel)
+}
+
+/// The tray's notification bell (left of the date and time).
+fn bell_rect(width: i32, height: i32) -> (i32, i32, i32, i32) {
+    let (cx0, _) = clock_area(width);
+    (cx0 - 34, height - TASKBAR_H + 5, 30, TASKBAR_H - 10)
+}
+
+/// The action center panel above the tray.
+fn center_rect(width: i32, height: i32) -> (i32, i32, i32, i32) {
+    let w = 360;
+    let h = (height - TASKBAR_H - 16).min(470);
+    (width - w - 8, height - TASKBAR_H - 8 - h, w, h)
+}
+
+const CENTER_CARD_H: i32 = 66;
+
+fn center_clear_rect(width: i32, height: i32) -> (i32, i32, i32, i32) {
+    let (x, y, w, _) = center_rect(width, height);
+    (x + w - 16 - 110, y + 12, 110, 26)
+}
+
+/// Card `i` of the action center (newest first).
+fn center_card_rect(width: i32, height: i32, i: usize) -> (i32, i32, i32, i32) {
+    let (x, y, w, _) = center_rect(width, height);
+    (x + 12, y + 52 + i as i32 * (CENTER_CARD_H + 6), w - 24, CENTER_CARD_H)
+}
+
+fn center_cards(width: i32, height: i32) -> usize {
+    let (_, _, _, h) = center_rect(width, height);
+    ((h - 60) / (CENTER_CARD_H + 6)).max(0) as usize
+}
+
+/// The toast in the top-right corner.
+fn toast_rect(width: i32) -> (i32, i32, i32, i32) {
+    (width - 352, 12, 340, 74)
+}
+
+/// Search box in the Start menu's header.
+fn search_box_rect(height: i32) -> (i32, i32, i32, i32) {
+    let (x, y) = menu_origin(height);
+    (x + 150, y + 9, 230, 28)
+}
+
+/// Result row `i` in the Start menu (search mode).
+fn result_rect(height: i32, i: usize) -> (i32, i32, i32, i32) {
+    let (x, y) = menu_origin(height);
+    (x + SM_RAIL_W + 12, y + SM_HDR + 12 + i as i32 * 44, SM_W - SM_RAIL_W - 24, 40)
+}
+const MAX_RESULTS: usize = 9;
 
 /// How long the on-screen display stays (timer ticks, 18.2 per second).
 const OSD_TICKS: u64 = 27;
@@ -554,7 +954,16 @@ pub fn close_orphan_windows() -> usize {
     let mut guard = WM.lock();
     let Some(wm) = guard.as_mut() else { return 0 };
     let before = wm.windows.len();
+    let gone: Vec<(u32, (i32, i32, i32, i32))> = wm
+        .windows
+        .iter()
+        .filter(|w| !(w.owner == 0 || crate::process::is_alive(w.owner)) && w.workspace == wm.workspace && w.state != WinState::Minimized)
+        .map(|w| (w.id, (w.x, w.y, w.w, w.h)))
+        .collect();
     wm.windows.retain(|w| w.owner == 0 || crate::process::is_alive(w.owner));
+    for (id, r) in gone {
+        wm.animate(id, r, false);
+    }
     before - wm.windows.len()
 }
 
@@ -732,8 +1141,84 @@ pub fn self_test() -> bool {
     handle_mouse(ix + iw / 2, iy + ih / 2, true);
     handle_mouse(ix + iw / 2, iy + ih / 2, false);
     let ctx = ctx_open && matches!(take_pending_launch().as_deref(), Some("@tile"));
-    crate::println!("[wm] self-test: start menu {} / {} / {}, right-click menu {}", first, game, managed, ctx);
-    let launched = first && game && managed && ctx;
+    // Start menu -> Matikan asks first: Batal (Esc) leaves no power action,
+    // the dialog's button queues it.
+    let (pbx, pbw) = {
+        let b = power_buttons(height);
+        (b[0].0, b[0].1)
+    };
+    let (_, my0) = menu_origin(height);
+    let pby = my0 + SM_H - SM_FTR + 10 + 13;
+    handle_mouse(40, height - 4, true);
+    handle_mouse(40, height - 4, false);
+    handle_mouse(pbx + pbw / 2, pby, true);
+    handle_mouse(pbx + pbw / 2, pby, false);
+    let asked = confirm_pending() == Some(1) && take_pending_power() == 0;
+    shell_key('\u{1b}');
+    let cancelled = confirm_pending().is_none() && take_pending_power() == 0;
+    handle_mouse(40, height - 4, true);
+    handle_mouse(40, height - 4, false);
+    handle_mouse(pbx + pbw / 2, pby, true);
+    handle_mouse(pbx + pbw / 2, pby, false);
+    let width = WM.lock().as_ref().map_or(0, |w| w.width);
+    let (_, ok_btn, _) = confirm_rects(width, height);
+    handle_mouse(ok_btn.0 + 10, ok_btn.1 + 10, true);
+    handle_mouse(ok_btn.0 + 10, ok_btn.1 + 10, false);
+    let confirmed = take_pending_power() == 1;
+    let power = asked && cancelled && confirmed;
+    // Start menu search: type, the results come from search::query, Enter
+    // launches the first one.
+    handle_mouse(40, height - 4, true);
+    handle_mouse(40, height - 4, false);
+    for c in "kalku".chars() {
+        if shell_key(c) {
+            set_results(crate::search::query(&search_text(), MAX_RESULTS));
+        }
+    }
+    shell_key('\n');
+    let searched = matches!(take_pending_launch().as_deref(), Some("mcalc")) && !start_menu_open();
+    // Double-click on a window's title bar maximizes it, a second one restores.
+    let dbl = {
+        let id = create_window("Uji judul", 200, 120, 300, 180, &[]);
+        let (tx, ty) = (260, 130);
+        handle_mouse(tx, ty, true);
+        handle_mouse(tx, ty, false);
+        handle_mouse(tx, ty, true);
+        handle_mouse(tx, ty, false);
+        let maxed = window_state(id) == Some(WinState::Maximized);
+        handle_mouse(tx, 4, true);
+        handle_mouse(tx, 4, false);
+        handle_mouse(tx, 4, true);
+        handle_mouse(tx, 4, false);
+        let restored = window_state(id) == Some(WinState::Normal) && window_rect(id) == Some((200, 120, 300, 180));
+        if let Some(wm) = WM.lock().as_mut() {
+            wm.windows.retain(|w| w.id != id);
+            wm.last_title = (0, 0);
+        }
+        maxed && restored
+    };
+    // The bell opens the action center and marks everything read.
+    let center = {
+        let n = crate::notify::post("Uji", "Pusat notifikasi", "uji bel");
+        let (bx, by, _, _) = bell_rect(width, height);
+        handle_mouse(bx + 10, by + 10, true);
+        handle_mouse(bx + 10, by + 10, false);
+        let open = WM.lock().as_ref().is_some_and(|w| w.center_open) && crate::notify::unread() == 0;
+        let (cx, cy, _, _) = center_card_rect(width, height, 0);
+        handle_mouse(cx + 20, cy + 20, true);
+        handle_mouse(cx + 20, cy + 20, false);
+        let removed = !crate::notify::list().iter().any(|x| x.id == n);
+        handle_mouse(width / 3, height / 3, true);
+        handle_mouse(width / 3, height / 3, false);
+        let closed = WM.lock().as_ref().is_some_and(|w| !w.center_open);
+        crate::notify::dismiss_toast();
+        open && removed && closed
+    };
+    crate::println!(
+        "[wm] self-test: start menu {} / {} / {}, right-click menu {}, power confirm {}, search {}, title double-click {}, action center {}",
+        first, game, managed, ctx, power, searched, dbl, center
+    );
+    let launched = first && game && managed && ctx && power && searched && dbl && center;
     // Reset shell state so the real desktop starts clean.
     if let Some(wm) = WM.lock().as_mut() {
         wm.start_open = false;
@@ -741,6 +1226,11 @@ pub fn self_test() -> bool {
         wm.pending = None;
         wm.last_icon = (usize::MAX, 0);
         wm.ctx_menu = None;
+        wm.confirm = None;
+        wm.pending_power = 0;
+        wm.center_open = false;
+        wm.search.clear();
+        wm.results.clear();
     }
     opened && launched
 }
@@ -811,13 +1301,16 @@ pub fn tick_animation(frame: u64) -> bool {
     let mut guard = WM.lock();
     let Some(wm) = guard.as_mut() else { return false };
     wm.frame = frame;
+    let before = wm.anims.len();
+    wm.anims.retain(|a| frame.saturating_sub(a.start) <= ANIM_TICKS);
+    let anim = before > 0;
     if let Some((_, _, start)) = wm.ripple {
         if frame.saturating_sub(start) > 8 {
             wm.ripple = None;
         }
         return true;
     }
-    false
+    anim
 }
 
 /// Toggle animations / rounded corners (Personalization).
@@ -854,6 +1347,7 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
         events: alloc::collections::VecDeque::new(),
         caret: None,
     });
+    wm.animate(id, (x, y, w, h), true);
     id
 }
 
@@ -909,6 +1403,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
                 h: ch,
                 pixels: vec![body; (cw * ch) as usize],
                 front: None,
+                surface: None,
             })),
             state: WinState::Normal,
             saved: (board_x, y, ww, h),
@@ -941,6 +1436,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             h: ch,
             pixels: vec![body; (cw * ch) as usize],
             front: None,
+            surface: None,
         })),
         state: WinState::Normal,
         saved: (x, y, w, h),
@@ -948,6 +1444,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         events: alloc::collections::VecDeque::new(),
         caret: None,
     });
+    wm.animate(id, (x, y, w, h), true);
     id
 }
 
@@ -1267,6 +1764,10 @@ pub fn handle_mouse(x: i32, y: i32, left: bool) {
     let released = !left && wm.prev_left;
     wm.prev_left = left;
     wm.route_pointer(cx, cy, left, pressed, released, (mdx, mdy) != (0, 0));
+    if wm.fs_window().is_some() && wm.confirm.is_none() {
+        wm.drag = Drag::None;
+        return; // exclusive full screen: no shell, no window frames
+    }
 
     if pressed {
         let frame = wm.frame;
@@ -1309,7 +1810,7 @@ impl Wm {
             }
             return;
         }
-        let over_shell = self.start_open || cy >= self.height - TASKBAR_H;
+        let over_shell = self.fs_window().is_none() && (self.start_open || cy >= self.height - TASKBAR_H);
         let target = if over_shell {
             None
         } else {
@@ -1340,7 +1841,7 @@ impl Wm {
     /// Wheel notches to the app window under the pointer (not over the shell).
     fn route_wheel(&mut self, notches: i64) -> bool {
         let (cx, cy) = self.cursor;
-        if self.start_open || cy >= self.height - TASKBAR_H {
+        if self.fs_window().is_none() && (self.start_open || cy >= self.height - TASKBAR_H) {
             return false;
         }
         let Some(i) = self.window_at(cx, cy) else { return false };
@@ -1374,10 +1875,20 @@ impl Wm {
 
         let in_resize = x >= w.x + w.w - RESIZE_GRIP && y >= w.y + w.h - RESIZE_GRIP;
         let in_title = y < w.y + TITLE_H;
+        let (dx, dy) = (x - w.x, y - w.y);
         self.drag = if in_resize {
             Drag::Resize { id }
         } else if in_title {
-            Drag::Move { id, dx: x - w.x, dy: y - w.y }
+            // a second press within ~0.6 s maximizes / restores
+            let now = crate::interrupts::ticks();
+            if self.last_title.0 == id && now.saturating_sub(self.last_title.1) < 11 {
+                self.last_title = (0, 0);
+                self.toggle_maximize(id);
+                Drag::None
+            } else {
+                self.last_title = (id, now);
+                Drag::Move { id, dx, dy }
+            }
         } else {
             Drag::None
         };
@@ -1416,6 +1927,49 @@ impl Wm {
     /// desktop icon). Returns true if the click was consumed. Launch/power
     /// requests are queued in `pending`/`pending_power` for the desktop loop.
     fn shell_click(&mut self, cx: i32, cy: i32) -> bool {
+        // The power confirmation: its button confirms, any other click cancels.
+        if let Some(code) = self.confirm.take() {
+            let (_, ok, _) = confirm_rects(self.width, self.height);
+            if hit(cx, cy, ok) {
+                self.pending_power = code;
+            }
+            return true;
+        }
+        // The toast: a click opens the action center.
+        let now = crate::interrupts::ticks();
+        if !self.center_open && crate::notify::toast(now).is_some() && hit(cx, cy, toast_rect(self.width)) {
+            crate::notify::dismiss_toast();
+            self.center_open = true;
+            crate::notify::mark_all_read();
+            return true;
+        }
+        // The bell in the tray opens / closes the action center.
+        if hit(cx, cy, bell_rect(self.width, self.height)) {
+            self.center_open = !self.center_open;
+            self.start_open = false;
+            if self.center_open {
+                crate::notify::mark_all_read();
+            }
+            return true;
+        }
+        if self.center_open {
+            if hit(cx, cy, center_rect(self.width, self.height)) {
+                if hit(cx, cy, center_clear_rect(self.width, self.height)) {
+                    crate::notify::clear();
+                } else {
+                    let notes = crate::notify::list();
+                    for (i, n) in notes.iter().rev().take(center_cards(self.width, self.height)).enumerate() {
+                        if hit(cx, cy, center_card_rect(self.width, self.height, i)) {
+                            crate::notify::remove(n.id);
+                            break;
+                        }
+                    }
+                }
+                return true;
+            }
+            self.center_open = false;
+            return true;
+        }
         // Right-click menu open: an item runs, anywhere else just closes it.
         if let Some((mx, my)) = self.ctx_menu.take() {
             if let Some(i) = (0..CTX_ITEMS.len()).find(|&i| hit(cx, cy, ctx_item_rect(mx, my, i))) {
@@ -1430,27 +1984,43 @@ impl Wm {
                 for i in 0..CATEGORIES.len() {
                     if hit(cx, cy, rail_rect(self.height, i)) {
                         self.start_cat = i;
+                        self.search.clear();
+                        self.results.clear();
                         return true;
+                    }
+                }
+                if !self.search.is_empty() {
+                    for i in 0..self.results.len().min(MAX_RESULTS) {
+                        if hit(cx, cy, result_rect(self.height, i)) {
+                            self.pending = Some(self.results[i].action.clone());
+                            self.close_start();
+                            return true;
+                        }
                     }
                 }
                 let cat = &CATEGORIES[self.start_cat];
                 for (j, (name, _)) in cat.apps.iter().enumerate() {
-                    if hit(cx, cy, card_rect(self.height, j)) {
+                    if self.search.is_empty() && hit(cx, cy, card_rect(self.height, j)) {
                         self.pending = Some(String::from(*name));
-                        self.start_open = false;
+                        self.close_start();
                         return true;
                     }
                 }
                 let py = y + SM_H - SM_FTR + 10;
                 for (bx, bw, code, _) in power_buttons(self.height) {
                     if hit(cx, cy, (bx, py, bw, 26)) {
-                        self.pending_power = code;
-                        self.start_open = false;
+                        // sleep at once; shutdown and restart ask first
+                        if code == 3 {
+                            self.pending_power = code;
+                        } else {
+                            self.confirm = Some(code);
+                        }
+                        self.close_start();
                     }
                 }
                 return true;
             }
-            self.start_open = false;
+            self.close_start();
             return true; // outside click closes the menu (and is consumed)
         }
         // Start button on the taskbar.
@@ -1475,6 +2045,32 @@ impl Wm {
         false
     }
 
+    /// The full-screen window when it is the top window of this desktop.
+    fn fs_window(&self) -> Option<&Window> {
+        let (id, _, _) = self.fullscreen?;
+        let top = self.windows.iter().rev().find(|w| w.workspace == self.workspace && w.state != WinState::Minimized)?;
+        (top.id == id && top.canvas.is_some()).then_some(top)
+    }
+
+    /// Close the Start menu and forget its search.
+    fn close_start(&mut self) {
+        self.start_open = false;
+        self.search.clear();
+        self.results.clear();
+        self.sel = 0;
+    }
+
+    /// Start a window animation (only on the live desktop, with animations on).
+    fn animate(&mut self, id: u32, rect: (i32, i32, i32, i32), opening: bool) {
+        if !self.animations || !crate::interactive::is_active() {
+            return;
+        }
+        self.anims.retain(|a| a.id != id);
+        if self.anims.len() < 16 {
+            self.anims.push(Anim { id, rect, start: crate::interrupts::ticks(), opening });
+        }
+    }
+
     /// Which title button (if any) is under (x, y), on the top-most window there.
     fn title_button_at(&self, x: i32, y: i32) -> Option<(u32, TitleButton)> {
         let idx = self.window_at(x, y)?;
@@ -1493,12 +2089,19 @@ impl Wm {
     fn press_button(&mut self, id: u32, btn: TitleButton) {
         match btn {
             TitleButton::Close => {
+                let mut rect = None;
                 if let Some(w) = self.windows.iter().find(|w| w.id == id) {
                     if w.owner != 0 {
                         self.closed_owners.push(w.owner);
                     }
+                    if w.workspace == self.workspace && w.state != WinState::Minimized {
+                        rect = Some((w.x, w.y, w.w, w.h));
+                    }
                 }
                 self.windows.retain(|w| w.id != id);
+                if let Some(r) = rect {
+                    self.animate(id, r, false);
+                }
             }
             TitleButton::Minimize => {
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
@@ -1599,6 +2202,21 @@ impl Wm {
 
     fn compose(&self, canvas: &mut Canvas) {
         let th = theme::current();
+        if let Some(win) = self.fs_window() {
+            // Exclusive full screen: the window's pixels are the frame.
+            let _z = crate::profile::Guard::new("compose:fullscreen");
+            if let Some(app) = &win.canvas {
+                let a = app.lock();
+                if a.w < self.width || a.h < self.height {
+                    canvas.fill_rect(0, 0, self.width, self.height, gfx::rgb(0, 0, 0));
+                }
+                drop(a);
+                Self::blit_app(canvas, win, app);
+            }
+            self.draw_osd(canvas, &th);
+            self.draw_confirm(canvas, &th);
+            return;
+        }
         {
             let _z = crate::profile::Guard::new("compose:wallpaper");
             crate::wallpaper::paint(canvas, &th, self.workspace);
@@ -1611,7 +2229,7 @@ impl Wm {
                 mx >= ix && mx < ix + ICON_W && my >= iy && my < iy + ICON_H
             });
             let mut key = gfx::mix(theme_key(&th), hot.map_or(u64::MAX, |i| i as u64));
-            key = gfx::mix(key, crate::icons::loaded() as u64);
+            key = gfx::mix(key, crate::icons::cache_key());
             let (_, last_y) = icon_rect(DESKTOP.len() - 1);
             cached_layer(&ICON_LAYER, canvas, 0, 0, ICON_W + 40, last_y + ICON_H + 8, key, |c| self.draw_desktop_icons(c, &th));
         }
@@ -1620,7 +2238,7 @@ impl Wm {
         let visible: Vec<&Window> = self
             .windows
             .iter()
-            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
+            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized && !self.opening(w.id))
             .collect();
         let top_id = visible.last().map(|w| w.id);
         let bt = th.border_thickness;
@@ -1710,30 +2328,7 @@ impl Wm {
             self.draw_title_buttons(canvas, win, &th, title_color);
 
             if let Some(app) = &win.canvas {
-                let app = app.lock();
-                let shown = app.front.as_ref().unwrap_or(&app.pixels);
-                // Blit the app canvas into the client area, clipped to both
-                // the current window size and the screen.
-                let ox = win.x + BORDER;
-                let oy = win.y + BORDER + TITLE_H;
-                let vis_w = app.w.min(win.w - 2 * BORDER).max(0);
-                let vis_h = app.h.min(win.h - TITLE_H - 2 * BORDER).max(0);
-                // Row copies, clipped to the screen once (G1: this was a
-                // bounds-checked put() per pixel, most of a compose).
-                let cw = canvas.width as i32;
-                let x0 = ox.max(0);
-                let x1 = (ox + vis_w).min(cw);
-                let y0 = oy.max(canvas.y0 as i32);
-                let y1 = (oy + vis_h).min(canvas.y1 as i32);
-                if x1 > x0 {
-                    let n = (x1 - x0) as usize;
-                    let src_col = (x0 - ox) as usize;
-                    for py in y0..y1 {
-                        let src = ((py - oy) as usize) * app.w as usize + src_col;
-                        let dst = canvas.at(x0 as usize, py as usize);
-                        canvas.pixels[dst..dst + n].copy_from_slice(&shown[src..src + n]);
-                    }
-                }
+                Self::blit_app(canvas, win, app);
             } else {
                 let mut ty = win.y + TITLE_H + 8;
                 let body_bottom = win.y + win.h - 6;
@@ -1764,6 +2359,7 @@ impl Wm {
             }
         }
 
+        self.draw_anims(canvas, &th, radius);
         drop(zw);
         let zt = crate::profile::Guard::new("compose:taskbar");
         let key = self.taskbar_key(&th);
@@ -1771,8 +2367,162 @@ impl Wm {
         drop(zt);
         self.draw_start_menu(canvas, &th);
         self.draw_ctx_menu(canvas, &th);
+        self.draw_center(canvas, &th);
+        self.draw_toast(canvas, &th);
         self.draw_ripple(canvas, &th);
         self.draw_osd(canvas, &th);
+        self.draw_confirm(canvas, &th);
+    }
+
+    /// Blit an app window's canvas (or its shared-memory surface) into the
+    /// client area, clipped to the window and the screen.
+    fn blit_app(canvas: &mut Canvas, win: &Window, app: &SharedCanvas) {
+        let app = app.lock();
+        let shown = app.front.as_ref().unwrap_or(&app.pixels);
+        let ox = win.x + BORDER;
+        let oy = win.y + BORDER + TITLE_H;
+        let vis_w = app.w.min(win.w - 2 * BORDER).max(0);
+        let vis_h = app.h.min(win.h - TITLE_H - 2 * BORDER).max(0);
+        // Row copies, clipped to the screen once (G1: this was a
+        // bounds-checked put() per pixel, most of a compose).
+        let cw = canvas.width as i32;
+        let x0 = ox.max(0);
+        let x1 = (ox + vis_w).min(cw);
+        let y0 = oy.max(canvas.y0 as i32);
+        let y1 = (oy + vis_h).min(canvas.y1 as i32);
+        if x1 > x0 {
+            let n = (x1 - x0) as usize;
+            let src_col = (x0 - ox) as usize;
+            for py in y0..y1 {
+                let dst = canvas.at(x0 as usize, py as usize);
+                match &app.surface {
+                    Some(s) => s.copy_row(app.w, (py - oy) as usize, src_col, &mut canvas.pixels[dst..dst + n]),
+                    None => {
+                        let src = ((py - oy) as usize) * app.w as usize + src_col;
+                        canvas.pixels[dst..dst + n].copy_from_slice(&shown[src..src + n]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Is window `id` still growing in (not drawn yet)?
+    fn opening(&self, id: u32) -> bool {
+        self.anims.iter().any(|a| a.opening && a.id == id)
+    }
+
+    /// Ghost frames of opening and closing windows.
+    fn draw_anims(&self, canvas: &mut Canvas, th: &theme::Theme, radius: i32) {
+        for a in &self.anims {
+            let age = self.frame.saturating_sub(a.start).min(ANIM_TICKS) as i32;
+            let t = ANIM_TICKS as i32;
+            // scale in 1/100: opening 70 -> 100, closing 100 -> 75
+            let (scale, alpha) = if a.opening { (70 + 30 * age / t, 90 + 110 * age / t) } else { (100 - 25 * age / t, 200 - 170 * age / t) };
+            let (x, y, w, h) = a.rect;
+            let (sw, sh) = (w * scale / 100, h * scale / 100);
+            let (sx, sy) = (x + (w - sw) / 2, y + (h - sh) / 2);
+            if sw < 8 || sh < 8 {
+                continue;
+            }
+            blend_rounded(canvas, sx, sy, sw, sh, radius, th.win_body, alpha as u8);
+            blend_rounded(canvas, sx, sy, sw, (TITLE_H * scale / 100).max(4), radius, th.win_title_active, alpha as u8);
+        }
+    }
+
+    /// The newest notification as a card in the top-right corner.
+    fn draw_toast(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        if self.center_open {
+            return;
+        }
+        let Some(n) = crate::notify::toast(self.frame.max(crate::interrupts::ticks())) else { return };
+        let (x, y, w, h) = toast_rect(self.width);
+        blend_rounded(canvas, x + 3, y + 5, w, h, 12, th.shadow, 110);
+        panel(canvas, th, x, y, w, h, 12);
+        if th.glass > 0 {
+            blend_rounded(canvas, x, y, w, h, 12, th.taskbar_bg, 110);
+        }
+        outline_rounded(canvas, x, y, w, h, 12, 1, th.win_border);
+        fill_rounded(canvas, x + 10, y + 12, 4, h - 24, 2, th.accent);
+        self.draw_note_text(canvas, th, &n, x + 22, y + 9, x + w - 12);
+    }
+
+    /// App + time, title, body of a notification from (x, y).
+    fn draw_note_text(&self, canvas: &mut Canvas, th: &theme::Theme, n: &crate::notify::Note, x: i32, y: i32, max_x: i32) {
+        let muted = if th.glass > 0 { crate::theme::LICHEN } else { darken(th.text, 40) };
+        let head = alloc::format!("{}  {:02}:{:02}", n.app, n.time.0, n.time.1);
+        canvas.draw_text_styled(x, y, &head, muted, max_x, gfx::TextStyle::Body);
+        canvas.draw_text_styled(x, y + 19, &n.title, th.text, max_x, gfx::TextStyle::Strong);
+        canvas.draw_text_styled(x, y + 38, &n.body, th.text, max_x, gfx::TextStyle::Body);
+    }
+
+    /// The action center: every notification, newest first, "Hapus semua".
+    fn draw_center(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        if !self.center_open {
+            return;
+        }
+        let (x, y, w, h) = center_rect(self.width, self.height);
+        blend_rounded(canvas, x + 4, y + 6, w, h, 12, th.shadow, 110);
+        panel(canvas, th, x, y, w, h, 12);
+        if th.glass > 0 {
+            blend_rounded(canvas, x, y, w, h, 12, th.taskbar_bg, 120);
+        }
+        outline_rounded(canvas, x, y, w, h, 12, 1, th.win_border);
+        canvas.draw_text_styled(x + 16, y + 14, "Notifikasi", th.text, x + w / 2, gfx::TextStyle::Strong);
+        let notes = crate::notify::list();
+        let (cx, cy) = self.cursor;
+        if !notes.is_empty() {
+            let r = center_clear_rect(self.width, self.height);
+            if hit(cx, cy, r) {
+                fill_rounded(canvas, r.0, r.1, r.2, r.3, 7, shift(th.taskbar_bg, 34));
+            } else {
+                outline_rounded(canvas, r.0, r.1, r.2, r.3, 7, 1, th.win_border);
+            }
+            canvas.draw_text(r.0 + 10, r.1 + 5, "Hapus semua", th.text, r.0 + r.2 - 4);
+        }
+        canvas.fill_rect(x + 1, y + 46, w - 2, 1, th.win_border);
+        if notes.is_empty() {
+            canvas.draw_text_styled(x + 16, y + 64, "Tidak ada notifikasi.", th.text, x + w - 16, gfx::TextStyle::Body);
+            canvas.draw_text_styled(x + 16, y + 84, "Pesan dari aplikasi muncul di sini.", darken(th.text, 40), x + w - 16, gfx::TextStyle::Body);
+            return;
+        }
+        for (i, n) in notes.iter().rev().take(center_cards(self.width, self.height)).enumerate() {
+            let (rx, ry, rw, rh) = center_card_rect(self.width, self.height, i);
+            let bg = if hit(cx, cy, (rx, ry, rw, rh)) { shift(th.taskbar_bg, 34) } else { shift(th.taskbar_bg, 16) };
+            fill_rounded(canvas, rx, ry, rw, rh, 8, bg);
+            self.draw_note_text(canvas, th, n, rx + 10, ry + 6, rx + rw - 10);
+        }
+    }
+
+    /// "Matikan komputer?" with Batal / the action, over a dimmed desktop.
+    fn draw_confirm(&self, canvas: &mut Canvas, th: &theme::Theme) {
+        let Some(code) = self.confirm else { return };
+        blend_rounded(canvas, 0, 0, self.width, self.height, 0, gfx::rgb(0, 0, 0), 110);
+        let ((x, y, w, h), ok, cancel) = confirm_rects(self.width, self.height);
+        blend_rounded(canvas, x + 4, y + 6, w, h, 14, th.shadow, 120);
+        panel(canvas, th, x, y, w, h, 14);
+        outline_rounded(canvas, x, y, w, h, 14, 1, th.win_border);
+        let (title, body, action) = if code == 2 {
+            ("Mulai ulang komputer?", "Aplikasi yang terbuka akan ditutup.", "Mulai ulang")
+        } else {
+            ("Matikan komputer?", "Aplikasi yang terbuka akan ditutup.", "Matikan")
+        };
+        canvas.draw_text_styled(x + 22, y + 20, title, th.text, x + w - 20, gfx::TextStyle::Heading);
+        canvas.draw_text_styled(x + 22, y + 56, body, darken(th.text, 30), x + w - 20, gfx::TextStyle::Body);
+        let (cx, cy) = self.cursor;
+        let (ox, oy, ow, oh) = ok;
+        let red = gfx::rgb(0xC0, 0x39, 0x2B);
+        fill_rounded(canvas, ox, oy, ow, oh, 8, if hit(cx, cy, ok) { shift(red, 30) } else { red });
+        let lw = gfx::text_width(action, gfx::TextStyle::Strong);
+        canvas.draw_text_styled(ox + (ow - lw) / 2, oy + 8, action, gfx::rgb(0xFF, 0xFF, 0xFF), ox + ow, gfx::TextStyle::Strong);
+        let (bx, by, bw, bh) = cancel;
+        if hit(cx, cy, cancel) {
+            fill_rounded(canvas, bx, by, bw, bh, 8, shift(th.taskbar_bg, 34));
+        } else {
+            outline_rounded(canvas, bx, by, bw, bh, 8, 1, th.win_border);
+        }
+        let cw = gfx::text_width("Batal", gfx::TextStyle::Body);
+        canvas.draw_text_styled(bx + (bw - cw) / 2, by + 8, "Batal", th.text, bx + bw, gfx::TextStyle::Body);
+        canvas.draw_text_styled(x + 22, y + h - 42, "Enter / Esc", darken(th.text, 50), ox - 8, gfx::TextStyle::Body);
     }
 
     /// The on-screen display: a pill at the top centre, text and a level bar.
@@ -1893,11 +2643,26 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         let mut global = gfx::mix(theme_key(&th), self.workspace as u64);
         global = gfx::mix_bytes(global, crate::wallpaper::label().as_bytes());
         global = gfx::mix(global, (self.width as u64) << 32 | self.height as u64);
-        global = gfx::mix(global, (self.rounded as u64) << 2 | (self.animations as u64) << 1 | crate::icons::loaded() as u64);
+        global = gfx::mix(global, (self.rounded as u64) << 2 | (self.animations as u64) << 1);
+        global = gfx::mix(global, crate::icons::cache_key());
         global = gfx::mix(global, self.cursor_scale as u64);
         // Menus and the click ripple follow the pointer over large areas:
         // while one is up (or was, see `damage`) every frame is a full one.
-        let overlay = self.start_open || self.ctx_menu.is_some() || self.ripple.is_some();
+        let toast = crate::notify::toast(crate::interrupts::ticks());
+        let overlay = self.start_open
+            || self.ctx_menu.is_some()
+            || self.ripple.is_some()
+            || self.confirm.is_some()
+            || self.center_open
+            || !self.anims.is_empty()
+            || toast.is_some();
+        global = gfx::mix(global, toast.map_or(0, |n| n.id as u64));
+        global = gfx::mix(gfx::mix(global, crate::notify::generation()), self.center_open as u64);
+        global = gfx::mix(global, self.confirm.map_or(0, |c| c as u64 + 1));
+        global = gfx::mix_bytes(gfx::mix(global, self.sel as u64), self.search.as_bytes());
+        global = gfx::mix(global, self.results.len() as u64);
+        let fs = self.fs_window().map(|w| w.id);
+        global = gfx::mix(global, fs.map_or(0, |i| i as u64 + 1));
         if let Some((text, level, _)) = &self.osd {
             global = gfx::mix(gfx::mix_bytes(global, text.as_bytes()), *level as u64 + 1);
         }
@@ -1920,7 +2685,8 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         let windows = self
             .windows
             .iter()
-            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized)
+            .filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized && !self.opening(w.id))
+            .filter(|w| fs.is_none_or(|f| f == w.id))
             .map(|w| {
                 let mut k = gfx::mix_bytes(gfx::mix(0, (Some(w.id) == top_id) as u64), w.title.as_bytes());
                 for line in &w.lines {
@@ -1953,7 +2719,16 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
     /// the cursor's own pixels. None = not eligible (a menu is open, a drag
     /// or a ripple is running: the pointer position matters to the scene).
     fn cursor_key(&self) -> Option<u64> {
-        if self.start_open || self.ctx_menu.is_some() || self.ripple.is_some() || self.osd.is_some() || !matches!(self.drag, Drag::None) {
+        if self.start_open
+            || self.ctx_menu.is_some()
+            || self.ripple.is_some()
+            || self.osd.is_some()
+            || self.confirm.is_some()
+            || self.center_open
+            || !self.anims.is_empty()
+            || crate::notify::toast(crate::interrupts::ticks()).is_some()
+            || !matches!(self.drag, Drag::None)
+        {
             return None;
         }
         let th = theme::current();
@@ -2028,6 +2803,8 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
     fn taskbar_key(&self, th: &theme::Theme) -> u64 {
         let mut k = gfx::mix(theme_key(th), self.start_open as u64);
         k = gfx::mix(k, self.workspace as u64);
+        k = gfx::mix(gfx::mix(k, crate::notify::unread() as u64), self.center_open as u64);
+        k = gfx::mix(k, hit(self.cursor.0, self.cursor.1, bell_rect(self.width, self.height)) as u64);
         let (cx, cy) = self.cursor;
         let ws_hover = (0..WORKSPACES).position(|ws| hit(cx, cy, ws_button_rect(self.width, self.height, ws)));
         k = gfx::mix(k, ws_hover.map_or(u64::MAX, |i| i as u64));
@@ -2104,6 +2881,25 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         if hit(self.cursor.0, self.cursor.1, (cx0, y + 5, cw, TASKBAR_H - 10)) {
             fill_rounded(canvas, cx0, y + 5, cw, TASKBAR_H - 10, 6, shift(th.taskbar_bg, 18));
         }
+        // notification bell, with the unread count on a badge
+        let (bx, by, bw, bh) = bell_rect(self.width, self.height);
+        if self.center_open || hit(self.cursor.0, self.cursor.1, (bx, by, bw, bh)) {
+            fill_rounded(canvas, bx, by, bw, bh, 6, shift(th.taskbar_bg, if self.center_open { 34 } else { 18 }));
+        }
+        let bc = if glass { crate::theme::LICHEN } else { th.text };
+        let (mx0, my0) = (bx + bw / 2, by + 5);
+        canvas.ellipse(mx0 - 6, my0, 12, 12, bc, true);
+        canvas.fill_rect(mx0 - 6, my0 + 6, 12, 6, bc);
+        canvas.fill_rect(mx0 - 8, my0 + 12, 16, 2, bc);
+        canvas.fill_rect(mx0 - 2, my0 + 15, 4, 3, bc);
+        let unread = crate::notify::unread();
+        if unread > 0 {
+            let label = if unread > 9 { String::from("9+") } else { alloc::format!("{}", unread) };
+            let lw = gfx::text_width(&label, gfx::TextStyle::Body);
+            let dw = (lw + 8).max(16);
+            fill_rounded(canvas, bx + bw - dw + 4, by - 1, dw, 16, 8, gfx::rgb(0xE0, 0x48, 0x3B));
+            canvas.draw_text(bx + bw - dw + 4 + (dw - lw) / 2, by - 1, &label, gfx::rgb(0xFF, 0xFF, 0xFF), bx + bw + 8);
+        }
         let mut rx = cx0 + cw - 6;
         let (t, tn) = tray_time();
         let ts = core::str::from_utf8(&t[..tn]).unwrap();
@@ -2137,8 +2933,9 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         let start_x = 6 + START_W + 8; // keep in sync with taskbar_click
         let mut bx = start_x;
         let playing = playing_pids();
+        let strip_end = rx.min(bell_rect(self.width, self.height).0);
         for win in self.windows.iter().filter(|w| w.workspace == self.workspace) {
-            if bx + 116 > rx - 4 {
+            if bx + 116 > strip_end - 4 {
                 break; // no room before the tray
             }
             let active = Some(win.id) == top_id;
@@ -2228,8 +3025,22 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         }
         outline_rounded(canvas, x, y, SM_W, SM_H, 12, 1, line);
 
-        // Header: OS name (strong) + today's date (muted), hairline below.
-        canvas.draw_text_styled(x + 18, y + 15, "Buitenzorg OS", text, x + SM_W / 2, gfx::TextStyle::Strong);
+        // Header: OS name (strong), the search box, today's date (muted).
+        canvas.draw_text_styled(x + 18, y + 15, "Buitenzorg OS", text, x + 146, gfx::TextStyle::Strong);
+        {
+            let (sx, sy, sw, sh) = search_box_rect(self.height);
+            fill_rounded(canvas, sx, sy, sw, sh, 8, shift(th.taskbar_bg, 22));
+            outline_rounded(canvas, sx, sy, sw, sh, 8, 1, if self.search.is_empty() { line } else { th.accent });
+            // magnifier
+            canvas.ellipse(sx + 9, sy + 7, 11, 11, muted, false);
+            canvas.draw_line(sx + 18, sy + 17, sx + 22, sy + 21, muted);
+            if self.search.is_empty() {
+                canvas.draw_text(sx + 30, sy + 6, "Ketik untuk mencari...", muted, sx + sw - 6);
+            } else {
+                let end = canvas.draw_text_styled(sx + 30, sy + 6, &self.search, text, sx + sw - 8, gfx::TextStyle::Body);
+                canvas.fill_rect(end.min(sx + sw - 8) + 1, sy + 6, 2, 16, th.accent);
+            }
+        }
         let (day, d, mon) = today();
         let mut db = [0u8; 2];
         two_digits(&mut db, d);
@@ -2262,6 +3073,9 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         }
         canvas.fill_rect(x + SM_RAIL_W, y + SM_HDR + 10, 1, SM_H - SM_HDR - SM_FTR - 20, line);
 
+        if !self.search.is_empty() {
+            self.draw_results(canvas, th, muted);
+        } else {
         // Content pane: the category name as a heading, ruled in its leaf color.
         let cat = &CATEGORIES[self.start_cat];
         let px = x + SM_RAIL_W + 20;
@@ -2280,6 +3094,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             let lw = gfx::text_width(label, gfx::TextStyle::Body).min(cw - 6);
             canvas.draw_text(cx + (cw - lw) / 2, cy + 10 + isz + 10, label, if hot { text } else { muted }, cx + cw - 3);
         }
+        }
 
         // Footer: credit on the left, power actions on the right.
         let fy = y + SM_H - SM_FTR;
@@ -2296,6 +3111,34 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             }
             let c = if hot && code == 1 { gfx::rgb(0xFF, 0xFF, 0xFF) } else if hot { text } else { muted };
             canvas.draw_text(bx + 10, by + 5, label, c, bx + bw - 4);
+        }
+    }
+
+    /// Search results in the Start menu's content pane.
+    fn draw_results(&self, canvas: &mut Canvas, th: &theme::Theme, muted: Color) {
+        let (mx, my) = self.cursor;
+        if self.results.is_empty() {
+            let (x, y, w, _) = result_rect(self.height, 0);
+            canvas.draw_text_styled(x + 8, y + 8, "Tidak ada hasil", th.text, x + w, gfx::TextStyle::Strong);
+            let q = alloc::format!("untuk \"{}\"", self.search);
+            canvas.draw_text_styled(x + 8, y + 30, &q, muted, x + w, gfx::TextStyle::Body);
+            return;
+        }
+        for (i, h) in self.results.iter().take(MAX_RESULTS).enumerate() {
+            let (x, y, w, rh) = result_rect(self.height, i);
+            let hot = hit(mx, my, (x, y, w, rh)) || i == self.sel;
+            if hot {
+                fill_rounded(canvas, x, y, w, rh, 8, shift(th.taskbar_bg, if i == self.sel { 30 } else { 20 }));
+            }
+            if !h.icon.is_empty() {
+                draw_app_icon(canvas, &h.icon, &h.label, x + 6, y + (rh - crate::icons::size(false)) / 2, false);
+            } else {
+                canvas.ellipse(x + 10, y + rh / 2 - 5, 10, 10, th.accent, true);
+            }
+            canvas.draw_text_styled(x + 34, y + 3, &h.label, th.text, x + w - 90, gfx::TextStyle::Strong);
+            canvas.draw_text(x + 34, y + 21, &h.detail, muted, x + w - 90);
+            let kw = gfx::text_width(h.kind.label(), gfx::TextStyle::Body);
+            canvas.draw_text(x + w - 8 - kw, y + 12, h.kind.label(), muted, x + w);
         }
     }
 

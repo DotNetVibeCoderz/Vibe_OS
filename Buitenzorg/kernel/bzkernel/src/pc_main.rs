@@ -91,6 +91,9 @@ mod appnet;
 mod rng;
 mod ssh;
 mod wm;
+mod notify;
+mod search;
+mod vsync;
 mod gfx3d;
 mod bootmode;
 mod dhcp;
@@ -273,6 +276,12 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // Terminal tabs + jobs through the keys a user types (the session is
     // reset when the desktop starts); before READY: the smoke test stops at it
     shell::script_self_test();
+    notify::self_test();
+    search::self_test();
+    vsync::self_test();
+    settings::self_test();
+    theme::self_test();
+    icons::self_test();
     desktop::hotkey_self_test();
     usb::hid::pad_self_test();
     terminal::self_test("helloclr", "Hello from managed C#");
@@ -321,8 +330,15 @@ fn fast_boot() -> ! {
     }
     boot::phase("mount");
     clock::load();
+    // the RESOLUTION setting: switch the display before the desktop exists
+    if let Some((w, h)) = settings::boot_resolution() {
+        if let Err(e) = framebuffer::set_resolution(&devices, w, h) {
+            println!("[fb] resolution {}x{} not used: {}", w, h, e);
+        }
+    }
     let icons = icons::load();
     font::load_all();
+    theme::load_packages();
     boot::phase("icons");
     net::init([10, 0, 0, 1]);
     let t_dev = interrupts::ticks();
@@ -433,6 +449,7 @@ fn boot_background() {
                 clock::load();
                 icons::load();
                 font::load_all();
+                theme::load_packages();
                 wm::present_now();
             }
         },
@@ -1935,6 +1952,7 @@ fn dahan_demo() {
     // App icons for the desktop + start menu (IDE: /disk/ICONS.BIN).
     let n_icons = icons::load();
     font::load_all();
+    theme::load_packages();
     font::self_test();
     if n_icons > 0 {
         println!("[kernel] MILESTONE: ICONS OK ({} app icons loaded from /disk/ICONS.BIN)", n_icons);

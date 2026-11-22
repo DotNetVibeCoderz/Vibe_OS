@@ -85,7 +85,7 @@ pub fn timeout() -> u64 {
 
 /// Idle time before the screensaver, in seconds.
 pub fn timeout_seconds() -> u64 {
-    CONFIG.lock().timeout * 1000 / 18_206
+    (CONFIG.lock().timeout * 1000 + 9_103) / 18_206 // rounded: 77 s -> 1401 ticks -> 77 s
 }
 
 /// Set the idle time before the screensaver (seconds; ticks are 18.2 Hz).

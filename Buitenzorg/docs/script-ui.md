@@ -84,6 +84,21 @@ Plus what every script has: `str`, `len`, `abs`, `min`, `max`, `chr`, `ord`,
 
 **The OS's AI:** `aiload([file])`, `aistart(prompt, tokens[, temperature*1000])` + `ainext()` (one piece per frame, `""` = done), `aigenerate(...)`, `aibackend()`, `aiinfo(n)`, `aispeed()` -- the local language model; in C# script `Ai.Load()` / `Ai.Start()` / `Ai.Next()` / ... Details and templates: [ai-compute.md](ai-compute.md#for-app-authors).
 
+**Games and the OS:**
+
+| Function | Does |
+|---|---|
+| `keydown(name)` | is the key held now (`"left"`, `"right"`, `"up"`, `"down"`, `"space"`, `"enter"`, `"esc"`, `"shift"`, `"a"`..`"z"`, `"0"`..`"9"`, or a set-1 scancode) -- several keys at once |
+| `sprite(x, y, rows, scale, c [, c2])` | a pixel picture: rows split by `\|`, `#`/`X` = c, `o`/`+` = c2, anything else transparent; each run is one rectangle |
+| `hit(x1, y1, w1, h1, x2, y2, w2, h2)`, `near(x1, y1, x2, y2, r)` | do two rectangles overlap / two points lie within r |
+| `sound(hz [, ms])` (`beep`) | a tone, queued |
+| `notify(title, body)` | a notification (toast + action center) |
+| `vsync()` | wait for the next vertical blank |
+| `fullscreen(on)` | the window takes the whole screen (or gives it back); returns the new width |
+
+`bz new game-js` (and the C# twin `bz new game-csharp`) start a small game
+with them. Guide: [games.md](games.md).
+
 ## Language subset
 
 The interpreter is small: integers and strings (no floats: scale by 100 for

@@ -18,7 +18,11 @@ foreach ($proj in Get-ChildItem -Path $apps -Filter *.csproj -Recurse) {
     Copy-Item (Join-Path $proj.DirectoryName "bin\Release\net10.0\$name.dll") (Join-Path $dist $out) -Force
 }
 $rustnet = if ($env:RUSTNET_ROOT) { $env:RUSTNET_ROOT } else { Join-Path $root "..\..\Vibe_Runtime\RustNetRuntime" }
-if (Test-Path (Join-Path $rustnet "tests\fixtures")) {
+# The RustCLR fixtures (CONFORM.DLL, MODERN.DLL) are committed, built from the
+# commit clrhost pins; rebuilding them from a checkout at another commit (or
+# with uncommitted work) gives assemblies the pinned runtime cannot run.
+# Only on request: $env:BZ_REBUILD_FIXTURES = "1" with the checkout at the pin.
+if ($env:BZ_REBUILD_FIXTURES -eq "1" -and (Test-Path (Join-Path $rustnet "tests\fixtures"))) {
     foreach ($pair in @(@("Conformance", "CONFORM.DLL"), @("ModernSyntax", "MODERN.DLL"))) {
         $fx = $pair[0]; $out = $pair[1]
         Write-Host "==> RustCLR fixture $fx -> $out"

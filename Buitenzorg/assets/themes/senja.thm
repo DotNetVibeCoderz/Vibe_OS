@@ -1,0 +1,25 @@
+# Senja -- a sample third-party theme for Buitenzorg OS (dusk over the garden).
+# A theme package is a text file in /disk/THEMES/*.THM: key=value lines,
+# colors as #RRGGBB. Keys you leave out come from `base` (a built-in theme).
+# Ship it in a .bzpkg as THEMES/NAME.THM; `theme reload` or the next start
+# picks it up, `theme senja` (or Pengaturan) switches to it.
+name=senja
+base=kebun
+dark=1
+desktop_top=#2B1B2E
+desktop_bottom=#6B3A3A
+gradient=1
+win_body=#1E1622
+win_title_active=#E08A4F
+win_title_inactive=#4A3446
+win_border=#120C14
+border=2
+title_style=flat
+shadow_style=soft
+text=#F6DCC8
+title_text=#1A0F12
+taskbar_bg=#1A1018
+accent=#F2A65A
+cursor=#FFF2E0
+shadow=#08040A
+glass=170

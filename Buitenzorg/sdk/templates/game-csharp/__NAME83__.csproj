@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- __APPNAME__: a 2D game with Buitenzorg.Game (fixed-step loop, raw keys,
+       sound). /disk/__NAME83__.DLL, `run __NAME83__`. Created by `bz new game-csharp`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 8.3 upper case: this is the file name on the device. -->
+    <AssemblyName>__NAME83__</AssemblyName>
+    <RootNamespace>__NAME83__</RootNamespace>
+    <!-- the Buitenzorg checkout `bz new` ran from; override with -p:BuitenzorgRoot=... -->
+    <BuitenzorgRoot Condition="'$(BuitenzorgRoot)' == ''">__BZROOT__</BuitenzorgRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(BuitenzorgRoot)/userland/clr-apps/Buitenzorg.Game/Buitenzorg.Game.csproj" />
+  </ItemGroup>
+</Project>

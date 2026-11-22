@@ -48,6 +48,8 @@ const SLEEP_UNTIL: u64 = 61;
 const AUDIO_WRITE: u64 = 62;
 const IDLE_INHIBIT: u64 = 66;
 const CLIPBOARD: u64 = 67;
+const NOTIFY: u64 = 73;
+const WIN_CTL: u64 = 74;
 const AUDIO_APP_VOLUME: u64 = 63;
 const USER_OP: u64 = 55;
 const AUDIO_STAT: u64 = 23;
@@ -871,9 +873,28 @@ fn clipboard_seq(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>
     Ok(Some(Value::I64(sys::syscall(CLIPBOARD, 2, 0, 0) as i64)))
 }
 
+/// `Notify(string title, string body)` -> the notification's id (the app
+/// name is the process's).
+fn notify(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (t, b) = (cstr(&string(i, a, 0)), cstr(&string(i, a, 1)));
+    let r = sys::syscall(NOTIFY, t.as_ptr() as u64, b.as_ptr() as u64, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `WinCtl(long op_and_window, long arg)` -> the kernel's answer (full
+/// screen on/off, vsync wait/info). A vsync wait blocks: other managed
+/// threads and the collector go on meanwhile.
+fn win_ctl(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (a0, a1) = (int(a, 0) as u64, int(a, 1) as u64);
+    let r = if a0 & 0xFF == 3 { i.blocking(|_| sys::syscall(WIN_CTL, a0, a1, 0)) } else { sys::syscall(WIN_CTL, a0, a1, 0) };
+    Ok(Some(Value::I64(r as i64)))
+}
+
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 56] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 58] = [
+        ("Notify", notify),
+        ("WinCtl", win_ctl),
         ("WinCreate", win_create),
         ("WinDraw", win_draw),
         ("WinBlit", win_blit),

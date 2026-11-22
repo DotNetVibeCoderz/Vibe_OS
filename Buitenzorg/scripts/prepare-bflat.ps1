@@ -9,7 +9,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $bflatHome = Join-Path $root "tools\bflat"
 $patched = Join-Path $root "kernel\target\bflat-patched"
 $bflat = Join-Path $patched "bflat.exe"
-$patchVersion = "7"   # bump whenever tools/ZerolibPatch changes what it does
+$patchVersion = "8"   # bump whenever tools/ZerolibPatch changes what it does
 $marker = Join-Path $patched "ZEROLIB_PATCH"
 $current = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { "" }
 if (-not (Test-Path $bflat) -or $current -ne $patchVersion) {

@@ -1,5 +1,9 @@
 /* Buitenzorg's SDL2 subset: a window (WIN_CREATE with the client size), one
- * texture per renderer shown with a single BLIT draw op + WIN_PRESENT, key
+ * texture per renderer presented through the window's zero-copy surface
+ * (WIN_CTL SURFACE: two buffers shared with the compositor; the texture is
+ * copied -- scaled when the window is full screen -- into the back one and
+ * flipped, after a vblank wait with SDL_RENDERER_PRESENTVSYNC), else with a
+ * BLIT draw op; SDL_WINDOW_FULLSCREEN takes the whole screen; key
  * events from KEY_EVENT (PC set-1 scancodes, `| 0x100` for E0 keys, gamepad
  * buttons from 0x200) translated to SDL2 keycodes, SDL_GetTicks from
  * CLOCK_NANOS, SDL_Delay from SLEEP_UNTIL.
@@ -12,8 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct SDL_Window { uint64_t id; int w, h; };
-struct SDL_Renderer { SDL_Window *win; SDL_Texture *last; };
+struct SDL_Window { uint64_t id; int w, h; uint32_t *surface; int back; int sw, sh; int no_surface; };
+struct SDL_Renderer { SDL_Window *win; SDL_Texture *last; int vsync; };
 struct SDL_Texture { int w, h; uint32_t *px; };
 
 extern int bz_argc;
@@ -46,15 +50,34 @@ SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint
     win->w = w;
     win->h = h;
     if (win->id == 0) { free(win); return NULL; }
+    if (flags & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
     return win;
 }
+
+int SDL_SetWindowFullscreen(SDL_Window *w, Uint32 flags)
+{
+    if (!w || w->surface) return -1; /* the surface keeps the window's size */
+    uint64_t r = bz_syscall(BZ_WIN_CTL, BZ_WIN_FULLSCREEN | w->id << 8, flags ? 1 : 0, 0);
+    if (BZ_IS_ERROR(r)) return -1;
+    w->sw = (int)(r & 0xFFFF);
+    w->sh = (int)(r >> 16 & 0xFFFF);
+    return 0;
+}
+
+void SDL_GetWindowSize(SDL_Window *w, int *width, int *height)
+{
+    if (width) *width = w->sw ? w->sw : w->w;
+    if (height) *height = w->sh ? w->sh : w->h;
+}
+
+int SDL_RenderSetVSync(SDL_Renderer *r, int vsync) { r->vsync = vsync; return 0; }
 void SDL_DestroyWindow(SDL_Window *w) { free(w); }
 void SDL_SetWindowTitle(SDL_Window *w, const char *t) { (void)w; (void)t; }
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *w, int index, Uint32 flags)
 {
     (void)index; (void)flags;
     SDL_Renderer *r = calloc(1, sizeof *r);
-    if (r) r->win = w;
+    if (r) { r->win = w; r->vsync = (flags & SDL_RENDERER_PRESENTVSYNC) != 0; }
     return r;
 }
 void SDL_DestroyRenderer(SDL_Renderer *r) { free(r); }
@@ -105,10 +128,46 @@ static void report_and_exit(SDL_Texture *t)
 void SDL_RenderPresent(SDL_Renderer *r)
 {
     SDL_Texture *t = r->last;
-    if (!t || !r->win) return;
-    struct bz_draw_cmd c = { .op = BZ_DRAW_BLIT, .x = 0, .y = 0, .w = t->w, .h = t->h, .text_ptr = (uint64_t)t->px, .text_len = (uint64_t)t->w * t->h * 4 };
-    bz_syscall(BZ_WIN_CMD, r->win->id, (uint64_t)&c, 0);
-    bz_syscall(BZ_WIN_PRESENT, r->win->id, 0, 0);
+    SDL_Window *w = r->win;
+    if (!t || !w) return;
+    if (!w->surface && !w->no_surface) {
+        uint64_t size = bz_syscall(BZ_WIN_CTL, BZ_WIN_SURFACE_SIZE | w->id << 8, 0, 0);
+        uint64_t va = BZ_IS_ERROR(size) ? size : bz_syscall(BZ_WIN_CTL, BZ_WIN_SURFACE | w->id << 8, 0, 0);
+        if (BZ_IS_ERROR(va) || va == 0) {
+            w->no_surface = 1; /* an older kernel: BLIT */
+        } else {
+            w->surface = (uint32_t *)va;
+            w->sw = (int)(size & 0xFFFF);
+            w->sh = (int)(size >> 16 & 0xFFFF);
+        }
+    }
+    if (w->surface) {
+        size_t buf = ((size_t)w->sw * w->sh * 4 + 4095) & ~(size_t)4095;
+        uint32_t *dst = (uint32_t *)((char *)w->surface + (size_t)w->back * buf);
+        if (w->sw == t->w && w->sh == t->h) {
+            memcpy(dst, t->px, (size_t)t->w * t->h * 4);
+        } else {
+            /* full screen: scale keeping the aspect ratio, black bars */
+            int sw = w->sw, sh = w->sh, dw = sw, dh = (int)((long)sw * t->h / t->w);
+            if (dh > sh) { dh = sh; dw = (int)((long)sh * t->w / t->h); }
+            int ox = (sw - dw) / 2, oy = (sh - dh) / 2;
+            for (int y = 0; y < sh; y++) {
+                uint32_t *row = dst + (size_t)y * sw;
+                if (y < oy || y >= oy + dh) { memset(row, 0, (size_t)sw * 4); continue; }
+                const uint32_t *src = t->px + (size_t)((y - oy) * t->h / dh) * t->w;
+                for (int x = 0; x < sw; x++)
+                    row[x] = (x < ox || x >= ox + dw) ? 0 : src[(x - ox) * t->w / dw];
+            }
+        }
+        if (r->vsync) bz_syscall(BZ_WIN_CTL, BZ_WIN_VSYNC_WAIT, 0, 0);
+        bz_syscall(BZ_WIN_CTL, BZ_WIN_SURFACE_PRESENT | w->id << 8, (uint64_t)w->back, 0);
+        w->back ^= 1;
+    } else {
+        if (r->vsync) bz_syscall(BZ_WIN_CTL, BZ_WIN_VSYNC_WAIT, 0, 0);
+        struct bz_draw_cmd c = { .op = BZ_DRAW_BLIT, .x = 0, .y = 0, .w = t->w, .h = t->h, .text_ptr = (uint64_t)t->px, .text_len = (uint64_t)t->w * t->h * 4 };
+        bz_syscall(BZ_WIN_CMD, w->id, (uint64_t)&c, 0);
+    }
+    bz_syscall(BZ_WIN_PRESENT, w->id, 0, 0);
     frames++;
     if (frame_limit > 0 && frames >= frame_limit) report_and_exit(t);
 }

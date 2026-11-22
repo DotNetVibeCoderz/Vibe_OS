@@ -22,6 +22,7 @@ const REG_ENABLE: u16 = 4;
 const REG_VIRT_WIDTH: u16 = 6;
 const REG_X_OFFSET: u16 = 8;
 const REG_Y_OFFSET: u16 = 9;
+const REG_VIDEO_MEMORY_64K: u16 = 0xA;
 const ENABLED: u16 = 0x01;
 const LFB: u16 = 0x40;
 
@@ -37,6 +38,45 @@ fn write(reg: u16, value: u16) {
         Port::<u16>::new(INDEX).write(reg);
         Port::<u16>::new(DATA).write(value);
     }
+}
+
+/// Set `w` x `h` at 32 bpp on a Bochs / QEMU std-VGA (the RESOLUTION
+/// setting, applied at start-up before the window system exists). None =
+/// not that device, the mode is too large for its memory, or it refused.
+pub fn set_mode(devices: &[PciDevice], w: usize, h: usize) -> Option<Framebuffer> {
+    let dev = devices.iter().find(|d| {
+        d.class == 0x03 && ((d.vendor_id == 0x1234 && d.device_id == 0x1111) || (d.vendor_id == 0x80EE && d.device_id == 0xBEEF))
+    })?;
+    if !(0xB0C2..=0xB0CF).contains(&read(REG_ID)) || !(320..=4096).contains(&w) || !(200..=4096).contains(&h) {
+        return None;
+    }
+    // video memory in 64 KiB units (QEMU: 16 MiB by default)
+    let vram = read(REG_VIDEO_MEMORY_64K) as usize * 65536;
+    if vram != 0 && w * h * 4 > vram {
+        return None;
+    }
+    let phys = dev.mem_bar(0)?;
+    let len = w * h * 4;
+    let va = crate::memory::map_phys_normal(phys, len as u64)?;
+    let (ow, oh, ob) = (read(REG_XRES), read(REG_YRES), read(REG_BPP));
+    write(REG_ENABLE, 0);
+    write(REG_BPP, 32);
+    write(REG_XRES, w as u16);
+    write(REG_YRES, h as u16);
+    write(REG_VIRT_WIDTH, w as u16);
+    write(REG_X_OFFSET, 0);
+    write(REG_Y_OFFSET, 0);
+    write(REG_ENABLE, ENABLED | LFB);
+    if read(REG_BPP) != 32 || read(REG_XRES) as usize != w || read(REG_YRES) as usize != h {
+        write(REG_ENABLE, 0);
+        write(REG_BPP, ob);
+        write(REG_XRES, ow);
+        write(REG_YRES, oh);
+        write(REG_VIRT_WIDTH, ow);
+        write(REG_ENABLE, ENABLED | LFB);
+        return None;
+    }
+    Some(Framebuffer { addr: va, len, width: w, height: h, stride: w, bytes_per_pixel: 4, format: PixelFormat::Bgr })
 }
 
 /// If the screen is a Bochs/QEMU std-VGA LFB in a 24-bit mode, set the same

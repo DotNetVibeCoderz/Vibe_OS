@@ -149,7 +149,9 @@ fn rounded_alpha(x: usize, y: usize, size: usize, r: f32) -> u8 {
 /// ICONS.BIN: "BZIC", version 1, count, big size, small size, then per icon a
 /// 12-byte NUL-padded name, the big and the small icon as little-endian
 /// 0xAARRGGBB words. Read by the kernel's icons.rs.
-fn build_icon_pack(dir: &std::path::Path) -> Option<Vec<u8>> {
+/// `duotone`: the sample icon pack "DAUN" -- every icon recoloured from its
+/// luminance between deep forest green and pale leaf.
+fn build_icon_pack(dir: &std::path::Path, duotone: bool) -> Option<Vec<u8>> {
     let mut pack = Vec::new();
     pack.extend_from_slice(b"BZIC");
     pack.extend_from_slice(&[1, APP_ICONS.len() as u8, ICON_BIG as u8, ICON_SMALL as u8]);
@@ -166,7 +168,13 @@ fn build_icon_pack(dir: &std::path::Path) -> Option<Vec<u8>> {
                 for x in 0..size {
                     let p = (y * size + x) * 3;
                     let a = rounded_alpha(x, y, size, radius) as u32;
-                    let argb = a << 24 | (px[p] as u32) << 16 | (px[p + 1] as u32) << 8 | px[p + 2] as u32;
+                    let (mut r, mut g, mut b) = (px[p] as u32, px[p + 1] as u32, px[p + 2] as u32);
+                    if duotone {
+                        let l = (r * 299 + g * 587 + b * 114) / 1000;
+                        let mix = |lo: u32, hi: u32| (lo * (255 - l) + hi * l) / 255;
+                        (r, g, b) = (mix(0x12, 0xE4), mix(0x3A, 0xF6), mix(0x24, 0xC8));
+                    }
+                    let argb = a << 24 | r << 16 | g << 8 | b;
                     pack.extend_from_slice(&argb.to_le_bytes());
                 }
             }
@@ -604,8 +612,25 @@ fn main() {
     // App icons for the desktop and the start menu (assets/icons/*.jpg ->
     // anti-aliased rounded ARGB icons packed into /disk/ICONS.BIN).
     let icon_dir = manifest_dir().join("..").join("..").join("assets").join("icons");
-    if let Some(pack) = build_icon_pack(&icon_dir) {
+    if let Some(pack) = build_icon_pack(&icon_dir, false) {
         add_file(&mut builder, &mut files, "icons.bin".into(), pack);
+    }
+    // a sample icon pack (icons.rs: /disk/ICONS/*.BIN) and a sample theme
+    // package (theme.rs: /disk/THEMES/*.THM)
+    if let Some(pack) = build_icon_pack(&icon_dir, true) {
+        add_file(&mut builder, &mut files, "icons/daun.bin".into(), pack);
+    }
+    let themes = manifest_dir().join("..").join("..").join("assets").join("themes");
+    println!("cargo:rerun-if-changed={}", themes.display());
+    if let Ok(dir) = std::fs::read_dir(&themes) {
+        for e in dir.flatten() {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if name.ends_with(".thm") {
+                if let Ok(bytes) = std::fs::read(e.path()) {
+                    add_file(&mut builder, &mut files, format!("themes/{}", name).into(), bytes);
+                }
+            }
+        }
     }
 
     // v0.11: a generated 24-bit BMP so the kernel can demo loading a user

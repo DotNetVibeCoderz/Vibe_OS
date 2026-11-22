@@ -234,6 +234,23 @@ extern "C" fn bz_exception(index: u64, frame: *mut u64) {
         }
         // Any other synchronous exception from user code (bad access,
         // undefined instruction, ...) ends that program, not the kernel.
+        // A data abort on a null pointer (+ field offset) goes to the
+        // program's NullReferenceException handler when it registered one
+        // (FAULT_HANDLER): as if the faulting load had been `bl handler`
+        // (x30 = fault address + 4, so `return - 1` lies in the faulting
+        // method for an unwinder).
+        if esr >> 26 == 0x24 && far < 0x10000 {
+            let pid = crate::task::current_space().id;
+            if pid != 0 {
+                if let Some(h) = crate::process::fault_handler(pid, bz_abi::fault_kind::NULL_REFERENCE) {
+                    unsafe {
+                        frame.add(30).write(elr + 4);
+                        frame.add(31).write(h);
+                    }
+                    return;
+                }
+            }
+        }
         let (lr, sp) = unsafe { (frame.add(30).read(), frame.add(33).read()) };
         crate::el0_fault(esr, far, elr, sp, lr);
     }

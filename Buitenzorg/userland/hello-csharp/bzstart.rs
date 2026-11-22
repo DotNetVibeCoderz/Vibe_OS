@@ -9,8 +9,79 @@
 #![no_std]
 #![no_main]
 #![allow(internal_features)]
+#![allow(unknown_lints)]
+#![allow(unused_parens, improper_ctypes, suspicious_runtime_symbol_definitions)]
 
 use core::panic::PanicInfo;
+
+/// An exported symbol that runs `$imp` (up to three integer arguments)
+/// through `bzgc`'s `bz_gc_safe`: a GC safepoint (the thread counts as
+/// parked while it is inside).
+macro_rules! gc_safepoint {
+    ($name:literal, $imp:path) => {
+        #[cfg(target_arch = "x86_64")]
+        core::arch::global_asm!(
+            concat!(".global ", $name),
+            concat!($name, ":"),
+            "    mov rcx, rdx",
+            "    mov rdx, rsi",
+            "    mov rsi, rdi",
+            "    lea rdi, [rip + {imp}]",
+            "    jmp bz_gc_safe",
+            imp = sym $imp,
+        );
+        #[cfg(target_arch = "aarch64")]
+        core::arch::global_asm!(
+            concat!(".global ", $name),
+            concat!($name, ":"),
+            "    mov x3, x2",
+            "    mov x2, x1",
+            "    mov x1, x0",
+            "    adrp x0, {imp}",
+            "    add x0, x0, :lo12:{imp}",
+            "    b bz_gc_safe",
+            imp = sym $imp,
+        );
+    };
+}
+
+/// A shim helper that returns `1` for "failed" and the value otherwise:
+/// the exported name returns the value, or tail-jumps to the managed
+/// throw helper (exported from zerolib by tools/ZerolibPatch) with the
+/// managed caller's frame intact -- no Rust frame for the unwinder to cross.
+macro_rules! throwing {
+    ($name:literal, $imp:path, $throw:literal) => {
+        #[cfg(target_arch = "x86_64")]
+        core::arch::global_asm!(
+            concat!(".global ", $name),
+            concat!($name, ":"),
+            "    push rdi",
+            "    push rsi",
+            "    push rdx",
+            "    call {imp}",
+            "    pop rdx",
+            "    pop rsi",
+            "    pop rdi",
+            "    cmp rax, 1",
+            concat!("    je ", $throw),
+            "    ret",
+            imp = sym $imp,
+        );
+        #[cfg(target_arch = "aarch64")]
+        core::arch::global_asm!(
+            concat!(".global ", $name),
+            concat!($name, ":"),
+            "    stp x29, x30, [sp, #-16]!",
+            "    mov x29, sp",
+            "    bl {imp}",
+            "    ldp x29, x30, [sp], #16",
+            "    cmp x0, #1",
+            concat!("    b.eq ", $throw),
+            "    ret",
+            imp = sym $imp,
+        );
+    };
+}
 
 /// The collected managed heap (RhpNewFast / RhpNewArray).
 mod bzgc;
@@ -134,11 +205,17 @@ extern "C" {
     static __ReadyToRunHeader: u8;
 }
 
-/// `new T()`: a zeroed object of the MethodTable's base size on the collected
-/// heap, its MethodTable pointer in the first word. (zerolib's own export is
-/// renamed by tools/ZerolibPatch.)
-#[no_mangle]
-pub unsafe extern "C" fn RhpNewFast(mt: *const u8) -> *mut u8 {
+// `new T()`: a zeroed object of the MethodTable's base size on the collected
+// heap, its MethodTable pointer in the first word. (zerolib's own export is
+// renamed by tools/ZerolibPatch.) Both are GC safepoints.
+gc_safepoint!("RhpNewFast", new_fast);
+gc_safepoint!("RhpNewArray", new_array);
+
+extern "C" {
+    fn RhpNewFast(mt: *const u8) -> *mut u8;
+}
+
+unsafe extern "C" fn new_fast(mt: *const u8) -> *mut u8 {
     let size = (*(mt as *const MethodTable)).base_size as usize;
     let obj = bzgc::alloc(size);
     if obj.is_null() {
@@ -150,8 +227,7 @@ pub unsafe extern "C" fn RhpNewFast(mt: *const u8) -> *mut u8 {
 
 /// `new T[len]` (and strings): base size + len x component size; the length
 /// in the word after the MethodTable pointer.
-#[no_mangle]
-pub unsafe extern "C" fn RhpNewArray(mt: *const u8, len: isize) -> *mut u8 {
+unsafe extern "C" fn new_array(mt: *const u8, len: isize) -> *mut u8 {
     let t = &*(mt as *const MethodTable);
     if !(0..=0x7fff_ffff).contains(&len) {
         fatal(b"Unhandled exception: System.OverflowException (array length)\n");
@@ -476,9 +552,15 @@ pub unsafe extern "C" fn bz_munmap(addr: u64, size: u64) -> u64 {
 
 // --- v0.15 "Matang" increment 2: cooperative ring-3 threads ------------------
 
-/// Cooperatively yield the CPU (lets other threads of this process run).
-#[no_mangle]
-pub unsafe extern "C" fn bz_yield() {
+// Cooperatively yield the CPU (lets other threads of this process run).
+// Blocking calls are GC safepoints.
+gc_safepoint!("bz_yield", bz_yield_impl);
+gc_safepoint!("bz_thread_join", bz_thread_join_impl);
+gc_safepoint!("bz_futex_wait", bz_futex_wait_impl);
+gc_safepoint!("bz_proc_wait", bz_proc_wait_impl);
+gc_safepoint!("bz_mutex_lock", bz_mutex_lock_impl);
+
+unsafe extern "C" fn bz_yield_impl() {
     syscall2(SYS_YIELD, 0, 0);
 }
 
@@ -489,7 +571,9 @@ extern "C" fn bz_thread_body(ctx: *const u64) -> ! {
         let entry = *ctx;
         let arg = *ctx.add(1);
         let f: extern "C" fn(u64) = core::mem::transmute(entry);
+        bzgc::bz_gc_unpark(); // registered parked: start running
         f(arg);
+        bzgc::thread_end();
         bzgc::THREADS.fetch_sub(1, HeapOrd::AcqRel);
         syscall2(SYS_THREAD_EXIT, 0, 0);
     }
@@ -548,7 +632,10 @@ pub unsafe extern "C" fn bz_thread_create(entry: u64, arg: u64) -> u64 {
     *ctx = entry;
     *ctx.add(1) = arg;
     let stack_top = base + STACK;
-    // counted from here: the collector does not run while threads exist
+    // a slot for the collector (parked until it starts), then counted
+    if !bzgc::register_thread(base as usize, stack_top as usize) {
+        return 0;
+    }
     bzgc::THREADS.fetch_add(1, HeapOrd::AcqRel);
     let tid = syscall3(
         SYS_THREAD_CREATE,
@@ -557,6 +644,7 @@ pub unsafe extern "C" fn bz_thread_create(entry: u64, arg: u64) -> u64 {
         stack_top,
     );
     if tid >= u64::MAX - 1 {
+        bzgc::unregister_thread(base as usize);
         bzgc::THREADS.fetch_sub(1, HeapOrd::AcqRel);
         0
     } else {
@@ -587,8 +675,7 @@ pub unsafe extern "C" fn bz_atomic_cas32(p: *mut i32, expected: i32, new: i32) -
 }
 
 /// Wait for a thread to finish; 0 on success.
-#[no_mangle]
-pub unsafe extern "C" fn bz_thread_join(tid: u64) -> u64 {
+unsafe extern "C" fn bz_thread_join_impl(tid: u64) -> u64 {
     syscall2(SYS_THREAD_JOIN, tid, 0)
 }
 
@@ -621,8 +708,7 @@ pub unsafe extern "C" fn bz_spawn_worker(counter: u64) -> u64 {
 // --- v0.15 "Matang" increment 3: sync (futex/mutex), TLS, monotonic clock ----
 
 /// Futex wait: if *addr == expected, block until woken. Returns 0.
-#[no_mangle]
-pub unsafe extern "C" fn bz_futex_wait(addr: u64, expected: u64) -> u64 {
+unsafe extern "C" fn bz_futex_wait_impl(addr: u64, expected: u64) -> u64 {
     syscall2(SYS_FUTEX_WAIT, addr, expected)
 }
 
@@ -797,8 +883,7 @@ pub unsafe extern "C" fn bz_proc_spawn(path: *const u8, args: *const u8) -> u64 
 }
 
 /// Block until process `pid` exits; returns its exit code.
-#[no_mangle]
-pub unsafe extern "C" fn bz_proc_wait(pid: u64) -> u64 {
+unsafe extern "C" fn bz_proc_wait_impl(pid: u64) -> u64 {
     syscall2(SYS_PROC_WAIT, pid, 0)
 }
 
@@ -824,8 +909,7 @@ pub unsafe extern "C" fn bz_net_info(out: *mut u8) -> u64 {
 /// Lock a futex-backed mutex (0 = unlocked, 1 = locked). Single-core
 /// cooperative, so the compare-and-set is a plain read/write; contention blocks
 /// on the futex instead of spinning.
-#[no_mangle]
-pub unsafe extern "C" fn bz_mutex_lock(m: *mut i32) {
+unsafe extern "C" fn bz_mutex_lock_impl(m: *mut i32) {
     // 0 = free, 1 = held. Acquire with a compare-and-swap: two threads may try
     // at the same instant on different CPUs. While held, sleep in the kernel
     // (FUTEX_WAIT re-checks the word under the scheduler lock).
@@ -833,7 +917,7 @@ pub unsafe extern "C" fn bz_mutex_lock(m: *mut i32) {
         if bz_atomic_cas32(m, 0, 1) == 0 {
             return;
         }
-        bz_futex_wait(m as u64, 1);
+        bz_futex_wait_impl(m as u64, 1);
     }
 }
 
@@ -872,7 +956,7 @@ extern "C" fn bz_mutex_worker(arg: u64) {
         }
         let mut i = 0u64;
         while i < (*c).iters {
-            bz_mutex_lock((*c).mutex);
+            bz_mutex_lock_impl((*c).mutex);
             *(*c).token = me;
             syscall2(SYS_YIELD, 0, 0); // yield while holding the lock
             if *(*c).token != me {
@@ -895,7 +979,8 @@ pub unsafe extern "C" fn bz_spawn_mutex_worker(ctx: u64) -> u64 {
 /// Exit the calling thread (does not return).
 #[no_mangle]
 pub unsafe extern "C" fn bz_thread_exit(code: u64) -> ! {
-    // a worker leaving early: no longer counted (the collector waits for 0)
+    // a worker leaving early: no longer counted, its slot freed
+    bzgc::thread_end();
     let mut n = bzgc::THREADS.load(HeapOrd::Acquire);
     while n > 0 {
         match bzgc::THREADS.compare_exchange_weak(n, n - 1, HeapOrd::AcqRel, HeapOrd::Acquire) {
@@ -924,6 +1009,8 @@ unsafe fn rel32(p: *const u8) -> *const u8 {
 /// delegate of a method-group conversion) read garbage.
 #[no_mangle]
 pub unsafe extern "C" fn bz_init_statics() {
+    bzgc::register_main();
+    register_fault_handlers();
     let h = core::ptr::addr_of!(__ReadyToRunHeader);
     if core::ptr::read_unaligned(h as *const u32) != 0x0052_5452 {
         return; // not "RTR"
@@ -1149,6 +1236,23 @@ unsafe fn type_of(obj: *const u8) -> *const MethodTable {
     *(obj as *const *const MethodTable)
 }
 
+// Managed throw helpers, exported from zerolib by tools/ZerolibPatch
+// (each builds the exception object and throws it).
+extern "C" {
+    fn bz_throw_null_reference() -> !;
+    fn bz_throw_divide_by_zero() -> !;
+}
+
+const SYS_FAULT_HANDLER: u64 = 75;
+
+/// Ask the kernel to turn a null dereference / an integer division by zero
+/// into a call of the managed throw helper (FAULT_HANDLER): `try` / `catch`
+/// then sees a NullReferenceException / DivideByZeroException.
+unsafe fn register_fault_handlers() {
+    syscall2(SYS_FAULT_HANDLER, 0, bz_throw_null_reference as *const () as u64);
+    syscall2(SYS_FAULT_HANDLER, 1, bz_throw_divide_by_zero as *const () as u64);
+}
+
 unsafe fn fatal(msg: &[u8]) -> ! {
     bz_write(msg.as_ptr(), msg.len() as u64);
     SystemNative_Abort()
@@ -1158,20 +1262,21 @@ unsafe fn is_instance(target: *const MethodTable, obj: *const u8) -> *const u8 {
     if obj.is_null() || assignable(target, type_of(obj)) { obj } else { core::ptr::null() }
 }
 
-unsafe fn check_cast(target: *const MethodTable, obj: *const u8) -> *const u8 {
+/// The cast check: the object, or 1 when the cast is invalid (the exported
+/// `RhTypeCast_CheckCast*` then throw InvalidCastException).
+unsafe extern "C" fn check_cast(target: *const MethodTable, obj: *const u8) -> *const u8 {
     if obj.is_null() || assignable(target, type_of(obj)) {
         obj
     } else {
-        bz_throw_invalid_cast()
+        1 as *const u8
     }
 }
 
-/// An invalid cast. Until exceptions exist this ends the program with a
-/// message instead of an unexplained exit.
-#[no_mangle]
-pub unsafe extern "C" fn bz_throw_invalid_cast() -> ! {
-    fatal(b"Unhandled exception: System.InvalidCastException (cast to an incompatible type)\n")
-}
+throwing!("RhTypeCast_CheckCastClass", check_cast, "bz_throw_invalid_cast");
+throwing!("RhTypeCast_CheckCastClassSpecial", check_cast, "bz_throw_invalid_cast");
+throwing!("RhTypeCast_CheckCastInterface", check_cast, "bz_throw_invalid_cast");
+throwing!("RhTypeCast_CheckCastAny", check_cast, "bz_throw_invalid_cast");
+throwing!("RhTypeCast_CheckCastArray", check_cast, "bz_throw_invalid_cast");
 
 #[no_mangle]
 pub unsafe extern "C" fn RhTypeCast_IsInstanceOfClass(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
@@ -1181,35 +1286,69 @@ pub unsafe extern "C" fn RhTypeCast_IsInstanceOfInterface(t: *const MethodTable,
 pub unsafe extern "C" fn RhTypeCast_IsInstanceOfAny(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
 #[no_mangle]
 pub unsafe extern "C" fn RhTypeCast_IsInstanceOfArray(t: *const MethodTable, o: *const u8) -> *const u8 { is_instance(t, o) }
-#[no_mangle]
-pub unsafe extern "C" fn RhTypeCast_CheckCastClass(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
-#[no_mangle]
-pub unsafe extern "C" fn RhTypeCast_CheckCastClassSpecial(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
-#[no_mangle]
-pub unsafe extern "C" fn RhTypeCast_CheckCastInterface(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
-#[no_mangle]
-pub unsafe extern "C" fn RhTypeCast_CheckCastAny(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
-#[no_mangle]
-pub unsafe extern "C" fn RhTypeCast_CheckCastArray(t: *const MethodTable, o: *const u8) -> *const u8 { check_cast(t, o) }
 
 /// `array[index] = obj` for a reference-type array: bounds check, then the
 /// covariance check (`object[]` takes anything, `Base[]` takes a Derived,
 /// `IFoo[]` takes any implementer).
-#[no_mangle]
-pub unsafe extern "C" fn RhpStelemRef(array: *mut u8, index: isize, obj: *const u8) {
+/// 0 = stored, 1 = index out of range (thrown by the stub), 2 = type
+/// mismatch, 3 = null array.
+unsafe extern "C" fn stelem_ref(array: *mut u8, index: isize, obj: *const u8) -> u64 {
+    if array.is_null() {
+        return 3;
+    }
     let len = *(array.add(8) as *const u32) as usize;
     if index < 0 || index as usize >= len {
-        fatal(b"Unhandled exception: System.IndexOutOfRangeException\n");
+        return 1;
     }
     let slot = array.add(16 + 8 * index as usize) as *mut *const u8;
     if !obj.is_null() {
         let elem = (*type_of(array)).related;
         if !assignable(elem, type_of(obj)) {
-            fatal(b"Unhandled exception: System.ArrayTypeMismatchException\n");
+            return 2;
         }
     }
     *slot = obj;
+    0
 }
+
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".global RhpStelemRef",
+    "RhpStelemRef:",
+    "    push rdi",
+    "    push rsi",
+    "    push rdx",
+    "    call {imp}",
+    "    pop rdx",
+    "    pop rsi",
+    "    pop rdi",
+    "    cmp rax, 1",
+    "    je bz_throw_index_out_of_range",
+    "    cmp rax, 2",
+    "    je bz_throw_array_type_mismatch",
+    "    cmp rax, 3",
+    "    je bz_throw_null_reference",
+    "    ret",
+    imp = sym stelem_ref,
+);
+
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".global RhpStelemRef",
+    "RhpStelemRef:",
+    "    stp x29, x30, [sp, #-16]!",
+    "    mov x29, sp",
+    "    bl {imp}",
+    "    ldp x29, x30, [sp], #16",
+    "    cmp x0, #1",
+    "    b.eq bz_throw_index_out_of_range",
+    "    cmp x0, #2",
+    "    b.eq bz_throw_array_type_mismatch",
+    "    cmp x0, #3",
+    "    b.eq bz_throw_null_reference",
+    "    ret",
+    imp = sym stelem_ref,
+);
 
 // --- Interface dispatch (zerolib has none) -----------------------------------
 //

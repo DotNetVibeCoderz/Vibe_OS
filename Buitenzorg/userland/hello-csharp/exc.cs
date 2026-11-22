@@ -16,6 +16,16 @@ class CodeException : Exception
     public CodeException(int code) : base("code exception") { Code = code; }
 }
 
+class Node
+{
+    public int Value;
+    public Node Next;
+}
+
+class Animal { }
+class Dog : Animal { }
+class Cat : Animal { }
+
 class Resource : IDisposable
 {
     public static int Disposed;
@@ -23,6 +33,8 @@ class Resource : IDisposable
 }
 
 delegate int IntFunc(int x);
+
+class ArithmeticDummy : Exception { }
 
 struct Pair<T>
 {
@@ -35,6 +47,9 @@ static class Exc
     static int s_log;
     static int s_failures;
     static int s_threadResult;
+    static int s_zero;
+    static Node s_null;
+    static object s_cat = new Cat();
 
     [DllImport("*")] static extern ulong bz_thread_create(ulong entry, ulong arg);
     [DllImport("*")] static extern ulong bz_thread_join(ulong tid);
@@ -223,9 +238,62 @@ static class Exc
         }
         Check(s_threadResult == 111, "FAIL 13: exception on a worker thread");
 
+        // 14. the runtime's own checks throw too: array index out of range
+        int[] small = new int[3];
+        int idx = 3 + s_zero;
+        bool bounds = false;
+        try { small[idx] = 1; }
+        catch (IndexOutOfRangeException) { bounds = true; }
+        Check(bounds, "FAIL 14: index out of range is an exception");
+
+        // 15. a null dereference (a hardware fault, turned into a throw)
+        bool nullRef = false;
+        int v = 0;
+        try { v = s_null.Value; }
+        catch (NullReferenceException) { nullRef = true; }
+        bool nullCall = false;
+        try { s_null.Next.Value = 2; }
+        catch (NullReferenceException e) { nullCall = e.Message != null; }
+        Check(nullRef && nullCall && v == 0, "FAIL 15: null dereference is an exception");
+
+        // 16. integer division by zero
+        bool div = false;
+        try { v = 10 / s_zero; }
+        catch (DivideByZeroException) { div = true; }
+        bool rem = false;
+        try { v = 10 % s_zero; }
+        catch (ArithmeticDummy) { }
+        catch (DivideByZeroException) { rem = true; }
+        Check(div && rem, "FAIL 16: division by zero is an exception");
+
+        // 17. an invalid cast, a bad array store
+        bool cast = false;
+        try { Dog d = (Dog)s_cat; v = d == null ? 1 : 2; }
+        catch (InvalidCastException) { cast = true; }
+        bool store = false;
+        Animal[] dogs = new Dog[2];
+        try { dogs[0] = (Animal)s_cat; }
+        catch (ArrayTypeMismatchException) { store = true; }
+        Check(cast && store, "FAIL 17: invalid cast / array store are exceptions");
+
+        // 18. each kind caught as SystemException in a loop (no leak, no hang)
+        int sys = 0;
+        for (int i = 0; i < 200; i++)
+        {
+            try
+            {
+                if ((i & 3) == 0) v = small[idx + i];
+                else if ((i & 3) == 1) v = s_null.Value;
+                else if ((i & 3) == 2) v = i / s_zero;
+                else { Dog d2 = (Dog)s_cat; v = d2 == null ? 0 : 1; }
+            }
+            catch (SystemException) { sys++; }
+        }
+        Check(sys == 200, "FAIL 18: runtime exceptions in a loop");
+
         if (s_failures == 0)
         {
-            Console.WriteLine("MILESTONE: EXCEPTIONS OK (throw/catch across frames, base-class catch, finally order, filters, throw;, throw inside catch and finally, catch-all + using, generics, delegates, 2000 throws, worker thread)");
+            Console.WriteLine("MILESTONE: EXCEPTIONS OK (throw/catch across frames, base-class catch, finally order, filters, throw;, throw inside catch and finally, catch-all + using, generics, delegates, 2000 throws, worker thread; runtime checks: index, null dereference, divide by zero, cast, array store)");
             return 0;
         }
         return 1;

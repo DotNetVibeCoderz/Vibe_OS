@@ -13,6 +13,15 @@ use spin::Mutex;
 use crate::pci::PciDevice;
 
 static INFO: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The display registers once mapped (0 = none): the vsync counter reads them.
+static PIPE_REGS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Pipe A's frame counter (untested on hardware: the Latitude 7290 run
+/// predates it; QEMU has no Intel display model).
+fn pipe_a_frame_counter() -> Option<u32> {
+    let regs = PIPE_REGS.load(core::sync::atomic::Ordering::Relaxed);
+    (regs != 0).then(|| unsafe { read_volatile((regs + 0x70040) as *const u32) })
+}
 
 /// (generation, family, name) from the PCI device id.
 fn identify(id: u16) -> (&'static str, &'static str, &'static str) {
@@ -67,6 +76,13 @@ fn probe(dev: &PciDevice) -> Vec<String> {
     let Some(regs) = crate::memory::map_mmio(mmio, 2 << 20) else { return out };
     let Some(gtt) = crate::memory::map_mmio(mmio + (8 << 20), 8 << 20) else { return out };
     let rd = |o: u64| unsafe { read_volatile((regs + o) as *const u32) };
+    // pipe A's hardware frame counter (PIPE_FRMCOUNT_G4X, +1 per vblank)
+    // is the vsync source while the pipe runs (PIPEACONF bit 31)
+    if rd(0x70008) & (1 << 31) != 0 {
+        PIPE_REGS.store(regs, core::sync::atomic::Ordering::Relaxed);
+        crate::vsync::install(pipe_a_frame_counter, 60_000, "Intel pipe A frame counter");
+        out.push(String::from("  vsync: pipe A frame counter"));
+    }
     // pipe A source size, plane 1A control/stride/surface (display engine, powered by the firmware)
     let pipesrc = rd(0x6001C);
     let (w, h) = ((pipesrc >> 16) + 1, (pipesrc & 0xFFFF) + 1);

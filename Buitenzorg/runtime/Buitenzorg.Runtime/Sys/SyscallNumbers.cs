@@ -223,9 +223,34 @@ public static class SyscallNumbers
     public const ulong FontOp = 71;
     /// <summary>GPU compute: a0 = operation (<see cref="ComputeOp"/>) | handle &lt;&lt; 8.</summary>
     public const ulong ComputeOp = 72;
+    /// <summary>Post a notification: a0 = NUL-terminated title, a1 = NUL-terminated body (or 0). Returns its id.</summary>
+    public const ulong Notify = 73;
+    /// <summary>Window control: a0 = operation (<see cref="WinCtl"/>) | window id &lt;&lt; 8.</summary>
+    public const ulong WinCtl = 74;
+    /// <summary>User-mode handler for a hardware fault: a0 = kind (<see cref="FaultKind"/>), a1 = handler address (0 = none).</summary>
+    public const ulong FaultHandler = 75;
 
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 73;
+    public const ulong Count = 76;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.WinCtl"/> (mirrors <c>bz_abi::win_ctl</c>).</summary>
+public static class WinCtl
+{
+    public const ulong Fullscreen = 0;
+    public const ulong Surface = 1;
+    public const ulong SurfacePresent = 2;
+    public const ulong VsyncWait = 3;
+    public const ulong VsyncInfo = 4;
+    public const ulong SurfaceSize = 5;
+}
+
+/// <summary>Kinds of <see cref="SyscallNumbers.FaultHandler"/> (mirrors <c>bz_abi::fault_kind</c>).</summary>
+public static class FaultKind
+{
+    public const ulong NullReference = 0;
+    public const ulong Divide = 1;
+    public const ulong Count = 2;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.ComputeOp"/> (mirrors <c>bz_abi::compute_op</c>).</summary>

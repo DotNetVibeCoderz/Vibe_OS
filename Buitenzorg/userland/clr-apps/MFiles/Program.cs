@@ -361,6 +361,27 @@ public static class FilesApp
         return (w, vm, grid, tree);
     }
 
+    /// <summary>`mfiles --open PATH` (the desktop's search): show PATH's folder
+    /// with PATH selected, or the folder itself.</summary>
+    public static bool OpenAt(FilesViewModel vm, DataGrid grid, string path)
+    {
+        path = path.TrimEnd('/');
+        var info = Files.GetInfo(path);
+        if (info == null) return false;
+        if (info.IsDirectory) { vm.Open(path); return true; }
+        int cut = path.LastIndexOf('/');
+        if (cut <= 0) return false;
+        vm.Open(path.Substring(0, cut));
+        string name = path.Substring(cut + 1);
+        for (int i = 0; i < vm.Entries.Count; i++)
+            if (string.Equals(vm.Entries[i].Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                grid.Select(i);
+                return true;
+            }
+        return false;
+    }
+
     public static Checks SelfTest()
     {
         var c = new Checks("Berkas");
@@ -392,6 +413,10 @@ public static class FilesApp
         grid.SortBy(0);
         grid.SortBy(0);
         c.That(true, "sorting both ways");
+
+        // --open PATH (global search): the file's folder, the file selected
+        var (w3, vm3, grid3, _) = FilesApp.Build(headless: true);
+        c.That(FilesApp.OpenAt(vm3, grid3, dir + "/BACA.TXT") && vm3.Path == dir && grid3.SelectedItem is FileEntry sel && sel.Name == "BACA.TXT", "--open selects BACA.TXT in " + vm3.Path);
 
         // file management
         vm.Open(dir);
@@ -432,7 +457,9 @@ public static class Program
             Console.WriteLine(c.ToString());
             return c.Ok ? 0 : 1;
         }
-        var (w, _, _, _) = FilesApp.Build();
+        var (w, vm, grid, _) = FilesApp.Build();
+        int open = Array.IndexOf(args, "--open");
+        if (open >= 0 && open + 1 < args.Length) FilesApp.OpenAt(vm, grid, args[open + 1]);
         app.Run(w);
         return 0;
     }

@@ -6,11 +6,16 @@
 //   - allocate small managed arrays (`new int[16]`) — the heap allocator in the
 //     runtime shim must hand every thread distinct memory even when they call
 //     it at the same instant on different CPUs;
-//   - stamp each array with the worker's number and keep its address;
+//   - stamp each array with the worker's number and keep a reference to it in
+//     a local int[][] (a root on that thread's stack: the collector runs while
+//     the threads are alive, so a bare address in an mmap page keeps nothing);
 //   - add their work to a shared total with an atomic add,
 // then verify every array they allocated still holds their own stamp. Two
-// threads ever receiving overlapping memory, or a lost atomic update, fails it.
-// Exit code: 0 = correct; 1 = heap corruption; 2 = setup failed; 3 = lost update.
+// threads ever receiving overlapping memory, a live array being collected, or
+// a lost atomic update fails it -- and so does a run in which the collector
+// never stopped the world, since that would prove nothing about the collector.
+// Exit code: 0 = correct; 1 = heap corruption; 2 = setup failed; 3 = lost
+// update; 4 = no collection ran while the threads were alive.
 // Built with bflat --stdlib:zero.
 
 using System;
@@ -23,19 +28,21 @@ unsafe class ParallelThreads
     [DllImport("*")] static extern ulong bz_thread_join(ulong tid);
     [DllImport("*")] static extern ulong bz_ticks();
     [DllImport("*")] static extern long bz_atomic_add(long* p, long v);
+    [DllImport("*")] static extern ulong bz_gc_stopped_world();
 
     const int WORKERS = 3;
-    const int KEEP = 480;          // array addresses each worker keeps to verify
+    const int KEEP = 480;          // arrays each worker keeps to verify
     const ulong RUN_TICKS = 27;    // ~1.5 s at the PIT's 18.2 Hz
     const ulong PROT_RW = 1 | 2;
 
     // Shared page layout (longs): [0] total work, [1] errors,
-    // [8 + w] = rounds of worker w; per-worker pages hold kept addresses.
+    // [8 + w] = rounds of worker w; per-worker pages hold the kept arrays' stamps.
     static void Worker(ulong arg)
     {
         long* shared = (long*)(arg & ~0xFFFUL);
         long w = (long)(arg & 0xFFF);
-        long* kept = (long*)shared[16 + w];
+        long* stamps = (long*)shared[16 + w];
+        int[][] kept = new int[KEEP][];
         int n = 0;
         long rounds = 0;
         ulong start = bz_ticks();
@@ -47,25 +54,38 @@ unsafe class ParallelThreads
                 a[i] = stamp;
             if (n < KEEP)
             {
-                fixed (int* p = a)
-                    kept[2 * n] = (long)p;
-                kept[2 * n + 1] = stamp;
+                kept[n] = a;
+                stamps[n] = stamp;
                 n++;
             }
             long sum = 0;
             for (int i = 0; i < 2000; i++)
                 sum += i ^ w;
+            // the array just allocated is still this worker's alone
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (a[i] != stamp)
+                {
+                    bz_atomic_add(&shared[1], 1);
+                    break;
+                }
+            }
             bz_atomic_add(&shared[0], 1);
             rounds++;
         }
         // Every kept array must still hold exactly this worker's stamp.
         for (int k = 0; k < n; k++)
         {
-            int* p = (int*)kept[2 * k];
-            int stamp = (int)kept[2 * k + 1];
+            int[] a = kept[k];
+            int stamp = (int)stamps[k];
+            if (a.Length != 16)
+            {
+                bz_atomic_add(&shared[1], 1);
+                continue;
+            }
             for (int i = 0; i < 16; i++)
             {
-                if (p[i] != stamp)
+                if (a[i] != stamp)
                 {
                     bz_atomic_add(&shared[1], 1);
                     break;
@@ -82,7 +102,7 @@ unsafe class ParallelThreads
             return 2;
         for (int w = 0; w < WORKERS; w++)
         {
-            ulong page = bz_mmap((ulong)(KEEP * 16), PROT_RW);
+            ulong page = bz_mmap((ulong)(KEEP * 8), PROT_RW);
             if (page == 0 || page >= 0xFFFF_FFFF_FFFF_FF00UL)
                 return 2;
             shared[16 + w] = (long)page;
@@ -109,6 +129,11 @@ unsafe class ParallelThreads
         {
             Console.WriteLine("PTHREAD: UPDATE HILANG -- penambahan atomik tidak utuh");
             return 3;
+        }
+        if (bz_gc_stopped_world() == 0)
+        {
+            Console.WriteLine("PTHREAD: GC TIDAK JALAN -- tidak ada koleksi selama thread hidup");
+            return 4;
         }
         Console.WriteLine("PTHREAD: 3 thread paralel selesai -- heap & atomik utuh");
         return 0;

@@ -27,6 +27,8 @@ typedef struct SDL_Rect { int x, y, w, h; } SDL_Rect;
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOW_SHOWN 0x04u
 #define SDL_WINDOW_RESIZABLE 0x20u
+#define SDL_WINDOW_FULLSCREEN 0x01u
+#define SDL_WINDOW_FULLSCREEN_DESKTOP 0x1001u
 #define SDL_RENDERER_SOFTWARE 0x01u
 #define SDL_RENDERER_ACCELERATED 0x02u
 #define SDL_RENDERER_PRESENTVSYNC 0x04u
@@ -64,6 +66,9 @@ void SDL_DestroyRenderer(SDL_Renderer *r);
 int SDL_RenderClear(SDL_Renderer *r);
 int SDL_RenderCopy(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *src, const SDL_Rect *dst);
 void SDL_RenderPresent(SDL_Renderer *r);
+int SDL_SetWindowFullscreen(SDL_Window *w, Uint32 flags);
+void SDL_GetWindowSize(SDL_Window *w, int *width, int *height);
+int SDL_RenderSetVSync(SDL_Renderer *r, int vsync);
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access, int w, int h);
 void SDL_DestroyTexture(SDL_Texture *t);
 int SDL_UpdateTexture(SDL_Texture *t, const SDL_Rect *rect, const void *pixels, int pitch);

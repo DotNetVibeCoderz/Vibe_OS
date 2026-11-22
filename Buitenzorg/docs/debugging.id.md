@@ -348,17 +348,25 @@ bersimbol**, ke log dan ke `/ram/CRASH/P<pid>.TXT` (`/disk/CRASH/` bila tidak
 ada `/ram`).
 
 ```text
-=== crash report: pid 1009 'crashme' ===
-page fault (read), address 0x8
-pc 0x401481  crashme_Crash__Level3+0x1
-sp 0x7001ff90
+=== crash report: pid 1010 'crashme' ===
+page fault (read), address 0x6dead004
+pc 0x405783  crashme_Crash__Level3+0x3
+sp 0x7001ff38
 backtrace (return addresses found on the stack, innermost first):
-  #0  0x401481  crashme_Crash__Level3+0x1
-  #1  0x4014a6  crashme_Crash__Level2+0xa
-  #2  0x4014b4  crashme_Crash__Level1+0x8
-  #3  0x4016a7  crashme__Module___StartupCodeMain+0x47
-  #4  0x4000b2  _start+0x26
+  #0  0x405783  crashme_Crash__Level3+0x3
+  #1  0x405796  crashme_Crash__Level2+0xa
+  #2  0x4057a4  crashme_Crash__Level1+0x8
+  #3  0x405a15  crashme_Crash__Main+0x71
+  #4  0x405d14  crashme__Module___StartupCodeMain+0x38
+  #5  0x400349  _start+0x2d
 ```
+
+**Dereferensi null di C# native bukan crash:** ia menjadi
+`NullReferenceException` (pembagian bilangan bulat dengan nol menjadi
+`DivideByZeroException`). Bila tak ditangkap, program berakhir dengan
+`Unhandled exception: ...` **tanpa laporan crash**; debugger juga tidak
+berhenti di sana. Laporan crash untuk fault yang tidak diambil runtime:
+pointer liar, lompat ke data, instruksi tak dikenal.
 
 - Di Terminal: `crash` mendaftar laporan, `crash PID` / `crash last`
   menampilkan satu; dari PC, `bz pull /ram/CRASH/P1009.TXT` atau `bz logs`.

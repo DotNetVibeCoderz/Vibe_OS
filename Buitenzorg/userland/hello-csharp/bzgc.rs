@@ -23,13 +23,21 @@
 //! * **sweep:** unmarked slots become free (zeroed again when handed out),
 //!   empty blocks go back to the free pool.
 //!
-//! Limit, deliberately: a collection runs only while the program has no
-//! other thread (threads made with `bz_thread_create`; their count is kept
-//! here). Other threads could hold references in registers the collector
-//! cannot see; with threads alive the heap simply grows, as before.
+//! Threads: every thread (main + `bz_thread_create`) has a slot with its
+//! stack range. A thread is **parked** while it is inside the runtime at a
+//! safepoint -- an allocation (`RhpNewFast` / `RhpNewArray`) or a blocking
+//! call (`bz_yield`, `bz_futex_wait`, `bz_mutex_lock`, `bz_thread_join`,
+//! `bz_proc_wait`) -- entered through `bz_gc_safe`, which spills the
+//! callee-saved registers and records the stack pointer first. A collection
+//! with other threads alive stops the world: it raises `GC_ACTIVE`, waits up
+//! to 50 ms for every other thread to be parked (a parked thread does not
+//! leave while it is raised), then scans each parked thread's stack from its
+//! recorded pointer up. A thread that runs managed code for 50 ms without
+//! allocating or blocking makes the collection skip (counted in `skipped`)
+//! and the heap grow for now.
 
 use crate::{bz_mmap, bz_mprotect, syscall2, SYS_CLOCK_NANOS};
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 const BLOCK_SHIFT: usize = 16;
 const BLOCK: usize = 1 << BLOCK_SHIFT;
@@ -131,6 +139,147 @@ pub static THREADS: AtomicUsize = AtomicUsize::new(0);
 pub static mut BZ_STACK_TOP: usize = 0;
 /// 1 = never collect (an escape hatch for a program that hides references).
 static DISABLED: AtomicBool = AtomicBool::new(false);
+
+// ---- threads and safepoints ----------------------------------------------------
+
+const MAX_THREADS: usize = 64;
+const SLOT_FREE: u32 = 0;
+const SLOT_RUNNING: u32 = 1;
+const SLOT_PARKED: u32 = 2;
+
+struct Slot {
+    lo: AtomicUsize,
+    top: AtomicUsize,
+    /// Stack pointer recorded when the thread parked.
+    sp: AtomicUsize,
+    state: AtomicU32,
+    /// The object this thread allocated last, until it is RUNNING again: an
+    /// allocation runs parked (inside `bz_gc_safe`) and its result lives only
+    /// in registers until the caller stores it, so another thread's
+    /// collection must treat it as a root.
+    pending: AtomicUsize,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+const EMPTY_SLOT: Slot = Slot { lo: AtomicUsize::new(0), top: AtomicUsize::new(0), sp: AtomicUsize::new(0), state: AtomicU32::new(SLOT_FREE), pending: AtomicUsize::new(0) };
+static SLOTS: [Slot; MAX_THREADS] = [EMPTY_SLOT; MAX_THREADS];
+/// A stop-the-world collection is in progress: parked threads stay parked.
+static GC_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Collections that stopped other threads.
+static STOPPED_WORLD: AtomicUsize = AtomicUsize::new(0);
+
+/// The main thread (from `_start`, before any managed code).
+pub unsafe fn register_main() {
+    let top = BZ_STACK_TOP;
+    let s = &SLOTS[0];
+    s.lo.store(top.saturating_sub(8 << 20), Ordering::Relaxed);
+    s.top.store(top, Ordering::Relaxed);
+    s.sp.store(top, Ordering::Relaxed);
+    s.state.store(SLOT_RUNNING, Ordering::SeqCst);
+}
+
+/// A new thread's slot (its stack `lo..top`), parked until it starts: its
+/// whole stack (with the entry/argument context at the bottom) is scanned.
+/// False when every slot is taken.
+pub fn register_thread(lo: usize, top: usize) -> bool {
+    for s in SLOTS.iter().skip(1) {
+        if s.state.compare_exchange(SLOT_FREE, SLOT_PARKED, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+            s.lo.store(lo, Ordering::SeqCst);
+            s.top.store(top, Ordering::SeqCst);
+            s.sp.store(lo, Ordering::SeqCst);
+            s.pending.store(0, Ordering::SeqCst);
+            return true;
+        }
+    }
+    false
+}
+
+/// Give a slot back (the thread could not be created).
+pub fn unregister_thread(lo: usize) {
+    for s in SLOTS.iter().skip(1) {
+        if s.lo.load(Ordering::SeqCst) == lo && s.state.load(Ordering::SeqCst) != SLOT_FREE {
+            s.state.store(SLOT_FREE, Ordering::SeqCst);
+        }
+    }
+}
+
+fn slot_of(sp: usize) -> Option<&'static Slot> {
+    SLOTS.iter().find(|s| s.state.load(Ordering::Acquire) != SLOT_FREE && s.lo.load(Ordering::Relaxed) <= sp && sp < s.top.load(Ordering::Relaxed))
+}
+
+#[inline(never)]
+fn current_sp() -> usize {
+    let x = 0u8;
+    core::hint::black_box(&x) as *const u8 as usize
+}
+
+/// The calling thread is finished with managed code (it is exiting).
+pub fn thread_end() {
+    if let Some(s) = slot_of(current_sp()) {
+        if !core::ptr::eq(s, &SLOTS[0]) {
+            s.state.store(SLOT_FREE, Ordering::SeqCst);
+        }
+    }
+}
+
+/// `bz_gc_safe` entry: the callee-saved registers are on the stack at `sp`.
+#[no_mangle]
+extern "C" fn bz_gc_park(sp: usize) {
+    if THREADS.load(Ordering::Acquire) == 0 {
+        return; // alone: nobody can collect while we are in here
+    }
+    if let Some(s) = slot_of(sp) {
+        s.sp.store(sp, Ordering::SeqCst);
+        s.state.store(SLOT_PARKED, Ordering::SeqCst);
+    }
+}
+
+/// Leave a safepoint (and a new thread's first step): wait while a
+/// collection runs.
+#[no_mangle]
+pub extern "C" fn bz_gc_unpark() {
+    let Some(s) = slot_of(current_sp()) else { return };
+    loop {
+        s.state.store(SLOT_RUNNING, Ordering::SeqCst);
+        if !GC_ACTIVE.load(Ordering::SeqCst) {
+            // running again: no collection can start until this thread's
+            // next safepoint, which spills where the caller keeps the object
+            s.pending.store(0, Ordering::SeqCst);
+            return;
+        }
+        s.state.store(SLOT_PARKED, Ordering::SeqCst);
+        let mut spins = 0u32;
+        while GC_ACTIVE.load(Ordering::SeqCst) {
+            spins += 1;
+            if spins > 64 {
+                unsafe { syscall2(crate::SYS_YIELD, 0, 0) };
+                spins = 0;
+            } else {
+                core::hint::spin_loop();
+            }
+        }
+    }
+}
+
+/// Stop every other thread at a safepoint (true), or give up after 50 ms.
+unsafe fn stop_world() -> bool {
+    let me = slot_of(current_sp()).map_or(core::ptr::null(), |m| m as *const Slot);
+    GC_ACTIVE.store(true, Ordering::SeqCst);
+    let deadline = syscall2(SYS_CLOCK_NANOS, 0, 0) + 50_000_000;
+    for s in SLOTS.iter() {
+        if core::ptr::eq(s, me) {
+            continue;
+        }
+        while s.state.load(Ordering::SeqCst) == SLOT_RUNNING {
+            if syscall2(SYS_CLOCK_NANOS, 0, 0) > deadline {
+                GC_ACTIVE.store(false, Ordering::SeqCst);
+                return false;
+            }
+            syscall2(crate::SYS_YIELD, 0, 0);
+        }
+    }
+    true
+}
 
 fn lock() {
     let mut spins = 0u32;
@@ -372,6 +521,13 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
         }
         None => core::ptr::null_mut(),
     };
+    // with other threads alive, the result is a root until this thread runs
+    // again (see `Slot::pending`) -- recorded before the lock is released
+    if !p.is_null() && THREADS.load(Ordering::Acquire) != 0 {
+        if let Some(s) = slot_of(current_sp()) {
+            s.pending.store(p as usize, Ordering::SeqCst);
+        }
+    }
     unlock();
     p
 }
@@ -637,6 +793,78 @@ extern "C" {
     fn bz_gc_spill_and_mark(h: *mut Heap);
 }
 
+// bz_gc_safe(f, a0, a1, a2) -> f(a0, a1, a2), with the thread parked around
+// the call (callee-saved registers spilled where the collector scans them).
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".global bz_gc_safe",
+    "bz_gc_safe:",
+    "    push rbx",
+    "    push rbp",
+    "    push r12",
+    "    push r13",
+    "    push r14",
+    "    push r15",
+    "    mov rbx, rdi",
+    "    mov r12, rsi",
+    "    mov r13, rdx",
+    "    mov r14, rcx",
+    "    sub rsp, 8",
+    "    lea rdi, [rsp + 8]",
+    "    call {park}",
+    "    mov rdi, r12",
+    "    mov rsi, r13",
+    "    mov rdx, r14",
+    "    call rbx",
+    "    mov r12, rax",
+    "    call {unpark}",
+    "    mov rax, r12",
+    "    add rsp, 8",
+    "    pop r15",
+    "    pop r14",
+    "    pop r13",
+    "    pop r12",
+    "    pop rbp",
+    "    pop rbx",
+    "    ret",
+    park = sym bz_gc_park,
+    unpark = sym bz_gc_unpark,
+);
+
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".global bz_gc_safe",
+    "bz_gc_safe:",
+    "    stp x29, x30, [sp, #-96]!",
+    "    stp x19, x20, [sp, #16]",
+    "    stp x21, x22, [sp, #32]",
+    "    stp x23, x24, [sp, #48]",
+    "    stp x25, x26, [sp, #64]",
+    "    stp x27, x28, [sp, #80]",
+    "    mov x19, x0",
+    "    mov x20, x1",
+    "    mov x21, x2",
+    "    mov x22, x3",
+    "    mov x0, sp",
+    "    bl {park}",
+    "    mov x0, x20",
+    "    mov x1, x21",
+    "    mov x2, x22",
+    "    blr x19",
+    "    mov x20, x0",
+    "    bl {unpark}",
+    "    mov x0, x20",
+    "    ldp x27, x28, [sp, #80]",
+    "    ldp x25, x26, [sp, #64]",
+    "    ldp x23, x24, [sp, #48]",
+    "    ldp x21, x22, [sp, #32]",
+    "    ldp x19, x20, [sp, #16]",
+    "    ldp x29, x30, [sp], #96",
+    "    ret",
+    park = sym bz_gc_park,
+    unpark = sym bz_gc_unpark,
+);
+
 extern "C" fn mark_roots(h: *mut Heap, sp: usize) {
     unsafe {
         let h = &mut *h;
@@ -645,9 +873,29 @@ extern "C" fn mark_roots(h: *mut Heap, sp: usize) {
         let (ds, de) = (core::ptr::addr_of!(__bz_data_start) as usize, core::ptr::addr_of!(__bz_bss_end) as usize);
         scan_range(h, ds, de);
         drain(h);
-        let top = BZ_STACK_TOP;
-        if top > sp {
-            scan_range(h, sp, top);
+        // this thread from the spilled registers up; every other live
+        // thread (parked: stopped) from where it parked
+        let mut mine = false;
+        for s in SLOTS.iter() {
+            if s.state.load(Ordering::SeqCst) == SLOT_FREE {
+                continue;
+            }
+            let (lo, top) = (s.lo.load(Ordering::Relaxed), s.top.load(Ordering::Relaxed));
+            let pending = s.pending.as_ptr() as usize;
+            scan_range(h, pending, pending + 8);
+            if lo <= sp && sp < top {
+                scan_range(h, sp, top);
+                mine = true;
+            } else {
+                let p = s.sp.load(Ordering::SeqCst).max(lo);
+                if top > p {
+                    scan_range(h, p, top);
+                }
+            }
+            drain(h);
+        }
+        if !mine && BZ_STACK_TOP > sp {
+            scan_range(h, sp, BZ_STACK_TOP);
         }
         drain(h);
         rescan_marked(h);
@@ -660,14 +908,21 @@ unsafe fn collect_locked(h: &mut Heap, force: bool) -> bool {
     if h.base == 0 || DISABLED.load(Ordering::Relaxed) || BZ_STACK_TOP == 0 {
         return false;
     }
-    if THREADS.load(Ordering::Acquire) != 0 {
-        // other threads may hold references in registers: grow instead
-        h.skipped += 1;
-        h.since = 0;
-        return false;
-    }
     let t0 = now_us();
+    let others = THREADS.load(Ordering::Acquire) != 0;
+    if others {
+        if !stop_world() {
+            // a thread kept running managed code: grow instead, try later
+            h.skipped += 1;
+            h.since = 0;
+            return false;
+        }
+        STOPPED_WORLD.fetch_add(1, Ordering::Relaxed);
+    }
     bz_gc_spill_and_mark(h);
+    if others {
+        GC_ACTIVE.store(false, Ordering::SeqCst);
+    }
     let freed = sweep(h);
     h.freed += freed;
     h.collections += 1;
@@ -720,4 +975,10 @@ pub unsafe fn summary() -> [usize; 5] {
     let v = [h.total, h.committed, h.blocks_used, h.count, free];
     unlock();
     v
+}
+
+/// Collections that stopped other threads (stop-the-world).
+#[no_mangle]
+pub extern "C" fn bz_gc_stopped_world() -> u64 {
+    STOPPED_WORLD.load(Ordering::Relaxed) as u64
 }

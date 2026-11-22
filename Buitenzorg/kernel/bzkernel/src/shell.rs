@@ -139,7 +139,7 @@ const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "lsusb", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
-    "settings", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
+    "settings", "notify", "icons", "cari", "search", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
 ];
 
 // ---- command lines: quoting, variables, globs, pipes, redirection ----------
@@ -1126,6 +1126,8 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "dmesg" | "log" => (dmesg(args.first().copied()), Effect::None),
         "lspci" => (lspci(), Effect::None),
         "lsusb" => (crate::usb::describe(), Effect::None),
+        "notify" | "notif" => (crate::notify::command(&args), Effect::None),
+        "cari" | "search" => (crate::search::command(&args), Effect::None),
         #[cfg(target_arch = "aarch64")]
         "pi" => (crate::platform::virt::tryboot::command(&args), Effect::None),
         "gpu" => (gpu_cmd(args.first().copied()), Effect::None),
@@ -1207,6 +1209,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             (lines, Effect::None)
         }
         "bg" | "wallpaper" => bg_cmd(args.first().copied()),
+        "icons" | "ikon" => icons_cmd(args.first().copied()),
         "saver" | "screensaver" => saver_cmd(args.first().copied()),
         "cursor" => cursor_cmd(args.first().copied()),
         "anim" => anim_cmd(args.first().copied()),
@@ -1324,6 +1327,22 @@ fn dmesg(filter: Option<&str>) -> Vec<String> {
 
 /// What the GPU is and how the firmware set it up (Intel, PCs).
 fn gpu_info() -> Vec<String> {
+    let mut out = gpu_info_device();
+    out.push(format!(
+        "display: vsync from {} at {}.{:03} Hz ({} wait(s) served); full screen: {}",
+        crate::vsync::source_name(),
+        crate::vsync::refresh_mhz() / 1000,
+        crate::vsync::refresh_mhz() % 1000,
+        crate::vsync::waits(),
+        match crate::wm::fullscreen_window() {
+            Some(id) => format!("window #{}", id),
+            None => String::from("off"),
+        }
+    ));
+    out
+}
+
+fn gpu_info_device() -> Vec<String> {
     #[cfg(target_arch = "x86_64")]
     {
         crate::intel_gpu::info()
@@ -1445,7 +1464,10 @@ fn help_lines() -> Vec<String> {
      "  netup             coba lagi menyalakan jaringan (DHCP)",
      "  echo <teks>       cetak teks",
      "  mounts            daftar mount VFS",
-     "  theme [nama|cycle|list]     ganti tema (8 style + dark/light)",
+     "  theme [nama|cycle|list|reload]  ganti tema (bawaan + paket /disk/THEMES/*.THM)",
+     "  icons [nama|list|bawaan]    paket ikon dari /disk/ICONS/*.BIN",
+     "  notify <judul> [isi]        kirim notifikasi (toast + pusat notifikasi)",
+     "  cari <kata>                 cari aplikasi, pengaturan, dan berkas",
      "  bg [nama|list|/path.bmp]    ganti wallpaper (bawaan / gambar user)",
      "  saver [nama|list|off]       screensaver (starfield, mystify, pipes, ...)",
      "  cursor [normal|besar]       ukuran kursor",
@@ -1636,6 +1658,28 @@ fn cd(arg: Option<&str>) -> Vec<String> {
     }
 }
 
+/// `icons [list | NAME | default]`: choose an icon pack from /disk/ICONS.
+fn icons_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
+    match arg {
+        None | Some("list") => {
+            let cur = crate::icons::pack_name();
+            let mut out = vec![format!("{}bawaan (ikon asli)", if cur.is_none() { "* " } else { "  " })];
+            for p in crate::icons::packs() {
+                out.push(format!("{}{}", if cur.as_deref() == Some(p.as_str()) { "* " } else { "  " }, p.to_ascii_lowercase()));
+            }
+            (out, Effect::None)
+        }
+        Some("default") | Some("bawaan") => {
+            let _ = crate::icons::set_pack(None);
+            (vec![String::from("ikon: bawaan")], Effect::Redraw)
+        }
+        Some(name) => match crate::icons::set_pack(Some(name)) {
+            Ok(()) => (vec![format!("ikon: {}", name)], Effect::Redraw),
+            Err(e) => (vec![format!("icons: {}", e)], Effect::None),
+        },
+    }
+}
+
 fn theme_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     match arg {
         None | Some("toggle") => {
@@ -1644,11 +1688,16 @@ fn theme_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
         Some("cycle") | Some("next") => {
             (vec![format!("tema: {}", theme::cycle())], Effect::Redraw)
         }
+        Some("reload") => {
+            let n = theme::load_packages();
+            (vec![format!("tema: {} paket tema dimuat dari /disk/THEMES", n)], Effect::Redraw)
+        }
         Some("list") => {
             let mut out = vec![String::from("tema tersedia:")];
             for t in theme::names().iter() {
                 let mark = if t.name == theme::name() { "* " } else { "  " };
-                out.push(format!("{}{}", mark, t.name));
+                let pkg = if theme::is_package(t.name) { "  (paket /disk/THEMES)" } else { "" };
+                out.push(format!("{}{}{}", mark, t.name, pkg));
             }
             (out, Effect::None)
         }

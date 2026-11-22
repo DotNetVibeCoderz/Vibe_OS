@@ -4,6 +4,8 @@
 //! borders, shadows, and the desktop per the theme's style tokens — switchable
 //! live at runtime (`theme <name>` / cycle).
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use spin::Mutex;
 
 use crate::gfx::{rgb, Color};
@@ -328,9 +330,18 @@ pub const THEMES: [Theme; 11] = [
 ];
 
 static CURRENT: Mutex<usize> = Mutex::new(DEFAULT);
+/// Themes from `/disk/THEMES/*.THM` (third-party theme packages), after the
+/// built-in ones: index `THEMES.len() + i`.
+static EXTRA: Mutex<Vec<Theme>> = Mutex::new(Vec::new());
+
+const DIR: &str = "/disk/THEMES";
 
 pub fn current() -> Theme {
-    THEMES[*CURRENT.lock()]
+    let i = *CURRENT.lock();
+    if i < THEMES.len() {
+        return THEMES[i];
+    }
+    EXTRA.lock().get(i - THEMES.len()).copied().unwrap_or(THEMES[DEFAULT])
 }
 
 pub fn name() -> &'static str {
@@ -343,7 +354,7 @@ pub fn is_dark() -> bool {
 
 /// Set the theme by name; returns true if found.
 pub fn set_by_name(name: &str) -> bool {
-    if let Some(idx) = THEMES.iter().position(|t| t.name == name) {
+    if let Some(idx) = all().iter().position(|t| t.name.eq_ignore_ascii_case(name)) {
         *CURRENT.lock() = idx;
         true
     } else {
@@ -353,9 +364,10 @@ pub fn set_by_name(name: &str) -> bool {
 
 /// Advance to the next theme (live cycle); returns its name.
 pub fn cycle() -> &'static str {
-    let mut cur = CURRENT.lock();
-    *cur = (*cur + 1) % THEMES.len();
-    THEMES[*cur].name
+    let n = THEMES.len() + EXTRA.lock().len();
+    let next = (*CURRENT.lock() + 1) % n;
+    *CURRENT.lock() = next;
+    current().name
 }
 
 /// Toggle between light and the default dark-ish look (light -> kebun,
@@ -371,7 +383,149 @@ pub fn set_default() {
     *CURRENT.lock() = DEFAULT;
 }
 
-/// All theme names, for `theme list`.
-pub fn names() -> &'static [Theme; 11] {
-    &THEMES
+/// Every theme: the built-in ones, then the installed packages.
+pub fn all() -> Vec<Theme> {
+    let mut v: Vec<Theme> = THEMES.to_vec();
+    v.extend(EXTRA.lock().iter().copied());
+    v
+}
+
+/// All themes, for `theme list` and the THEME setting.
+pub fn names() -> Vec<Theme> {
+    all()
+}
+
+/// Whether `name` is a theme package (not built in).
+pub fn is_package(name: &str) -> bool {
+    !THEMES.iter().any(|t| t.name == name) && EXTRA.lock().iter().any(|t| t.name == name)
+}
+
+fn color(v: &str) -> Option<Color> {
+    let h = v.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
+    }
+    let n = u32::from_str_radix(h, 16).ok()?;
+    Some(rgb((n >> 16) as u8, (n >> 8) as u8, n as u8))
+}
+
+/// Parse a `.THM` theme package: `key=value` lines (`#` comments), colors as
+/// `#RRGGBB`; keys left out come from `base` (a built-in theme, default
+/// kebun). None without a valid `name` (letters, digits, `-`, <= 24).
+pub fn parse(text: &str) -> Option<Theme> {
+    let pairs: Vec<(&str, &str)> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.split_once('=').map(|(k, v)| (k.trim(), v.trim())))
+        .collect();
+    let get = |k: &str| pairs.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
+    let name = get("name")?.to_ascii_lowercase();
+    if name.is_empty() || name.len() > 24 || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return None;
+    }
+    let mut t = get("base").and_then(|b| THEMES.iter().find(|t| t.name == b)).copied().unwrap_or(THEMES[DEFAULT]);
+    for (k, v) in &pairs {
+        let flag = *v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes");
+        match *k {
+            "dark" => t.dark = flag,
+            "gradient" => t.gradient = flag,
+            "border" => t.border_thickness = v.parse::<i32>().unwrap_or(t.border_thickness).clamp(0, 6),
+            "glass" => t.glass = v.parse::<u32>().unwrap_or(t.glass as u32).min(255) as u8,
+            "title_style" => {
+                t.title_style = match *v {
+                    "beveled" => TitleStyle::Beveled,
+                    "tab" => TitleStyle::Tab,
+                    _ => TitleStyle::Flat,
+                }
+            }
+            "shadow_style" => {
+                t.shadow_style = match *v {
+                    "none" => ShadowStyle::None,
+                    "hard" => ShadowStyle::HardOffset,
+                    _ => ShadowStyle::Soft,
+                }
+            }
+            _ => {
+                let Some(c) = color(v) else { continue };
+                match *k {
+                    "desktop_top" => t.desktop_top = c,
+                    "desktop_bottom" => t.desktop_bottom = c,
+                    "win_body" => t.win_body = c,
+                    "win_title_active" => t.win_title_active = c,
+                    "win_title_inactive" => t.win_title_inactive = c,
+                    "win_border" => t.win_border = c,
+                    "text" => t.text = c,
+                    "title_text" => t.title_text = c,
+                    "taskbar_bg" => t.taskbar_bg = c,
+                    "accent" => t.accent = c,
+                    "cursor" => t.cursor = c,
+                    "shadow" => t.shadow = c,
+                    _ => {}
+                }
+            }
+        }
+    }
+    // the name lives as long as the kernel (a few bytes per package)
+    t.name = alloc::boxed::Box::leak(name.into_boxed_str());
+    Some(t)
+}
+
+/// (Re)load the theme packages in /disk/THEMES. A package with a built-in
+/// theme's name is skipped. Returns how many packages are registered.
+pub fn load_packages() -> usize {
+    let entries = crate::vfs::list_entries(DIR).unwrap_or_default();
+    let current_name = name();
+    let mut found: Vec<Theme> = Vec::new();
+    for e in entries.iter().filter(|e| !e.is_dir && e.name.to_ascii_uppercase().ends_with(".THM")) {
+        let path = alloc::format!("{}/{}", DIR, e.name);
+        let Some(t) = crate::vfs::read(&path).ok().and_then(|b| String::from_utf8(b).ok()).and_then(|s| parse(&s)) else {
+            crate::println!("[theme] {}: not a theme package", path);
+            continue;
+        };
+        if THEMES.iter().any(|b| b.name == t.name) || found.iter().any(|f| f.name == t.name) {
+            continue;
+        }
+        found.push(t);
+    }
+    let n = found.len();
+    // keep the current theme selected if it is still there
+    let still = found.iter().position(|t| t.name == current_name);
+    {
+        let mut extra = EXTRA.lock();
+        let mut cur = CURRENT.lock();
+        if *cur >= THEMES.len() {
+            *cur = still.map_or(DEFAULT, |i| THEMES.len() + i);
+        }
+        *extra = found;
+    }
+    if n > 0 {
+        crate::println!("[theme] {} theme package(s) from {}", n, DIR);
+    }
+    n
+}
+
+/// Self-test: a package parses (base + overrides), registers, can be
+/// selected, and a broken one is refused.
+pub fn self_test() -> bool {
+    let sample = "name=uji-tema\nbase=light\naccent=#123456\nglass=300\ntitle_style=tab\n";
+    let parsed = parse(sample)
+        .filter(|t| t.accent == rgb(0x12, 0x34, 0x56) && t.glass == 255 && !t.dark && t.title_style == TitleStyle::Tab);
+    let refused = parse("name=bad name\n").is_none() && parse("accent=#000000\n").is_none();
+    let loaded = load_packages();
+    let before = name();
+    let pkg = all().iter().find(|t| is_package(t.name)).map(|t| t.name);
+    let switched = pkg.is_none_or(|n| set_by_name(n) && name() == n);
+    set_by_name(before);
+    let ok = parsed.is_some() && refused && switched;
+    if ok {
+        crate::println!(
+            "[kernel] MILESTONE: THEME PACKAGES OK ({} package(s) in {}, base + overrides parsed, broken files refused)",
+            loaded,
+            DIR
+        );
+    } else {
+        crate::println!("[theme] self-test: parsed {} refused {} switched {}", parsed.is_some(), refused, switched);
+    }
+    ok
 }

@@ -32,6 +32,40 @@ static unsafe class GcTest
     [DllImport("*")] static extern void bz_gc_stats(ulong* outp);
     [DllImport("*")] static extern void bz_heap_stats(ulong* outp);
     [DllImport("*")] static extern ulong bz_gc_collect();
+    [DllImport("*")] static extern ulong bz_gc_stopped_world();
+    [DllImport("*")] static extern ulong bz_thread_create(ulong entry, ulong arg);
+    [DllImport("*")] static extern ulong bz_thread_join(ulong tid);
+    [DllImport("*")] static extern void bz_yield();
+
+    static int s_workerOk;
+
+    // A worker keeps a live list in a local (only its own stack holds it)
+    // and makes 24 MiB of garbage: collections that run meanwhile must stop
+    // it at a safepoint and scan its stack.
+    static void Worker(ulong id)
+    {
+        Node mine = Build(2000);
+        long junk = 0;
+        while (junk < (24L << 20))
+        {
+            for (int i = 0; i < 500; i++)
+            {
+                var n = new Node { Value = i, Payload = new int[8] };
+                junk += 24 + 56;
+            }
+            var a = new byte[40000];
+            a[0] = 1;
+            junk += a.Length;
+            if (!Verify(mine, 2000)) return;
+        }
+        if (Verify(mine, 2000)) Interlocked(ref s_workerOk);
+    }
+
+    static void Interlocked(ref int x)
+    {
+        fixed (int* p = &x) bz_atomic_add32(p, 1);
+    }
+    [DllImport("*")] static extern int bz_atomic_add32(int* p, int v);
 
     static ulong Gc(int i) { ulong* s = stackalloc ulong[8]; bz_gc_stats(s); return s[i]; }
     static ulong Heap(int i) { ulong* s = stackalloc ulong[5]; bz_heap_stats(s); return s[i]; }
@@ -150,9 +184,35 @@ static unsafe class GcTest
         Check(Gc(1) + 100000 < liveBefore, "FAIL: dropped list not reclaimed");
         Check(Verify(local, 3000), "FAIL: local list after second collect");
 
+        // with threads: two workers and the main thread allocate at once
+        ulong stoppedBefore = bz_gc_stopped_world();
+        ulong collBefore = Gc(0);
+        s_workerOk = 0;
+        delegate*<ulong, void> entry = &Worker;
+        ulong t1 = bz_thread_create((ulong)entry, 1);
+        ulong t2 = bz_thread_create((ulong)entry, 2);
+        Node mainList = Build(1000);
+        long mjunk = 0;
+        while (mjunk < (16L << 20))
+        {
+            var a = new long[2000];
+            a[1] = 5;
+            mjunk += a.Length * 8;
+            if ((mjunk & 0xFFFFF) < 16000) bz_yield();
+        }
+        if (t1 != 0) bz_thread_join(t1);
+        if (t2 != 0) bz_thread_join(t2);
+        ulong stopped = bz_gc_stopped_world() - stoppedBefore;
+        Num("GC: collections with threads ", Gc(0) - collBefore);
+        Num("GC: stop-the-world collections ", stopped);
+        Num("GC: skipped (a thread never reached a safepoint) ", Gc(5));
+        Check(t1 != 0 && t2 != 0 && s_workerOk == 2, "FAIL: worker lists damaged");
+        Check(Verify(mainList, 1000) && Verify(local, 3000), "FAIL: main lists after threaded collections");
+        Check(stopped >= 1, "FAIL: no collection ran while threads were alive");
+
         if (s_failures == 0)
         {
-            Console.WriteLine("MILESTONE: GC OK (128 MiB of garbage in small/medium/large objects reclaimed, committed memory bounded, live lists + large array intact, dropped static list reclaimed)");
+            Console.WriteLine("MILESTONE: GC OK (128 MiB of garbage in small/medium/large objects reclaimed, committed memory bounded, live lists + large array intact, dropped static list reclaimed, stop-the-world collections with 2 worker threads)");
             return 0;
         }
         return 1;

@@ -97,6 +97,10 @@ pub fn run() -> ! {
     let mut last_input = interrupts::ticks();
     let mut last_keys = keyboard::pushed();
     let mut saver_active = false;
+    let mut last_notes = crate::notify::generation();
+    let mut settings_restored = false;
+    let started = crate::interrupts::ticks();
+    let mut last_save = started;
 
     if w != 0 {
         wm::render_frame(&mut back, w, h);
@@ -177,6 +181,41 @@ pub fn run() -> ! {
         // jobs of terminal tabs: their output and their end
         terminal::poll();
 
+        // desktop settings kept on /disk: applied once the wallpapers can be
+        // loaded (a normal start), then saved whenever they change
+        if !settings_restored && !crate::bootmode::selftest() && (crate::wallpaper::label() != "theme" || now.saturating_sub(started) > 146) {
+            settings_restored = true;
+            crate::settings::restore();
+        }
+        if now.saturating_sub(last_save) >= 55 {
+            last_save = now;
+            crate::settings::autosave();
+        }
+
+        // notifications: a new one (toast), one that expired, one removed
+        let notes = crate::notify::generation();
+        if notes != last_notes || crate::notify::toast_expired(now) {
+            last_notes = crate::notify::generation();
+            input = true;
+            other = true;
+        }
+
+        // The Start menu's search box and the power confirmation take the
+        // keyboard while they are up, whoever has the focus.
+        if wm::takes_keys() {
+            while let Some(c) = keyboard::pop() {
+                input = true;
+                other = true;
+                if !saver_active && wm::shell_key(c) {
+                    let q = wm::search_text();
+                    wm::set_results(crate::search::query(&q, 9));
+                }
+                if !wm::takes_keys() {
+                    break;
+                }
+            }
+        }
+
         // Keys go to the terminal unless the focused window belongs to a
         // running program — then they stay queued for its KEY_READ.
         if !process::is_alive(wm::focus_owner()) {
@@ -252,7 +291,17 @@ pub fn run() -> ! {
                         "tile" => {
                             wm::tile();
                         }
+                        "notifications" => wm::toggle_center(),
                         _ => {}
+                    }
+                    input = true;
+                    other = true;
+                } else if let Some(path) = app_name.strip_prefix("open:") {
+                    // a search hit: Berkas opens at the file
+                    let args = alloc::format!("--open {}", path);
+                    match app::spawn_with_args("mfiles", &args) {
+                        Ok(pid) => println!("[desktop] opened '{}' in Berkas (pid {})", path, pid),
+                        Err(e) => println!("[desktop] open '{}' failed: {}", path, e),
                     }
                     input = true;
                     other = true;
@@ -260,7 +309,10 @@ pub fn run() -> ! {
                 // Start it as its own process; the desktop keeps running.
                 match app::spawn_named(&app_name) {
                     Ok(pid) => println!("[desktop] launched '{}' as pid {}", app_name, pid),
-                    Err(e) => println!("[desktop] launch '{}' failed: {}", app_name, e),
+                    Err(e) => {
+                        println!("[desktop] launch '{}' failed: {}", app_name, e);
+                        crate::notify::post("Desktop", &alloc::format!("{} tidak bisa dibuka", app_name), e);
+                    }
                 }
                 input = true;
                 other = true;
@@ -317,6 +369,7 @@ pub fn hotkey(h: keyboard::Hotkey) {
             Ok(path) => {
                 println!("[desktop] screenshot saved: {}", path);
                 wm::show_osd(&alloc::format!("Layar disimpan: {}", path), -1);
+                crate::notify::post("Tangkapan layar", "Layar disimpan", &path);
             }
             Err(e) => {
                 println!("[desktop] screenshot failed: {}", e);

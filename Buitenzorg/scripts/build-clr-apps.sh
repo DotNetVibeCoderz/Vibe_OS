@@ -19,7 +19,11 @@ for proj in "$apps"/*/*.csproj; do
     cp "$(dirname "$proj")/bin/Release/net10.0/$name.dll" "$dist/$out"
 done
 rustnet="${RUSTNET_ROOT:-$root/../../Vibe_Runtime/RustNetRuntime}"
-if [ -d "$rustnet/tests/fixtures" ]; then
+# The RustCLR fixtures (CONFORM.DLL, MODERN.DLL) are committed, built from the
+# commit clrhost pins; rebuilding them from a checkout that is at another
+# commit (or has uncommitted work) gives assemblies the pinned runtime cannot
+# run. Only on request: BZ_REBUILD_FIXTURES=1 with the checkout at the pin.
+if [ "${BZ_REBUILD_FIXTURES:-0}" = "1" ] && [ -d "$rustnet/tests/fixtures" ]; then
     for pair in Conformance:CONFORM.DLL ModernSyntax:MODERN.DLL; do
         fx="${pair%%:*}"; out="${pair#*:}"
         echo "==> RustCLR fixture $fx -> $out"

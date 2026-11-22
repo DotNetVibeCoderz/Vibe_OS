@@ -1,0 +1,10 @@
+{
+  "id": "com.example.gamejs",
+  "name": "Game Script",
+  "type": "desktop",
+  "language": "javascript",
+  "version": "0.1.0",
+  "entry": "main.js",
+  "permissions": ["audio"],
+  "theme": "system"
+}

@@ -16,7 +16,7 @@ return args switch
     [] or ["help"] or ["--help"] or ["-h"] => Help(),
     ["version"] or ["--version"] => Version(),
     ["new", var template, var name] => NewProject(template, name),
-    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, ai-csharp, js-app, ts-app, python-app, ai-js)"),
+    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, ai-csharp, game-csharp, widget-csharp, js-app, ts-app, python-app, ai-js, game-js, web-app)"),
     ["manifest", "validate", var path] => ValidateManifest(path),
     ["manifest", ..] => Fail("usage: bz manifest validate <path-to-app.manifest>"),
     ["pack", .. var rest] when rest.Length >= 1 => Pack(rest),
@@ -337,7 +337,7 @@ static void Personalize(string target, string name, string bzRoot)
     if (n83.Length == 0 || char.IsDigit(n83[0])) n83 = "APP" + n83;
     if (n83.Length > 8) n83 = n83[..8];
     string Fill(string s) => s.Replace("__APPNAME__", app).Replace("__NAME83__", n83).Replace("__BZROOT__", bzRoot);
-    var text = new[] { ".cs", ".csproj", ".md", ".js", ".ts", ".py", ".csx", ".json", ".manifest", ".txt", ".ps1", ".sh" };
+    var text = new[] { ".cs", ".csproj", ".md", ".js", ".ts", ".py", ".csx", ".json", ".manifest", ".txt", ".ps1", ".sh", ".htm", ".html", ".css" };
     foreach (var file in Directory.GetFiles(target, "*", SearchOption.AllDirectories))
     {
         var path = file;

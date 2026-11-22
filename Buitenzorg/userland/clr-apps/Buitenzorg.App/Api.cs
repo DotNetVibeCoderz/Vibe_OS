@@ -42,6 +42,77 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int ProcKill(long pid);
     [DllImport("buitenzorg")] internal static extern long SysStat(int field);
     [DllImport("buitenzorg")] internal static extern string ShellRun(string line);
+    [DllImport("buitenzorg")] internal static extern int Notify(string title, string body);
+    [DllImport("buitenzorg")] internal static extern long WinCtl(long opAndWindow, long arg);
+}
+
+/// <summary>
+/// Desktop notifications: a toast in the top-right corner for a few seconds,
+/// kept in the action center (the bell in the tray). The app name shown is the
+/// program's. Off the device the notifications are kept in <see cref="Posted"/>.
+/// </summary>
+public static class Notifications
+{
+    static bool _offDevice;
+    static int _simId;
+
+    /// <summary>What was posted off the device (title, body), for tests.</summary>
+    public static readonly List<string> Posted = new();
+
+    /// <summary>Post a notification; returns its id (-1 when refused).</summary>
+    public static int Show(string title, string body = "")
+    {
+        if (!_offDevice)
+        {
+            try { return Native.Notify(title, body); }
+            catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _offDevice = true; }
+        }
+        Posted.Add(title + " -- " + body);
+        return ++_simId;
+    }
+}
+
+/// <summary>The display's refresh: wait for the next vertical blank to draw
+/// one frame per refresh (no tearing, no wasted CPU).</summary>
+public static class Display
+{
+    static bool _offDevice;
+    static long _simCount;
+
+    static long Ctl(long op, long arg)
+    {
+        if (!_offDevice)
+        {
+            try { return Native.WinCtl(op, arg); }
+            catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _offDevice = true; }
+        }
+        return -1;
+    }
+
+    /// <summary>Block until the next vblank; returns the vblank counter.</summary>
+    public static long WaitVsync()
+    {
+        long r = Ctl(3, 0);
+        if (_offDevice)
+        {
+            Thread.Sleep(16);
+            return ++_simCount;
+        }
+        return r;
+    }
+
+    /// <summary>The refresh rate in Hz (60 when it cannot be read).</summary>
+    public static double RefreshHz
+    {
+        get
+        {
+            long r = Ctl(4, 0);
+            long mhz = r & 0xFFFFFFFF;
+            return r < 0 || mhz == 0 ? 60.0 : mhz / 1000.0;
+        }
+    }
+
+    internal static long Fullscreen(int window, bool on) => Ctl(0 | ((long)window << 8), on ? 1 : 0);
 }
 
 /// <summary>Colors as 0xRRGGBB.</summary>
@@ -104,6 +175,16 @@ public sealed class Window
 
     /// <summary>Recompose the desktop so what was drawn becomes visible.</summary>
     public void Present() => Native.WinPresent(Id);
+
+    /// <summary>Exclusive full screen on / off (games, video): the window's
+    /// client area becomes the whole screen and the desktop shell is hidden.
+    /// Returns the client size as (width, height); (0, 0) when refused.</summary>
+    public (int Width, int Height) SetFullscreen(bool on)
+    {
+        long r = Display.Fullscreen(Id, on);
+        if (r < 0 || r > 0xFFFFFFFFL) return (0, 0);
+        return ((int)(r & 0xFFFF), (int)((r >> 16) & 0xFFFF));
+    }
 }
 
 /// <summary>The keyboard (keys reach the app whose window has the focus).</summary>

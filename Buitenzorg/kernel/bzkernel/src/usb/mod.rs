@@ -158,6 +158,7 @@ pub fn poll() {
         match crate::vfs::mount(&mount, disk, false) {
             Ok(()) => {
                 crate::println!("[kernel] MILESTONE: USB HOTPLUG DISK OK (a disk plugged in after boot is mounted at /{})", mount);
+                crate::notify::post("USB", "Disk USB terpasang", &alloc::format!("dibuka di /{}", mount));
                 HOT_MOUNTS.lock().push((controller, device, mount));
             }
             Err(e) => crate::println!("[usb] hot-plugged disk not mounted: {}", e),

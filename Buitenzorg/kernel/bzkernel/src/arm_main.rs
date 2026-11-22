@@ -94,6 +94,9 @@ mod appnet;
 mod rng;
 mod ssh;
 mod wm;
+mod notify;
+mod search;
+mod vsync;
 mod gfx3d;
 mod bootmode;
 
@@ -341,6 +344,17 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     if crate::bootmode::selftest() {
         desktop::ensure_session_windows();
         shell::script_self_test();
+        notify::self_test();
+        search::self_test();
+        vsync::self_test();
+        settings::self_test();
+        theme::self_test();
+        icons::self_test();
+        if wm::self_test() {
+            println!("[kernel] MILESTONE: DESKTOP SHELL OK (start menu + launcher + icons)");
+        } else {
+            println!("[kernel] desktop shell self-test failed");
+        }
         desktop::hotkey_self_test();
         usb::hid::pad_self_test();
         virtio::snd::stream_self_test();
@@ -1124,6 +1138,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
         theme::set_default();
         let n = icons::load();
         font::load_all();
+        theme::load_packages();
         if st {
             font::self_test();
         }

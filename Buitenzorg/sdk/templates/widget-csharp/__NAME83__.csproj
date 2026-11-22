@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- __APPNAME__: a desktop widget (docked on the widget board) with Buitenzorg.UI.
+       /disk/__NAME83__.DLL, `run __NAME83__`. Created by `bz new widget-csharp`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>__NAME83__</AssemblyName>
+    <RootNamespace>__NAME83__</RootNamespace>
+    <BuitenzorgRoot Condition="'$(BuitenzorgRoot)' == ''">__BZROOT__</BuitenzorgRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(BuitenzorgRoot)/userland/clr-apps/Buitenzorg.UI/Buitenzorg.UI.csproj" />
+  </ItemGroup>
+</Project>

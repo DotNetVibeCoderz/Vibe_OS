@@ -10,31 +10,17 @@
 // System.IDisposable (for `using`) is added to zerolib itself by
 // tools/ZerolibPatch: the compiler looks for it in the core library only.
 //
-// Keep `Message` the first field: an unhandled exception is reported by the
-// shim as "Unhandled exception: <Message>", read from there.
 //
-// Only `throw` raises exceptions. The checks zerolib makes itself (array
-// index, null, division by zero) still end the program with a message.
+// System.Exception, SystemException and the exceptions the runtime itself
+// raises (IndexOutOfRange, NullReference, InvalidCast, Overflow,
+// DivideByZero, ArrayTypeMismatch) live in the patched zerolib
+// (tools/ZerolibPatch, patch v8): an array index out of range, a null
+// dereference, an integer division by zero, a failed cast and a bad array
+// store throw them, and `catch` takes them like any other exception.
 // (zerolib has no string concatenation, so messages are fixed strings.)
 
 namespace System
 {
-    public class Exception
-    {
-        public string Message;
-        public Exception InnerException;
-        public Exception() { Message = "Exception of type System.Exception was thrown."; }
-        public Exception(string message) { Message = message; }
-        public Exception(string message, Exception inner) { Message = message; InnerException = inner; }
-    }
-
-    public class SystemException : Exception
-    {
-        public SystemException() : base("System error.") { }
-        public SystemException(string message) : base(message) { }
-        public SystemException(string message, Exception inner) : base(message, inner) { }
-    }
-
     public class ApplicationException : Exception
     {
         public ApplicationException() : base("Error in the application.") { }
@@ -86,36 +72,6 @@ namespace System
     {
         public FormatException() : base("One of the identified items was in an invalid format.") { }
         public FormatException(string message) : base(message) { }
-    }
-
-    public class IndexOutOfRangeException : SystemException
-    {
-        public IndexOutOfRangeException() : base("Index was outside the bounds of the array.") { }
-        public IndexOutOfRangeException(string message) : base(message) { }
-    }
-
-    public class NullReferenceException : SystemException
-    {
-        public NullReferenceException() : base("Object reference not set to an instance of an object.") { }
-        public NullReferenceException(string message) : base(message) { }
-    }
-
-    public class InvalidCastException : SystemException
-    {
-        public InvalidCastException() : base("Specified cast is not valid.") { }
-        public InvalidCastException(string message) : base(message) { }
-    }
-
-    public class OverflowException : SystemException
-    {
-        public OverflowException() : base("Arithmetic operation resulted in an overflow.") { }
-        public OverflowException(string message) : base(message) { }
-    }
-
-    public class DivideByZeroException : SystemException
-    {
-        public DivideByZeroException() : base("Attempted to divide by zero.") { }
-        public DivideByZeroException(string message) : base(message) { }
     }
 
     public class TimeoutException : SystemException

@@ -13,6 +13,63 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Changed -- native C# behaviour (2026-11-22)
+
+- A null dereference or integer division by zero is an exception now. When
+  nobody catches it the program ends with `Unhandled exception: ...` and
+  **no crash report is written and the debugger does not stop**; other faults
+  (wild pointers) still do both. `crashme` now uses a wild pointer.
+- The collector also runs while threads are alive, so an object reachable
+  only through a raw address outside the roots is freed. `pthread.cs` relied
+  on the old behaviour; it now holds managed references and fails if no
+  collection ran while its threads were alive.
+
+### Added -- the remaining small/medium features (2026-11-22)
+
+- **Notifications and an action center:** syscall `NOTIFY` (73) posts a
+  toast (top right, ~4.5 s) and keeps the last 50 behind a bell in the tray
+  (unread dot, remove, clear). Managed `Notifications.Show`, UI-script
+  `notify`, shell `notify`. The kernel posts its own (USB disk plugged in,
+  screenshot saved, an app that failed to start) -> `MILESTONE: NOTIFY OK`.
+- **Global search:** the Start menu's search box and shell `cari` look
+  through apps, settings pages and the files/folders of every mount; a file
+  hit opens Berkas at it (`mfiles --open PATH`) -> `MILESTONE: SEARCH OK`.
+- **Windows:** open/close animations, double-click a title bar to maximize /
+  restore, a confirmation dialog before shutdown and restart.
+- **Settings:** `RESOLUTION` (12; std VGA, applied at the next start when the
+  heap allows it), `UI_SCALE` (13; 100/110/125 % text), `ICON_PACK` (14).
+  Theme, wallpaper, screensaver + delay, animations, cursor, scale, icon pack
+  and resolution are saved to `/disk/DESKTOP.CFG` when they change and
+  restored at start-up -> `MILESTONE: SETTINGS SAVED OK`. Pengaturan shows the
+  new choices (22 checks off the device).
+- **Theme packages** (`/disk/THEMES/*.THM`, key=value over a built-in base;
+  sample `SENJA.THM`; `theme reload`) -> `MILESTONE: THEME PACKAGES OK`, and
+  **icon packs** (`/disk/ICONS/*.BIN` laid over the built-in icons; sample
+  `DAUN.BIN`; shell `icons`) -> `MILESTONE: ICON PACKS OK`.
+- **Display:** syscall `WIN_CTL` (74) -- zero-copy shared surfaces (two
+  pinned buffers the compositor reads in place), `VSYNC_WAIT`/`VSYNC_INFO`
+  (Intel pipe frame counter when the display is on, else 60 Hz -- the Intel
+  source is untested on hardware), exclusive `FULLSCREEN`. The SDL layer (and
+  so DOOM), `Display.WaitVsync`/`Window.SetFullscreen` and UI-script
+  `vsync`/`fullscreen` use it -> `MILESTONE: VSYNC OK`, `SURFACE OK` (RISC-V
+  test program).
+- **Templates:** `bz new web-app`, `widget-csharp`, `game-csharp`, `game-js`
+  (VS Code's list too); MagicAppGen `managed-game` and `js-game` plus a
+  `game` API reference. UI scripts gained `keydown`, `sprite`, `hit`, `near`
+  and `sound`.
+- **Native C#:** null dereferences, array bounds, division by zero, failed
+  casts, bad array stores and checked overflow now throw catchable
+  exceptions (ZerolibPatch v8 moves the exception types into zerolib; the
+  kernel redirects null/divide faults to a handler registered with the new
+  `FAULT_HANDLER` syscall, 75; `exc.cs` 18 checks). The collector no longer
+  skips while threads are alive: threads park at safepoints (allocation and
+  blocking calls) and the collector stops the world (`gc.cs` with two
+  allocating workers). A thread computing > 50 ms without a safepoint still
+  makes a collection give up.
+- ABI: `COUNT` 76; setting keys 12-14 (both mirrors, both contract tests,
+  `docs/abi.md`). Guide `docs/desktop-features.md` (+ `.id.md`).
+
+
 ### Changed -- `ask` answers with the local GGUF model; RustCLR 8500b96 (2026-11-22)
 
 - **`ask PROMPT`** now runs the GGUF language model on every image

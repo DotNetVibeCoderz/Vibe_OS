@@ -539,6 +539,15 @@ Item lanjutan sebelum v1.0 (permintaan 2026-07-24):
   keputusan terdokumentasi); desktop baru (taskbar+start menu+ikon) tampil dan
   bisa dipakai meluncurkan app.
 
+## 🧺 Fitur kecil/sedang yang tersisa — dirampungkan (2026-11-22) ✅
+
+- **Desktop:** notifikasi + pusat notifikasi (`NOTIFY` 73, lonceng di tray), pencarian global (kotak cari menu Start, `cari`), animasi buka/tutup jendela, klik dua kali bilah judul = maksimalkan, konfirmasi sebelum matikan/mulai ulang.
+- **Pengaturan:** resolusi layar (std VGA, berlaku saat mulai berikutnya) + ukuran teks 100/110/125 %; tema, wallpaper, screensaver, kursor, skala, paket ikon dan resolusi disimpan di `/disk/DESKTOP.CFG`.
+- **Pengembang:** template SDK `web-app`, `widget-csharp`, `game-csharp`, `game-js` (+ MagicAppGen `managed-game` / `js-game`), fungsi game untuk skrip UI (`keydown`, `sprite`, `hit`, `near`, `sound`), paket tema pihak ketiga (`/disk/THEMES/*.THM`) dan paket ikon (`/disk/ICONS/*.BIN`). MVVM sudah ada di Buitenzorg.UI.
+- **Grafis:** permukaan shared-memory tanpa salin, vsync, layar penuh eksklusif (`WIN_CTL` 74); SDL dan DOOM memakainya.
+- **C# native:** null / indeks / bagi nol / cast / array store / overflow menjadi exception (ZerolibPatch v8 + `FAULT_HANDLER` 75); GC berjalan dengan thread hidup (stop-the-world di safepoint).
+- Belum diuji di perangkat keras: sumber vblank Intel; resolusi hanya untuk std VGA.
+
 ## 🪄 MagicAppGen — Magic App Generator (tools host, pra-v1.0)
 Aplikasi desktop **Avalonia UI** (cross-platform, .NET) bernama **Magic App
 Generator (MagicAppGen)**: code editor + asisten AI untuk men-generate aplikasi

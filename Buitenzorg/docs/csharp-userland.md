@@ -60,16 +60,31 @@ when blocks run out, or on `BzGC.Collect()`.
 - **Sweep:** unmarked slots are freed and zeroed when handed out again; empty
   blocks return to the pool.
 
-**Limit:** a collection is skipped while the program has other threads alive
-(`bz_thread_create` counts them): their references may sit in registers the
-collector cannot see, so the heap grows until they are gone. The libc-style
-`malloc` family (used by the shim itself) is a separate, never-collected heap.
+**A bare address is not a reference.** An object whose address is stored
+only outside the roots (an mmap page, kernel memory) is collected, with or
+without threads: keep a managed reference to it for as long as it is used.
+
+**Threads: stop the world at safepoints.** Every thread has a slot (stack
+range, saved stack pointer, state). A thread parks itself at a *safepoint* --
+every allocation (`RhpNewFast` / `RhpNewArray`) and every blocking call
+(`bz_yield`, `bz_thread_join`, `bz_futex_wait`, `bz_proc_wait`,
+`bz_mutex_lock`) -- through `bz_gc_safe`, which spills its callee-saved
+registers onto its own stack first, so the collector can scan every parked
+thread's stack from its saved pointer to its top. The collecting thread raises
+a flag and waits (up to 50 ms) until every other running thread has parked;
+threads that are blocked are parked already. **Limit:** a thread that
+computes for longer than that without allocating or blocking makes the
+collection give up (counted in `SkippedCount()`); the heap then grows until
+the next try. The libc-style `malloc` family (used by the shim itself) is a
+separate, never-collected heap.
 
 `BzGC` (bzbcl2.cs): `Collect()`, `CollectionCount()`, `LiveBytes()`,
 `FreedBytes()`, `SkippedCount()`, `LastPauseMicroseconds()`, `SetEnabled()`,
 plus the old allocation figures. `gc.cs` allocates 128 MiB of garbage while
-keeping linked lists and a large array alive: 18 collections, 187 MiB freed,
-peak committed 14 MiB, live data intact -> `MILESTONE: GC OK` (x86-64 and ARM64).
+keeping linked lists and a large array alive, then lets two worker threads
+allocate 24 MiB each while the main thread allocates too: collections run
+with all three threads alive (`bz_gc_stopped_world()` >= 1) and every live
+list is intact -> `MILESTONE: GC OK` (x86-64 and ARM64).
 
 ## Exceptions
 
@@ -89,10 +104,24 @@ Clauses are matched against the call instruction (return address - 1): on
 ARM64 a call can be the last instruction of a `try` block.
 
 No handler: `Unhandled exception: <Message>` and the program ends (finally
-blocks do not run then, as in .NET). The checks zerolib makes itself (null,
-array bounds, division by zero) still end the program with a message instead
-of throwing, and an exception thrown inside a `when` filter is not supported.
-`exc.cs` checks 13 cases -> `MILESTONE: EXCEPTIONS OK` (x86-64 and ARM64).
+blocks do not run then, as in .NET). An exception thrown inside a `when`
+filter is not supported.
+
+**Runtime checks throw.** `tools/ZerolibPatch` (patch version 8) moves
+`System.Exception` and the runtime's exception types (`NullReferenceException`,
+`IndexOutOfRangeException`, `DivideByZeroException`, `OverflowException`,
+`InvalidCastException`, `ArrayTypeMismatchException`) into zerolib and makes
+its throw helpers really throw, so a failed array bounds check, a failed cast
+(`(T)x`), a bad covariant array store and checked overflow raise catchable
+exceptions. Hardware faults do too: `_start` registers handlers with the
+`FAULT_HANDLER` syscall (75), and the kernel redirects a load or store below
+64 KiB (a null dereference) and an x86 integer division by zero into the
+program as if the faulting instruction had called the handler, which throws
+`NullReferenceException` / `DivideByZeroException` (ARM64 has no division
+trap: ILC emits an explicit check there). Limit: on ARM64 a null fault in a
+leaf function that keeps its return address only in the link register
+unwinds from that function's caller. `exc.cs` checks 18 cases (5 of them
+these) -> `MILESTONE: EXCEPTIONS OK` (x86-64 and ARM64).
 
 ## Execution path in the kernel
 
@@ -148,17 +177,16 @@ task is done. An exception escaping an async method faults its task, and
 `await`, `.Result` and `Wait()` throw it again (the exception itself, not an
 AggregateException); an `async void` method's exception is dropped. For the
 full .NET library
-(LINQ, reflection, a thread-safe GC), use the managed path (RustCLR,
+(LINQ, reflection), use the managed path (RustCLR,
 [managed-apps.md](managed-apps.md)).
 
 ## What's next
 
-On the native path: collections while other threads run (suspending them at
-safe points and scanning their stacks), turning zerolib's own checks (null,
-array bounds, division by zero, failed casts) into catchable exceptions,
-exceptions thrown from `when` filters, and an RISC-V build (bflat and ILC have
-no RISC-V target -- C# reaches RISC-V through RustCLR). Full .NET (reflection,
-dynamic loading, the whole BCL) is the managed RustCLR path.
+On the native path: exceptions thrown from `when` filters, crash reports for
+uncaught runtime exceptions, safepoints inside long compute-only loops, and a
+RISC-V build (bflat and ILC have no RISC-V target -- C# reaches RISC-V through
+RustCLR). Full .NET (reflection, dynamic loading, the whole BCL) is the
+managed RustCLR path.
 
 ---
 

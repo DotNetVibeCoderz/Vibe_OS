@@ -139,6 +139,9 @@ fn destroy_when_home(space: aspace::Space) {
     // 3D contexts, meshes and textures do not live in the address space
     crate::gfx3d::release(space.id);
     crate::compute::release(space.id);
+    // windows stop reading its surfaces before its frames are freed
+    crate::wm::detach_surfaces(space.id);
+    crate::memory::shared_release(space.id);
     if task::wait_space_stopped(space.id) {
         aspace::destroy(space);
     } else {

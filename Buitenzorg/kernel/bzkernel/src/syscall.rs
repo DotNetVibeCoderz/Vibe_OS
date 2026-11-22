@@ -165,6 +165,9 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::DNS_RESOLVE
             | sysno::IDLE_INHIBIT
             | sysno::CLIPBOARD
+            | sysno::NOTIFY
+            | sysno::WIN_CTL
+            | sysno::FAULT_HANDLER
     )
 }
 
@@ -186,6 +189,40 @@ fn user_write(ptr: u64, len: u64) -> bool {
         return ptr != 0;
     }
     crate::memory::validate_user_range(ptr, len, true)
+}
+
+/// Read NUL-terminated UTF-8 text (at most `max` bytes) from user space.
+fn read_user_text(ptr: u64, max: u64) -> Option<alloc::string::String> {
+    if ptr == 0 {
+        return None;
+    }
+    let len = if from_user() {
+        crate::memory::validate_user_cstr(ptr, max)?
+    } else {
+        let p = ptr as *const u8;
+        let mut n = 0u64;
+        while n < max && unsafe { core::ptr::read_volatile(p.add(n as usize)) } != 0 {
+            n += 1;
+        }
+        n
+    };
+    let p = ptr as *const u8;
+    let bytes: alloc::vec::Vec<u8> = (0..len as usize).map(|i| unsafe { core::ptr::read_volatile(p.add(i)) }).collect();
+    Some(alloc::string::String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// NOTIFY: a toast + an entry in the action center, under the program's name.
+fn sys_notify(title: u64, body: u64) -> u64 {
+    let Some(t) = read_user_text(title, 256) else { return syserr::INVAL };
+    let b = if body == 0 { alloc::string::String::new() } else {
+        match read_user_text(body, 1024) {
+            Some(b) => b,
+            None => return syserr::INVAL,
+        }
+    };
+    let pid = crate::aspace::current_id();
+    let app = crate::process::name_of(pid).unwrap_or_else(|| alloc::string::String::from("Sistem"));
+    crate::notify::post(&app, &t, &b) as u64
 }
 
 /// Read a NUL-terminated path from user space, bounded and validated.
@@ -392,6 +429,9 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_READ_AT => sys_fs_read_at(a0, a1, a2),
         sysno::FONT_OP => sys_font_op(a0, a1, a2),
         sysno::COMPUTE_OP => sys_compute_op(a0, a1, a2),
+        sysno::NOTIFY => sys_notify(a0, a1),
+        sysno::WIN_CTL => crate::wm::win_ctl(a0, a1),
+        sysno::FAULT_HANDLER => crate::process::set_fault_handler(crate::aspace::current_id(), a0, a1),
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
         sysno::FS_WRITE => sys_fs_write(a0, a1, a2),
         sysno::FS_APPEND => sys_fs_append(a0, a1, a2),

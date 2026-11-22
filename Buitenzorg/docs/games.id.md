@@ -76,6 +76,15 @@ dipetakan; baru diuji dengan report contoh, belum dengan pad sungguhan.
 
 Contohnya **Lompat Kodok** (`run mlompat`, Mulai > Hiburan), sebuah platformer.
 
+
+## Memulai permainan sendiri
+
+`bz new game-csharp NAMA` membuat proyek Buitenzorg.Game (aturan di kelas
+biasa, `GameView` dengan `Update`/`Draw`, `--selftest` yang menekan tombol);
+`bz new game-js NAMA` membuat permainan yang sama sebagai skrip UI JavaScript
+(`keydown`, `sprite`, `hit`, `sound` -- lihat [script-ui.id.md](script-ui.id.md)).
+MagicAppGen punya keduanya sebagai `managed-game` dan `js-game`.
+
 ---
 
 ← [Indeks dokumentasi](README.id.md) · *Buitenzorg OS — dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.*

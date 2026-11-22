@@ -63,18 +63,33 @@ habis, atau lewat `BzGC.Collect()`.
 - **Sweep:** slot yang tidak bertanda dibebaskan dan di-nol-kan saat dibagikan
   lagi; blok kosong kembali ke pool.
 
-**Batasan:** koleksi dilewati selama program masih punya thread lain yang
-hidup (dihitung `bz_thread_create`): referensinya mungkin ada di register yang
-tidak terlihat kolektor, jadi heap tumbuh sampai thread itu selesai. Keluarga
+**Alamat mentah bukan referensi.** Objek yang alamatnya hanya disimpan di luar
+root (halaman mmap, memori kernel) akan dikoleksi, dengan atau tanpa thread:
+simpan referensi managed-nya selama masih dipakai.
+
+**Thread: hentikan dunia di safepoint.** Setiap thread punya slot (rentang
+stack, stack pointer tersimpan, status). Thread memarkir dirinya di
+*safepoint* -- setiap alokasi (`RhpNewFast` / `RhpNewArray`) dan setiap
+panggilan yang memblokir (`bz_yield`, `bz_thread_join`, `bz_futex_wait`,
+`bz_proc_wait`, `bz_mutex_lock`) -- lewat `bz_gc_safe`, yang menumpahkan
+register callee-saved ke stack-nya dulu, sehingga kolektor bisa memindai
+stack setiap thread yang parkir dari pointer tersimpan sampai puncaknya.
+Thread yang mengoleksi menaikkan bendera dan menunggu (paling lama 50 ms)
+sampai semua thread lain yang sedang berjalan parkir; thread yang sedang
+terblokir sudah parkir. **Batasan:** thread yang menghitung lebih lama dari
+itu tanpa alokasi atau blokir membuat koleksi menyerah (dihitung di
+`SkippedCount()`); heap tumbuh sampai percobaan berikutnya. Keluarga
 `malloc` gaya libc (dipakai shim sendiri) adalah heap terpisah yang tidak
 pernah dikoleksi.
 
 `BzGC` (bzbcl2.cs): `Collect()`, `CollectionCount()`, `LiveBytes()`,
 `FreedBytes()`, `SkippedCount()`, `LastPauseMicroseconds()`, `SetEnabled()`,
 ditambah angka alokasi yang lama. `gc.cs` mengalokasikan 128 MiB sampah sambil
-menjaga linked list dan array besar tetap hidup: 18 koleksi, 187 MiB
-dibebaskan, puncak commit 14 MiB, data hidup utuh -> `MILESTONE: GC OK`
-(x86-64 dan ARM64).
+menjaga linked list dan array besar tetap hidup, lalu dua thread pekerja
+mengalokasikan 24 MiB masing-masing sementara thread utama juga
+mengalokasikan: koleksi berjalan dengan ketiga thread hidup
+(`bz_gc_stopped_world()` >= 1) dan setiap list hidup tetap utuh ->
+`MILESTONE: GC OK` (x86-64 dan ARM64).
 
 ## Exception
 
@@ -95,10 +110,25 @@ dengan instruksi call (alamat kembali - 1): di ARM64 sebuah call bisa menjadi
 instruksi terakhir blok `try`.
 
 Tanpa handler: `Unhandled exception: <Message>` lalu program berakhir (blok
-finally tidak dijalankan, seperti di .NET). Pemeriksaan yang dilakukan zerolib
-sendiri (null, batas array, pembagian dengan nol) tetap mengakhiri program
-dengan pesan alih-alih melempar, dan exception yang dilempar di dalam filter
-`when` belum didukung. `exc.cs` memeriksa 13 kasus -> `MILESTONE: EXCEPTIONS OK`
+finally tidak dijalankan, seperti di .NET). Exception yang dilempar di dalam
+filter `when` belum didukung.
+
+**Pemeriksaan runtime melempar exception.** `tools/ZerolibPatch` (patch versi
+8) memindahkan `System.Exception` dan tipe exception runtime
+(`NullReferenceException`, `IndexOutOfRangeException`,
+`DivideByZeroException`, `OverflowException`, `InvalidCastException`,
+`ArrayTypeMismatchException`) ke zerolib dan membuat throw helper-nya benar-
+benar melempar, jadi pemeriksaan batas array yang gagal, cast yang gagal
+(`(T)x`), penyimpanan array kovarian yang salah, dan overflow checked
+menghasilkan exception yang bisa ditangkap. Fault perangkat keras juga:
+`_start` mendaftarkan handler lewat syscall `FAULT_HANDLER` (75), dan kernel
+mengalihkan load/store di bawah 64 KiB (dereferensi null) serta pembagian
+integer dengan nol di x86 ke program seolah instruksi yang gagal memanggil
+handler, yang melempar `NullReferenceException` / `DivideByZeroException`
+(ARM64 tidak punya trap pembagian: ILC menyisipkan pemeriksaan eksplisit).
+Batasan: di ARM64 fault null di fungsi leaf yang menyimpan alamat kembali
+hanya di link register di-unwind dari pemanggil fungsi itu. `exc.cs`
+memeriksa 18 kasus (5 di antaranya ini) -> `MILESTONE: EXCEPTIONS OK`
 (x86-64 dan ARM64).
 
 ## Jalur eksekusi di kernel
@@ -155,16 +185,15 @@ memberi giliran ke pekerjaan lain, `Task.Run` mengantrekan pekerjaan,
 dari method async membuat task-nya gagal, dan `await`, `.Result`, serta
 `Wait()` melemparnya lagi (exception aslinya, bukan AggregateException);
 exception dari method `async void` dibuang. Untuk pustaka .NET lengkap (LINQ,
-reflection, GC yang aman untuk banyak thread), pakai jalur managed (RustCLR).
+reflection), pakai jalur managed (RustCLR).
 
 ## Berikutnya
 
-Di jalur native: koleksi saat thread lain berjalan (menghentikannya di safe
-point dan memindai stack-nya), mengubah pemeriksaan zerolib sendiri (null,
-batas array, pembagian dengan nol, cast gagal) menjadi exception yang bisa
-ditangkap, exception yang dilempar dari filter `when`, dan build RISC-V (bflat
-dan ILC tidak punya target RISC-V -- C# sampai ke RISC-V lewat RustCLR). .NET
-lengkap (reflection, dynamic loading, seluruh BCL) adalah jalur managed RustCLR.
+Di jalur native: exception yang dilempar dari filter `when`, laporan crash
+untuk exception runtime yang tak ditangkap, safepoint di dalam loop komputasi
+panjang, dan build RISC-V (bflat dan ILC tidak punya target RISC-V -- C#
+mencapai RISC-V lewat RustCLR). .NET penuh (reflection, dynamic loading,
+seluruh BCL) ada di jalur managed RustCLR.
 
 ---
 

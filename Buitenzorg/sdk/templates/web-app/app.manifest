@@ -1,0 +1,10 @@
+{
+  "id": "com.example.web",
+  "name": "Web App",
+  "type": "web",
+  "language": "javascript",
+  "version": "0.1.0",
+  "entry": "INDEX.HTM",
+  "permissions": [],
+  "theme": "system"
+}

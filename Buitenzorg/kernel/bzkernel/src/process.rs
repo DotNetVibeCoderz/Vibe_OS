@@ -20,6 +20,8 @@ struct App {
     args: String,
     /// What it may do (`perm.rs`); the system's programs: everything.
     grant: crate::perm::Grant,
+    /// User-mode handlers for hardware faults (`bz_abi::fault_kind`), 0 = none.
+    fault: [u64; 2],
 }
 
 static APPS: Mutex<Vec<App>> = Mutex::new(Vec::new());
@@ -44,8 +46,31 @@ pub fn app_start(name: &str) -> u64 {
         cpu_ticks: 0,
         args: String::new(),
         grant: crate::perm::Grant::system(),
+        fault: [0; 2],
     });
     pid
+}
+
+/// FAULT_HANDLER: program `pid` handles fault `kind` at user address
+/// `handler` (0 = none).
+pub fn set_fault_handler(pid: u64, kind: u64, handler: u64) -> u64 {
+    if kind >= bz_abi::fault_kind::COUNT || handler >= crate::memory::USER_ADDR_MAX || (handler != 0 && handler < 0x1000) {
+        return bz_abi::syserr::INVAL;
+    }
+    match APPS.lock().iter_mut().find(|a| a.pid == pid) {
+        Some(a) => {
+            a.fault[kind as usize] = handler;
+            0
+        }
+        None => bz_abi::syserr::INVAL,
+    }
+}
+
+/// Program `pid`'s handler for fault `kind`, if it registered one.
+pub fn fault_handler(pid: u64, kind: u64) -> Option<u64> {
+    let apps = APPS.lock();
+    let h = apps.iter().find(|a| a.pid == pid)?.fault.get(kind as usize).copied()?;
+    (h != 0).then_some(h)
 }
 
 /// Set program `pid`'s grant (before its task can run, like its args).

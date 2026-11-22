@@ -69,6 +69,10 @@ const FILL_ROUND_GRADIENT_V: u64 = 11;
 const DRAW_TEXT_STYLED: u64 = 12;
 const DRAW_TEXT_FONT: u64 = 14;
 const FONT_OP: u64 = 71;
+const AUDIO_TONE: u64 = 25;
+const KEY_STATE: u64 = 60;
+const NOTIFY: u64 = 73;
+const WIN_CTL: u64 = 74;
 
 // bz_abi::pointer_event kinds
 const EV_MOVE: u64 = 1;
@@ -161,6 +165,39 @@ fn metrics(style: u64) -> (i64, i64) {
     let m = sys::syscall(TEXT_METRICS, style, 0, 0);
     let (w, h) = ((m >> 32) as i64, (m & 0xFFFF_FFFF) as i64);
     if w <= 0 { (8, 16) } else { (w, h) }
+}
+
+/// `keydown(name)`: a key name -> the set-1 scancode KEY_STATE takes
+/// (`| 0x100` for the E0 keys), or a number as it is.
+fn key_code(v: Option<&Value>) -> u64 {
+    let name = match v {
+        Some(Value::Int(n)) => return *n as u64,
+        Some(Value::Str(s)) => s.to_ascii_lowercase(),
+        _ => return 0,
+    };
+    const LETTERS: &[u8; 26] = &[
+        0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14,
+        0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C,
+    ];
+    match name.as_str() {
+        "left" => 0x14B,
+        "right" => 0x14D,
+        "up" => 0x148,
+        "down" => 0x150,
+        "space" | " " => 0x39,
+        "enter" | "return" => 0x1C,
+        "escape" | "esc" => 0x01,
+        "shift" => 0x2A,
+        "ctrl" | "control" => 0x1D,
+        "tab" => 0x0F,
+        "backspace" => 0x0E,
+        n if n.len() == 1 && n.as_bytes()[0].is_ascii_lowercase() => LETTERS[(n.as_bytes()[0] - b'a') as usize] as u64,
+        n if n.len() == 1 && n.as_bytes()[0].is_ascii_digit() => match n.as_bytes()[0] {
+            b'0' => 0x0B,
+            d => (d - b'1') as u64 + 0x02,
+        },
+        _ => 0,
+    }
 }
 
 fn int(a: &[Value], i: usize) -> i64 {
@@ -530,6 +567,83 @@ impl Host for Ui {
             "aispeed" => {
                 let (n, ms) = (crate::aiapi::info(self.ai, 8), crate::aiapi::info(self.ai, 9));
                 Value::Int(if n > 0 { n * 1000 / ms.max(1) } else { 0 })
+            }
+            // ---- games: held keys, sound, collisions, sprites ----
+            // keydown("left") / keydown("a") / keydown(0x39): is the key held now?
+            "keydown" => {
+                let code = key_code(a.first());
+                Value::Bool(code != 0 && self.interactive && sys::syscall(KEY_STATE, code, 0, 0) == 1)
+            }
+            // sound(hz, ms): a tone (queued; the program goes on)
+            "sound" | "beep" => {
+                let (hz, ms) = (int(a, 0).clamp(20, 20_000) as u64, if a.len() > 1 { int(a, 1).clamp(1, 5000) as u64 } else { 120 });
+                if self.interactive {
+                    sys::syscall(AUDIO_TONE, hz, ms, 0);
+                }
+                nil
+            }
+            // hit(x1, y1, w1, h1, x2, y2, w2, h2): do two rectangles overlap?
+            "hit" => {
+                let (x1, y1, w1, h1) = (int(a, 0), int(a, 1), int(a, 2), int(a, 3));
+                let (x2, y2, w2, h2) = (int(a, 4), int(a, 5), int(a, 6), int(a, 7));
+                Value::Bool(x1 < x2 + w2 && x2 < x1 + w1 && y1 < y2 + h2 && y2 < y1 + h1)
+            }
+            // near(x1, y1, x2, y2, r): are two points within r of each other?
+            "near" => {
+                let (dx, dy, r) = (int(a, 0) - int(a, 2), int(a, 1) - int(a, 3), int(a, 4));
+                Value::Bool(dx * dx + dy * dy <= r * r)
+            }
+            // sprite(x, y, rows, scale, color [, color2]): rows separated by
+            // '|', '#' / 'X' = color, 'o' / '+' = color2, anything else
+            // transparent; each run of a row is one rectangle
+            "sprite" => {
+                let (x0, y0) = (int(a, 0), int(a, 1));
+                let rows = text_of(a, 2);
+                let scale = if a.len() > 3 { int(a, 3).clamp(1, 32) } else { 4 };
+                let (c1, c2) = (int(a, 4), if a.len() > 5 { int(a, 5) } else { int(a, 4) });
+                for (ry, row) in rows.split('|').enumerate() {
+                    let b = row.as_bytes();
+                    let mut x = 0;
+                    while x < b.len() {
+                        let kind = match b[x] {
+                            b'#' | b'X' => 1,
+                            b'o' | b'+' => 2,
+                            _ => 0,
+                        };
+                        let mut e = x + 1;
+                        while e < b.len() && kind != 0 && matches!((kind, b[e]), (1, b'#' | b'X') | (2, b'o' | b'+')) {
+                            e += 1;
+                        }
+                        if kind != 0 {
+                            let col = if kind == 1 { c1 } else { c2 };
+                            self.draw(FILL_RECT, x0 + x as i64 * scale, y0 + ry as i64 * scale, (e - x) as i64 * scale, scale, col, 0, "", 0);
+                        }
+                        x = e;
+                    }
+                }
+                nil
+            }
+            // the OS: notify(title, body) -> id; vsync() waits for the next
+            // vertical blank; fullscreen(on) -> the client width (0 = refused)
+            "notify" => {
+                let (t, b) = (format!("{}\0", text_of(a, 0)), format!("{}\0", text_of(a, 1)));
+                let r = sys::syscall(NOTIFY, t.as_ptr() as u64, b.as_ptr() as u64, 0);
+                Value::Int(if sys::is_err(r) { -1 } else { r as i64 })
+            }
+            "vsync" => Value::Int(sys::syscall(WIN_CTL, 3, 0, 0) as i64),
+            "fullscreen" => {
+                if self.win == 0 {
+                    return Some(Ok(Value::Int(0)));
+                }
+                let on = a.first().is_none_or(|v| v.truthy());
+                let r = sys::syscall(WIN_CTL, self.win << 8, on as u64, 0);
+                if sys::is_err(r) {
+                    Value::Int(0)
+                } else {
+                    self.w = (r & 0xFFFF) as i64;
+                    self.h = (r >> 16 & 0xFFFF) as i64;
+                    Value::Int(self.w)
+                }
             }
             "arg" => Value::Str(self.args.get(int(a, 0).max(0) as usize).cloned().unwrap_or_default()),
             "argcount" => Value::Int(self.args.len() as i64),

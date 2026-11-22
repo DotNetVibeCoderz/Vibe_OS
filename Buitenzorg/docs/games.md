@@ -112,6 +112,15 @@ has been tested with recorded reports only, not with a real pad yet.
 
 The sample is **Lompat Kodok** (`run mlompat`, Start > Hiburan), a platformer.
 
+
+## Starting a game of your own
+
+`bz new game-csharp NAME` creates a Buitenzorg.Game project (rules in a
+plain class, a `GameView` with `Update`/`Draw`, a `--selftest` that drives the
+keys); `bz new game-js NAME` the same game as a JavaScript UI script
+(`keydown`, `sprite`, `hit`, `sound` -- see [script-ui.md](script-ui.md)).
+MagicAppGen has both as `managed-game` and `js-game`.
+
 ---
 
 ← [Documentation index](README.md) · *Buitenzorg OS — made by Gravicode Studios, led by Kang Fadhil.*

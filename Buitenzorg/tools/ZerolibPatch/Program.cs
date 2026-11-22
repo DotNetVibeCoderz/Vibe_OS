@@ -111,6 +111,135 @@ if (module.GetType("System.IDisposable") is null)
     Console.WriteLine("System.IDisposable: added");
 }
 
+// ---- exceptions (patch v8) ----------------------------------------------------
+// The base exception types live in zerolib, so the runtime's own checks can
+// throw them: ThrowHelpers (array index, division, overflow) now build the
+// exception and `throw` it instead of FailFast, and BzThrow exports throw
+// helpers the startup shim jumps to (invalid cast, array store, and the
+// kernel's FAULT_HANDLER redirect of a null dereference / #DE). The other
+// exception types stay in userland/hello-csharp/bzexc.cs.
+var voidType = source.ReturnType;
+// `string` as decoded from an existing signature (ELEMENT_TYPE_STRING, not a
+// class token: the C# compiler cannot use a String encoded as a class)
+var stringType = module.Types.SelectMany(t => t.Methods).SelectMany(m => m.Parameters)
+    .Select(p => p.ParameterType).FirstOrDefault(t => t.MetadataType == MetadataType.String);
+var objectType = module.GetType("System.Object");
+var objectCtor = objectType?.Methods.FirstOrDefault(m => m.IsConstructor && !m.IsStatic && m.Parameters.Count == 0);
+int addedExceptions = 0;
+var exTypes = new Dictionary<string, TypeDefinition>();
+const MethodAttributes ctorAttrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName;
+MethodDefinition Ctor(TypeDefinition t, params TypeReference[] ps)
+{
+    var c = new MethodDefinition(".ctor", ctorAttrs, voidType);
+    foreach (var p in ps) c.Parameters.Add(new ParameterDefinition(p));
+    t.Methods.Add(c);
+    return c;
+}
+if (module.GetType("System.Exception") is null && stringType is not null && objectCtor is not null)
+{
+    // System.Exception: Message (first field: the shim reads it at obj+8), InnerException
+    var ex = new TypeDefinition("System", "Exception", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.BeforeFieldInit, objectType);
+    module.Types.Add(ex);
+    var msg = new FieldDefinition("Message", FieldAttributes.Public, stringType);
+    var inner = new FieldDefinition("InnerException", FieldAttributes.Public, ex);
+    ex.Fields.Add(msg);
+    ex.Fields.Add(inner);
+    var il = Ctor(ex).Body.GetILProcessor();
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, objectCtor);
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldstr, "Exception of type System.Exception was thrown."); il.Emit(OpCodes.Stfld, msg);
+    il.Emit(OpCodes.Ret);
+    il = Ctor(ex, stringType).Body.GetILProcessor();
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, objectCtor);
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_1); il.Emit(OpCodes.Stfld, msg);
+    il.Emit(OpCodes.Ret);
+    il = Ctor(ex, stringType, ex).Body.GetILProcessor();
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, objectCtor);
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_1); il.Emit(OpCodes.Stfld, msg);
+    il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_2); il.Emit(OpCodes.Stfld, inner);
+    il.Emit(OpCodes.Ret);
+    exTypes["Exception"] = ex;
+    addedExceptions++;
+    void Derived(string name, string baseName, string message, bool withInner)
+    {
+        var b = exTypes[baseName];
+        var t = new TypeDefinition("System", name, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.BeforeFieldInit, b);
+        module.Types.Add(t);
+        var baseStr = b.Methods.First(m => m.IsConstructor && m.Parameters.Count == 1);
+        var p = Ctor(t).Body.GetILProcessor();
+        p.Emit(OpCodes.Ldarg_0); p.Emit(OpCodes.Ldstr, message); p.Emit(OpCodes.Call, baseStr); p.Emit(OpCodes.Ret);
+        p = Ctor(t, stringType).Body.GetILProcessor();
+        p.Emit(OpCodes.Ldarg_0); p.Emit(OpCodes.Ldarg_1); p.Emit(OpCodes.Call, baseStr); p.Emit(OpCodes.Ret);
+        if (withInner)
+        {
+            var baseInner = b.Methods.First(m => m.IsConstructor && m.Parameters.Count == 2);
+            p = Ctor(t, stringType, exTypes["Exception"]).Body.GetILProcessor();
+            p.Emit(OpCodes.Ldarg_0); p.Emit(OpCodes.Ldarg_1); p.Emit(OpCodes.Ldarg_2); p.Emit(OpCodes.Call, baseInner); p.Emit(OpCodes.Ret);
+        }
+        exTypes[name] = t;
+        addedExceptions++;
+    }
+    Derived("SystemException", "Exception", "System error.", true);
+    Derived("IndexOutOfRangeException", "SystemException", "Index was outside the bounds of the array.", false);
+    Derived("NullReferenceException", "SystemException", "Object reference not set to an instance of an object.", false);
+    Derived("InvalidCastException", "SystemException", "Specified cast is not valid.", false);
+    Derived("OverflowException", "SystemException", "Arithmetic operation resulted in an overflow.", false);
+    Derived("DivideByZeroException", "SystemException", "Attempted to divide by zero.", false);
+    Derived("ArrayTypeMismatchException", "SystemException", "Attempted to access an element as a type incompatible with the array.", false);
+    Console.WriteLine($"exceptions: {addedExceptions} type(s) added");
+}
+
+void ThrowBody(MethodDefinition m, TypeDefinition exType)
+{
+    var ctor = exType.Methods.First(c => c.IsConstructor && c.Parameters.Count == 0);
+    m.Body.Instructions.Clear();
+    m.Body.Variables.Clear();
+    m.Body.ExceptionHandlers.Clear();
+    var il = m.Body.GetILProcessor();
+    il.Emit(OpCodes.Newobj, ctor);
+    il.Emit(OpCodes.Throw);
+}
+
+int throwing = 0;
+if (exTypes.Count > 0)
+{
+    foreach (var (helper, exName) in new[] {
+        ("ThrowIndexOutOfRangeException", "IndexOutOfRangeException"),
+        ("ThrowDivideByZeroException", "DivideByZeroException"),
+        ("ThrowOverflowException", "OverflowException") })
+    {
+        var m = helpers.Methods.FirstOrDefault(x => x.Name == helper && x.Parameters.Count == 0);
+        if (m is null) continue;
+        ThrowBody(m, exTypes[exName]);
+        throwing++;
+    }
+    var exportAttr = module.GetType("System.Runtime.RuntimeExportAttribute");
+    var exportCtor = exportAttr?.Methods.FirstOrDefault(c => c.IsConstructor && c.Parameters.Count == 1);
+    if (exportCtor is not null)
+    {
+        var bz = new TypeDefinition("Internal.Runtime.CompilerHelpers", "BzThrow",
+            TypeAttributes.NotPublic | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed, objectType);
+        module.Types.Add(bz);
+        foreach (var (export, exName) in new[] {
+            ("bz_throw_null_reference", "NullReferenceException"),
+            ("bz_throw_divide_by_zero", "DivideByZeroException"),
+            ("bz_throw_index_out_of_range", "IndexOutOfRangeException"),
+            ("bz_throw_invalid_cast", "InvalidCastException"),
+            ("bz_throw_array_type_mismatch", "ArrayTypeMismatchException"),
+            ("bz_throw_overflow", "OverflowException") })
+        {
+            var m = new MethodDefinition(export.Replace("bz_throw_", "Throw_"),
+                MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, voidType);
+            var attr = new CustomAttribute(exportCtor);
+            attr.ConstructorArguments.Add(new CustomAttributeArgument(stringType, export));
+            m.CustomAttributes.Add(attr);
+            bz.Methods.Add(m);
+            ThrowBody(m, exTypes[exName]);
+            throwing++;
+        }
+    }
+    Console.WriteLine($"throw helpers: {throwing} now throw managed exceptions");
+}
+
 // The shim also allocates every managed object (RhpNewFast / RhpNewArray) on
 // the heap its garbage collector manages (zerolib's versions call malloc).
 string[] shimExports = ["RhpStelemRef", "RhpNewFast", "RhpNewArray"];

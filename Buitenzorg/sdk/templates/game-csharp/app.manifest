@@ -1,0 +1,10 @@
+{
+  "id": "com.example.game",
+  "name": "Game",
+  "type": "desktop",
+  "language": "csharp",
+  "version": "0.1.0",
+  "entry": "__NAME83__.DLL",
+  "permissions": ["audio"],
+  "theme": "system"
+}

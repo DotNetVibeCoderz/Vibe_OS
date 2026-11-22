@@ -298,8 +298,51 @@ pub mod sysno {
     /// GPU compute (see [`compute_op`]): `a0` = operation | handle << 8;
     /// `a1`, `a2` depend on the operation.
     pub const COMPUTE_OP: u64 = 72;
+    /// Post a notification (toast + action center): `a0` = NUL-terminated
+    /// title, `a1` = NUL-terminated body (or 0). Returns its id.
+    pub const NOTIFY: u64 = 73;
+    /// Window control (see [`win_ctl`]): `a0` = operation | window id << 8;
+    /// `a1` depends on the operation.
+    pub const WIN_CTL: u64 = 74;
+    /// Register a user-mode handler for a hardware fault of the calling
+    /// process (see [`fault_kind`]): `a0` = kind, `a1` = handler address (0 =
+    /// none: the fault ends the program, as before). The kernel enters the
+    /// handler as if the faulting instruction had called it (the return
+    /// address is the faulting pc + 1), so a runtime can throw from there.
+    pub const FAULT_HANDLER: u64 = 75;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 73;
+    pub const COUNT: u64 = 76;
+}
+
+/// Operations of [`sysno::WIN_CTL`] (the low 8 bits of `a0`).
+pub mod win_ctl {
+    /// Exclusive full screen on (`a1` = 1) or off (0): the window's client
+    /// area becomes the whole screen, without frame or taskbar, and the
+    /// compositor shows only it. Returns the client size `w | h << 16`.
+    pub const FULLSCREEN: u64 = 0;
+    /// Map a shared-memory surface for the window: two buffers of client
+    /// width x height 32-bit pixels, back to back, in the caller's address
+    /// space. The compositor reads the shown buffer directly (no BLIT copy).
+    /// Returns its user address (`w | h << 16` comes from [`SURFACE_SIZE`]).
+    pub const SURFACE: u64 = 1;
+    /// Show surface buffer `a1` (0 or 1) from now on. Returns 0.
+    pub const SURFACE_PRESENT: u64 = 2;
+    /// Block until the next vertical blank. Returns the vblank counter.
+    pub const VSYNC_WAIT: u64 = 3;
+    /// Refresh rate in millihertz | vblank counter << 32 (`a1` ignored).
+    pub const VSYNC_INFO: u64 = 4;
+    /// The surface's (= client area's) size `w | h << 16`.
+    pub const SURFACE_SIZE: u64 = 5;
+}
+
+/// Kinds of [`sysno::FAULT_HANDLER`].
+pub mod fault_kind {
+    /// A load or store at an address below 64 KiB (a null reference).
+    pub const NULL_REFERENCE: u64 = 0;
+    /// Integer division by zero (x86 #DE).
+    pub const DIVIDE: u64 = 1;
+    /// Number of kinds.
+    pub const COUNT: u64 = 2;
 }
 
 /// Operations of [`sysno::COMPUTE_OP`] (the low 8 bits of `a0`). Buffers
@@ -570,6 +613,14 @@ pub mod setting_key {
     /// Font of the terminal and text windows (0 = bitmap, then the installed
     /// monospace families).
     pub const MONO_FONT: u64 = 11;
+    /// Screen resolution (an index; NAME = "1280x720"). Takes effect at the
+    /// next start (QEMU / Bochs / VirtualBox std VGA; elsewhere the firmware's
+    /// mode stays).
+    pub const RESOLUTION: u64 = 12;
+    /// Text size of the desktop and apps (an index: 100 %, 110 %, 125 %).
+    pub const UI_SCALE: u64 = 13;
+    /// Icon pack (an index: 0 = the built-in icons, then /disk/ICONS/*.BIN).
+    pub const ICON_PACK: u64 = 14;
 }
 
 /// Queries of the [`sysno::HW_BOARD`] syscall.
@@ -1151,10 +1202,15 @@ mod tests {
         assert_eq!(sysno::FS_READ_AT, 70);
         assert_eq!(sysno::FONT_OP, 71);
         assert_eq!(sysno::COMPUTE_OP, 72);
+        assert_eq!(sysno::NOTIFY, 73);
+        assert_eq!(sysno::WIN_CTL, 74);
+        assert_eq!(sysno::FAULT_HANDLER, 75);
+        assert_eq!(win_ctl::SURFACE_SIZE, 5);
+        assert_eq!(fault_kind::DIVIDE, 1);
         assert_eq!(compute_op::GEMV, 5);
         assert_eq!(compute_kind::INTEL, 3);
         assert_eq!(audio_read_op::QUEUED, 3);
-        assert_eq!(sysno::COUNT, 73);
+        assert_eq!(sysno::COUNT, 76);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1174,7 +1230,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 73, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 76, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

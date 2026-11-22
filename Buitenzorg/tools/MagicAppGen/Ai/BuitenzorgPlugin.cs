@@ -34,13 +34,14 @@ public sealed class BuitenzorgPlugin
         "drawing, ui, audio, bcl, syscalls, gotchas. MANAGED C# (dotnet build, RustCLR): managed (Buitenzorg.App), " +
         "managed-ui (Buitenzorg.UI toolkit), devices (Buitenzorg.Devices GPIO/I2C/SPI/UART). SCRIPTS: scripts " +
         "(the Python/JS/TS subset). DEVICE: deploy (how apps reach a device).")]
-    public string GetApiReference([Description("drawing|ui|audio|bcl|syscalls|gotchas|managed|managed-ui|devices|ai|scripts|deploy")] string library)
+    public string GetApiReference([Description("drawing|ui|audio|bcl|syscalls|gotchas|managed|managed-ui|devices|ai|game|scripts|deploy")] string library)
         => library.ToLowerInvariant() switch
         {
             "managed" or "buitenzorg.app" => ManagedApiReference.App,
             "managed-ui" or "buitenzorg.ui" => ManagedApiReference.Ui,
             "devices" or "buitenzorg.devices" or "gpio" => ManagedApiReference.Devices,
             "ai" or "buitenzorg.ai" or "llm" or "ml" or "vision" => ManagedApiReference.Ai,
+            "game" or "games" or "buitenzorg.game" => ManagedApiReference.Game,
             "scripts" or "python" or "js" or "ts" or "javascript" or "typescript" => ManagedApiReference.Scripts,
             "deploy" => ManagedApiReference.Deploy,
             "drawing" =>
