@@ -567,7 +567,7 @@ fn matang_demo() {
     println!("[kernel] v0.15 'Matang' increment 1: user memory PAL (mmap/mprotect/munmap)");
     match app::run_named("matang") {
         Ok(code) => println!("[kernel] matang app exited (code {})", code),
-        Err(e) => println!("[kernel] matang app not run: {} (build: scripts/build-hello-csharp)", e),
+        Err(e) => native_not_run("matang", e),
     }
     println!("[kernel] MILESTONE: PAL MEM OK (SYS_MMAP/MPROTECT/MUNMAP wired + verified from C#)");
 
@@ -576,7 +576,7 @@ fn matang_demo() {
     println!("[kernel] v0.15 'Matang' increment 2: cooperative ring-3 threads");
     match app::run_named("thread") {
         Ok(code) => println!("[kernel] thread app exited (code {})", code),
-        Err(e) => println!("[kernel] thread app not run: {}", e),
+        Err(e) => native_not_run("thread", e),
     }
     println!("[kernel] MILESTONE: THREADS OK (SYS_THREAD_CREATE/JOIN/EXIT wired + verified from C#)");
 
@@ -584,7 +584,7 @@ fn matang_demo() {
     println!("[kernel] v0.15 'Matang' increment 3: sync (futex/mutex) + TLS + clock");
     match app::run_named("sync") {
         Ok(code) => println!("[kernel] sync app exited (code {})", code),
-        Err(e) => println!("[kernel] sync app not run: {}", e),
+        Err(e) => native_not_run("sync", e),
     }
     println!("[kernel] MILESTONE: SYNC PAL OK (futex/mutex + thread-self + monotonic clock)");
 
@@ -593,7 +593,7 @@ fn matang_demo() {
     println!("[kernel] v0.15 'Matang' increment 4: managed heap (new/array/generics)");
     match app::run_named("heap") {
         Ok(code) => println!("[kernel] heap app exited (code {})", code),
-        Err(e) => println!("[kernel] heap app not run: {}", e),
+        Err(e) => native_not_run("heap", e),
     }
     println!("[kernel] MILESTONE: HEAP PAL OK (growable mmap-backed heap; new/array/generics)");
 
@@ -609,25 +609,25 @@ fn matang_demo() {
     }
     match app::run_named("statics") {
         Ok(code) => println!("[kernel] statics app exited (code {})", code),
-        Err(e) => println!("[kernel] statics app not run: {}", e),
+        Err(e) => native_not_run("statics", e),
     }
     // Buitenzorg.Bcl part 3: casts + covariant arrays (shim), delegates,
     // Interlocked, TimeSpan, Guid (RANDOM syscall), generic LINQ.
     match app::run_named("bcl3") {
         Ok(code) => println!("[kernel] bcl3 app exited (code {})", code),
-        Err(e) => println!("[kernel] bcl3 app not run: {}", e),
+        Err(e) => native_not_run("bcl3", e),
     }
     // Buitenzorg.Bcl part 4: async/await on an event loop (bzasync.cs).
     match app::run_named("async") {
         Ok(code) => println!("[kernel] async app exited (code {})", code),
-        Err(e) => println!("[kernel] async app not run: {}", e),
+        Err(e) => native_not_run("async", e),
     }
     // Native C# runtime: exceptions (bzeh.rs dispatcher over ILC's unwind and
     // clause tables) and a reclaiming mark-sweep GC (bzgc.rs).
     for name in ["exc", "gc"] {
         match app::run_named(name) {
             Ok(code) => println!("[kernel] {} app exited (code {})", name, code),
-            Err(e) => println!("[kernel] {} app not run: {}", name, e),
+            Err(e) => native_not_run(name, e),
         }
     }
 
@@ -636,7 +636,7 @@ fn matang_demo() {
     println!("[kernel] v0.15 'Matang' increment 5: GC memory model (reserve/commit)");
     match app::run_named("gcmem") {
         Ok(code) => println!("[kernel] gcmem app exited (code {})", code),
-        Err(e) => println!("[kernel] gcmem app not run: {}", e),
+        Err(e) => native_not_run("gcmem", e),
     }
     println!("[kernel] MILESTONE: GCMEM PAL OK (lazy reserve + commit-on-demand for the GC heap)");
 
@@ -645,7 +645,7 @@ fn matang_demo() {
     println!("[kernel] v0.15 'Matang' increment 6: Buitenzorg.Bcl (collections/text/encoding)");
     match app::run_named("bcl") {
         Ok(code) => println!("[kernel] bcl app exited (code {})", code),
-        Err(e) => println!("[kernel] bcl app not run: {}", e),
+        Err(e) => native_not_run("bcl", e),
     }
     println!("[kernel] MILESTONE: BCL PAL OK (Buitenzorg.Bcl: List/LINQ/StringBuilder/BitConverter/Base64)");
 
@@ -654,7 +654,7 @@ fn matang_demo() {
     println!("[kernel] v0.16 'Panen': Buitenzorg.Drawing (software renderer + BLIT)");
     match app::run_named("drawing") {
         Ok(code) => println!("[kernel] draw app exited (code {})", code),
-        Err(e) => println!("[kernel] draw app not run: {}", e),
+        Err(e) => native_not_run("draw", e),
     }
     println!("[kernel] MILESTONE: DRAWING2 OK (client-side software renderer, BLIT to window)");
 
@@ -663,7 +663,7 @@ fn matang_demo() {
     println!("[kernel] v0.16 'Panen': Buitenzorg.UI (retained toolkit)");
     match app::run_named("ui") {
         Ok(code) => println!("[kernel] ui app exited (code {})", code),
-        Err(e) => println!("[kernel] ui app not run: {}", e),
+        Err(e) => native_not_run("ui", e),
     }
     println!("[kernel] MILESTONE: UI TOOLKIT OK (retained tree + layout + controls, rendered via Drawing)");
 }
@@ -693,7 +693,7 @@ fn panen_audio_demo() {
     // Ring-3 C# app: reads AUDIO_STAT, sets volume, plays a tone via syscalls.
     match app::run_named("audio") {
         Ok(code) => println!("[kernel] audio app exited (code {})", code),
-        Err(e) => println!("[kernel] audio app not run: {}", e),
+        Err(e) => native_not_run("audio", e),
     }
 
     if up && audio::is_present() && audio::mixer_ok() {
@@ -709,7 +709,7 @@ fn panen_audio_demo() {
     println!("[kernel] v0.16 'Panen': audio-settings panel (Buitenzorg.UI + Audio)");
     match app::run_named("audiopanel") {
         Ok(code) => println!("[kernel] audiopanel app exited (code {})", code),
-        Err(e) => println!("[kernel] audiopanel app not run: {}", e),
+        Err(e) => native_not_run("audiopanel", e),
     }
     println!("[kernel] MILESTONE: AUDIO PANEL OK (volume/mute/test-tone UI over the audio subsystem)");
 
@@ -720,7 +720,7 @@ fn panen_audio_demo() {
     println!("[kernel] pre-v1.0: Buitenzorg.Bcl part 2 (IO/Text/Regex/Globalization/Diagnostics/Net/Tasks)");
     match app::run_named("bcl2") {
         Ok(code) => println!("[kernel] bcl2 app exited (code {})", code),
-        Err(e) => println!("[kernel] bcl2 app not run: {}", e),
+        Err(e) => native_not_run("bcl2", e),
     }
     println!("[kernel] MILESTONE: BCL2 PAL OK (System.IO/Text/Regex/Globalization/Diagnostics/Management/Net/Tasks/Timers/GC/Pkg)");
     // Restore a sensible default volume after the panel's mute/slider demo.
@@ -736,55 +736,55 @@ fn panen_suite_demo() {
     // Calculator: a Grid of themed buttons over a numeric display.
     match app::run_named("calc") {
         Ok(code) => println!("[kernel] calc app exited (code {})", code),
-        Err(e) => println!("[kernel] calc app not run: {}", e),
+        Err(e) => native_not_run("calc", e),
     }
 
     // 2048: a sliding-tile game on a colored Buitenzorg.UI board.
     match app::run_named("2048") {
         Ok(code) => println!("[kernel] 2048 app exited (code {})", code),
-        Err(e) => println!("[kernel] 2048 app not run: {}", e),
+        Err(e) => native_not_run("2048", e),
     }
 
     // Jam: an analog + digital clock (Drawing transforms/AA showcase).
     match app::run_named("clock") {
         Ok(code) => println!("[kernel] clock app exited (code {})", code),
-        Err(e) => println!("[kernel] clock app not run: {}", e),
+        Err(e) => native_not_run("clock", e),
     }
 
     // Piano: an on-screen keyboard wired to the audio subsystem.
     match app::run_named("piano") {
         Ok(code) => println!("[kernel] piano app exited (code {})", code),
-        Err(e) => println!("[kernel] piano app not run: {}", e),
+        Err(e) => native_not_run("piano", e),
     }
 
     // App Store: a catalog store front (Buitenzorg.UI list + install action).
     match app::run_named("store") {
         Ok(code) => println!("[kernel] store app exited (code {})", code),
-        Err(e) => println!("[kernel] store app not run: {}", e),
+        Err(e) => native_not_run("store", e),
     }
 
     // File Manager: browse the VFS (mounts + files) via FS_LIST.
     match app::run_named("files") {
         Ok(code) => println!("[kernel] files app exited (code {})", code),
-        Err(e) => println!("[kernel] files app not run: {}", e),
+        Err(e) => native_not_run("files", e),
     }
 
     // Text Editor: a multi-line editable text area with a menu bar.
     match app::run_named("editor") {
         Ok(code) => println!("[kernel] editor app exited (code {})", code),
-        Err(e) => println!("[kernel] editor app not run: {}", e),
+        Err(e) => native_not_run("editor", e),
     }
 
     // Image Viewer: load /disk/PHOTO.BMP via the FS_READ syscall and show it.
     match app::run_named("imgview") {
         Ok(code) => println!("[kernel] imgview app exited (code {})", code),
-        Err(e) => println!("[kernel] imgview app not run: {}", e),
+        Err(e) => native_not_run("imgview", e),
     }
 
     // JPEG decoder test: decode /disk/GRAD.JPG (baseline JPEG) in ring-3 C#.
     match app::run_named("jpgtest") {
         Ok(code) => println!("[kernel] jpgtest app exited (code {})", code),
-        Err(e) => println!("[kernel] jpgtest app not run: {}", e),
+        Err(e) => native_not_run("jpgtest", e),
     }
 
     println!("[kernel] MILESTONE: SUITE OK (preloaded apps: kalkulator, 2048, jam, piano, store, files, editor, imgview)");
@@ -802,7 +802,7 @@ fn multiproc_demo() {
     println!();
     println!("[kernel] multiproc: preemptive multi-process (address space per process)");
     let Ok(image) = vfs::read("/disk/MPROC.ELF") else {
-        println!("[kernel] multiproc: MPROC.ELF not on /disk (skipped)");
+        native_not_run("mproc", "MPROC.ELF is not on /disk");
         return;
     };
     // Frames in use before any test process exists: every frame the processes
@@ -922,7 +922,7 @@ fn multiproc_demo() {
     // own MILESTONE: PROCCTL OK line is the verdict.
     match app::run_named("proctest") {
         Ok(code) => println!("[kernel] proctest exited (code {})", code),
-        Err(e) => println!("[kernel] proctest not run: {}", e),
+        Err(e) => native_not_run("proctest", e),
     }
 }
 
@@ -1454,6 +1454,16 @@ fn native_apps_in_image() -> bool {
     vfs::stat("/disk/HELLO.ELF").is_ok()
 }
 
+/// A demo's native C# program did not start: expected (and said so) in an
+/// image built without them, a failure in an image that has them.
+fn native_not_run(name: &str, why: &str) {
+    if native_apps_in_image() {
+        println!("[kernel] {} failed to start: {}", name, why);
+    } else {
+        println!("[kernel] {} skipped: no native C# programs in this image", name);
+    }
+}
+
 /// v0.9 "Serbuk": Buitenzorg.Drawing (System.Drawing-style graphics) + a
 /// Windows-style Task Manager. Runs the Paint demo (draws shapes via the
 /// managed library) and the Task Manager (lists processes + resources + kill).
@@ -1773,7 +1783,7 @@ fn tunas_demo() {
     .flatten();
 
     let Some(bytes) = bytes else {
-        println!("[kernel] tunas: HELLO.ELF not found on disk (build it: scripts/build-hello-csharp.ps1)");
+        println!("[kernel] tunas skipped: no native C# programs in this image (build them: scripts/build-hello-csharp)");
         return;
     };
     println!("[kernel] tunas: loaded HELLO.ELF from disk ({} bytes)", bytes.len());
@@ -2064,7 +2074,7 @@ fn dahan_demo() {
                 Err(e) => println!("[init] svc-csharp run failed: {}", e),
             }
         }
-        Err(_) => println!("[init] SVC.ELF not on /disk (build it: scripts/build-hello-csharp.ps1)"),
+        Err(_) => native_not_run("svc", "SVC.ELF is not on /disk"),
     }
 }
 
