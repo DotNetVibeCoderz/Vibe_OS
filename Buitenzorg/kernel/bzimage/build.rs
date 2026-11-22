@@ -81,11 +81,11 @@ const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
 /// App icons, in launcher order: (asset name in assets/icons, launch name used
 /// by the kernel's `icons.rs` / `wm.rs` LAUNCH list).
 // The later ones (mmusik onward) are drawn by scripts/make-icons.py.
-const APP_ICONS: [&str; 38] = [
+const APP_ICONS: [&str; 39] = [
     "files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint",
     "xox", "audiopanel", "wallpaper", "theme", "managed", "msetting", "mwaktu", "mgallery", "mhwlab",
     "mruang", "mbuah", "mstudio", "mweb", "mmusik", "mvideo", "mrekam", "mular", "mranjau", "mbata",
-    "mbalok", "mkartu", "mkonsol", "munduh", "mbaca", "mlabirin", "mchip8", "mlompat", "masisten",
+    "mbalok", "mkartu", "mkonsol", "munduh", "mbaca", "mlabirin", "mchip8", "mlompat", "masisten", "doom",
 ];
 /// Icon sizes in ICONS.BIN: desktop tile and start-menu row.
 const ICON_BIG: usize = 44;

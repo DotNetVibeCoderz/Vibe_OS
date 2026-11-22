@@ -369,9 +369,16 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
-    let mut port = Port::new(0x60);
-    let byte: u8 = unsafe { port.read() };
-    crate::mouse::handle_byte(byte);
+    // Only a byte that is really waiting (bit 0) and from the mouse (bit 5):
+    // mouse::init polls its ACKs, the IRQ they raised still arrives, and the
+    // port then repeats the last ACK (0xFA) -- which passed as a packet start
+    // with the right button down and shifted every packet after it.
+    let status: u8 = unsafe { Port::new(0x64).read() };
+    if status & 0x21 == 0x21 {
+        let mut port = Port::new(0x60);
+        let byte: u8 = unsafe { port.read() };
+        crate::mouse::handle_byte(byte);
+    }
     crate::ioapic::note_irq(12);
     end_of_interrupt(InterruptIndex::Mouse.as_u8());
 }

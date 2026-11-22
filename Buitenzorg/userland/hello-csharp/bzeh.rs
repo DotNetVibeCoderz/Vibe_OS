@@ -21,7 +21,8 @@
 //! then calls the catch funclet and resumes its method at the address the
 //! funclet returns, with the callee-saved registers and stack pointer the
 //! method had at that frame. No handler: `Unhandled exception: <Message>`
-//! and the program ends (finally blocks do not run then, as in .NET).
+//! and the program ends (finally blocks do not run then, as in .NET) through
+//! CRASH_REPORT: a crash report from the throw, and a debugger stop there.
 //!
 //! Funclets run on the frame pointer of their method: x86-64 -- rbp = the
 //! method's rbp, rsi = the exception, returns rax (catch: resume address,
@@ -540,7 +541,7 @@ pub unsafe extern "C" fn bz_eh_throw(obj: *const u8, ctx: *const Ctx) -> ! {
     let mut depth = 0usize;
     let found: (usize, usize, usize);
     'search: loop {
-        let Some(f) = find_fde(c.pc - 1) else { unhandled(obj) };
+        let Some(f) = find_fde(c.pc - 1) else { unhandled(obj, &first) };
         let m = method_of(&f);
         let mut i = from;
         while let Some(cl) = clause(&m, i) {
@@ -560,12 +561,12 @@ pub unsafe extern "C" fn bz_eh_throw(obj: *const u8, ctx: *const Ctx) -> ! {
             }
             i += 1;
         }
-        let Some((n, next)) = step(&c, &f) else { unhandled(obj) };
+        let Some((n, next)) = step(&c, &f) else { unhandled(obj, &first) };
         c = n;
         from = next;
         depth += 1;
         if depth > 100_000 {
-            unhandled(obj);
+            unhandled(obj, &first);
         }
     }
     // pass 2: run the finally / fault blocks between, then the catch
@@ -574,7 +575,7 @@ pub unsafe extern "C" fn bz_eh_throw(obj: *const u8, ctx: *const Ctx) -> ! {
     let mut from = 0usize;
     let mut depth = 0usize;
     loop {
-        let f = find_fde(c.pc - 1).unwrap_or_else(|| unhandled(obj));
+        let f = find_fde(c.pc - 1).unwrap_or_else(|| unhandled(obj, &first));
         let m = method_of(&f);
         let last = if depth == target_depth { target_clause } else { usize::MAX };
         let mut i = from;
@@ -591,7 +592,7 @@ pub unsafe extern "C" fn bz_eh_throw(obj: *const u8, ctx: *const Ctx) -> ! {
             let resume = bz_call_funclet(handler, &c, obj, &r);
             bz_eh_resume(&c, resume);
         }
-        let (n, next) = step(&c, &f).unwrap_or_else(|| unhandled(obj));
+        let (n, next) = step(&c, &f).unwrap_or_else(|| unhandled(obj, &first));
         c = n;
         from = next;
         depth += 1;
@@ -615,17 +616,64 @@ pub unsafe extern "C" fn bz_eh_rethrow(ctx: *const Ctx) -> ! {
     fatal_msg(b"throw; outside a catch block")
 }
 
+#[inline(never)]
 unsafe fn fatal_msg(m: &[u8]) -> ! {
+    let here = 0u8;
+    let sp = core::hint::black_box(&here) as *const u8 as usize;
+    fatal_at(m, fatal_msg as *const () as usize, sp)
+}
+
+/// End the program with `Unhandled exception: <m>`, reported at `pc` / `sp`.
+unsafe fn fatal_at(m: &[u8], pc: usize, sp: usize) -> ! {
+    let mut text = [0u8; 256];
+    let out = text.as_mut_ptr();
     let p = b"Unhandled exception: ";
-    bz_write(p.as_ptr(), p.len() as u64);
-    bz_write(m.as_ptr(), m.len() as u64);
+    core::ptr::copy_nonoverlapping(p.as_ptr(), out, p.len());
+    let n = m.len().min(200);
+    core::ptr::copy_nonoverlapping(m.as_ptr(), out.add(p.len()), n);
+    bz_write(out, (p.len() + n) as u64);
     bz_write(b"\n".as_ptr(), 1);
-    SystemNative_Abort()
+    crate::crash_report(out, pc, sp);
+    SystemNative_Abort() // (only if the kernel refused the report)
+}
+
+extern "C" {
+    fn bz_throw_null_reference() -> !;
+    fn bz_throw_divide_by_zero() -> !;
+    fn bz_throw_index_out_of_range() -> !;
+    fn bz_throw_invalid_cast() -> !;
+    fn bz_throw_array_type_mismatch() -> !;
+}
+
+/// Where the program went wrong: the throwing frame, or its caller when that
+/// frame is one of the runtime's throwers (a redirected fault "called" it, so
+/// the stack scan of a report could not find the faulting method by itself).
+unsafe fn origin(first: &Ctx) -> (usize, usize) {
+    let mut c = *first;
+    if let Some(f) = find_fde(c.pc - 1) {
+        let s = f.start;
+        if s == bz_throw_null_reference as *const () as usize
+            || s == bz_throw_divide_by_zero as *const () as usize
+            || s == bz_throw_index_out_of_range as *const () as usize
+            || s == bz_throw_invalid_cast as *const () as usize
+            || s == bz_throw_array_type_mismatch as *const () as usize
+        {
+            if let Some(n) = unwind(&c, &f, c.pc - 1) {
+                c = n;
+            }
+        }
+    }
+    // back from the return address into the call (or onto the faulting load)
+    #[cfg(target_arch = "x86_64")]
+    let pc = c.pc - 1;
+    #[cfg(target_arch = "aarch64")]
+    let pc = c.pc - 4;
+    (pc, *c.regs.as_ptr().add(arch::SP))
 }
 
 /// No clause takes `obj`: report it (its Message when it has one) and end
 /// the program.
-unsafe fn unhandled(obj: *const u8) -> ! {
+unsafe fn unhandled(obj: *const u8, first: &Ctx) -> ! {
     let mut buf = [0u8; 200];
     let mut n = 0;
     // System.Exception's first field is the Message string (bzexc.cs)
@@ -643,7 +691,8 @@ unsafe fn unhandled(obj: *const u8) -> ! {
         core::ptr::copy_nonoverlapping(s.as_ptr(), buf.as_mut_ptr(), s.len());
         n = s.len();
     }
-    fatal_msg(core::slice::from_raw_parts(buf.as_ptr(), n))
+    let (pc, sp) = origin(first);
+    fatal_at(core::slice::from_raw_parts(buf.as_ptr(), n), pc, sp)
 }
 
 /// Does `p` look like a System.String (component size 2, no references)?

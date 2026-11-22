@@ -600,25 +600,21 @@ pub fn upgrade_x86_display(devices: &[crate::pci::PciDevice]) {
 }
 
 /// The RESOLUTION setting at start-up (x86, std VGA): switch to `w` x `h`
-/// before the window system is created. Refused when the kernel heap was
-/// sized for a smaller screen (`allocator::heap_size` grows with the screen
-/// the loader gave) -- the desktop's buffers would not fit.
+/// before the window system is created. The kernel heap grows first
+/// (`allocator::grow_for_screen`): it was sized for the loader's screen. The
+/// mode's width may come out up to 7 pixels narrower (`bochs_vbe::set_mode`).
 #[cfg(target_arch = "x86_64")]
 pub fn set_resolution(devices: &[crate::pci::PciDevice], w: usize, h: usize) -> Result<(), &'static str> {
     let Some(info) = CONSOLE.get().map(|c| c.lock().info()) else { return Err("no framebuffer") };
     if info.width == w && info.height == h {
         return Ok(());
     }
-    // the heap's rule (allocator::heap_size): 48 MiB covers screens up to
-    // 1280x800, each byte of screen beyond that needs 6 more
-    let need = 48 * 1024 * 1024 + 6 * (w * h * 4).saturating_sub(1280 * 800 * 4);
-    if crate::allocator::stats().1 < need {
-        return Err("not enough kernel heap for that screen size");
-    }
+    crate::allocator::grow_for_screen(w, h)?;
     match crate::bochs_vbe::set_mode(devices, w, h) {
         Some(new) => {
+            let width = new.width;
             rebind(new);
-            crate::println!("[fb] resolution {}x{} (the RESOLUTION setting)", w, h);
+            crate::println!("[fb] resolution {}x{} (the RESOLUTION setting)", width, h);
             Ok(())
         }
         None => Err("the display refused that mode (std VGA only)"),

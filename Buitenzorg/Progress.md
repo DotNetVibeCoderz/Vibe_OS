@@ -191,6 +191,7 @@
 - [x] Pilih screensaver · [x] pilih theme (8 tema + dark/light) · [x] kursor (normal/besar)
 - [x] Opsi: animasi on/off, rounded on/off
 - [x] Display resolusi (std VGA, berlaku saat mulai berikutnya) / scaling teks 100-125 % ✓ (2026-11-22) · [x] simpan preferensi ke VFS (`REGION.CFG`, `USERS.CFG`, `SSHD.CFG`, `DESKTOP.CFG` = tema/wallpaper/screensaver/kursor/skala/ikon/resolusi, `SETTINGS SAVED OK`) ✓ (2026-11-22) · [x] app GUI (Pengaturan)
+- [~] Uji fitur 2026-11-22: [x] visual di QEMU (8 resolusi, teks 100/125 %, animasi, dialog, action center) · [ ] laptop + Pi 4 fisik (`docs/hardware-test-checklist.id.md`)
 - [x] Milestone: **atur background/tema/saver/kursor** (`PERSONALIZE OK`)
 
 ### ✨ Micro-interactions (UI/UX)
@@ -422,6 +423,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Developer Workstation](PLAN.md). Fase 
   - [x] **Integrasi debugger di Studio** ✓ (2026-11-07): breakpoint F9 / klik nomor baris, Debug F6, tab Debug (henti, call stack, variabel, keluaran), F10/F11 maju-mundur, baris aktif ditandai -- `Studio: 30 checks`
 - **Debugging & Diagnostik**
   - [x] **Crash report app ring-3** ✓ (2026-11-06): fault + pc/sp/lr + backtrace ter-simbolisasi (symtab ELF disimpan saat load, pindaian stack untuk alamat kembali setelah instruksi call; demangle Rust v0/legacy) → log + `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64, ARM64, RISC-V; `MILESTONE: CRASH REPORT OK` (`crashme.cs` / `crashme.rs`)
+  - [x] **Exception C# native tak tertangkap → laporan crash + stop debugger** ✓ (2026-11-22): `CRASH_REPORT` (76), `UNHANDLED REPORT OK` (x86 + ARM64)
   - [x] **Debugger app ring-3** ✓ (2026-11-06): `dbg run/break/delete/cont/step/regs/set/mem/bt/kill/detach` (`debug.rs`) -- breakpoint `int3`/`brk`/`c.ebreak`, single-step (TF x86, software step ARM64, breakpoint sementara di RISC-V), baca/tulis register + memori, backtrace bersimbol, berhenti saat fault; juga dari PC lewat `bz run "dbg ..."`; x86-64/ARM64/RISC-V, `MILESTONE: DEBUGGER OK`
   - [x] **GDB remote stub untuk program ring-3** ✓ (2026-11-08): `gdbserver PORT APP` (`gdbstub.rs`, RSP lewat TCP di atas mesin `dbg`: g/p/P/m/Z0/z0/c/s/k/D, `monitor`), x86-64/ARM64/RISC-V; + **tulis memori `M`**, **Ctrl+C/pause** (`dbg pause`), watchpoint software (oleh GDB), **`kgdb PORT`** (baca memori kernel, `qOffsets`) ✓ (2026-11-08); `bz gdb-check` (23 pemeriksaan) di smoke `[bzlink]` -- GDB asli belum dicoba · [ ] berhentikan kernel dari stub sendiri (tetap QEMU `-s`)
   - [x] **VS Code DAP adapter** ✓ (2026-11-08): `bz dap` (`sdk/bz/Dap.cs`) lewat bz-link -- skrip JS/TS/Python/C# script: breakpoint baris, continue, step over/in/out, step back/reverse continue, call stack, lokal/global, hover, keluaran, galat sebagai exception; ELF native lewat `dbg`: breakpoint fungsi, step instruksi, step out, register (bisa diubah), Debug Console → `dbg`; ekstensi VS Code (F5 di berkas aktif); `bz dap --selftest` (CI) + `--check` di smoke `[bzlink]`; kernel `dbg wait`
@@ -473,6 +475,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [~] GPU: virtio-gpu 2D ✓ → virgl 3D ✓ → [ ] API gaya Vulkan/WebGPU `Buitenzorg.GPU` · [x] compute GPU (`COMPUTE_OP` 72; backend V3D belum diuji di papan) · [x] driver GPU nyata (Intel Gen9 + V3D Pi 4, backend `gfx3d`)
   - [~] Engine: [x] scene graph · [ ] animasi skeletal · [x] **fisika rigid body** (bola + kotak AABB, gravitasi, pantulan, gesekan, tidur; `PhysicsWorld`) · [x] **audio 3D posisional** (`Audio3D`: pan equal-power + atenuasi jarak, dicampur ke mixer) -- Ruang 3D tombol J, 2026-11-20
   - [x] **Lapisan libc + subset SDL2 → port DOOM** (`userland/c`: crt0, libc kecil, SDL2 subset, di-build dengan zig; doomgeneric + Freedoom jalan di x86-64, ARM64 dan RISC-V; `scripts/fetch-doom` / `build-doom`, syscall `FS_READ_AT` 70; `MILESTONE: DOOM OK`; 2026-11-20) · [ ] suara DOOM (SDL_mixer) · [ ] POSIX lebih luas (thread, socket)
+  - [x] **Pintasan DOOM** di Mulai > Permainan + ikon orisinal ✓ (2026-11-22); Ruang 3D pindah ke Hiburan
 - **Hiburan & UX**
   - [~] [x] **Mode game: layar pengaman ditahan** (syscall `IDLE_INHIBIT` 66; `GameView` dan `MediaPlayer` memakainya otomatis) ✓ (2026-11-09) · [x] fullscreen ✓ (2026-11-22) · [ ] tunda notifikasi, prioritas · [x] **media key + OSD + hotkey screenshot** (`keyboard::Hotkey`, `wm::show_osd`, `screenshot.rs`; `MILESTONE: MEDIA KEYS OK`; 2026-11-19)
   - [ ] Kategori Game/Media di App Store · perpustakaan media lintas app

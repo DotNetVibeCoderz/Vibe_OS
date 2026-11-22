@@ -53,13 +53,14 @@ pub fn counter() -> u64 {
 /// Sleep until the CPU counter reaches `deadline` (ns).
 fn sleep_until(deadline: u64) {
     let word = 0u32; // nobody wakes it: only the clock ends the wait
+    let margin = crate::task::precise_wait_margin(2_000_000);
     loop {
         let now = crate::arch::cpu::nanos();
         if now >= deadline {
             return;
         }
-        if deadline - now > 3_000_000 && crate::task::is_started() {
-            crate::task::futex_wait_timeout_if(&word as *const u32 as u64, 0, deadline - 2_000_000);
+        if deadline - now > margin + 1_000_000 && crate::task::is_started() {
+            crate::task::futex_wait_timeout_if(&word as *const u32 as u64, 0, deadline - margin);
         } else {
             crate::task::yield_now();
         }

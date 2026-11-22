@@ -217,8 +217,8 @@ public static class SettingsApp
     /// <summary>The "Pengguna" page: accounts, with an administrator's password for changes.</summary>
     static Control UsersPage(Window w, Parts parts)
     {
-        parts.AdminName = new TextBox { Text = Users.DefaultAdministrator, Width = 150 };
-        parts.AdminPassword = new TextBox { PasswordChar = '*', Watermark = "kata sandi", Width = 150 };
+        parts.AdminName = new TextBox { Text = Users.DefaultAdministrator, Width = 146 };
+        parts.AdminPassword = new TextBox { PasswordChar = '*', Watermark = "kata sandi", Width = 146 };
         parts.UserStatus = new TextBlock("Perubahan akun memerlukan kata sandi administrator.") { TextWrapping = TextWrapping.Wrap }.WithClass("faint");
         var accounts = new ObservableCollection<UserAccount>();
         void Reload(string? select = null)
@@ -227,7 +227,7 @@ public static class SettingsApp
             for (int i = 0; i < accounts.Count; i++) if (accounts[i].Name == select) parts.Accounts.SelectedIndex = i;
             if (parts.Accounts.SelectedIndex < 0 && accounts.Count > 0) parts.Accounts.SelectedIndex = 0;
         }
-        parts.Accounts = new ListBox { ItemsSource = accounts, Height = 170 };
+        parts.Accounts = new ListBox { ItemsSource = accounts, Height = 126 };
         parts.Accounts.ItemTemplate = o =>
         {
             var u = (UserAccount)o;
@@ -358,7 +358,7 @@ public static class SettingsApp
     {
         var p = new StackPanel { Orientation = Orientation.Vertical, Spacing = 8 };
         p.Children.Add(new TextBlock(title).WithClass("h2"));
-        p.Children.Add(new TextBlock(hint).WithClass("faint"));
+        p.Children.Add(new TextBlock(hint) { TextWrapping = TextWrapping.Wrap }.WithClass("faint"));
         foreach (var c in body) p.Children.Add(c);
         return p;
     }
@@ -378,17 +378,17 @@ public static class SettingsApp
         parts.Cursor.IsCheckedChanged += t => AppSettings.LargeCursor = t.IsChecked;
         parts.Resolution = new ComboBox(AppSettings.Choices(AppSettings.ResolutionKey), AppSettings.Resolution) { Width = 130 };
         parts.Resolution.SelectionChanged += cb => { if (cb.SelectedIndex >= 0 && cb.SelectedIndex != AppSettings.Resolution) AppSettings.Resolution = cb.SelectedIndex; };
-        parts.Scale = new ComboBox(AppSettings.Choices(AppSettings.UiScaleKey), AppSettings.UiScale) { Width = 110 };
+        parts.Scale = new ComboBox(AppSettings.Choices(AppSettings.UiScaleKey), AppSettings.UiScale) { Width = 100, MinWidth = 100 };
         parts.Scale.SelectionChanged += cb => { if (cb.SelectedIndex >= 0 && cb.SelectedIndex != AppSettings.UiScale) AppSettings.UiScale = cb.SelectedIndex; };
         var screenRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        screenRow.Children.Add(new TextBlock("Resolusi"));
+        screenRow.Children.Add(new TextBlock("Resolusi") { VerticalAlignment = VerticalAlignment.Center });
         screenRow.Children.Add(parts.Resolution);
-        screenRow.Children.Add(new TextBlock("Ukuran teks"));
+        screenRow.Children.Add(new TextBlock("Ukuran teks") { VerticalAlignment = VerticalAlignment.Center });
         screenRow.Children.Add(parts.Scale);
         parts.Icons = new ComboBox(AppSettings.Choices(AppSettings.IconPackKey), AppSettings.IconPack) { Width = 110 };
         parts.Icons.SelectionChanged += cb => { if (cb.SelectedIndex >= 0 && cb.SelectedIndex != AppSettings.IconPack) AppSettings.IconPack = cb.SelectedIndex; };
         var iconRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        iconRow.Children.Add(new TextBlock("Paket ikon"));
+        iconRow.Children.Add(new TextBlock("Paket ikon") { VerticalAlignment = VerticalAlignment.Center });
         iconRow.Children.Add(parts.Icons);
         var look = Page("Tampilan", "Tema dan ukuran teks berlaku langsung; resolusi setelah komputer dimulai ulang.", parts.Themes, screenRow, iconRow, parts.Animations, parts.Cursor);
 
@@ -439,7 +439,7 @@ public static class SettingsApp
             ("Pengguna", IconKind.Home, users),
         };
         var host = new Border { Padding = new Thickness(16, 0, 0, 0) };
-        var nav = new ListBox { BorderThickness = 0, Background = Color.Transparent, CornerRadius = 0, Padding = new Thickness(6), Width = 160 };
+        var nav = new ListBox { BorderThickness = 0, Background = Color.Transparent, CornerRadius = 0, Padding = new Thickness(6), Width = 168 };
         var names = new List<string>();
         foreach (var p in pages) names.Add(p.Item1);
         nav.ItemsSource = names;

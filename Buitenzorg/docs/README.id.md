@@ -19,6 +19,7 @@ dan **Bahasa Indonesia**; spec teknis dan tracker perencanaan di root repo dalam
 | Dokumen | Isi |
 |---|---|
 | [Jalankan di VM](run-in-vm.id.md) | Konversi image lalu jalankan di VMware Player, VirtualBox, atau Hyper-V. |
+| [Daftar uji perangkat](hardware-test-checklist.id.md) | Yang dijalankan dan difoto di laptop dan Pi 4 untuk perubahan yang tak bisa dibuktikan QEMU. |
 | [Pasang di Hardware](install-hardware.id.md) | Tulis image ke stik USB dan boot mesin fisik (BIOS/UEFI), dengan tabel kompatibilitas yang jujur. |
 | [Kernel baru di Pi tanpa cabut kartu SD](raspberry-pi-ci.id.md) | `bz pi update`: kernel lewat jaringan, boot sekali dijaga watchdog, dipakai hanya bila lulus; CI di runner self-hosted. |
 | [Buitenzorg Studio](studio.id.md) | IDE di dalam OS: proyek dari 52 template, editor kode, Jalankan (F5), Keluaran, Masalah, Terminal. |

@@ -409,6 +409,18 @@ pub fn mono() -> Option<(u16, u32)> {
     }
 }
 
+/// The pixel size to use for a size given with an id: the UI aliases follow
+/// the text scale as the styled draw ops do (a toolkit measures "14 px body"
+/// with an alias and draws with op 12 -- at 125 % its boxes came out too
+/// narrow), a face id means exactly the pixels asked for.
+pub fn alias_px(id: u32, px: u32) -> u32 {
+    if (0xFFF0..=0xFFF2).contains(&id) {
+        (px * scale() + 50) / 100
+    } else {
+        px
+    }
+}
+
 /// Resolve an id from user space: 1.. = a face, 0xFFF0 + style = the UI font
 /// for a toolkit style (0 body, 1 strong, 2 heading), 0xFFFE = monospace.
 pub fn resolve(id: u32) -> Option<u16> {

@@ -315,6 +315,7 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::ABI_VERSION => ABI_VERSION,
         sysno::DEBUG_WRITE => sys_debug_write(a0, a1),
         sysno::EXIT => sys_exit(a0),
+        sysno::CRASH_REPORT => sys_crash_report(a0, a1, a2),
         sysno::YIELD => {
             task::yield_now();
             0
@@ -772,6 +773,7 @@ fn sys_compute_op(a0: u64, a1: u64, a2: u64) -> u64 {
 fn sys_font_op(a0: u64, a1: u64, a2: u64) -> u64 {
     use bz_abi::font_op as o;
     let (op, id, px) = (a0 & 0xFF, (a0 >> 8) & 0xFFFF, ((a0 >> 24) & 0xFF) as u32);
+    let px = crate::font::alias_px(id as u32, px);
     let face = || crate::font::resolve(id as u32);
     match op {
         o::COUNT => crate::font::count() as u64,
@@ -1525,13 +1527,14 @@ fn sys_key_event() -> u64 {
 /// the timer tick, ~10 ms), then yield until it.
 fn sys_sleep_until(deadline: u64) -> u64 {
     static WORD: u32 = 0; // nobody wakes it: only the clock ends the wait
+    let margin = task::precise_wait_margin(11_000_000);
     loop {
         let now = crate::arch::cpu::nanos();
         if now >= deadline {
             return 0;
         }
-        if deadline - now > 12_000_000 {
-            task::futex_wait_timeout_if(&WORD as *const u32 as u64, 0, deadline - 11_000_000);
+        if deadline - now > margin + 1_000_000 {
+            task::futex_wait_timeout_if(&WORD as *const u32 as u64, 0, deadline - margin);
         } else {
             task::yield_now();
         }
@@ -1724,6 +1727,22 @@ fn sys_debug_write(ptr: u64, len: u64) -> u64 {
         }
         Err(_) => syserr::INVAL,
     }
+}
+
+/// CRASH_REPORT: the program's runtime gives up on an unhandled error. Like a
+/// fault (report, debugger stop), but the exit code stays an abort's 134.
+fn sys_crash_report(what_ptr: u64, pc: u64, sp: u64) -> u64 {
+    {
+        let Some(what) = read_user_path_checked(what_ptr) else { return syserr::INVAL };
+        // one line of printable ASCII: it goes into the log and the report
+        let what: alloc::string::String = what.chars().map(|c| if (' '..='~').contains(&c) { c } else { '?' }).collect();
+        let pid = task::current_space().id;
+        if pid != 0 {
+            crate::crash::record(pid, &what, pc, sp, None, None);
+            crate::debug::on_fault(&what, pc, sp, None);
+        }
+    } // (freed before the exit: it does not return)
+    sys_exit(crate::crash::UNHANDLED_EXIT_CODE)
 }
 
 fn sys_exit(code: u64) -> u64 {

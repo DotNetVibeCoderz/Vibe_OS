@@ -310,8 +310,14 @@ pub mod sysno {
     /// handler as if the faulting instruction had called it (the return
     /// address is the faulting pc + 1), so a runtime can throw from there.
     pub const FAULT_HANDLER: u64 = 75;
+    /// A runtime reports that this program dies of an error nobody handled
+    /// (native C#: an uncaught exception): `a0` = NUL-terminated description
+    /// (<= 255 bytes), `a1` = pc, `a2` = stack pointer of where it happened.
+    /// The kernel writes a crash report, lets a debugger stop there, and ends
+    /// the program with exit code 134. Returns only on a bad argument (INVAL).
+    pub const CRASH_REPORT: u64 = 76;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 76;
+    pub const COUNT: u64 = 77;
 }
 
 /// Operations of [`sysno::WIN_CTL`] (the low 8 bits of `a0`).
@@ -1205,12 +1211,13 @@ mod tests {
         assert_eq!(sysno::NOTIFY, 73);
         assert_eq!(sysno::WIN_CTL, 74);
         assert_eq!(sysno::FAULT_HANDLER, 75);
+        assert_eq!(sysno::CRASH_REPORT, 76);
         assert_eq!(win_ctl::SURFACE_SIZE, 5);
         assert_eq!(fault_kind::DIVIDE, 1);
         assert_eq!(compute_op::GEMV, 5);
         assert_eq!(compute_kind::INTEL, 3);
         assert_eq!(audio_read_op::QUEUED, 3);
-        assert_eq!(sysno::COUNT, 76);
+        assert_eq!(sysno::COUNT, 77);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1230,7 +1237,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 76, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 77, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

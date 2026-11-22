@@ -754,6 +754,10 @@ belum bisa ditulis persisten** (FAT12 write hanya di `/ram`).
 - **Profiler app**: zona `profile.rs` lewat syscall + sampling RIP user dari IRQ
   timer; `bz prof <app>`. **Log**: `bz logs [-f] [app]`.
 
+> **Status 2026-11-22:** exception C# native yang tak ditangkap (throw, null,
+> bagi nol) juga menjadi laporan crash dan menghentikan debugger
+> (`MILESTONE: UNHANDLED REPORT OK`).
+>
 > **Status 2026-11-06: crash report tercapai** — fault program ring-3 menulis
 > laporan dengan backtrace ter-simbolisasi (simbol ELF + pindaian stack) ke log
 > dan `/ram/CRASH/P<pid>.TXT`, shell `crash`; x86-64/ARM64/RISC-V,
@@ -1450,6 +1454,7 @@ Dijadwalkan **setelah v1.0** karena berisiko & tak boleh menghambat rilis stabil
 
 Item yang belum tuntas dan dijadwalkan menyusul (lihat anotasi di [Progress.md](Progress.md)):
 
+- [ ] Pi 4 (QEMU raspi4b): `programs done; frames leaked: 1` sejak sebelum 2026-11-22; dugaan dari kode: frame permanen kursor firmware (`rpi_io::cursor_image`), belum dibuktikan; smoke hanya mewajibkan 0 di ARM64 virt
 - **CoreCLR/JIT + GC + reflection** — runtime C# masih NativeAOT/bflat freestanding (heap bump tanpa kolektor sejak v0.15). Loncatan Layer-4 "Menengah" (§5.1).
 - **APIC + SMP** — sebagian (2026-11-01): LAPIC BSP (virtual wire), MADT, AP dibangunkan (`SMP OK`); increment 2: GDT/TSS per-AP, timer LAPIC di AP, IPI ping + TLB shootdown, state per-CPU via ID LAPIC (`SMP PERCPU OK`). Increment 3: proses ring-3 paralel di semua core (`SMP SCHED OK`). Increment 4: kernel SMP simetris dengan Big Kernel Lock — syscall & task kernel di semua core (`SMP KERNEL OK`). Increment 5: lock berbutir halus — syscall memori/scheduler/konsol tanpa BKL (`SMP FINELOCK OK`, ×2,25 di 4 CPU). WM/KEY_READ/registry proses/RTC menyusul. I/O APIC ✓ (`IOAPIC OK`). Lock WM dipecah (kanvas per jendela + komposisi dari snapshot); thread paralel dalam satu proses (`SMP THREADS OK`). FS tanpa BKL; syscall dengan interrupt menyala. Proses (spawn/wait), jaringan, paket, audio kini juga tanpa BKL. Sisa di bawah BKL: EXIT/PROC_KILL dan THREAD_CREATE/JOIN.
 - **Driver native NVMe/AHCI/USB & e1000** — saat ini hanya IDE PIO + net loopback.

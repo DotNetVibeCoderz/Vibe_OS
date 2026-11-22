@@ -6,6 +6,9 @@
 // The kernel ends the program (exit 0xDEAD) and writes a crash
 // report whose backtrace must name Level3 <- Level2 <- Level1 from the ELF's
 // symbol table (crash.rs) -- the boot checks it: MILESTONE: CRASH REPORT OK.
+// With `null` (a null dereference three calls deep) or `throw` (an uncaught
+// throw) it dies of an exception: exit 134, and a report naming those methods
+// (MILESTONE: UNHANDLED REPORT OK).
 // With the argument `spin` it does not crash: it spends ~1.2 s in Hot and
 // ~0.3 s in Cold, for the per-app profiler's boot check (appprof.rs,
 // MILESTONE: APP PROFILER OK). Built with bflat --stdlib:zero.
@@ -47,16 +50,42 @@ static unsafe class Crash
         return x;
     }
 
-    static unsafe bool Spin()
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int Null3(int[] values, int i) => values[i] + 1;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int Null2(int[] values, int i) => Null3(values, i) * 2 + i;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int Null1(int[] values, int i) => Null2(values, i + 1) - 3;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int[] Nothing(int n) => n == 0 ? null : new int[n];
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int Throw2(int n)
+    {
+        if (n > 0) throw new System.InvalidOperationException("crashme: thrown on purpose");
+        return n;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int Throw1(int n) => Throw2(n + 1) + 1;
+
+    // the argument's first letter: s(pin), n(ull), t(hrow), 0 = none
+    static byte Arg()
     {
         byte* a = stackalloc byte[16];
         ulong n = bz_proc_args(a, 16);
-        return n >= 4 && a[0] == (byte)'s' && a[1] == (byte)'p' && a[2] == (byte)'i' && a[3] == (byte)'n';
+        return n >= 4 && n <= 16 ? a[0] : (byte)0;
     }
 
     static int Main()
     {
-        if (Spin())
+        byte arg = Arg();
+        if (arg == (byte)'n') return Null1(Nothing(0), 0);
+        if (arg == (byte)'t') return Throw1(0);
+        if (arg == (byte)'s')
         {
             ulong t = bz_clock_nanos();
             ulong r = Hot(t + 1_200_000_000UL) ^ Cold(t + 1_500_000_000UL);

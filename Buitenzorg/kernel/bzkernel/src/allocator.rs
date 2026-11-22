@@ -28,9 +28,36 @@ const SCREEN_BUFFERS: u64 = 6;
 /// (and never less than the base: the kernel does not run on less).
 pub fn heap_size() -> u64 {
     let screen = crate::boot::info().framebuffer.map_or(0, |f| (f.width * f.height * 4) as u64);
-    let wanted = BASE_HEAP + SCREEN_BUFFERS * screen.saturating_sub(BASE_SCREEN);
+    let wanted = wanted_for(screen);
     let half_ram = memory::total_usable_mib() * 1024 * 1024 / 2;
     wanted.min(half_ram).max(BASE_HEAP) & !0xFFF
+}
+
+fn wanted_for(screen: u64) -> u64 {
+    BASE_HEAP + SCREEN_BUFFERS * screen.saturating_sub(BASE_SCREEN)
+}
+
+/// Grow the heap for a `w` x `h` screen, at most to half of RAM: `init` only
+/// knew the loader's mode (1280x720 on a BIOS boot), and the RESOLUTION
+/// setting is read from /disk later. Call it before secondary CPUs copy the
+/// top page-table level (`fast_boot` applies the setting before `smp::init`).
+pub fn grow_for_screen(w: usize, h: usize) -> Result<(), &'static str> {
+    const KERNEL_DATA: Flags = Flags { write: true, user: false, exec: false };
+    let need = (wanted_for((w * h * 4) as u64) + 0xFFF) & !0xFFF;
+    let have = stats().1 as u64;
+    if have >= need {
+        return Ok(());
+    }
+    if need > memory::total_usable_mib() * 1024 * 1024 / 2 {
+        return Err("not enough RAM for that screen size");
+    }
+    memory::with_ctx(|ctx| {
+        paging::map_fresh_range(&mut ctx.mapper, &mut ctx.frames, HEAP_START + have, (need - have) / 4096, KERNEL_DATA)
+            .map_err(|_| "out of frames for the bigger screen's heap")
+    })?;
+    // SAFETY: the range right after the heap's end was just mapped for it.
+    unsafe { ALLOCATOR.lock().extend((need - have) as usize) };
+    Ok(())
 }
 
 #[global_allocator]

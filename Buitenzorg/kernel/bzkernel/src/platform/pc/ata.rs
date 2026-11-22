@@ -20,6 +20,14 @@ const CMD_WRITE_SECTORS: u8 = 0x30;
 const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
 
+/// How long a command may keep the drive busy: ATA allows FLUSH CACHE 30 s,
+/// and an emulated disk is as slow as the host's storage under load.
+const COMMAND_SECONDS: u64 = 30;
+/// The fewest status polls before giving up, whatever the clock says; also
+/// the whole limit while probing (a position without a drive must not cost
+/// 30 s of boot).
+const MIN_POLLS: u64 = 1_000_000;
+
 struct Channel {
     io_base: u16,
     ctrl_base: u16,
@@ -49,29 +57,42 @@ impl Channel {
         }
     }
 
-    fn wait_not_busy(&self) -> Result<u8, &'static str> {
-        for _ in 0..1_000_000 {
+    /// Poll the status until `done` takes it; None after `seconds` (0 = after
+    /// `MIN_POLLS`). Counting polls alone gave up after a few seconds at
+    /// most -- less than one slow write takes.
+    fn poll(&self, seconds: u64, done: impl Fn(u8) -> bool) -> Option<u8> {
+        let start = crate::arch::cpu::timestamp();
+        let limit = seconds * crate::arch::cpu::counter_hz();
+        let mut polls = 0u64;
+        loop {
             let status = unsafe { self.reg(7).read() };
-            if status & STATUS_BSY == 0 {
-                return Ok(status);
+            if done(status) {
+                return Some(status);
+            }
+            polls += 1;
+            if polls >= MIN_POLLS && crate::arch::cpu::timestamp().wrapping_sub(start) >= limit {
+                return None;
             }
             core::hint::spin_loop();
         }
-        Err("ATA timeout waiting for BSY clear")
+    }
+
+    fn wait_not_busy(&self) -> Result<u8, &'static str> {
+        self.poll(COMMAND_SECONDS, |s| s & STATUS_BSY == 0).ok_or("ATA timeout waiting for BSY clear")
     }
 
     fn wait_data_request(&self) -> Result<(), &'static str> {
-        for _ in 0..1_000_000 {
-            let status = unsafe { self.reg(7).read() };
-            if status & STATUS_ERR != 0 {
-                return Err("ATA device reported error");
-            }
-            if status & STATUS_BSY == 0 && status & STATUS_DRQ != 0 {
-                return Ok(());
-            }
-            core::hint::spin_loop();
+        self.wait_data_request_for(COMMAND_SECONDS)
+    }
+
+    fn wait_data_request_for(&self, seconds: u64) -> Result<(), &'static str> {
+        let status = self
+            .poll(seconds, |s| s & STATUS_ERR != 0 || (s & STATUS_BSY == 0 && s & STATUS_DRQ != 0))
+            .ok_or("ATA timeout waiting for DRQ")?;
+        if status & STATUS_ERR != 0 {
+            return Err("ATA device reported error");
         }
-        Err("ATA timeout waiting for DRQ")
+        Ok(())
     }
 
     fn select(&self, slave: bool, lba_bits: u8) {
@@ -99,13 +120,13 @@ impl Channel {
         if status == 0 || status == 0xFF {
             return None; // no device on this position
         }
-        self.wait_not_busy().ok()?;
+        self.poll(0, |s| s & STATUS_BSY == 0)?;
         // ATAPI/SATA devices set the signature registers; plain IDENTIFY fails.
         let (mid, hi) = unsafe { (self.reg(4).read(), self.reg(5).read()) };
         if mid != 0 || hi != 0 {
             return None; // not a plain ATA disk (likely ATAPI)
         }
-        self.wait_data_request().ok()?;
+        self.wait_data_request_for(0).ok()?;
 
         let mut identify = [0u16; 256];
         for word in identify.iter_mut() {

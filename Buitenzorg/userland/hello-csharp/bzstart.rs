@@ -1244,6 +1244,7 @@ extern "C" {
 }
 
 const SYS_FAULT_HANDLER: u64 = 75;
+const SYS_CRASH_REPORT: u64 = 76;
 
 /// Ask the kernel to turn a null dereference / an integer division by zero
 /// into a call of the managed throw helper (FAULT_HANDLER): `try` / `catch`
@@ -1253,9 +1254,20 @@ unsafe fn register_fault_handlers() {
     syscall2(SYS_FAULT_HANDLER, 1, bz_throw_divide_by_zero as *const () as u64);
 }
 
+#[inline(never)]
 unsafe fn fatal(msg: &[u8]) -> ! {
     bz_write(msg.as_ptr(), msg.len() as u64);
+    let mut text = [0u8; 256];
+    let n = msg.len().saturating_sub(1).min(255); // (without its newline)
+    core::ptr::copy_nonoverlapping(msg.as_ptr(), text.as_mut_ptr(), n);
+    let sp = text.as_ptr() as usize;
+    crash_report(text.as_ptr(), fatal as *const () as usize, sp);
     SystemNative_Abort()
+}
+
+/// CRASH_REPORT: `what` (NUL-terminated) at `pc` / `sp`; returns only if refused.
+unsafe fn crash_report(what: *const u8, pc: usize, sp: usize) {
+    syscall3(SYS_CRASH_REPORT, what as u64, pc as u64, sp as u64);
 }
 
 unsafe fn is_instance(target: *const MethodTable, obj: *const u8) -> *const u8 {

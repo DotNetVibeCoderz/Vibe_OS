@@ -363,10 +363,12 @@ backtrace (return addresses found on the stack, innermost first):
 
 **Dereferensi null di C# native bukan crash:** ia menjadi
 `NullReferenceException` (pembagian bilangan bulat dengan nol menjadi
-`DivideByZeroException`). Bila tak ditangkap, program berakhir dengan
-`Unhandled exception: ...` **tanpa laporan crash**; debugger juga tidak
-berhenti di sana. Laporan crash untuk fault yang tidak diambil runtime:
-pointer liar, lompat ke data, instruksi tak dikenal.
+`DivideByZeroException`). Bila ditangkap, tidak ada jejaknya. **Bila tak
+ditangkap, exception apa pun dilaporkan seperti crash:** program mencetak
+`Unhandled exception: ...`, laporan dengan backtrace tempat throw (atau
+instruksi yang fault) ditulis, program di bawah `dbg` berhenti di sana, dan
+kode keluarnya 134. Coba `run crashme null` atau `run crashme throw`, lalu
+`crash last`.
 
 - Di Terminal: `crash` mendaftar laporan, `crash PID` / `crash last`
   menampilkan satu; dari PC, `bz pull /ram/CRASH/P1009.TXT` atau `bz logs`.

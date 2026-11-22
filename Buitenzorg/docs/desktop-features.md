@@ -42,7 +42,7 @@ setting opens Pengaturan, a file or folder opens in Berkas
 | Theme | `THEME` (0) | at once; built-in themes + theme packages |
 | Text size | `UI_SCALE` (13): 100 / 110 / 125 % | at once |
 | Icon pack | `ICON_PACK` (14): built-in, then `/disk/ICONS/*.BIN` | at once |
-| Screen resolution | `RESOLUTION` (12): 800x600 .. 1920x1080 | next start; QEMU / Bochs / VirtualBox std VGA only (elsewhere the firmware's mode stays), and only when the kernel heap is large enough |
+| Screen resolution | `RESOLUTION` (12): 800x600 .. 1920x1080 | next start; QEMU / Bochs / VirtualBox std VGA only (elsewhere the firmware's mode stays). The kernel heap grows for the bigger screen (at most half of RAM); std VGA widths are multiples of 8, so 1366x768 is shown as 1360x768 |
 
 **Kept on disk:** theme, wallpaper, screensaver + delay, animations, cursor,
 text scale, icon pack and resolution are written to `/disk/DESKTOP.CFG`

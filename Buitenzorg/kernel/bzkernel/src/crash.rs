@@ -391,3 +391,50 @@ pub fn flush() {
         }
     }
 }
+
+/// Exit code of a program that died of an unhandled error (CRASH_REPORT).
+pub const UNHANDLED_EXIT_CODE: u64 = 134;
+
+/// The boot's check of unhandled exceptions (`app arg` for each case): exit
+/// 134 and a report of that process naming `funcs`; then, under the debugger,
+/// the first case stops where it happened and still ends with 134.
+pub fn unhandled_check(app: &str, cases: &[(&str, &[&str])]) -> bool {
+    let mut ok = true;
+    for (arg, funcs) in cases {
+        let Ok(pid) = crate::app::spawn_with_args(app, arg) else {
+            crate::println!("[crash] unhandled check failed: cannot start {} {}", app, arg);
+            return false;
+        };
+        let code = crate::app::wait(pid);
+        flush();
+        let report = last().filter(|r| r.0 == pid).map(|r| r.1).unwrap_or_default();
+        let named = funcs.iter().all(|f| report.contains(f));
+        if code != UNHANDLED_EXIT_CODE || !named || !report.contains("Unhandled exception") {
+            crate::println!("[crash] unhandled check failed: {} {}: exit {}, functions named {}", app, arg, code, named);
+            ok = false;
+        }
+    }
+    let Some((arg, funcs)) = cases.first() else { return false };
+    let started = crate::debug::command(&["run", app, arg]).join(" ");
+    let Some(pid) = started.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()) else {
+        crate::println!("[crash] unhandled check failed: debugger: {}", started);
+        return false;
+    };
+    let stop = crate::debug::command(&["cont"]).join(" ");
+    let stopped = stop.contains("stopped (fault)") && funcs.first().is_some_and(|f| stop.contains(f));
+    crate::println!("[crash] unhandled check, debugger: {}", stop);
+    if stopped {
+        crate::debug::command(&["cont"]);
+    } else {
+        crate::debug::command(&["kill"]);
+    }
+    let code = crate::app::wait(pid);
+    flush();
+    ok &= stopped && code == UNHANDLED_EXIT_CODE;
+    if ok {
+        crate::println!("[kernel] MILESTONE: UNHANDLED REPORT OK (uncaught exceptions: crash report names where they were thrown, the debugger stops there, exit 134)");
+    } else {
+        crate::println!("[crash] unhandled check failed: debugger stopped {}, exit {}", stopped, code);
+    }
+    ok
+}

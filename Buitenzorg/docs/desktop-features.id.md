@@ -43,7 +43,7 @@ pengaturan membuka Pengaturan, berkas/folder dibuka di Berkas
 | Tema | `THEME` (0) | langsung; tema bawaan + paket tema |
 | Ukuran teks | `UI_SCALE` (13): 100 / 110 / 125 % | langsung |
 | Paket ikon | `ICON_PACK` (14): bawaan, lalu `/disk/ICONS/*.BIN` | langsung |
-| Resolusi layar | `RESOLUTION` (12): 800x600 .. 1920x1080 | saat mulai berikutnya; hanya VGA standar QEMU / Bochs / VirtualBox (di tempat lain mode firmware tetap), dan hanya bila heap kernel cukup |
+| Resolusi layar | `RESOLUTION` (12): 800x600 .. 1920x1080 | saat mulai berikutnya; hanya VGA standar QEMU / Bochs / VirtualBox (di tempat lain mode firmware tetap). Heap kernel membesar untuk layar yang lebih besar (paling banyak setengah RAM); lebar VGA standar kelipatan 8, jadi 1366x768 tampil 1360x768 |
 
 **Disimpan di disk:** tema, wallpaper, screensaver + jedanya, animasi, kursor,
 ukuran teks, paket ikon dan resolusi ditulis ke `/disk/DESKTOP.CFG` setiap

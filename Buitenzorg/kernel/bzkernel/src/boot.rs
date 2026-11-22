@@ -281,3 +281,8 @@ pub fn describe(info: &BootInfo) -> alloc::string::String {
         fw
     )
 }
+
+/// The desktop's first frame is on the screen.
+pub fn first_frame_shown() -> bool {
+    FIRST_FRAME.load(core::sync::atomic::Ordering::Acquire)
+}

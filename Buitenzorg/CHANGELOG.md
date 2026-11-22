@@ -13,12 +13,41 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Fixed -- crash reports, ATA, desktop defects; DOOM shortcut (2026-11-22)
+
+- **Uncaught native C# exceptions are crash reports again** (syscall
+  `CRASH_REPORT`, 76): backtrace of the throw or the faulting instruction,
+  debugger stop, exit 134 (`MILESTONE: UNHANDLED REPORT OK`).
+- **ATA:** a slow host no longer fails a read or write with "timeout waiting
+  for BSY clear": a command gives up only after 1M polls and 30 seconds.
+- **Self-test boot without the native C# programs** (CI) says it skips those
+  demos, where it used to print failure lines. A partly missing payload still
+  fails.
+- **Mouse:** the IRQ handler reads the 8042 only when a mouse byte is
+  waiting, so a late interrupt from a polled ACK cannot inject one.
+- **Resolution setting:** the kernel heap grows for the larger screen and
+  widths are rounded to the 8 pixels Bochs VBE needs (1366 shows as 1360).
+- **125 % text:** FONT_OP and draw op 14 scale the UI-font aliases like the
+  styled draw ops, so managed apps measure what is drawn. Settings no longer
+  clips; desktop and Start menu labels are centred by the font they use.
+- **Desktop frozen on an animation frame:** two CPUs could present their
+  frames out of order. An older frame is now dropped, and the session's own
+  windows no longer animate before the first frame (A/B at 1360x768: 4 of 21
+  boots frozen before, 0 of 21 after).
+- **Terminal:** the output and the end of a program running in a tab are
+  drawn when they happen (they waited for the next key or mouse move).
+- **Precise sleeps on a single x86 CPU:** vsync waits and `SLEEP_UNTIL` no
+  longer round up to 55 ms timer ticks (120 vsyncs took 12.4 s, want 2 s).
+- **DOOM** has a card and an original icon under Start > Permainan;
+  **Ruang 3D moved to Hiburan** (a category holds 9 cards).
+- Tested in QEMU only: docs/hardware-test-checklist.md has the laptop and
+  Raspberry Pi 4 steps.
+
 ### Changed -- native C# behaviour (2026-11-22)
 
 - A null dereference or integer division by zero is an exception now. When
-  nobody catches it the program ends with `Unhandled exception: ...` and
-  **no crash report is written and the debugger does not stop**; other faults
-  (wild pointers) still do both. `crashme` now uses a wild pointer.
+  nobody catches it the program ends with `Unhandled exception: ...`, a crash
+  report and, under `dbg`, a debugger stop (see Fixed above).
 - The collector also runs while threads are alive, so an object reachable
   only through a raw address outside the roots is freed. `pthread.cs` relied
   on the old behaviour; it now holds managed references and fails if no

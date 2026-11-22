@@ -179,7 +179,10 @@ pub fn run() -> ! {
         }
 
         // jobs of terminal tabs: their output and their end
-        terminal::poll();
+        // A program's output or end: a redraw, but not activity (it must
+        // neither dismiss nor postpone the screensaver).
+        let term_changed = terminal::poll();
+        other |= term_changed;
 
         // desktop settings kept on /disk: applied once the wallpapers can be
         // loaded (a normal start), then saved whenever they change
@@ -351,7 +354,7 @@ pub fn run() -> ! {
         } else {
             // Redraw on input or while a micro-interaction (ripple) animates.
             let animating = wm::tick_animation(now);
-            if input || animating {
+            if input || animating || term_changed {
                 wm::render_frame_hint(&mut back, w, h, input && !other && !animating);
             }
         }

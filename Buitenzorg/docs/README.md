@@ -21,6 +21,7 @@ The complete documentation index for **Buitenzorg OS**. Docs are written in
 | [Run in a VM](run-in-vm.md) | Convert the image and run it in VMware Player, VirtualBox, or Hyper-V. |
 | [Raspberry Pi 4](install-raspberry-pi.md) | The desktop on a Pi 4's HDMI screen, on all four cores: verified on a real 8 GB board and on QEMU. |
 | [New kernels on a Pi without the SD card](raspberry-pi-ci.md) | `bz pi update`: a kernel over the network, booted once under a watchdog, kept only if it passes; CI on a self-hosted runner. |
+| [Hardware test checklist](hardware-test-checklist.md) | What to run and photograph on the laptop and the Pi 4 for the changes QEMU cannot prove. |
 | [Install on Hardware](install-hardware.md) | Flash the image to a USB stick and boot a physical machine (BIOS/UEFI), with an honest capability matrix. |
 | [Buitenzorg Studio](studio.md) | The IDE inside the OS: projects from 52 templates, a code editor, Run (F5), Output, Problems, Terminal. |
 | [C# Script (`.csx`)](csharp-script.md) | C# without a build step: a bytecode engine for top-level C#, console and UI (`Ui.Window`), 16x faster than the tree interpreter. |

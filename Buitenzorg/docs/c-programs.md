@@ -30,7 +30,9 @@ scripts/build-doom.sh        # kernel/target/doom/<arch>/DOOM.ELF for x86_64, aa
 cd kernel && cargo run --release -p bzimage -- --out ../dist   # DOOM.ELF + DOOM.WAD on /disk
 ```
 
-On the desktop, type `doom` (or `run doom`) in the Terminal. Keys: arrows to
+Open it from **Start > Permainan > DOOM**, or type `doom` (or `run doom`) in the
+Terminal. On an image built without DOOM the Start entry answers with a
+notification that it is not on `/disk`. Keys: arrows to
 move, Ctrl to fire, Space to open doors, Shift to run, Esc for the menu, 1-7
 for weapons. A USB gamepad works too: the d-pad moves, A fires, B opens doors,
 X / Y strafe, Start is Enter, Select is Esc. There is no sound yet (DOOM's SDL

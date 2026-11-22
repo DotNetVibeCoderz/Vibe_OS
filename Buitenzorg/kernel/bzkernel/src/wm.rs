@@ -71,8 +71,10 @@ const CATEGORIES: [Category; 6] = [
             ("mbata", "Bata"),
             ("mbalok", "Balok"),
             ("mkartu", "Kartu"),
-            ("mruang", "Ruang 3D"),
             ("mbuah", "Panen Buah 3D"),
+            // /disk/DOOM.ELF + DOOM.WAD (Freedoom): on images built after
+            // scripts/fetch-doom + build-doom, else a click says it is absent
+            ("doom", "DOOM"),
         ],
     },
     Category {
@@ -89,7 +91,7 @@ const CATEGORIES: [Category; 6] = [
     Category {
         name: "Hiburan",
         leaf: gfx::rgb(0xE8, 0x8F, 0x7A),
-        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8"), ("mlompat", "Lompat Kodok")],
+        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8"), ("mlompat", "Lompat Kodok"), ("mruang", "Ruang 3D")],
     },
 ];
 
@@ -1263,6 +1265,12 @@ fn card_center(height: i32, j: usize) -> (i32, i32) {
     (x + w / 2, y + h / 2)
 }
 
+/// The width of text drawn with `Canvas::draw_text` (the monospace grid, not
+/// the scaled UI font that `gfx::text_width` measures).
+fn grid_width(text: &str) -> i32 {
+    text.chars().count() as i32 * gfx::glyph_width() as i32
+}
+
 /// Footer power actions: (x, w, power code, label). 1 = shutdown, 2 =
 /// restart, 3 = sleep; laid out right-to-left.
 fn power_buttons(height: i32) -> [(i32, i32, u8, &'static str); 3] {
@@ -1271,7 +1279,7 @@ fn power_buttons(height: i32) -> [(i32, i32, u8, &'static str); 3] {
     let mut out = [(0, 0, 0u8, ""); 3];
     let mut right = x + SM_W - 12;
     for (k, (code, label)) in labels.iter().enumerate() {
-        let w = gfx::text_width(label, gfx::TextStyle::Body) + 20;
+        let w = grid_width(label) + 20;
         right -= w;
         out[k] = (right, w, *code, *label);
         right -= 6;
@@ -1520,7 +1528,7 @@ pub fn draw_on_window(id: u32, cmd: &bz_abi::DrawCmd, text: Option<&str>) -> Res
         }
         bz_abi::draw_op::DRAW_TEXT_FONT => {
             let text = text.ok_or("draw_text without text")?;
-            let px = ((cmd._pad >> 16) & 0xFF).max(4);
+            let px = crate::font::alias_px(cmd._pad & 0xFFFF, (cmd._pad >> 16) & 0xFF).max(4);
             let max_x = if cmd.w > 0 { cmd.x + cmd.w } else { cw as i32 };
             match crate::font::resolve(cmd._pad & 0xFFFF) {
                 Some(id) if cmd.h > 0 => {
@@ -2060,9 +2068,11 @@ impl Wm {
         self.sel = 0;
     }
 
-    /// Start a window animation (only on the live desktop, with animations on).
+    /// Start a window animation (only on the live desktop, with animations
+    /// on). Not before its first frame: the session's own windows grew in at
+    /// their creation rects and then jumped to the laid-out ones.
     fn animate(&mut self, id: u32, rect: (i32, i32, i32, i32), opening: bool) {
-        if !self.animations || !crate::interactive::is_active() {
+        if !self.animations || !crate::interactive::is_active() || !crate::boot::first_frame_shown() {
             return;
         }
         self.anims.retain(|a| a.id != id);
@@ -2895,7 +2905,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         let unread = crate::notify::unread();
         if unread > 0 {
             let label = if unread > 9 { String::from("9+") } else { alloc::format!("{}", unread) };
-            let lw = gfx::text_width(&label, gfx::TextStyle::Body);
+            let lw = grid_width(&label);
             let dw = (lw + 8).max(16);
             fill_rounded(canvas, bx + bw - dw + 4, by - 1, dw, 16, 8, gfx::rgb(0xE0, 0x48, 0x3B));
             canvas.draw_text(bx + bw - dw + 4 + (dw - lw) / 2, by - 1, &label, gfx::rgb(0xFF, 0xFF, 0xFF), bx + bw + 8);
@@ -3091,7 +3101,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             }
             let isz = crate::icons::size(true);
             draw_app_icon(canvas, name, label, cx + (cw - isz) / 2, cy + 10, true);
-            let lw = gfx::text_width(label, gfx::TextStyle::Body).min(cw - 6);
+            let lw = grid_width(label).min(cw - 6);
             canvas.draw_text(cx + (cw - lw) / 2, cy + 10 + isz + 10, label, if hot { text } else { muted }, cx + cw - 3);
         }
         }
@@ -3137,7 +3147,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             }
             canvas.draw_text_styled(x + 34, y + 3, &h.label, th.text, x + w - 90, gfx::TextStyle::Strong);
             canvas.draw_text(x + 34, y + 21, &h.detail, muted, x + w - 90);
-            let kw = gfx::text_width(h.kind.label(), gfx::TextStyle::Body);
+            let kw = grid_width(h.kind.label());
             canvas.draw_text(x + w - 8 - kw, y + 12, h.kind.label(), muted, x + w);
         }
     }
@@ -3156,7 +3166,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             let tx = ix + (ICON_W - isz) / 2;
             blend_rounded(canvas, tx + 1, iy + 6, isz, isz, 10, th.shadow, 120);
             draw_app_icon(canvas, name, label, tx, iy + 3, true);
-            let lw = gfx::text_width(label, gfx::TextStyle::Body);
+            let lw = grid_width(label);
             let lx = ix + (ICON_W - lw) / 2;
             let ly = iy + 3 + isz + 4;
             blend_rounded(canvas, lx - 5, ly - 1, lw + 10, 18, 8, th.taskbar_bg, if th.glass > 0 { 150 } else { 0 });
@@ -3182,6 +3192,10 @@ struct SceneDesc {
 
 /// What is on the screen now (None = unknown: present everything next time).
 static ON_SCREEN: Mutex<Option<SceneDesc>> = Mutex::new(None);
+/// Numbers the scene snapshots in the order of the states they show (taken
+/// under `WM`), and the newest one presented (written under `ON_SCREEN`).
+static SNAPSHOT_ORDER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static SHOWN_ORDER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Damage frames since the last full present (a full one every so often is
 /// the safety net for any change the description misses).
 static SINCE_FULL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -3362,6 +3376,8 @@ struct FramePointer {
     pos: (i32, i32),
     scale: i32,
     key: Option<u64>,
+    /// Which state this frame shows (`SNAPSHOT_ORDER`).
+    order: u64,
 }
 
 /// Present a composed frame `back` (without the pointer) showing `scene`: the
@@ -3375,6 +3391,16 @@ fn present_scene(back: &mut [u32], width: usize, height: usize, scene: SceneDesc
     let (gpu_hw, fb_hw) = sync_hw_cursors(&th, ptr.pos, ptr.scale);
     let gpu_on = crate::virtio::gpu::active();
     let mut on_screen = ON_SCREEN.lock();
+    // The desktop loop and `present_now` compose on different CPUs: the one
+    // with the older state must not present last (the desktop then showed
+    // that state, e.g. the last animation step, until the next change).
+    if ptr.order < SHOWN_ORDER.load(Relaxed) {
+        if record {
+            *CURSOR_FRAME.lock() = None;
+        }
+        return;
+    }
+    SHOWN_ORDER.store(ptr.order, Relaxed);
     let bands = match on_screen.as_ref() {
         Some(old) if SINCE_FULL.load(Relaxed) < 64 => damage(old, &scene, width as i32, height as i32),
         _ => None,
@@ -3868,7 +3894,10 @@ static CURSOR_FRAME: Mutex<Option<CursorFrame>> = Mutex::new(None);
 /// meanwhile. The pointer is not drawn: `present_scene` does that per output.
 fn compose_scene(back: &mut [u32], width: usize, height: usize) -> Option<(SceneDesc, FramePointer)> {
     use core::sync::atomic::Ordering;
-    let snapshot = WM.lock().clone();
+    let (snapshot, order) = {
+        let guard = WM.lock();
+        (guard.clone(), SNAPSHOT_ORDER.fetch_add(1, Ordering::Relaxed) + 1)
+    };
     let wm = snapshot?;
     COMPOSE_SEQ.fetch_add(1, Ordering::AcqRel);
     COMPOSING.fetch_add(1, Ordering::Relaxed);
@@ -3878,7 +3907,7 @@ fn compose_scene(back: &mut [u32], width: usize, height: usize) -> Option<(Scene
     let scene = wm.scene_desc();
     compose_parallel(&wm, back, width, height);
     COMPOSING.fetch_sub(1, Ordering::Relaxed);
-    Some((scene, FramePointer { pos: wm.cursor, scale: wm.cursor_scale, key: wm.cursor_key() }))
+    Some((scene, FramePointer { pos: wm.cursor, scale: wm.cursor_scale, key: wm.cursor_key(), order }))
 }
 
 fn clip_rect(r: (i32, i32, i32, i32), width: usize, height: usize) -> (usize, usize, usize, usize) {

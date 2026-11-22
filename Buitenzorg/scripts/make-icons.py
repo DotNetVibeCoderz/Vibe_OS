@@ -408,7 +408,25 @@ def masisten():
     save(img, "masisten")
 
 
-ALL = [mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten]
+def doom():
+    """An original picture (no logo or art of the game): a burning portal in a crosshair."""
+    img = background(0x6E3A34, 0x1C0D0E)
+    arch = shape(lambda d: (d.ellipse([222, 150, 802, 730], fill=255), d.rectangle([222, 440, 802, 880], fill=255)))
+    paint(img, arch, 0x8C8580, gloss=0.2)
+    glow = shape(lambda d: (d.ellipse([312, 240, 712, 640], fill=255), d.rectangle([312, 440, 712, 880], fill=255)))
+    paint(img, glow, 0xF2762E, shadow=False, gloss=0.4)
+    sight = shape(lambda d: (
+        d.ellipse([332, 350, 692, 710], outline=255, width=50),
+        d.rectangle([487, 290, 537, 440], fill=255),
+        d.rectangle([487, 620, 537, 770], fill=255),
+        d.rectangle([272, 505, 422, 555], fill=255),
+        d.rectangle([602, 505, 752, 555], fill=255),
+    ))
+    paint(img, sight, 0xFFF1C9, shadow=True, gloss=0.2)
+    save(img, "doom")
+
+
+ALL = [mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom]
 
 if __name__ == "__main__":
     want = set(sys.argv[1:])

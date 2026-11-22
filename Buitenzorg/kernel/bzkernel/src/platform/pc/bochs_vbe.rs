@@ -50,6 +50,8 @@ pub fn set_mode(devices: &[PciDevice], w: usize, h: usize) -> Option<Framebuffer
     if !(0xB0C2..=0xB0CF).contains(&read(REG_ID)) || !(320..=4096).contains(&w) || !(200..=4096).contains(&h) {
         return None;
     }
+    // DISPI takes only widths that are a multiple of 8 (1366 -> 1360)
+    let w = w & !7;
     // video memory in 64 KiB units (QEMU: 16 MiB by default)
     let vram = read(REG_VIDEO_MEMORY_64K) as usize * 65536;
     if vram != 0 && w * h * 4 > vram {

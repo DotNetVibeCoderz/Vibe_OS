@@ -182,8 +182,8 @@ full .NET library
 
 ## What's next
 
-On the native path: exceptions thrown from `when` filters, crash reports for
-uncaught runtime exceptions, safepoints inside long compute-only loops, and a
+On the native path: exceptions thrown from `when` filters, safepoints inside
+long compute-only loops, and a
 RISC-V build (bflat and ILC have no RISC-V target -- C# reaches RISC-V through
 RustCLR). Full .NET (reflection, dynamic loading, the whole BCL) is the
 managed RustCLR path.

@@ -359,10 +359,12 @@ backtrace (return addresses found on the stack, innermost first):
 
 **A null dereference in native C# is not a crash:** it becomes a
 `NullReferenceException` (as does an integer division by zero a
-`DivideByZeroException`). Uncaught, it ends the program with
-`Unhandled exception: ...` and writes **no crash report**; the debugger does
-not stop there either. Crash reports are for faults the runtime does not
-take: wild pointers, jumps into data, illegal instructions.
+`DivideByZeroException`). Caught, it leaves no trace. **Uncaught, any
+exception is reported like a crash:** the program prints
+`Unhandled exception: ...`, a report with the backtrace of the throw (or of
+the faulting instruction) is written, a program under `dbg` stops there, and
+the exit code is 134. Try `run crashme null` or `run crashme throw`, then
+`crash last`.
 
 - In the Terminal: `crash` lists the reports, `crash PID` / `crash last`
   shows one; from a PC, `bz pull /ram/CRASH/P1009.TXT` or `bz logs`.

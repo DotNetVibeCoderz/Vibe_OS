@@ -230,8 +230,11 @@ public static class SyscallNumbers
     /// <summary>User-mode handler for a hardware fault: a0 = kind (<see cref="FaultKind"/>), a1 = handler address (0 = none).</summary>
     public const ulong FaultHandler = 75;
 
+    /// <summary>The program dies of an unhandled error (description, pc, sp): crash report, debugger stop, exit 134.</summary>
+    public const ulong CrashReport = 76;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 76;
+    public const ulong Count = 77;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.WinCtl"/> (mirrors <c>bz_abi::win_ctl</c>).</summary>

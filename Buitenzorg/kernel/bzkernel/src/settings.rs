@@ -47,7 +47,8 @@ fn current_resolution() -> usize {
         return w;
     }
     let (sw, sh) = crate::framebuffer::dimensions().unwrap_or((0, 0));
-    RESOLUTIONS.iter().position(|(w, h, _)| *w == sw && *h == sh).unwrap_or(2)
+    // (std VGA shows 1366 as 1360: widths are multiples of 8 there)
+    RESOLUTIONS.iter().position(|(w, h, _)| (*w == sw || *w & !7 == sw) && *h == sh).unwrap_or(2)
 }
 
 /// What DESKTOP.CFG holds now.

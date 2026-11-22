@@ -189,8 +189,8 @@ reflection), pakai jalur managed (RustCLR).
 
 ## Berikutnya
 
-Di jalur native: exception yang dilempar dari filter `when`, laporan crash
-untuk exception runtime yang tak ditangkap, safepoint di dalam loop komputasi
+Di jalur native: exception yang dilempar dari filter `when`, safepoint di
+dalam loop komputasi
 panjang, dan build RISC-V (bflat dan ILC tidak punya target RISC-V -- C#
 mencapai RISC-V lewat RustCLR). .NET penuh (reflection, dynamic loading,
 seluruh BCL) ada di jalur managed RustCLR.

@@ -605,6 +605,7 @@ fn matang_demo() {
         crash::boot_check(Some(code), &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
         debug::self_test("crashme", "Crash__Level2", "Crash__Level1");
         appprof::self_test("crashme", "Crash__Hot", "Crash__Cold");
+        crash::unhandled_check("crashme", &[("null", &["Crash__Null3", "Crash__Null2", "Crash__Null1"]), ("throw", &["Crash__Throw2", "Crash__Throw1"])]);
     }
     match app::run_named("statics") {
         Ok(code) => println!("[kernel] statics app exited (code {})", code),
@@ -1425,11 +1426,18 @@ fn buah_demo() {
     // Verify: remove then reinstall really toggled installed-state + the gate.
     let _ = pkg::remove("webview");
     let gated = shell::run("run webview").0.iter().any(|l| l.contains("belum terpasang"));
-    let installed = pkg::install("webview").is_ok();
-    if gated && installed && pkg::is_installed("xox") {
-        println!("[kernel] MILESTONE: PACKAGE OK (install/remove from registry + run gated)");
+    let installed = pkg::install("webview");
+    if native_apps_in_image() {
+        if gated && installed.is_ok() && pkg::is_installed("xox") {
+            println!("[kernel] MILESTONE: PACKAGE OK (install/remove from registry + run gated)");
+        } else {
+            println!("[pkg] package manager verification failed");
+        }
+    } else if gated && installed == Err("package payload missing on /disk") && !pkg::is_installed("webview") {
+        // the part that can be checked without payloads
+        println!("[pkg] install check skipped: no native C# programs in this image (run gated, install without a payload refused)");
     } else {
-        println!("[pkg] package manager verification failed");
+        println!("[pkg] package manager verification failed (image without native C# programs)");
     }
 
     println!("[kernel] MILESTONE: BUAH OK (theme engine + 8 styles + package manager)");
@@ -1440,6 +1448,12 @@ fn buah_demo() {
     wm::render_frame(&mut back, w, h);
 }
 
+/// Were the native C# programs built into this image? (CI has no bflat.) An
+/// image that has them and lacks one app is still a failure.
+fn native_apps_in_image() -> bool {
+    vfs::stat("/disk/HELLO.ELF").is_ok()
+}
+
 /// v0.9 "Serbuk": Buitenzorg.Drawing (System.Drawing-style graphics) + a
 /// Windows-style Task Manager. Runs the Paint demo (draws shapes via the
 /// managed library) and the Task Manager (lists processes + resources + kill).
@@ -1447,6 +1461,10 @@ fn serbuk_demo() {
     println!();
     if framebuffer::dimensions().is_none() {
         println!("[app] no framebuffer; skipping v0.9 apps");
+        return;
+    }
+    if !native_apps_in_image() {
+        println!("[app] v0.9 apps skipped: no native C# programs in this image");
         return;
     }
 
@@ -1496,6 +1514,10 @@ fn kembang_demo() {
     println!();
     if framebuffer::dimensions().is_none() {
         println!("[app] no framebuffer; skipping app framework demo");
+        return;
+    }
+    if !native_apps_in_image() {
+        println!("[app] app framework demo skipped: no native C# programs in this image");
         return;
     }
     println!("[app] launching desktop app: xox (C# via window syscalls)");

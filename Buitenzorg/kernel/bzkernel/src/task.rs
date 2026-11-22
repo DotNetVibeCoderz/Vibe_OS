@@ -1409,3 +1409,15 @@ pub fn watchdog(rip: u64, rsp: u64, from_user: bool) {
         }
     }
 }
+
+/// How long before its deadline a precise sleep must stop blocking and start
+/// yielding. A timed wait ends only on a timer tick: secondary CPUs tick at
+/// 100 Hz, but a lone CPU may have nothing but the 18.2 Hz PIT (a 60 Hz vsync
+/// wait then took two ticks, 100 ms), so there it polls for the last 56 ms.
+pub fn precise_wait_margin(fine_ns: u64) -> u64 {
+    if crate::smp::cpus_online() > 1 {
+        fine_ns
+    } else {
+        56_000_000
+    }
+}

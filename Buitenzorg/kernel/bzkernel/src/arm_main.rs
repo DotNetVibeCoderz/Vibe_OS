@@ -862,6 +862,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         crash::boot_check(code, &["Crash__Level3", "Crash__Level2", "Crash__Level1"]);
         debug::self_test("crashme", "Crash__Level2", "Crash__Level1");
         appprof::self_test("crashme", "Crash__Hot", "Crash__Cold");
+        crash::unhandled_check("crashme", &[("null", &["Crash__Null3", "Crash__Null2", "Crash__Null1"]), ("throw", &["Crash__Throw2", "Crash__Throw1"])]);
     }
 
     if let Some(image) = find("mproc") {

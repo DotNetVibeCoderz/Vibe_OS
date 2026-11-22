@@ -512,7 +512,8 @@ fn append_output(tab: &mut Tab, pid: u64, text: &str) {
 }
 
 /// Desktop loop: notice jobs that ended and new program output; re-render.
-pub fn poll() {
+/// True = the window changed: the desktop must draw it (this is not input).
+pub fn poll() -> bool {
     let mut changed = DIRTY.swap(false, Ordering::Relaxed);
     if JOBS_ALIVE.load(Ordering::Relaxed) > 0 {
         let mut guard = TERMINAL.lock();
@@ -548,6 +549,7 @@ pub fn poll() {
     if changed {
         render();
     }
+    changed
 }
 
 /// `jobs`: the running tab's jobs.

@@ -30,7 +30,9 @@ scripts/build-doom.sh        # kernel/target/doom/<arch>/DOOM.ELF untuk x86_64, 
 cd kernel && cargo run --release -p bzimage -- --out ../dist   # DOOM.ELF + DOOM.WAD di /disk
 ```
 
-Di desktop, ketik `doom` (atau `run doom`) di Terminal. Tombol: panah untuk
+Buka dari **Start > Permainan > DOOM**, atau ketik `doom` (atau `run doom`) di
+Terminal. Pada image yang dibangun tanpa DOOM, pintasannya menjawab dengan
+notifikasi bahwa DOOM tidak ada di `/disk`. Tombol: panah untuk
 bergerak, Ctrl menembak, Spasi membuka pintu, Shift berlari, Esc menu, 1-7
 senjata. Gamepad USB juga bisa: d-pad bergerak, A menembak, B membuka pintu,
 X / Y bergeser ke samping, Start = Enter, Select = Esc. Belum ada suara
