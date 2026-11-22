@@ -360,6 +360,10 @@ public class Control : UIObject
     // not re-measure the twenty buttons next to it.
     bool _measureValid, _arrangeValid;
     public static int MeasureCount, ArrangeCount;
+    /// <summary>Bumped when the fonts or the text scale change: a layout measured
+    /// under an older epoch is stale (also for controls outside the tree then).</summary>
+    internal static int FontEpoch;
+    int _measureEpoch;
     Size _lastAvailable;
     Rect _lastRect;
 
@@ -387,8 +391,9 @@ public class Control : UIObject
     // ---- layout
     public void Measure(Size available)
     {
-        if (_measureValid && available.Width == _lastAvailable.Width && available.Height == _lastAvailable.Height) return;
+        if (_measureValid && _measureEpoch == FontEpoch && available.Width == _lastAvailable.Width && available.Height == _lastAvailable.Height) return;
         _measureValid = true;
+        _measureEpoch = FontEpoch;
         _lastAvailable = available;
         MeasureCount++;
         if (!IsVisible) { DesiredSize = new Size(0, 0); return; }

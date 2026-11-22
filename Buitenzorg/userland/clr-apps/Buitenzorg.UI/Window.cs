@@ -45,8 +45,10 @@ public sealed class Window : Control
     Popup? _tip;
     Point _pointer;
 
-    public int ClientWidth { get; }
-    public int ClientHeight { get; }
+    public int ClientWidth { get; private set; }
+    public int ClientHeight { get; private set; }
+    /// <summary>Raised after the client area changed size (maximize / restore).</summary>
+    public event Action? Resized;
     public bool IsClosed { get; private set; }
     public Control? FocusedControl => _focused;
     public IReadOnlyList<Popup> Popups => _popups;
@@ -65,11 +67,27 @@ public sealed class Window : Control
         SetValue(TitleProperty, title);
         _id = headless ? 0 : Native.WinCreateEx(title, width, height, 1);
         if (!headless && _id == 0) throw new InvalidOperationException("Buitenzorg.UI: no desktop to open a window on");
+        // the layout fills any size: let maximize / restore resize the window
+        // (an older kernel answers NOSYS and the window keeps its size)
+        if (_id != 0) { try { Native.WinCtl(6 | ((long)_id << 8), 1); } catch (Exception) { } }
         Attach(this);
         Classes.Add("window");
     }
 
     public int Id => _id;
+
+    /// <summary>The client area is now <paramref name="width"/> x <paramref name="height"/>
+    /// (the kernel's RESIZE event; tests call it directly): lay out and draw again.</summary>
+    public void Resize(int width, int height)
+    {
+        if (width <= 0 || height <= 0 || (width == ClientWidth && height == ClientHeight)) return;
+        ClientWidth = width;
+        ClientHeight = height;
+        InvalidateSubtree();
+        InvalidateLayout();
+        foreach (var p in _popups) PlacePopup(p);
+        Resized?.Invoke();
+    }
 
     public Control? Content
     {
@@ -85,6 +103,26 @@ public sealed class Window : Control
     public void InvalidateLayout() { _layoutDirty = true; _renderDirty = true; }
     public new void InvalidateVisual() { _renderDirty = true; }
     public bool NeedsRender => _renderDirty || _layoutDirty;
+
+    static long _fontGen = long.MinValue;
+    /// <summary>Lay out again when the fonts or the text scale changed (Settings), so text
+    /// is measured in the size it is now drawn in.</summary>
+    internal void CheckFonts()
+    {
+        long g = Fonts.Generation;
+        if (g != _fontGen)
+        {
+            bool first = _fontGen == long.MinValue;
+            _fontGen = g;
+            if (!first) FontEpoch++;
+        }
+        if (_seenEpoch == FontEpoch) return;
+        _seenEpoch = FontEpoch;
+        InvalidateSubtree();
+        foreach (var p in _popups) p.Child.InvalidateSubtree();
+        InvalidateLayout();
+    }
+    int _seenEpoch;
 
     public void Close()
     {
@@ -511,6 +549,7 @@ public sealed class Window : Control
                 int x = (short)(ev & 0xFFFF), y = (short)((ev >> 16) & 0xFFFF);
                 bool left = ((ev >> 32) & 1) != 0;
                 if (kind == 5) DispatchWheel(x, y, (short)((ev >> 40) & 0xFFFF));
+                else if (kind == 6) Resize(x, y);
                 else DispatchPointer(kind, x, y, left);
             }
             if (RawKeys)
@@ -672,6 +711,7 @@ public class Application
         DispatcherTimer.RunDue();
         if (Animator.Active) { Animator.Tick(); any = true; }
         w.Tick();
+        w.CheckFonts();
         if (w.NeedsRender) w.RenderFrame();
         return any;
     }

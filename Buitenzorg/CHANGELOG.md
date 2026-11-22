@@ -13,6 +13,23 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Fixed -- after the laptop test (2026-11-23)
+
+The Latitude 7290 run of docs/hardware-test-checklist.md passed steps 1, 2,
+4, 6, 7, 10 and 11 (step 5 not run). Three findings:
+
+- **Vsync on a laptop panel:** `gpu` said `virtual 60 Hz clock`. The check
+  looked for a running pipe in transcoder A's register only; a laptop's eDP
+  panel runs on transcoder EDP. Both are checked now, the frame counter must
+  be seen moving, and its rate is measured (untested on hardware again).
+- **Maximized windows:** a managed app kept its old size in a maximized
+  window. New `WIN_CTL RESIZABLE` (op 6) and pointer event `RESIZE` (6):
+  maximize and restore resize the window's pixels and tell the program, and
+  every Buitenzorg.UI window opts in, so Calculator's keys fill the window.
+- **Text size:** labels were re-measured only after switching pages.
+  Buitenzorg.UI now lays the whole window out again when the font
+  generation changes.
+
 ### Fixed -- crash reports, ATA, desktop defects; DOOM shortcut (2026-11-22)
 
 - **Uncaught native C# exceptions are crash reports again** (syscall

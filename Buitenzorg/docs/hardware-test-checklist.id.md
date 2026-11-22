@@ -22,13 +22,13 @@ Boot dari flash disk (UEFI), lalu buka Terminal.
 |---|---|---|
 | 1 | Gerakkan touchpad / mouse begitu desktop tampil | Penunjuk ikut sejak gerakan pertama, tanpa lompat atau klik liar |
 | 2 | Lihat desktop 10 detik tanpa menyentuh apa pun | Terminal, Welcome dan Tips padat, bukan bayangan tembus pandang (**foto**) |
-| 3 | `gpu` | Baris terakhir: `display: vsync from Intel pipe A frame counter at 60.000 Hz ...` (**foto**) |
+| 3 | `gpu` | Ada baris `vsync: pipe A frame counter, N vblanks in 100 ms` dan baris terakhir `display: vsync from Intel pipe A frame counter at 60.000 Hz ...`. Bila tidak, baris `vsync:` menyebut sebabnya (**foto**) |
 | 4 | Ketik dua baris di bawah tabel ini | `120 vsync: N ms`, N mendekati 2000 pada panel 60 Hz (**foto**) |
 | 5 | `run crashme null`, tunggu selesai, lalu `crash last` | NullReferenceException tak tertangani, backtrace menyebut `Null3`, `Null2`, `Null1` (**foto**) |
 | 6 | `run crashme throw`, lalu `crash last` | Backtrace menyebut `Throw2`, `Throw1` (**foto**) |
 | 7 | `notify Tes halo`, lalu klik lonceng | Toast muncul, lalu action center memuatnya (**foto**) |
-| 8 | Buka-tutup Kalkulator beberapa kali, klik ganda bilah judul | Buka / tutup mulus, tak ada sisa setengah gambar, jendela membesar |
-| 9 | Pengaturan > Tampilan > Ukuran teks 125 %, lihat keenam halaman | Tidak ada label terpotong (**foto** halaman Tampilan) |
+| 8 | Buka-tutup Kalkulator beberapa kali, klik ganda bilah judul | Buka / tutup mulus, tak ada sisa setengah gambar, jendela membesar dan tombolnya mengisi jendela; klik ganda lagi mengembalikannya (**foto** saat membesar) |
+| 9 | Pengaturan > Tampilan > Ukuran teks 125 %, lihat keenam halaman | Tidak ada label terpotong, langsung di halaman Tampilan tanpa pindah halaman (**foto** halaman Tampilan) |
 | 10 | Mulai > Permainan > DOOM | Ikonnya ada, game mulai dan menerima tombol (**foto**) |
 | 11 | Mulai > Matikan, tekan Esc; ulangi, tekan Enter | Esc membatalkan, Enter mematikan laptop |
 

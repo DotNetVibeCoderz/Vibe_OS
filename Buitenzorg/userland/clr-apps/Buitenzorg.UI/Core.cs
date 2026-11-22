@@ -13,6 +13,7 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern int WinBlit(int window, int x, int y, int w, int h, int[] pixels);
     [DllImport("buitenzorg")] internal static extern int WinPresent(int window);
     [DllImport("buitenzorg")] internal static extern long WinEvent(int window);
+    [DllImport("buitenzorg")] internal static extern long WinCtl(long opAndWindow, long arg);
     [DllImport("buitenzorg")] internal static extern int KeyRead();
     [DllImport("buitenzorg")] internal static extern int KeyEvent();
     [DllImport("buitenzorg")] internal static extern int KeyState(int code);

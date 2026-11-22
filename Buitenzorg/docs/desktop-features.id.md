@@ -88,8 +88,9 @@ ikon dalam dua warna hijau daun) dibuat oleh bzimage.
 |---|---|
 | `SURFACE` | memetakan dua buffer 32-bit seukuran area klien ke program; compositor membaca buffer yang tampil di tempatnya (tanpa salinan BLIT). Buffer terkunci: MUNMAP menolaknya |
 | `SURFACE_PRESENT` | tampilkan buffer 0 atau 1 mulai sekarang (gambar ke yang lain) |
-| `VSYNC_WAIT` / `VSYNC_INFO` | tunggu vertical blank berikutnya / laju refresh + penghitung. Sumbernya dari layar (penghitung frame pipe Intel -- belum diuji di perangkat keras) atau timer 60 Hz |
+| `VSYNC_WAIT` / `VSYNC_INFO` | tunggu vertical blank berikutnya / laju refresh + penghitung. Sumbernya dari layar (penghitung frame pipe A Intel, dipakai setelah terlihat bergerak -- transcoder A atau EDP) atau timer 60 Hz |
 | `FULLSCREEN` | area klien jendela menjadi seluruh layar tanpa bingkai dan taskbar; off mengembalikannya. Ditolak untuk jendela yang punya permukaan |
+| `RESIZABLE` | program menggambar ulang di ukuran apa pun: maximize / restore mengubah ukuran pikselnya dan mengirim event pointer `RESIZE` (jenis 6, x = lebar, y = tinggi). Semua jendela Buitenzorg.UI menyalakannya, jadi app managed mengisi jendela yang di-maximize |
 
 Lapisan SDL di runtime C memakainya (`SDL_SetWindowFullscreen`,
 `SDL_RenderSetVSync`; DOOM tampil lewat permukaan), aplikasi managed punya

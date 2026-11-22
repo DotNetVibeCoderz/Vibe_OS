@@ -23,6 +23,47 @@ fn pipe_a_frame_counter() -> Option<u32> {
     (regs != 0).then(|| unsafe { read_volatile((regs + 0x70040) as *const u32) })
 }
 
+/// Watch pipe A's frame counter for ~100 ms: (vblanks seen, measured rate
+/// in millihertz). Runs once, from `boot_background` (the CPU counter is
+/// calibrated by then).
+fn frame_counter_rate(rd: &dyn Fn(u64) -> u32) -> (u32, u32) {
+    let first = rd(0x70040);
+    // start at a vblank edge so the measurement covers whole frames
+    let t_limit = crate::arch::cpu::nanos() + 50_000_000;
+    let mut start = first;
+    while start == first && crate::arch::cpu::nanos() < t_limit {
+        core::hint::spin_loop();
+        start = rd(0x70040);
+    }
+    if start == first {
+        return (0, 0);
+    }
+    let t0 = crate::arch::cpu::nanos();
+    let deadline = t0 + 100_000_000;
+    let (mut last, mut t_last) = (start, t0);
+    while crate::arch::cpu::nanos() < deadline {
+        let v = rd(0x70040);
+        if v != last {
+            last = v;
+            t_last = crate::arch::cpu::nanos();
+        }
+        core::hint::spin_loop();
+    }
+    let frames = last.wrapping_sub(start);
+    let span = t_last.saturating_sub(t0);
+    if frames == 0 || span == 0 {
+        return (frames, 0);
+    }
+    (frames, (frames as u64 * 1_000_000_000_000 / span) as u32)
+}
+
+/// Snap a measured refresh rate to the usual panel rates when it is close.
+fn nearest_refresh(mhz: u32) -> u32 {
+    const RATES: [u32; 10] = [48_000, 50_000, 59_940, 60_000, 75_000, 90_000, 120_000, 144_000, 165_000, 240_000];
+    let best = RATES.iter().copied().min_by_key(|r| r.abs_diff(mhz)).unwrap_or(mhz);
+    if best.abs_diff(mhz) * 50 <= best { best } else { mhz }
+}
+
 /// (generation, family, name) from the PCI device id.
 fn identify(id: u16) -> (&'static str, &'static str, &'static str) {
     match id {
@@ -76,12 +117,27 @@ fn probe(dev: &PciDevice) -> Vec<String> {
     let Some(regs) = crate::memory::map_mmio(mmio, 2 << 20) else { return out };
     let Some(gtt) = crate::memory::map_mmio(mmio + (8 << 20), 8 << 20) else { return out };
     let rd = |o: u64| unsafe { read_volatile((regs + o) as *const u32) };
-    // pipe A's hardware frame counter (PIPE_FRMCOUNT_G4X, +1 per vblank)
-    // is the vsync source while the pipe runs (PIPEACONF bit 31)
-    if rd(0x70008) & (1 << 31) != 0 {
+    // pipe A's hardware frame counter (PIPE_FRMCOUNT_G4X, +1 per vblank) is
+    // the vsync source while the pipe runs. Its transcoder is transcoder A
+    // (PIPEACONF 0x70008) for external outputs but transcoder EDP
+    // (0x7F008) for a laptop panel -- the Latitude 7290's case, where only
+    // checking 0x70008 left the virtual clock in place. Whichever it is, the
+    // counter must be seen moving before it is trusted.
+    let (conf_a, conf_edp) = (rd(0x70008), rd(0x7F008));
+    let running = conf_a & (1 << 31) != 0 || conf_edp & (1 << 31) != 0;
+    let (moved, hz_mhz) = if running { frame_counter_rate(&rd) } else { (0, 0) };
+    if moved > 0 {
         PIPE_REGS.store(regs, core::sync::atomic::Ordering::Relaxed);
-        crate::vsync::install(pipe_a_frame_counter, 60_000, "Intel pipe A frame counter");
-        out.push(String::from("  vsync: pipe A frame counter"));
+        let mhz = if (40_000..=250_000).contains(&hz_mhz) { nearest_refresh(hz_mhz) } else { 60_000 };
+        crate::vsync::install(pipe_a_frame_counter, mhz, "Intel pipe A frame counter");
+        out.push(format!("  vsync: pipe A frame counter, {} vblanks in 100 ms (~{}.{:03} Hz)", moved, hz_mhz / 1000, hz_mhz % 1000));
+    } else {
+        out.push(format!(
+            "  vsync: pipe A frame counter not used (transcoder A conf {:#010x}, EDP conf {:#010x}, {})",
+            conf_a,
+            conf_edp,
+            if running { "counter did not move" } else { "no transcoder running" }
+        ));
     }
     // pipe A source size, plane 1A control/stride/surface (display engine, powered by the firmware)
     let pipesrc = rd(0x6001C);

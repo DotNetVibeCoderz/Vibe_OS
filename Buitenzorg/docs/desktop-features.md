@@ -87,8 +87,9 @@ pack `DAUN.BIN` (every icon in two leaf greens) is built by bzimage.
 |---|---|
 | `SURFACE` | maps two client-sized 32-bit buffers into the program; the compositor reads the shown one in place (no BLIT copy). They stay pinned: MUNMAP refuses them |
 | `SURFACE_PRESENT` | show buffer 0 or 1 from now on (draw into the other one) |
-| `VSYNC_WAIT` / `VSYNC_INFO` | block until the next vertical blank / refresh rate + counter. The source is the display's (Intel pipe frame counter -- untested on hardware) or a 60 Hz timer |
+| `VSYNC_WAIT` / `VSYNC_INFO` | block until the next vertical blank / refresh rate + counter. The source is the display's (Intel pipe A frame counter, used once it is seen moving -- transcoder A or EDP) or a 60 Hz timer |
 | `FULLSCREEN` | the window's client area becomes the whole screen without frame or taskbar; off restores it. Refused for a window with a surface |
+| `RESIZABLE` | the program redraws at any size: maximize / restore resize its pixels and send a `RESIZE` pointer event (kind 6, x = width, y = height). Every Buitenzorg.UI window turns it on, so managed apps fill a maximized window |
 
 The C runtime's SDL layer uses them (`SDL_SetWindowFullscreen`,
 `SDL_RenderSetVSync`; DOOM presents through the surface), managed apps have

@@ -339,6 +339,12 @@ pub mod win_ctl {
     pub const VSYNC_INFO: u64 = 4;
     /// The surface's (= client area's) size `w | h << 16`.
     pub const SURFACE_SIZE: u64 = 5;
+    /// The program redraws at any client size (`a1` = 1) or not (0): when
+    /// the window is maximized or restored its pixels are resized and a
+    /// [`crate::pointer_event::RESIZE`] event carries the new client size.
+    /// Without it a window keeps the size it was created with. Returns the
+    /// client size `w | h << 16`.
+    pub const RESIZABLE: u64 = 6;
 }
 
 /// Kinds of [`sysno::FAULT_HANDLER`].
@@ -834,6 +840,9 @@ pub mod pointer_event {
     /// The wheel turned over the client area: bits 40-55 = notches,
     /// positive = away from the user (scroll up).
     pub const WHEEL: u64 = 5;
+    /// The client area of a resizable window (`win_ctl::RESIZABLE`) changed
+    /// size: x = new width, y = new height. Its pixels are cleared: redraw.
+    pub const RESIZE: u64 = 6;
 }
 
 /// Operations for [`DrawCmd::op`].
@@ -1213,6 +1222,8 @@ mod tests {
         assert_eq!(sysno::FAULT_HANDLER, 75);
         assert_eq!(sysno::CRASH_REPORT, 76);
         assert_eq!(win_ctl::SURFACE_SIZE, 5);
+        assert_eq!(win_ctl::RESIZABLE, 6);
+        assert_eq!(pointer_event::RESIZE, 6);
         assert_eq!(fault_kind::DIVIDE, 1);
         assert_eq!(compute_op::GEMV, 5);
         assert_eq!(compute_kind::INTEL, 3);

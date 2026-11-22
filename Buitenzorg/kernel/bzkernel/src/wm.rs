@@ -403,6 +403,9 @@ pub struct Window {
     /// A text caret in a text window (row, column of `lines`): the terminal's
     /// editing position.
     pub caret: Option<(u16, u16)>,
+    /// The program redraws at any size (WIN_CTL RESIZABLE): maximize and
+    /// restore resize its pixels and send it a RESIZE event.
+    pub resizable: bool,
 }
 
 /// Pack a pointer event (see `bz_abi::pointer_event`).
@@ -672,6 +675,23 @@ pub fn win_ctl(a0: u64, a1: u64) -> u64 {
         _ => {}
     }
     let caller = crate::aspace::current_id();
+    if opn == op::RESIZABLE {
+        let mut g = WM.lock();
+        let Some(wm) = g.as_mut() else { return syserr::INVAL };
+        let Some(w) = wm.windows.iter_mut().find(|w| w.id == id && (caller == 0 || w.owner == caller)) else {
+            return syserr::INVAL;
+        };
+        w.resizable = a1 != 0;
+        wm.sync_client(id);
+        let w = wm.windows.iter().find(|w| w.id == id).unwrap();
+        return match &w.canvas {
+            Some(c) => {
+                let c = c.lock();
+                c.w as u64 | (c.h as u64) << 16
+            }
+            None => syserr::INVAL,
+        };
+    }
     let canvas = {
         let g = WM.lock();
         let Some(wm) = g.as_ref() else { return syserr::INVAL };
@@ -721,6 +741,37 @@ fn create_surface(canvas: &SharedCanvas) -> u64 {
     va
 }
 
+/// Give a canvas a new size, keeping the overlapping top-left part of what
+/// it showed (the program redraws the rest). False when nothing changed or
+/// the canvas has a surface (whose buffers keep their size).
+fn resize_canvas(canvas: &SharedCanvas, cw: i32, ch: i32) -> bool {
+    let mut c = canvas.lock();
+    if (c.w == cw && c.h == ch) || c.surface.is_some() || cw <= 0 || ch <= 0 {
+        return false;
+    }
+    let (ow, oh) = (c.w, c.h);
+    let copy = |old: &[u32]| {
+        let mut v = vec![0u32; (cw * ch) as usize];
+        let (mw, mh) = (ow.min(cw) as usize, oh.min(ch) as usize);
+        for y in 0..mh {
+            let (src, dst) = (y * ow as usize, y * cw as usize);
+            if src + mw <= old.len() {
+                v[dst..dst + mw].copy_from_slice(&old[src..src + mw]);
+            }
+        }
+        v
+    };
+    c.pixels = copy(&c.pixels);
+    if let Some(f) = c.front.as_ref() {
+        let nf = copy(f);
+        c.front = Some(nf);
+    }
+    c.w = cw;
+    c.h = ch;
+    c.gen += 1;
+    true
+}
+
 /// Exclusive full screen for window `id` on / off. Returns the client size.
 pub fn set_fullscreen(id: u32, on: bool) -> u64 {
     let mut g = WM.lock();
@@ -732,16 +783,7 @@ pub fn set_fullscreen(id: u32, on: bool) -> u64 {
         return bz_abi::syserr::INVAL; // a surface keeps its size: go full screen first
     }
     let resize = |cw: i32, ch: i32| {
-        let mut c = canvas.lock();
-        if c.w != cw || c.h != ch {
-            c.w = cw;
-            c.h = ch;
-            c.pixels = vec![0; (cw * ch) as usize];
-            if c.front.is_some() {
-                c.front = Some(vec![0; (cw * ch) as usize]);
-            }
-            c.gen += 1;
-        }
+        resize_canvas(&canvas, cw, ch);
     };
     if on {
         if let Some((other, _, _)) = wm.fullscreen {
@@ -1354,6 +1396,7 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
         owner: crate::aspace::current_id(),
         events: alloc::collections::VecDeque::new(),
         caret: None,
+        resizable: false,
     });
     wm.animate(id, (x, y, w, h), true);
     id
@@ -1418,6 +1461,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             owner: crate::aspace::current_id(),
             events: alloc::collections::VecDeque::new(),
             caret: None,
+            resizable: false,
         });
         return id;
     }
@@ -1451,6 +1495,7 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         owner: crate::aspace::current_id(),
         events: alloc::collections::VecDeque::new(),
         caret: None,
+        resizable: false,
     });
     wm.animate(id, (x, y, w, h), true);
     id
@@ -2151,6 +2196,21 @@ impl Wm {
                 }
             }
         }
+        self.sync_client(id);
+    }
+
+    /// A resizable window's frame changed: resize its pixels to the client
+    /// area and tell the program (RESIZE event).
+    fn sync_client(&mut self, id: u32) {
+        let Some(w) = self.windows.iter_mut().find(|w| w.id == id) else { return };
+        if !w.resizable || w.state == WinState::Minimized {
+            return;
+        }
+        let Some(canvas) = w.canvas.clone() else { return };
+        let (cw, ch) = ((w.w - 2 * BORDER).max(1), (w.h - TITLE_H - 2 * BORDER).max(1));
+        if resize_canvas(&canvas, cw, ch) {
+            w.push_event(pack_event(bz_abi::pointer_event::RESIZE, cw, ch, 0));
+        }
     }
 
     /// Raise a window to the top and restore it if minimized.
@@ -2164,6 +2224,7 @@ impl Wm {
                 w.w = sw;
                 w.h = sh;
                 w.state = WinState::Normal;
+                self.sync_client(id);
             }
             let win = self.windows.remove(idx);
             self.windows.push(win);

@@ -22,13 +22,13 @@ Boot from the stick (UEFI) and open the Terminal.
 |---|---|---|
 | 1 | Move the touchpad / mouse right after the desktop appears | The pointer follows the first movement, no jump, no stray click |
 | 2 | Look at the desktop for 10 s without touching it | Terminal, Welcome and Tips are solid, not see-through outlines (**photo**) |
-| 3 | `gpu` | Last line: `display: vsync from Intel pipe A frame counter at 60.000 Hz ...` (**photo**) |
+| 3 | `gpu` | A line `vsync: pipe A frame counter, N vblanks in 100 ms` and the last line `display: vsync from Intel pipe A frame counter at 60.000 Hz ...`. If not, the `vsync:` line says why (**photo**) |
 | 4 | Type the two lines under this table | `120 vsync: N ms`, N close to 2000 on a 60 Hz panel (**photo**) |
 | 5 | `run crashme null`, wait for it to end, then `crash last` | Unhandled NullReferenceException, backtrace naming `Null3`, `Null2`, `Null1` (**photo**) |
 | 6 | `run crashme throw`, then `crash last` | Backtrace naming `Throw2`, `Throw1` (**photo**) |
 | 7 | `notify Tes halo`, then click the bell | A toast, then the action center lists it (**photo**) |
-| 8 | Open and close Calculator a few times, double-click a title bar | Smooth open / close, nothing left half drawn, the window maximizes |
-| 9 | Pengaturan > Tampilan > Ukuran teks 125 %, look at all six pages | No label cut off (**photo** of Tampilan) |
+| 8 | Open and close Calculator a few times, double-click a title bar | Smooth open / close, nothing left half drawn, the window maximizes and the keys fill it; a second double-click restores it (**photo** maximized) |
+| 9 | Pengaturan > Tampilan > Ukuran teks 125 %, look at all six pages | No label cut off, already on Tampilan without switching pages (**photo** of Tampilan) |
 | 10 | Mulai > Permainan > DOOM | The icon is there and the game starts and takes keys (**photo**) |
 | 11 | Mulai > Matikan, press Esc; again, press Enter | Esc cancels, Enter powers the laptop off |
 

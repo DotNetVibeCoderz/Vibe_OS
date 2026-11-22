@@ -286,6 +286,16 @@ public static class CalcApp
         c.That(vm.History.Count == 5, "history has 5 entries");
         w.RenderFrame();
         c.That(w.LastFrameOps > 40, "frame drew " + w.LastFrameOps + " ops");
+        // maximize: the key grid fills the larger client area, restore brings it back
+        var eq = Key(w, "=");
+        int w0 = eq.Bounds.Width, h0 = eq.Bounds.Height;
+        w.Resize(800, 560);
+        w.UpdateLayout();
+        int w1 = eq.Bounds.Width, h1 = eq.Bounds.Height;
+        w.Resize(340, 470);
+        w.UpdateLayout();
+        c.That(w1 > w0 * 2 && h1 > h0 && eq.Bounds.Width == w0 && eq.Bounds.Height == h0,
+            "keys follow the window size (" + w0 + "x" + h0 + " -> " + w1 + "x" + h1 + " -> " + eq.Bounds.Width + "x" + eq.Bounds.Height + ")");
         return c;
     }
 
