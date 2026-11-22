@@ -338,7 +338,7 @@ fi
 boot ide1 "$root/dist/boot-ide1.log"
 require "$root/dist/boot-ide1.log" "${basic[@]}" "MILESTONE: SMP OK (1 CPU(s)"
 if grep -qF "Hello from C#" "$root/dist/boot-ide1.log"; then
-  require "$root/dist/boot-ide1.log" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: MULTIPROC OK" "MILESTONE: PROCCTL OK"
+  require "$root/dist/boot-ide1.log" "MILESTONE: BCL2 OK" "MILESTONE: THREAD OK" "MILESTONE: SYNC OK" "MILESTONE: MULTIPROC OK" "MILESTONE: PROCCTL OK"
 fi
 echo "smoke [ide1]: process tests pass on a single CPU"
 

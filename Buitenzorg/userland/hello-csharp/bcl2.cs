@@ -292,15 +292,18 @@ unsafe class Bcl2Demo
             ok &= BzDebug.Assert(BzPkg.Search(pkgs, "cal").Count >= 1, "package search");
 
             // Install/remove really change kernel state: re-read to confirm.
-            bool wasInstalled = calc.Installed;
+            // PKGS.CFG outlives a boot and the kernel refuses a second install,
+            // so start from "not installed" whatever the last boot left.
+            if (calc.Installed)
+            {
+                ok &= BzDebug.Assert(BzPkg.Remove(calc), "package pre-installed remove");
+                ok &= BzDebug.Assert(!BzPkg.IsInstalled(BzPkg.List(32), "calc"), "package pre-installed removed in kernel");
+            }
             ok &= BzDebug.Assert(BzPkg.Install(calc), "package install call");
             ok &= BzDebug.Assert(BzPkg.IsInstalled(BzPkg.List(32), "calc"), "package installed in kernel");
-            if (!wasInstalled)
-            {
-                ok &= BzDebug.Assert(BzPkg.Remove(calc), "package remove call");
-                ok &= BzDebug.Assert(!BzPkg.IsInstalled(BzPkg.List(32), "calc"), "package removed in kernel");
-                BzPkg.Install(calc);   // leave it installed
-            }
+            ok &= BzDebug.Assert(BzPkg.Remove(calc), "package remove call");
+            ok &= BzDebug.Assert(!BzPkg.IsInstalled(BzPkg.List(32), "calc"), "package removed in kernel");
+            ok &= BzDebug.Assert(BzPkg.Install(calc), "package reinstall call");   // leave it installed
         }
 
         // -----------------------------------------------------------------

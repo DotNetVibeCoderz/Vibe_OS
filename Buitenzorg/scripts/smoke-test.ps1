@@ -360,7 +360,7 @@ $ide1Log = Join-Path $root "dist\boot-ide1.log"
 Invoke-Boot -Media ide1 -Log $ide1Log
 $ide1Markers = $basic + @("MILESTONE: SMP OK (1 CPU(s)")
 if (Select-String -Path $ide1Log -Pattern "Hello from C#" -Quiet) {
-    $ide1Markers += @("MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "MILESTONE: MULTIPROC OK", "MILESTONE: PROCCTL OK")
+    $ide1Markers += @("MILESTONE: BCL2 OK", "MILESTONE: THREAD OK", "MILESTONE: SYNC OK", "MILESTONE: MULTIPROC OK", "MILESTONE: PROCCTL OK")
 }
 Assert-Markers -Log $ide1Log -Markers $ide1Markers
 Write-Host "smoke [ide1]: process tests pass on a single CPU"
