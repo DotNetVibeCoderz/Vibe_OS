@@ -21,7 +21,10 @@ The Latitude 7290 run of docs/hardware-test-checklist.md passed steps 1, 2,
 - **Vsync on a laptop panel:** `gpu` said `virtual 60 Hz clock`. The check
   looked for a running pipe in transcoder A's register only; a laptop's eDP
   panel runs on transcoder EDP. Both are checked now, the frame counter must
-  be seen moving, and its rate is measured (untested on hardware again).
+  be seen moving, and its rate is measured. Retest on the laptop: `vsync: pipe A
+  frame counter, 6 vblanks in 100 ms (~60.155 Hz)`, vsync at 60.000 Hz; the
+  crash report (step 5), the maximized Calculator and the 125 % labels passed
+  too.
 - **Maximized windows:** a managed app kept its old size in a maximized
   window. New `WIN_CTL RESIZABLE` (op 6) and pointer event `RESIZE` (6):
   maximize and restore resize the window's pixels and tell the program, and
