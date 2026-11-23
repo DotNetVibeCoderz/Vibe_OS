@@ -38,6 +38,12 @@ senjata. Gamepad USB juga bisa: d-pad bergerak, A menembak, B membuka pintu,
 X / Y bergeser ke samping, Start = Enter, Select = Esc. Belum ada suara
 (modul SDL mixer DOOM tidak ikut).
 
+Image kartu Raspberry Pi 4 juga membawa DOOM (sejak 24-11-2026; dari partisi
+127 MiB masih tersisa ~58 MiB). Untuk menambahkannya ke kartu lama tanpa
+flash ulang, salin `kernel/target/doom/aarch64/DOOM.ELF` sebagai `DOOM.ELF`
+dan `kernel/target/doom/FREEDOOM.WAD` sebagai `DOOM.WAD` ke partisi FAT kartu
+(di samping `kernel8.img`).
+
 Boot self-test memainkan demo pertama IWAD selama 40 frame dan memeriksa
 gambarnya (`MILESTONE: DOOM OK`, diwajibkan smoke test bila DOOM di-build).
 

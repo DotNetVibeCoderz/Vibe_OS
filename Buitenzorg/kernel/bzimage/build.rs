@@ -872,9 +872,8 @@ fn main() {
             raw.push(("kernel8.img".into(), k.clone()));
             // The /disk files too (wallpapers, icons, programs, managed apps): the
             // kernel mounts the card's FAT partition as /disk (R3).
-            // without DOOM's 29 MB game data: the SD partition is a fixed 127 MiB
-            let pi_files: Vec<(String, Vec<u8>)> = arm_files.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("doom.wad") && !n.eq_ignore_ascii_case("DOOM.ELF")).cloned().collect();
-            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &pi_files, RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
+            // DOOM included: with it the fixed 127 MiB partition still has ~58 MiB free.
+            limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, RPI4_LIMINE_CONF, &raw, &rpi_path).unwrap_or(false)
         }
         _ => false,
     };

@@ -65,6 +65,7 @@ dotnet run --project sdk\bz -- pi update dist\kernel8.img --expect "first deskto
 Kemudian ulangi langkah 1, 2, 5, 6, 7, 8, 9 dan 11 dari tabel laptop. Bedanya:
 
 - `gpu` melaporkan `virtual 60 Hz clock`: Pi tidak punya sumber vblank.
-- Image Pi tidak membawa DOOM, jadi kartunya menjawab dengan notifikasi bahwa
-  game itu tidak ada di media ini.
+- Image Pi yang dibangun sebelum 24-11-2026 tidak membawa DOOM, jadi kartunya
+  menjawab dengan notifikasi bahwa game itu tidak ada di media ini. Image yang
+  lebih baru membawanya (lihat docs/c-programs.id.md).
 - Matikan menghentikan papan; LED merah tetap menyala.

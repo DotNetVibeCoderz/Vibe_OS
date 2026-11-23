@@ -65,6 +65,7 @@ dotnet run --project sdk\bz -- pi update dist\kernel8.img --expect "first deskto
 Then repeat steps 1, 2, 5, 6, 7, 8, 9 and 11 of the laptop table. Differences:
 
 - `gpu` reports `virtual 60 Hz clock`: there is no vblank source on the Pi.
-- The Pi image carries no DOOM, so its card answers with a notification that
-  says the game is not on this medium.
+- Images built before 2026-11-24 carry no DOOM on the Pi, so the card answers
+  with a notification that the game is not on this medium. Newer images have
+  it (see docs/c-programs.md).
 - Shut down halts the board; the red LED stays on.

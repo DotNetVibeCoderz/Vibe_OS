@@ -38,6 +38,12 @@ for weapons. A USB gamepad works too: the d-pad moves, A fires, B opens doors,
 X / Y strafe, Start is Enter, Select is Esc. There is no sound yet (DOOM's SDL
 mixer module is left out).
 
+The Raspberry Pi 4 card image carries DOOM too (since 2026-11-24; ~58 MiB of
+the 127 MiB partition stays free). To add it to a card written earlier without
+re-flashing, copy `kernel/target/doom/aarch64/DOOM.ELF` as `DOOM.ELF` and
+`kernel/target/doom/FREEDOOM.WAD` as `DOOM.WAD` onto the card's FAT partition
+(next to `kernel8.img`).
+
 The self-test boot plays the IWAD's first demo for 40 frames and checks the
 picture (`MILESTONE: DOOM OK`, required by the smoke test when DOOM was built).
 

@@ -13,6 +13,23 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Raspberry Pi 4 test round (2026-11-24)
+
+docs/hardware-test-checklist.md passed on the board: `gpu` reports the virtual
+60 Hz vsync clock and 120 `vsync()` calls take 1995 ms, `crashme null` /
+`crashme throw` leave backtraces naming `Null3`/`Null2`/`Null1` and
+`Throw2`/`Throw1`, notifications reach the action center, the Calculator
+maximizes and fills its window, Pengaturan at 125 % shows no clipped labels,
+and the power dialog is in place. The DOOM shortcut answered "app not found",
+as expected for that image.
+
+### Changed
+
+- **DOOM on the Raspberry Pi 4:** the card image now carries `DOOM.ELF` +
+  `DOOM.WAD`. It had been left out for space, but the fixed 127 MiB partition
+  still has ~58 MiB free with it. For a card written earlier, copying the two
+  files onto its FAT partition is enough (docs/c-programs.md).
+
 ### Fixed -- after the laptop test (2026-11-23)
 
 The Latitude 7290 run of docs/hardware-test-checklist.md passed steps 1, 2,

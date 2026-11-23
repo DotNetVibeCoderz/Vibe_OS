@@ -191,7 +191,7 @@
 - [x] Pilih screensaver · [x] pilih theme (8 tema + dark/light) · [x] kursor (normal/besar)
 - [x] Opsi: animasi on/off, rounded on/off
 - [x] Display resolusi (std VGA, berlaku saat mulai berikutnya) / scaling teks 100-125 % ✓ (2026-11-22) · [x] simpan preferensi ke VFS (`REGION.CFG`, `USERS.CFG`, `SSHD.CFG`, `DESKTOP.CFG` = tema/wallpaper/screensaver/kursor/skala/ikon/resolusi, `SETTINGS SAVED OK`) ✓ (2026-11-22) · [x] app GUI (Pengaturan)
-- [~] Uji fitur 2026-11-22: [x] visual di QEMU (8 resolusi, teks 100/125 %, animasi, dialog, action center) · [x] laptop Latitude 7290 (2026-11-23: langkah 1, 2, 4, 6, 7, 10, 11 lulus; vsync eDP, maximize app managed, relayout ukuran teks diperbaiki ; uji ulang langkah 3, 5, 8, 9 lulus -- semua langkah laptop lulus) · [ ] Pi 4 fisik
+- [~] Uji fitur 2026-11-22: [x] visual di QEMU (8 resolusi, teks 100/125 %, animasi, dialog, action center) · [x] laptop Latitude 7290 (2026-11-23: langkah 1, 2, 4, 6, 7, 10, 11 lulus; vsync eDP, maximize app managed, relayout ukuran teks diperbaiki ; uji ulang langkah 3, 5, 8, 9 lulus -- semua langkah laptop lulus) · [x] Pi 4 fisik (2026-11-24: vsync virtual 60 Hz, 120 vsync = 1995 ms, backtrace crashme null/throw, notifikasi, Kalkulator membesar, Pengaturan 125 %, dialog Matikan -- semua lulus; image Pi kini membawa DOOM)
 - [x] Milestone: **atur background/tema/saver/kursor** (`PERSONALIZE OK`)
 
 ### ✨ Micro-interactions (UI/UX)
