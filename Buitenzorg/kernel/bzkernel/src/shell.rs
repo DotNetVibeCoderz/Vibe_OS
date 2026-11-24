@@ -137,7 +137,7 @@ pub fn command_names() -> Vec<&'static str> {
 
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
-    "dmesg", "lspci", "lsusb", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
+    "dmesg", "lspci", "lsusb", "wifi", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
     "netup", "ping", "ping6", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
     "settings", "notify", "icons", "cari", "search", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
 ];
@@ -1169,6 +1169,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "dmesg" | "log" => (dmesg(args.first().copied()), Effect::None),
         "lspci" => (lspci(), Effect::None),
         "lsusb" => (crate::usb::describe(), Effect::None),
+        "wifi" => (crate::wifi::command(&args), Effect::None),
         "notify" | "notif" => (crate::notify::command(&args), Effect::None),
         "cari" | "search" => (crate::search::command(&args), Effect::None),
         #[cfg(target_arch = "aarch64")]

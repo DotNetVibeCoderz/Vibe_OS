@@ -20,6 +20,8 @@ pub mod genet;
 #[cfg(target_arch = "aarch64")]
 pub mod rpi_io;
 #[cfg(target_arch = "aarch64")]
+pub mod cyw43;
+#[cfg(target_arch = "aarch64")]
 pub mod hdmi_audio;
 #[cfg(target_arch = "aarch64")]
 pub mod pi_stream;

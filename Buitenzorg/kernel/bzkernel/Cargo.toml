@@ -15,6 +15,7 @@ linked_list_allocator = "0.10"
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 hmac = { version = "0.12", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = { version = "0.10", default-features = false, features = ["force-soft"] }
 # SSH server (ssh.rs): curve25519-sha256 key exchange, ssh-ed25519 host key,
 # chacha20-poly1305@openssh.com
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }

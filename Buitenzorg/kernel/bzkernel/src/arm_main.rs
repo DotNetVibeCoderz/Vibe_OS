@@ -81,6 +81,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod wifi;
 mod perm;
 mod screenshot;
 mod appprof;
@@ -363,6 +364,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             println!("[kernel] desktop shell self-test failed");
         }
         desktop::hotkey_self_test();
+        platform::virt::cyw43::self_test();
         usb::hid::pad_self_test();
         wm::pad_self_test();
         virtio::snd::stream_self_test();
@@ -466,6 +468,7 @@ fn sd_card_init() -> usize {
                 if mbr {
                     println!("[kernel] MILESTONE: SD CARD OK ({} at {:#x}: SDHCI v3, 4-bit, PIO; MBR read)", card.name(), pa);
                     driver::register_block_device(alloc::boxed::Box::new(card));
+                    platform::virt::cyw43::SD_DISK_BASE.store(pa, core::sync::atomic::Ordering::Relaxed);
                     return 1;
                 }
             }
@@ -1239,7 +1242,7 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
 fn boot_background() {
     crate::boot::wait_first_frame();
     let t0 = interrupts::ticks();
-    let steps: [fn(); 5] = [
+    let steps: [fn(); 6] = [
         || {
             if wallpaper::set_official("nature").is_ok() {
                 wm::present_now();
@@ -1262,6 +1265,8 @@ fn boot_background() {
             }
         },
         ethernet_init,
+        // Pi 4 Wi-Fi: joins the network saved by `wifi connect` when no cable is in
+        platform::virt::cyw43::autostart,
         || {
             rng::init();
             users::load();

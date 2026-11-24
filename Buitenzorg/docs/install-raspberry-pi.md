@@ -148,6 +148,38 @@ The card holds both, and `config.txt` picks one.
   UEFI to read from. The firmware hides the Device Tree by default, so Limine
   passes `bcm2711-rpi-4-b.dtb` from the card instead.
 
+## Wi-Fi (not yet tried on a board)
+
+The Pi 4's Wi-Fi chip (Cypress CYW43455) has a driver,
+`kernel/bzkernel/src/platform/virt/cyw43.rs`, written after Linux's
+`brcmfmac`. **It has not run on a real board yet**: QEMU has no model of the
+chip, so the first board run is its first test. Before building the image,
+fetch the chip's firmware (Cypress licence, so it is not in git):
+
+```
+scripts/fetch-wifi-firmware.sh      # or .ps1 on Windows -> kernel/target/wifi
+```
+
+bzimage then puts it on the card as `/disk/WIFI/FW.BIN`, `FW.CLM`, `FW.TXT`.
+In the terminal:
+
+| | |
+|---|---|
+| `wifi` | status: chip, firmware version, MAC, frame counters, or why it is off |
+| `wifi scan` | the networks in range (signal, channel, WPA or open) |
+| `wifi connect SSID PASSWORD` | join (WPA2-PSK; no password = an open network), take a DHCP address, use Wi-Fi for the network. Saved in `/disk/WIFI.CFG` and joined at every start while no network cable is in |
+| `wifi forget` | delete `/disk/WIFI.CFG` |
+
+`WIFI.CFG` holds the WPA2 key derived from the password
+(PBKDF2-HMAC-SHA1, as the standard does), not the password itself. That key
+is still enough to join the network, so treat the card like the password.
+WPA2 is done by the chip's own firmware (its supplicant); WPA3 and enterprise
+networks (802.1X) are not supported. Everything is polled, and the chip is
+kept awake (no power saving).
+
+If it fails, the terminal and `dmesg wifi` show at which step (no answer to
+CMD5, firmware not starting, join status). Please send a photo of that.
+
 ## Limits
 
 - Hot-plug is checked every desktop-loop turn; a device plugged in takes a

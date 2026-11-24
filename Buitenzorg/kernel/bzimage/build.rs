@@ -81,11 +81,11 @@ const OFFICIAL_WALLPAPERS: [(&str, &str); 8] = [
 /// App icons, in launcher order: (asset name in assets/icons, launch name used
 /// by the kernel's `icons.rs` / `wm.rs` LAUNCH list).
 // The later ones (mmusik onward) are drawn by scripts/make-icons.py.
-const APP_ICONS: [&str; 39] = [
+const APP_ICONS: [&str; 40] = [
     "files", "editor", "calc", "store", "imgview", "clock", "piano", "2048", "taskmgr", "paint",
     "xox", "audiopanel", "wallpaper", "theme", "managed", "msetting", "mwaktu", "mgallery", "mhwlab",
     "mruang", "mbuah", "mstudio", "mweb", "mmusik", "mvideo", "mrekam", "mular", "mranjau", "mbata",
-    "mbalok", "mkartu", "mkonsol", "munduh", "mbaca", "mlabirin", "mchip8", "mlompat", "masisten", "doom",
+    "mbalok", "mkartu", "mkonsol", "munduh", "mbaca", "mlabirin", "mchip8", "mlompat", "masisten", "doom", "mnes",
 ];
 /// Icon sizes in ICONS.BIN: desktop tile and start-menu row.
 const ICON_BIG: usize = 44;
@@ -818,6 +818,16 @@ fn main() {
         }
     }
 
+    // NES: an original homebrew game for the emulator (scripts/make-nes-rom.py
+    // writes it; commercial ROMs are not shipped)
+    {
+        let p = manifest_dir().join("..").join("..").join("assets").join("nes").join("KEBUN.NES");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "kebun.nes".into(), bytes);
+        }
+    }
+
     // Gambar: sample photos in the formats the viewer decodes besides BMP
     // (assets/photos: a JPEG, a PNG with transparency, an animated GIF).
     for name in ["KEBUN.JPG", "ANGGREK.PNG", "DAUN.GIF"] {
@@ -891,6 +901,16 @@ fn main() {
         arm_files.push(("DOOM.ELF".into(), bytes));
     }
     arm_files.extend(c_tests("aarch64"));
+    // Raspberry Pi 4 Wi-Fi (platform/virt/cyw43.rs): the CYW43455 firmware,
+    // CLM blob and NVRAM (Cypress licence), fetched by scripts/fetch-wifi-firmware.*
+    // into kernel/target/wifi; not committed. /disk/WIFI/FW.{BIN,CLM,TXT}.
+    let wifi_dir = manifest_dir().join("..").join("target").join("wifi");
+    println!("cargo:rerun-if-changed={}", wifi_dir.display());
+    for name in ["FW.BIN", "FW.CLM", "FW.TXT"] {
+        if let Ok(bytes) = std::fs::read(wifi_dir.join(name)) {
+            arm_files.push((format!("wifi/{}", name), bytes));
+        }
+    }
     let arm_ok = arm_kernel.exists()
         && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &[], &arm_path).unwrap_or(false);
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });

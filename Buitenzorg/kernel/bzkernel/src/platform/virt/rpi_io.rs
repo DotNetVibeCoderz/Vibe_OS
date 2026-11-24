@@ -177,6 +177,42 @@ pub fn init(gpio_phys: u64) -> bool {
     true
 }
 
+/// The Wi-Fi chip's SDIO lines (GPIO 34-39 on ALT3 = the Arasan "mmcnr"
+/// controller; pull-ups on CMD/DATA, none on CLK) and WL_REG_ON (firmware
+/// expander GPIO 129): power-cycled off -> on, as Linux's mmc-pwrseq does.
+pub fn wifi_power_on() -> bool {
+    {
+        let guard = IO.lock();
+        let Some(io) = guard.as_ref() else { return false };
+        for pin in 34..=39 {
+            io.fsel(pin, alt(3));
+            io.pull(pin, if pin == 34 { 0 } else { 1 });
+        }
+    }
+    let mut off = [129, 0];
+    let mut on = [129, 1];
+    if !firmware_property(0x0003_8041, &mut off) {
+        return false;
+    }
+    let t0 = cpu::timestamp();
+    while since_us(t0) < 20_000 {
+        core::hint::spin_loop();
+    }
+    if !firmware_property(0x0003_8041, &mut on) {
+        return false;
+    }
+    let t0 = cpu::timestamp();
+    while since_us(t0) < 150_000 {
+        core::hint::spin_loop();
+    }
+    true
+}
+
+/// The Arasan controller's base clock (firmware clock 1, "EMMC"), Hz.
+pub fn emmc_clock() -> u64 {
+    fw(0x0003_0002, 1, 2).map(|v| v[1] as u64).filter(|&h| h > 1_000_000).unwrap_or(0)
+}
+
 pub fn present() -> bool {
     IO.lock().is_some()
 }

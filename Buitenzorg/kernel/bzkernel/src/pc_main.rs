@@ -78,6 +78,7 @@ mod splash;
 mod clock;
 mod applog;
 mod clipboard;
+mod wifi;
 mod perm;
 mod screenshot;
 mod appprof;
