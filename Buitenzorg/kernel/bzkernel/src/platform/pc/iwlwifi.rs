@@ -47,6 +47,7 @@ const CSR_UCODE_DRV_GP1_CLR: usize = 0x05C;
 const GP1_SW_RFKILL: u32 = 1 << 1;
 const GP1_CMD_BLOCKED: u32 = 1 << 2;
 const CSR_HW_RF_ID: usize = 0x09C;
+const CSR_MAC_SHADOW_REG_CTRL: usize = 0x0A8;
 const CSR_INT_COALESCING: usize = 0x004;
 const CSR_GIO_CHICKEN: usize = 0x100;
 const CHICKEN_L1A_NO_L0S_RX: u32 = 0x0080_0000;
@@ -68,6 +69,12 @@ const RELEASE_CPU_RESET: u32 = 0x300C;
 const RELEASE_CPU_RESET_BIT: u32 = 1 << 24;
 const WFPM_GP2: u32 = 0xA030B4;
 const LMPM_CHICK: u32 = 0xA01FF8;
+// secure-boot status of each CPU and the firmware's program counters, read
+// when ALIVE does not come (what iwlmvm prints on an ALIVE timeout)
+const SB_CPU_1_STATUS: u32 = 0xA01E30;
+const SB_CPU_2_STATUS: u32 = 0xA01E34;
+const UMAC_CURRENT_PC: u32 = 0xA05C18;
+const LMAC1_CURRENT_PC: u32 = 0xA05C1C;
 const LMPM_CHICK_EXTENDED: u32 = 0x01;
 const SCD_TXFACT: u32 = 0xA02C00 + 0x10;
 
@@ -92,6 +99,9 @@ const FH_RX_CONFIG: usize = 0x1C00;
 const FH_RX_STTS_WPTR: usize = 0x1BC0;
 const FH_RX_RBDCB_BASE: usize = 0x1BC4;
 const FH_RX_WPTR: usize = 0x1BC8;
+const FH_RX_RDPTR: usize = 0x1BCC;
+const FH_RX_CHNL0_RBDCB_WPTR: usize = 0x1C08;
+const FH_RX_FLUSH_RB_REQ: usize = 0x1C10;
 const FH_RX_STATUS: usize = 0x1C44;
 
 const CPU1_CPU2_SEPARATOR: u32 = 0xFFFF_CCCC;
@@ -218,6 +228,30 @@ impl Nic {
             let e = crate::pci::dma_error_bits(&d);
             self.note(format!("  {}", e));
         }
+    }
+
+    /// What iwlmvm logs when ALIVE times out: secure-boot status per CPU
+    /// and where each firmware CPU is executing (read twice: a moving PC
+    /// means the firmware runs but did not report), plus the RX status page
+    /// and the first words of RB 0.
+    fn firmware_state(&mut self, stts: *mut u8, rb0: *mut u8) {
+        let rd = |n: &Nic, a| n.read_prph(a).map(|v| format!("{:#010x}", v)).unwrap_or_else(|| String::from("?"));
+        let s = format!(
+            "  SB_CPU1 {} SB_CPU2 {} UMAC_PC {} LMAC_PC {}",
+            rd(self, SB_CPU_1_STATUS), rd(self, SB_CPU_2_STATUS), rd(self, UMAC_CURRENT_PC), rd(self, LMAC1_CURRENT_PC)
+        );
+        self.note(s);
+        delay_us(1000);
+        let s = format!("  again: UMAC_PC {} LMAC_PC {} WFPM_GP2 {}", rd(self, UMAC_CURRENT_PC), rd(self, LMAC1_CURRENT_PC), rd(self, WFPM_GP2));
+        self.note(s);
+        crate::arch::cpu::dma_sync(stts as u64, 16);
+        crate::arch::cpu::dma_sync(rb0 as u64, 64);
+        let w = |p: *mut u8, i: usize| unsafe { read_volatile((p as *const u32).add(i)) };
+        let s = format!(
+            "  rb_status {:08x} {:08x}; rb0 {:08x} {:08x} {:08x} {:08x}",
+            w(stts, 0), w(stts, 1), w(rb0, 0), w(rb0, 1), w(rb0, 2), w(rb0, 3)
+        );
+        self.note(s);
     }
 
     /// `iwl_pcie_prepare_card_hw`.
@@ -360,6 +394,20 @@ fn sections(fw: &[u8], kind: u32) -> Result<(String, Vec<(u32, &[u8])>), String>
     Ok((name, out))
 }
 
+/// The first 32-bit value of a TLV of type `kind` (PHY_SKU and the like).
+fn tlv_u32(fw: &[u8], kind: u32) -> Option<u32> {
+    let mut p = 88;
+    while p + 8 <= fw.len() {
+        let t = u32::from_le_bytes([fw[p], fw[p + 1], fw[p + 2], fw[p + 3]]);
+        let l = u32::from_le_bytes([fw[p + 4], fw[p + 5], fw[p + 6], fw[p + 7]]) as usize;
+        if t == kind && l >= 4 && p + 12 <= fw.len() {
+            return Some(u32::from_le_bytes([fw[p + 8], fw[p + 9], fw[p + 10], fw[p + 11]]));
+        }
+        p += 8 + ((l + 3) & !3);
+    }
+    None
+}
+
 /// `wifi up` on a PC: bring the adapter up to the firmware's ALIVE.
 pub fn bring_up(dev: &PciDevice) -> Vec<String> {
     let mut nic = Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None };
@@ -410,6 +458,18 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         if gp & GP_RF_KILL_SW != 0 { "on" } else { "OFF (hardware rfkill: Fn key / BIOS)" }
     ));
 
+    // iwl_mvm_nic_config: MAC step/dash from HW_REV, radio type/step/dash
+    // from the firmware's PHY_SKU TLV (23). No RADIO_SI on the 8000 family.
+    let phy = tlv_u32(&fw, 23).unwrap_or(0);
+    let mut cfg = ((rev >> 2) & 0x3) << 2 | (rev & 0x3);
+    cfg |= (phy & 0x3) << 10 | ((phy >> 2) & 0x3) << 14 | ((phy >> 4) & 0x3) << 12;
+    let mask = 0x3 | 0xC | 0xC00 | 0x3000 | 0xC000 | 0x200 | 0x100;
+    let v = (nic.r(CSR_HW_IF_CONFIG) & !mask) | cfg;
+    nic.w(CSR_HW_IF_CONFIG, v);
+    // iwl8000_base_params.shadow_reg_enable
+    nic.set(CSR_MAC_SHADOW_REG_CTRL, 0x800F_FFFF);
+    nic.note(format!("nic config: PHY_SKU {:#x}, HW_IF_CONFIG {:#010x}", phy, nic.r(CSR_HW_IF_CONFIG)));
+
     // RX (legacy single queue): 256 descriptors, one 4 KiB buffer each.
     let (rbd_phys, rbd) = crate::memory::alloc_dma_frame().ok_or("out of memory")?;
     let (stts_phys, stts) = crate::memory::alloc_dma_frame().ok_or("out of memory")?;
@@ -426,6 +486,9 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         return Err("no NIC access for the RX setup".into());
     }
     nic.w(FH_RX_CONFIG, 0);
+    nic.w(FH_RX_CHNL0_RBDCB_WPTR, 0);
+    nic.w(FH_RX_FLUSH_RB_REQ, 0);
+    nic.w(FH_RX_RDPTR, 0);
     nic.w(FH_RX_WPTR, 0);
     nic.w(FH_RX_RBDCB_BASE, (rbd_phys >> 8) as u32);
     nic.w(FH_RX_STTS_WPTR, (stts_phys >> 4) as u32);
@@ -470,6 +533,7 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         }
         if t > 2_000_000 {
             nic.dump("no ALIVE");
+            nic.firmware_state(stts, bufs[0].1);
             return Err(format!("no ALIVE within 2 s (CSR_INT alive bit {})", int & INT_ALIVE != 0));
         }
         delay_us(100);
