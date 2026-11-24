@@ -852,7 +852,7 @@ pub fn enable_present() -> String {
         Ok(sphys) => {
             crate::framebuffer::set_accel(Some(crate::framebuffer::Accel {
                 staging: crate::memory::phys_to_virt(sphys) as usize,
-                stride: stride as usize,
+                stride: fb.stride, // pixels per row, like the console's own stride
                 flush: |va, len| crate::arch::cpu::dma_sync(va as u64, len),
                 blit: present_blit,
             }));

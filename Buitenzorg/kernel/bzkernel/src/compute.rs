@@ -170,7 +170,10 @@ fn gemv_self_test(n: &Native) -> Result<String, String> {
             for r in 0..rows {
                 let got = f32::from_bits(u32::from_le_bytes([out[r * 4], out[r * 4 + 1], out[r * 4 + 2], out[r * 4 + 3]]));
                 let exp = if round == 0 { want[r] } else { -want[r] };
-                if got.to_bits() != exp.to_bits() {
+                // exact, but +0.0 == -0.0: a row whose products cancel sums to +0.0
+                // in both rounds, and negating the expected value made it -0.0
+                // (the Pi's V3D failed on exactly that)
+                if got != exp {
                     crate::println!("[compute] row {}: got {:?}, want {:?} (round {})", r, got, exp, round);
                     return Err("wrong result");
                 }
