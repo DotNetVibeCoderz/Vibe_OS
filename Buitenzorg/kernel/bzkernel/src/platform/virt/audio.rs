@@ -24,17 +24,34 @@ fn has_jack() -> bool {
     false
 }
 
-/// The mixer's stream (AUDIO_WRITE): through virtio-snd. The Pi's jack and
-/// HDMI are fed by the CPU in one go (`play_pcm`), not from a ring.
+/// The Pi's jack / HDMI streamed by DMA (`pi_stream`), when that works.
+fn pi_stream() -> bool {
+    #[cfg(target_arch = "aarch64")]
+    return super::pi_stream::available();
+    #[cfg(not(target_arch = "aarch64"))]
+    false
+}
+
+/// The mixer's stream (AUDIO_WRITE): virtio-snd, or the Pi's jack + HDMI by
+/// DMA. Without `pi_stream` the Pi plays only whole sounds fed by the CPU.
 pub fn can_stream() -> bool {
-    !has_jack() && snd::available()
+    pi_stream() || (!has_jack() && snd::available())
 }
 
 pub fn is_streaming() -> bool {
+    #[cfg(target_arch = "aarch64")]
+    if pi_stream() {
+        return super::pi_stream::is_streaming();
+    }
     snd::is_streaming()
 }
 
 pub fn stream_pump() {
+    #[cfg(target_arch = "aarch64")]
+    if pi_stream() {
+        super::pi_stream::kick();
+        return;
+    }
     if !has_jack() {
         snd::pump();
     }
@@ -108,11 +125,14 @@ fn mixer_tone(freq: u32, ms: u32) -> bool {
         phase = phase.wrapping_add(step as u32);
     }
     let took = crate::mixer::write(0, &bytes, 0);
-    snd::pump();
+    stream_pump();
     took > 0
 }
 
 pub fn play_tone(freq: u32, ms: u32) -> bool {
+    if pi_stream() {
+        return mixer_tone(freq, ms);
+    }
     #[cfg(target_arch = "aarch64")]
     if jack::audio_present() {
         return jack::audio_tone(freq, ms);
@@ -123,7 +143,7 @@ pub fn play_tone(freq: u32, ms: u32) -> bool {
 /// PCM from a caller buffer (validated by the syscall layer): copied with
 /// volatile reads (never a slice over user memory), at most 4 MiB (~22 s).
 pub fn play_pcm(src: u64, len: u64) -> bool {
-    if !has_jack() && snd::available() {
+    if pi_stream() || (!has_jack() && snd::available()) {
         let n = len.min(4 << 20) as usize & !3;
         let mut pcm = alloc::vec::Vec::with_capacity(n);
         let p = src as *const u8;
@@ -131,7 +151,7 @@ pub fn play_pcm(src: u64, len: u64) -> bool {
             pcm.push(unsafe { p.add(i).read_volatile() });
         }
         let took = crate::mixer::write(0, &pcm, 0);
-        snd::pump();
+        stream_pump();
         return took > 0;
     }
     #[cfg(target_arch = "aarch64")]

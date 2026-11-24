@@ -29,7 +29,7 @@ Boot dari flash disk (UEFI), lalu buka Terminal.
 | 7 | `notify Tes halo`, lalu klik lonceng | Toast muncul, lalu action center memuatnya (**foto**) |
 | 8 | Buka-tutup Kalkulator beberapa kali, klik ganda bilah judul | Buka / tutup mulus, tak ada sisa setengah gambar, jendela membesar dan tombolnya mengisi jendela; klik ganda lagi mengembalikannya (**foto** saat membesar) |
 | 9 | Pengaturan > Tampilan > Ukuran teks 125 %, lihat keenam halaman | Tidak ada label terpotong, langsung di halaman Tampilan tanpa pindah halaman (**foto** halaman Tampilan) |
-| 10 | Mulai > Permainan > DOOM | Ikonnya ada, game mulai dan menerima tombol (**foto**) |
+| 10 | Mulai > Permainan > DOOM | Ikonnya ada, game mulai, menerima tombol, dan berbunyi: efek + musik (Pi: jack dan HDMI; `dmesg pi-audio` menampilkan `DMA stream ok`) (**foto**) |
 | 11 | Mulai > Matikan, tekan Esc; ulangi, tekan Enter | Esc membatalkan, Enter mematikan laptop |
 
 ```

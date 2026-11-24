@@ -35,8 +35,20 @@ Terminal. Pada image yang dibangun tanpa DOOM, pintasannya menjawab dengan
 notifikasi bahwa DOOM tidak ada di `/disk`. Tombol: panah untuk
 bergerak, Ctrl menembak, Spasi membuka pintu, Shift berlari, Esc menu, 1-7
 senjata. Gamepad USB juga bisa: d-pad bergerak, A menembak, B membuka pintu,
-X / Y bergeser ke samping, Start = Enter, Select = Esc. Belum ada suara
-(modul SDL mixer DOOM tidak ikut).
+X / Y bergeser ke samping, Start = Enter, Select = Esc.
+
+**Suara** (sejak 24-11-2026): modul SDL_mixer DOOM diganti
+`userland/c/doom/bzsound.c` (kode kita; dibangun dengan `FEATURE_SOUND`). Ia
+mencampur efek suara dari WAD (16 kanal, volume dan pemisahan stereo ala DOOM)
+dan memainkan musik -- lump MUS, atau lagu MIDI yang dibawa Freedoom -- dengan
+synthesizer kecil (satu timbre per keluarga General MIDI, envelope, drum dari
+noise; bukan emulasi OPL, jadi lagunya terdengar seperti instrumen lain).
+Keduanya dikirim sebagai satu stream stereo 22050 Hz ke mixer kernel lewat
+`AUDIO_WRITE`, dijaga ~120 ms di depan tiap frame. Bila AUDIO_WRITE tidak punya
+perangkat, DOOM tetap senyap dan mencatat `bzsound: no sound device`. Di
+Raspberry Pi 4 stream itu sampai ke jack headphone dan HDMI lewat mesin DMA
+SoC (`pi_stream.rs`; log boot menulis `[pi-audio] ... DMA stream ok` per
+keluaran).
 
 Image kartu Raspberry Pi 4 juga membawa DOOM (sejak 24-11-2026; dari partisi
 127 MiB masih tersisa ~58 MiB). Untuk menambahkannya ke kartu lama tanpa

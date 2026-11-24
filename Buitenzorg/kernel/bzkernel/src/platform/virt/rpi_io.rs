@@ -172,6 +172,8 @@ pub fn init(gpio_phys: u64) -> bool {
         .or_else(|| fw(0x0003_0002, 9, 2).map(|v| v[1]).filter(|&h| h > 1_000_000))
         .unwrap_or(148_500_000) as u64;
     super::hdmi_audio::init(pixel);
+    // streaming (AUDIO_WRITE) on both outputs by DMA
+    super::pi_stream::init(periph);
     true
 }
 
@@ -539,7 +541,7 @@ const PWM_STA: u64 = 0x04;
 const PWM_RNG1: u64 = 0x10;
 const PWM_FIF1: u64 = 0x18;
 const PWM_RNG2: u64 = 0x20;
-const PWM_RANGE: u32 = 562;
+pub(super) const PWM_RANGE: u32 = 562;
 
 fn audio_setup(io: &mut Io) {
     if io.audio_ready {
@@ -586,6 +588,14 @@ fn audio_frame(p: u64, l: u32, rr: u32) -> bool {
 
 pub fn audio_present() -> bool {
     super::hdmi_audio::present() || IO.lock().as_ref().map_or(false, |io| io.pwm1 != 0)
+}
+
+/// The jack's PWM block, set up, for the DMA stream (None = no jack).
+pub(super) fn jack_for_dma() -> Option<u64> {
+    match jack() {
+        0 => None,
+        p => Some(p),
+    }
 }
 
 /// The jack's PWM FIFO, set up on first use (0 = no jack).

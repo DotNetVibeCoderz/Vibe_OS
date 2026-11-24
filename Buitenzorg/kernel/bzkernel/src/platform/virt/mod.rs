@@ -22,6 +22,8 @@ pub mod rpi_io;
 #[cfg(target_arch = "aarch64")]
 pub mod hdmi_audio;
 #[cfg(target_arch = "aarch64")]
+pub mod pi_stream;
+#[cfg(target_arch = "aarch64")]
 pub mod v3d;
 #[cfg(target_arch = "aarch64")]
 pub mod v3d_compute;

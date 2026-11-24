@@ -29,7 +29,7 @@ Boot from the stick (UEFI) and open the Terminal.
 | 7 | `notify Tes halo`, then click the bell | A toast, then the action center lists it (**photo**) |
 | 8 | Open and close Calculator a few times, double-click a title bar | Smooth open / close, nothing left half drawn, the window maximizes and the keys fill it; a second double-click restores it (**photo** maximized) |
 | 9 | Pengaturan > Tampilan > Ukuran teks 125 %, look at all six pages | No label cut off, already on Tampilan without switching pages (**photo** of Tampilan) |
-| 10 | Mulai > Permainan > DOOM | The icon is there and the game starts and takes keys (**photo**) |
+| 10 | Mulai > Permainan > DOOM | The icon is there, the game starts and takes keys, and plays sound effects + music (Pi: jack and HDMI; `dmesg pi-audio` shows `DMA stream ok`) (**photo**) |
 | 11 | Mulai > Matikan, press Esc; again, press Enter | Esc cancels, Enter powers the laptop off |
 
 ```

@@ -35,8 +35,19 @@ Terminal. On an image built without DOOM the Start entry answers with a
 notification that it is not on `/disk`. Keys: arrows to
 move, Ctrl to fire, Space to open doors, Shift to run, Esc for the menu, 1-7
 for weapons. A USB gamepad works too: the d-pad moves, A fires, B opens doors,
-X / Y strafe, Start is Enter, Select is Esc. There is no sound yet (DOOM's SDL
-mixer module is left out).
+X / Y strafe, Start is Enter, Select is Esc.
+
+**Sound** (since 2026-11-24): DOOM's SDL_mixer modules are replaced by
+`userland/c/doom/bzsound.c` (our code; built with `FEATURE_SOUND`). It mixes
+the WAD's sound effects (16 channels, DOOM's volume and stereo separation)
+and plays the music -- MUS lumps, or the MIDI songs Freedoom ships -- on a
+small synthesizer (a timbre per General MIDI family, envelopes, noise drums;
+not an OPL emulation, so the tunes sound like a different instrument). Both go
+as one 22050 Hz stereo stream to the kernel mixer through `AUDIO_WRITE`, kept
+~120 ms ahead each frame. Where AUDIO_WRITE has no device DOOM stays silent and
+logs `bzsound: no sound device`. On the Raspberry Pi 4 the stream reaches the
+headphone jack and HDMI through the SoC's DMA engine (`pi_stream.rs`; the boot
+log says `[pi-audio] ... DMA stream ok` per output).
 
 The Raspberry Pi 4 card image carries DOOM too (since 2026-11-24; ~58 MiB of
 the 127 MiB partition stays free). To add it to a card written earlier without

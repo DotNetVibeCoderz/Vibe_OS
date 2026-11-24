@@ -34,6 +34,7 @@ const SCHED_MODE_HDMI: u32 = 1 << 0;
 const SCHED_HDMI_ACTIVE: u32 = 1 << 1;
 // "hd" block
 const HD_MAI_CTL: u64 = 0x010;
+const HD_MAI_THR: u64 = 0x014;
 const HD_MAI_FMT: u64 = 0x018;
 const HD_MAI_DATA: u64 = 0x01c;
 const HD_MAI_SMP: u64 = 0x020;
@@ -252,12 +253,32 @@ pub fn report(frames: usize, sent: usize) {
 
 /// One IEC 958 sub-frame for a 16-bit sample: preamble (bits 0-3), audio in
 /// bits 4-27 (16-bit sample at 12-27), channel-status bit 30, even parity 31.
-fn subframe(sample: i16, preamble: u32, cbit: bool) -> u32 {
+pub(super) fn subframe(sample: i16, preamble: u32, cbit: bool) -> u32 {
     let mut v = preamble | ((sample as u16 as u32) << 12) | if cbit { 1 << 30 } else { 0 };
     if (v >> 4).count_ones() % 2 == 1 {
         v |= 1 << 31;
     }
     v
+}
+
+/// Let the MAI FIFO request DMA (for `pi_stream`): DREQ thresholds as
+/// Linux's vc4_hdmi sets them on BCM2711. False without HDMI audio.
+pub fn enable_dma() -> bool {
+    let hd = HD.load(Ordering::Relaxed);
+    if hd == 0 {
+        return false;
+    }
+    // panic high / low (29:24, 21:16), DREQ high / low (13:8, 5:0)
+    w(hd + HD_MAI_THR, (0x10 << 24) | (0x10 << 16) | (0x1c << 8) | 0x1c);
+    true
+}
+
+/// The DMA check failed: back to CPU-fed samples only.
+pub fn disable_dma() {
+    let hd = HD.load(Ordering::Relaxed);
+    if hd != 0 {
+        w(hd + HD_MAI_THR, 0);
+    }
 }
 
 /// Queue one stereo frame; false if the FIFO stayed full (no audio clock).
