@@ -67,6 +67,35 @@ const INI_SET_MASK: u32 = (1 << 31) | (1 << 29) | (1 << 27) | (1 << 25) | (1 << 
 
 // periphery registers through the HBUS window
 const HBUS_MEM_RADDR: usize = 0x40C;
+const HBUS_MEM_WADDR: usize = 0x410;
+const HBUS_MEM_WDAT: usize = 0x418;
+const HBUS_TARG_WRPTR: usize = 0x460;
+const FH_TX_CHICKEN_BITS: usize = 0x1E98;
+const SCD_SRAM_BASE_ADDR: u32 = 0xA02C00;
+const SCD_DRAM_BASE_ADDR: u32 = 0xA02C00 + 0x8;
+const SCD_CHAINEXT_EN: u32 = 0xA02C00 + 0x244;
+const SCD_AGGR_SEL: u32 = 0xA02C00 + 0x248;
+const SCD_CONTEXT_MEM_LOWER: u32 = 0x600;
+const SCD_TRANS_TBL_MEM_UPPER: u32 = 0x838;
+const fn scd_queue_rdptr(q: u32) -> u32 {
+    if q < 20 { 0xA02C00 + 0x68 + 4 * q } else { 0xA02C00 + 0x2B4 + 4 * (q - 20) }
+}
+const fn scd_queue_status(q: u32) -> u32 {
+    if q < 20 { 0xA02C00 + 0x10C + 4 * q } else { 0xA02C00 + 0x334 + 4 * (q - 20) }
+}
+/// iwlmvm's DQA command queue and the command FIFO.
+const CMD_QUEUE: u32 = 0;
+const CMD_FIFO: u32 = 7;
+/// WFMP_MAC_ADDR_0/1: the OTP MAC address (8000 family).
+const WFMP_MAC_ADDR_0: u32 = 0xA03080;
+const WFMP_MAC_ADDR_1: u32 = 0xA03084;
+// host command ids (group 1, wide header, like iwlmvm)
+const NVM_ACCESS_CMD: u8 = 0x88;
+const TX_ANT_CONFIGURATION_CMD: u8 = 0x98;
+const PHY_CONFIGURATION_CMD: u8 = 0x6A;
+const INIT_COMPLETE_NOTIF: u8 = 0x4;
+const CALIB_RES_NOTIF_PHY_DB: u8 = 0x6B;
+const NVM_CHUNK: usize = 2048;
 const HBUS_MEM_RDAT: usize = 0x41C;
 const PRPH_WADDR: usize = 0x444;
 const PRPH_RADDR: usize = 0x448;
@@ -672,14 +701,13 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         t += 100;
     }
     nic.w(CSR_INT, INT_FH_RX | INT_ALIVE);
-    let (_, buf) = bufs[0];
-    crate::arch::cpu::dma_sync(buf as u64, 4096);
-    let rd = |o: usize| unsafe { read_volatile(buf.add(o) as *const u32) };
-    let len_flags = rd(0);
-    let cmd = rd(4) & 0xFF;
-    let group = (rd(4) >> 8) & 0xFF;
+    let mut rx = Rx { stts, bufs, rb: 0, off: 0, consumed: 0, backlog: Vec::new() };
+    let pkt = rx.next(nic, 100_000).ok_or("RX closed a buffer but holds no packet")?;
+    let rd = |o: usize| pkt.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0);
+    let cmd = pkt[4];
+    let group = pkt[5];
     let words: Vec<String> = (0..12).map(|i| format!("{:08x}", rd(i * 4))).collect();
-    nic.note(format!("packet: len {} cmd {:#x} group {:#x}: {}", len_flags & 0x3FFF, cmd, group, words.join(" ")));
+    nic.note(format!("packet: len {} cmd {:#x} group {:#x}: {}", rd(0) & 0x3FFF, cmd, group, words.join(" ")));
     let status = rd(8) & 0xFFFF;
     if cmd != 0x1 {
         return Err(format!("first packet is cmd {:#x}, not ALIVE (0x1)", cmd));
@@ -687,11 +715,347 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
     if status != 0xCAFE {
         return Err(format!("ALIVE status {:#x} (expected 0xcafe)", status));
     }
-    nic.note(format!(
-        "ALIVE ok (status 0xcafe, ucode {}.{}); next step: NVM read, MAC address, scan",
-        rd(12),
-        rd(16)
-    ));
+    // iwl_alive_ntf_v3: status, lmac (major, minor, ver, timestamp, error
+    // table, log table, cpu regs, dbgm, alive counter, scd base, ...).
+    let scd_alive = rd(8 + 4 + 40);
+    nic.note(format!("ALIVE ok (status 0xcafe, ucode {}.{}), SCD base {:#x}", rd(12), rd(16), scd_alive));
     crate::println!("[kernel] MILESTONE: IWLWIFI ALIVE OK (Intel {:04x}, INIT firmware in {} ms)", dev.device_id, ms);
+
+    // ---- step 2: scheduler + command queue (iwl_pcie_tx_start) ----
+    let ring = CmdRing::new()?;
+    nic.tx_start(scd_alive, &ring)?;
+    let mut tx = Tx { ring, wr: 0 };
+
+    // The OTP MAC address (what Linux falls back to without an override).
+    let m0 = nic.read_prph(WFMP_MAC_ADDR_0).unwrap_or(0);
+    let m1 = nic.read_prph(WFMP_MAC_ADDR_1).unwrap_or(0);
+    let otp = [(m0 >> 24) as u8, (m0 >> 16) as u8, (m0 >> 8) as u8, m0 as u8, (m1 >> 8) as u8, m1 as u8];
+    nic.note(format!("OTP MAC address {}", mac_str(&otp)));
+
+    // iwl_nvm_init: read every section the 8000 family uses.
+    let mut mac = otp;
+    let mut sections_ok = 0;
+    for (kind, name) in [(10u16, "HW"), (1, "SW"), (11, "MAC_OVERRIDE"), (12, "PHY_SKU"), (3, "REGULATORY"), (4, "CALIBRATION")] {
+        match nvm_read(nic, &mut tx, &mut rx, kind) {
+            Ok(data) => {
+                sections_ok += 1;
+                nic.note(format!("NVM section {} ({}): {} bytes", kind, name, data.len()));
+                if kind == 11 && data.len() >= 8 {
+                    // MAC_ADDRESS_OVERRIDE_EXT_NVM: word 1, bytes swapped in pairs.
+                    let h = &data[2..8];
+                    let m = [h[3], h[2], h[1], h[0], h[5], h[4]];
+                    let valid = m != [0; 6] && m != [0xFF; 6] && m[0] & 1 == 0 && m != [2, 0, 0, 0, 0, 0];
+                    nic.note(format!("  override MAC {} ({})", mac_str(&m), if valid { "used" } else { "not valid, OTP kept" }));
+                    if valid {
+                        mac = m;
+                    }
+                }
+                if kind == 12 && data.len() >= 8 {
+                    // SKU_FAMILY_8000 (word offset 2 of PHY_SKU, as a u32).
+                    let sku = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+                    nic.note(format!(
+                        "  SKU {:#x}: 2.4 GHz {}, 5 GHz {}, 11n {}, 11ac {}",
+                        sku,
+                        sku & 1 != 0,
+                        sku & 2 != 0,
+                        sku & 4 != 0,
+                        sku & 8 != 0
+                    ));
+                }
+            }
+            Err(e) => nic.note(format!("NVM section {} ({}): {}", kind, name, e)),
+        }
+    }
+    if sections_ok == 0 {
+        return Err(String::from("no NVM section could be read (command queue not working)"));
+    }
+    nic.note(format!("MAC address {}", mac_str(&mac)));
+    crate::println!("[kernel] MILESTONE: IWLWIFI NVM OK (MAC {}, {} section(s))", mac_str(&mac), sections_ok);
+
+    // ---- INIT calibration: TX antennas, PHY config, wait INIT_COMPLETE ----
+    let phy = tlv_u32(&fw, 23).unwrap_or(0);
+    let tx_ant = (phy >> 16) & 0xF;
+    nic.send_cmd(&mut tx, &mut rx, TX_ANT_CONFIGURATION_CMD, &tx_ant.to_le_bytes())?;
+    let (flow, event) = def_calib(&fw, 1);
+    let mut cfg = Vec::with_capacity(12);
+    cfg.extend_from_slice(&phy.to_le_bytes());
+    cfg.extend_from_slice(&flow.to_le_bytes());
+    cfg.extend_from_slice(&event.to_le_bytes());
+    nic.note(format!("PHY config {:#x}, TX antennas {:#x}, calibration flow {:#x} event {:#x}", phy, tx_ant, flow, event));
+    let t0 = crate::arch::cpu::nanos();
+    nic.send_cmd(&mut tx, &mut rx, PHY_CONFIGURATION_CMD, &cfg)?;
+    let mut phy_db = 0usize;
+    loop {
+        let waited = (crate::arch::cpu::nanos() - t0) / 1000;
+        if waited > 2_000_000 {
+            nic.dump("no INIT_COMPLETE");
+            return Err(format!("no INIT_COMPLETE within 2 s ({} PHY DB entries)", phy_db));
+        }
+        let Some(p) = rx.next(nic, 2_000_000 - waited) else { continue };
+        match p[4] {
+            CALIB_RES_NOTIF_PHY_DB => phy_db += 1,
+            INIT_COMPLETE_NOTIF => break,
+            other => nic.note(format!("  notification {:#x} ({} bytes)", other, p.len())),
+        }
+    }
+    let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
+    nic.note(format!("INIT calibration complete in {} ms, {} PHY DB entries", ms, phy_db));
+    nic.note(String::from("next step: runtime image + paging, scan, association, WPA2"));
+    crate::println!("[kernel] MILESTONE: IWLWIFI CALIB OK ({} PHY DB entries)", phy_db);
     Ok(())
+}
+
+fn mac_str(m: &[u8; 6]) -> String {
+    format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
+}
+
+/// The DEF_CALIB TLV (22) for one ucode type (1 = INIT): flow and event triggers.
+fn def_calib(fw: &[u8], ucode_type: u32) -> (u32, u32) {
+    let mut p = 88;
+    while p + 8 <= fw.len() {
+        let t = u32::from_le_bytes([fw[p], fw[p + 1], fw[p + 2], fw[p + 3]]);
+        let l = u32::from_le_bytes([fw[p + 4], fw[p + 5], fw[p + 6], fw[p + 7]]) as usize;
+        if t == 22 && l >= 12 && p + 20 <= fw.len() {
+            let w = |o: usize| u32::from_le_bytes([fw[p + o], fw[p + o + 1], fw[p + o + 2], fw[p + o + 3]]);
+            if w(8) == ucode_type {
+                return (w(12), w(16));
+            }
+        }
+        p += 8 + ((l + 3) & !3);
+    }
+    (0, 0)
+}
+
+/// NVM_ACCESS_CMD reads of one section, 2 KiB at a time.
+fn nvm_read(nic: &mut Nic, tx: &mut Tx, rx: &mut Rx, kind: u16) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    loop {
+        let mut c = [0u8; 8];
+        // op 0 = read, target 0 = NVM_ACCESS_TARGET_CACHE
+        c[2..4].copy_from_slice(&kind.to_le_bytes());
+        c[4..6].copy_from_slice(&(out.len() as u16).to_le_bytes());
+        c[6..8].copy_from_slice(&(NVM_CHUNK as u16).to_le_bytes());
+        let r = nic.send_cmd(tx, rx, NVM_ACCESS_CMD, &c)?;
+        // iwl_nvm_access_resp: offset, length, type, status, data
+        if r.len() < 8 {
+            return Err(format!("short reply ({} bytes)", r.len()));
+        }
+        let len = u16::from_le_bytes([r[2], r[3]]) as usize;
+        let status = u16::from_le_bytes([r[6], r[7]]);
+        if status != 0 {
+            return if out.is_empty() { Err(format!("status {}", status)) } else { Ok(out) };
+        }
+        let data = r.get(8..8 + len).ok_or("reply shorter than its length")?;
+        out.extend_from_slice(data);
+        if len < NVM_CHUNK || out.len() > 64 * 1024 {
+            return Ok(out);
+        }
+    }
+}
+
+/// The legacy RX queue: buffers in order, several packets per buffer.
+struct Rx {
+    stts: *mut u8,
+    bufs: Vec<(u64, *mut u8)>,
+    rb: usize,
+    off: usize,
+    consumed: usize,
+    /// Packets that arrived while a command waited for its reply.
+    backlog: Vec<Vec<u8>>,
+}
+
+impl Rx {
+    /// The next packet (len_n_flags + header + payload), waiting up to `us`.
+    fn next(&mut self, nic: &Nic, us: u64) -> Option<Vec<u8>> {
+        if !self.backlog.is_empty() {
+            return Some(self.backlog.remove(0));
+        }
+        let mut t = 0u64;
+        loop {
+            crate::arch::cpu::dma_sync(self.stts as u64, 16);
+            let closed = (unsafe { read_volatile(self.stts as *const u16) } & 0xFFF) as usize;
+            if self.rb % RX_QUEUE != closed % RX_QUEUE {
+                let buf = self.bufs[self.rb % RX_QUEUE].1;
+                if self.off == 0 {
+                    crate::arch::cpu::dma_sync(buf as u64, 4096);
+                }
+                let lf = if self.off + 8 <= 4096 { unsafe { read_volatile(buf.add(self.off) as *const u32) } } else { 0 };
+                let len = (lf & 0x3FFF) as usize;
+                if len == 0 || lf == 0x5555_0000 || self.off + 4 + len > 4096 {
+                    self.advance(nic);
+                    continue;
+                }
+                let mut v = alloc::vec![0u8; len + 4];
+                for (i, b) in v.iter_mut().enumerate() {
+                    *b = unsafe { read_volatile(buf.add(self.off + i)) };
+                }
+                self.off += (len + 4 + 0x3F) & !0x3F;
+                if self.off >= 4096 {
+                    self.advance(nic);
+                }
+                return Some(v);
+            }
+            if t >= us {
+                return None;
+            }
+            delay_us(50);
+            t += 50;
+        }
+    }
+    /// Done with the current buffer: hand buffers back eight at a time.
+    fn advance(&mut self, nic: &Nic) {
+        self.rb += 1;
+        self.off = 0;
+        self.consumed += 1;
+        if self.consumed % 8 == 0 {
+            nic.write_direct(FH_RX_WPTR, ((RX_POSTED as usize + self.consumed) % RX_QUEUE) as u32);
+        }
+        nic.w(CSR_INT, INT_FH_RX);
+    }
+}
+
+const TFD_SIZE: usize = 128;
+const CMD_SLOTS: usize = 32;
+const CMD_BUF: usize = 512;
+
+/// TFD ring of the command queue, the scheduler's byte-count tables and
+/// one command buffer per slot.
+struct CmdRing {
+    tfd_phys: u64,
+    tfd: *mut u8,
+    bc_phys: u64,
+    cmd_phys: u64,
+    cmd: *mut u8,
+}
+
+impl CmdRing {
+    fn new() -> Result<CmdRing, String> {
+        let (tfd_phys, tfd) = crate::memory::alloc_dma_contiguous(8).ok_or("out of memory (TFD ring)")?;
+        // byte-count tables: 31 queues x 640 bytes, 1 KiB aligned.
+        let (bc_phys, _) = crate::memory::alloc_dma_contiguous(5).ok_or("out of memory (byte counts)")?;
+        let (cmd_phys, cmd) =
+            crate::memory::alloc_dma_contiguous(CMD_SLOTS * CMD_BUF / 4096).ok_or("out of memory (commands)")?;
+        Ok(CmdRing { tfd_phys, tfd, bc_phys, cmd_phys, cmd })
+    }
+}
+
+struct Tx {
+    ring: CmdRing,
+    wr: usize,
+}
+
+impl Nic {
+    fn write_mem(&self, addr: u32, v: u32) -> bool {
+        if !self.grab() {
+            return false;
+        }
+        self.w(HBUS_MEM_WADDR, addr);
+        self.w(HBUS_MEM_WDAT, v);
+        self.release();
+        true
+    }
+
+    /// iwl_pcie_tx_start + iwl_trans_ac_txq_enable(command queue).
+    fn tx_start(&mut self, scd_alive: u32, ring: &CmdRing) -> Result<(), String> {
+        let scd = self.read_prph(SCD_SRAM_BASE_ADDR).ok_or("no NIC access (SCD base)")?;
+        if scd != scd_alive {
+            self.note(format!("SCD base: register {:#x}, ALIVE {:#x} (using the register)", scd, scd_alive));
+        }
+        let mut a = scd + SCD_CONTEXT_MEM_LOWER;
+        while a < scd + SCD_TRANS_TBL_MEM_UPPER {
+            self.write_mem(a, 0);
+            a += 4;
+        }
+        self.write_prph(SCD_DRAM_BASE_ADDR, (ring.bc_phys >> 10) as u32);
+        self.write_prph(SCD_CHAINEXT_EN, 0);
+        // command queue 0 -> FIFO 7
+        let q = CMD_QUEUE;
+        self.write_direct(fh_cbbc(q as usize), (ring.tfd_phys >> 8) as u32);
+        self.write_prph(scd_queue_status(q), 1 << 19);
+        let aggr = self.read_prph(SCD_AGGR_SEL).unwrap_or(0);
+        self.write_prph(SCD_AGGR_SEL, aggr & !(1 << q));
+        self.write_direct(HBUS_TARG_WRPTR, q << 8);
+        self.write_prph(scd_queue_rdptr(q), 0);
+        let ctx = scd + SCD_CONTEXT_MEM_LOWER + q * 8;
+        self.write_mem(ctx, 0);
+        self.write_mem(ctx + 4, (64 & 0x7F) | ((64 << 16) & 0x7F_0000));
+        // active | FIFO | WSL | SCD_QUEUE_STTS_REG_MSK
+        self.write_prph(scd_queue_status(q), (1 << 3) | CMD_FIFO | (1 << 4) | 0x017F_0000);
+        // all TX FIFOs + DMA channels on, scheduler auto-retry
+        self.write_prph(SCD_TXFACT, 0xFF);
+        for ch in 0..8 {
+            self.write_direct(fh_tcsr_config(ch), 0x8000_0000 | 0x8);
+        }
+        let chick = self.read_direct(FH_TX_CHICKEN_BITS).unwrap_or(0);
+        self.write_direct(FH_TX_CHICKEN_BITS, chick | 0x2);
+        self.note(format!("scheduler at SRAM {:#x}; command queue {} on FIFO {}", scd, q, CMD_FIFO));
+        Ok(())
+    }
+
+    /// Send one host command (wide header, group 1) and wait for its reply;
+    /// notifications that arrive first are logged. Returns the reply payload.
+    fn send_cmd(&mut self, tx: &mut Tx, rx: &mut Rx, id: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
+        let idx = tx.wr % CMD_SLOTS;
+        let hw = tx.wr % 256;
+        let total = 8 + payload.len();
+        if total > CMD_BUF {
+            return Err("command too long".into());
+        }
+        let seq = ((CMD_QUEUE as u16 & 0x1F) << 8) | hw as u16;
+        let buf = unsafe { tx.ring.cmd.add(idx * CMD_BUF) };
+        let phys = tx.ring.cmd_phys + (idx * CMD_BUF) as u64;
+        let mut hdr = [0u8; 8];
+        hdr[0] = id;
+        hdr[1] = 1; // IWL_ALWAYS_LONG_GROUP
+        hdr[2..4].copy_from_slice(&seq.to_le_bytes());
+        hdr[4..6].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        unsafe {
+            for (i, &b) in hdr.iter().chain(payload.iter()).enumerate() {
+                write_volatile(buf.add(i), b);
+            }
+        }
+        crate::arch::cpu::dma_sync(buf as u64, total);
+        // TFD: TB0 = the first 20 bytes, TB1 = the rest (as iwlwifi splits it).
+        let tfd = unsafe { tx.ring.tfd.add(hw * TFD_SIZE) };
+        unsafe { core::ptr::write_bytes(tfd, 0, TFD_SIZE) };
+        let put = |n: usize, addr: u64, len: usize| unsafe {
+            let p = tfd.add(4 + n * 6);
+            write_volatile(p as *mut u32, addr as u32);
+            write_volatile(p.add(4) as *mut u16, (((addr >> 32) & 0xF) as u16) | ((len as u16) << 4));
+        };
+        let first = total.min(20);
+        put(0, phys, first);
+        let mut tbs = 1u8;
+        if total > first {
+            put(1, phys + first as u64, total - first);
+            tbs += 1;
+        }
+        unsafe { write_volatile(tfd.add(3), tbs) };
+        crate::arch::cpu::dma_sync(tfd as u64, TFD_SIZE);
+        tx.wr += 1;
+        if !self.grab() {
+            return Err("no NIC access to post a command".into());
+        }
+        self.w(HBUS_TARG_WRPTR, ((tx.wr % 256) as u32) | (CMD_QUEUE << 8));
+        let t0 = crate::arch::cpu::nanos();
+        let mut others = Vec::new();
+        let result = loop {
+            let waited = (crate::arch::cpu::nanos() - t0) / 1000;
+            if waited > 1_000_000 {
+                break Err(format!("command {:#x}: no reply within 1 s (CSR_INT {:#010x})", id, self.r(CSR_INT)));
+            }
+            if self.r(CSR_INT) & (INT_SW_ERR | INT_HW_ERR) != 0 {
+                break Err(format!("command {:#x}: firmware error (CSR_INT {:#010x})", id, self.r(CSR_INT)));
+            }
+            let Some(p) = rx.next(self, (1_000_000 - waited).min(50_000)) else { continue };
+            let pseq = u16::from_le_bytes([p[6], p[7]]);
+            if p[4] == id && pseq == seq {
+                break Ok(p[8..].to_vec());
+            }
+            others.push(p);
+        };
+        self.release();
+        rx.backlog.splice(0..0, others);
+        result
+    }
 }
