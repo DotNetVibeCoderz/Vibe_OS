@@ -398,7 +398,10 @@ fn handle(st: &mut State, pkt: &[u8], peer: &str) -> Option<Vec<u8>> {
             }
             r
         }
-        5 => run(op, seq, body),
+        5 => {
+            flush_audit(st, true); // `deploy log` cannot reach the buffer while we hold STATE
+            run(op, seq, body)
+        }
         6 => log(op, seq, body),
         7 => match u32_at(body, 0) {
             Some(pid) if crate::process::kill(pid as u64) => reply(op, seq, OK, &[]),
@@ -413,7 +416,10 @@ fn handle(st: &mut State, pkt: &[u8], peer: &str) -> Option<Vec<u8>> {
             }
         }
         9 => read(st, op, seq, body),
-        10 => exec(st, op, seq, body),
+        10 => {
+            flush_audit(st, true);
+            exec(st, op, seq, body)
+        }
         11 => {
             let from = (u32_at(body, 0).unwrap_or(0) as usize).min(st.output.len());
             let to = (from + REPLY_CHUNK).min(st.output.len());
