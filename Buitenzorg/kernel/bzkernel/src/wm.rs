@@ -91,7 +91,7 @@ const CATEGORIES: [Category; 6] = [
     Category {
         name: "Hiburan",
         leaf: gfx::rgb(0xE8, 0x8F, 0x7A),
-        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8"), ("mlompat", "Lompat Kodok"), ("mruang", "Ruang 3D")],
+        apps: &[("mbaca", "Baca"), ("mlabirin", "Labirin Kebun"), ("mchip8", "CHIP-8"), ("mlompat", "Lompat Kodok"), ("mruang", "Ruang 3D"), ("mnes", "NES")],
     },
 ];
 

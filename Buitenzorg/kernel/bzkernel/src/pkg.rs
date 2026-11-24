@@ -44,6 +44,7 @@ pub const REGISTRY: &[Package] = &[
     Package { name: "mlabirin", version: "1.0.0", description: "Labirin 3D (raycast)", elf: "MLABIRIN.DLL", kind: "desktop", category: "GAME", pre: true },
     Package { name: "mbuah", version: "1.0.0", description: "Panen Buah 3D", elf: "MBUAH.DLL", kind: "desktop", category: "GAME", pre: true },
     Package { name: "mchip8", version: "1.0.0", description: "Emulator CHIP-8", elf: "MCHIP8.DLL", kind: "desktop", category: "GAME", pre: true },
+    Package { name: "mnes", version: "1.0.0", description: "Emulator NES + game homebrew orisinal", elf: "MNES.DLL", kind: "desktop", category: "GAME", pre: true },
     Package { name: "doom", version: "1.0.0", description: "DOOM (Freedoom)", elf: "DOOM.ELF", kind: "desktop", category: "GAME", pre: true },
     Package { name: "mmusik", version: "1.0.0", description: "Musik -- WAV/FLAC/MP3/Ogg/MIDI", elf: "MMUSIK.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
     Package { name: "mvideo", version: "1.0.0", description: "Video -- AVI/MKV/WebM/MP4 + subtitle", elf: "MVIDEO.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },

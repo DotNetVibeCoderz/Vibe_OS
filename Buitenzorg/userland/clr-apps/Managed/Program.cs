@@ -42,6 +42,7 @@ public static class Folder
         new AppInfo("mlompat", "Lompat Kodok", "Platformer: kumpulkan embun, capai bendera", IconKind.Leaf, 0x5FB85A),
         new AppInfo("mbaca", "Baca", "Pembaca e-book EPUB dan teks", IconKind.File, 0xD9B77E),
         new AppInfo("mchip8", "CHIP-8", "Emulator CHIP-8 + dua program orisinal", IconKind.Grid, 0x9BE0B8),
+        new AppInfo("mnes", "NES", "Emulator NES + game homebrew Lebah Kebun", IconKind.Grid, 0xF3C969),
         new AppInfo("mvideo", "Video", "Putar video AVI (MJPEG + suara)", IconKind.Play, 0x8FB8E8),
         new AppInfo("mmusik", "Musik", "Putar lagu WAV, volume per aplikasi", IconKind.Play, 0xB99AE8),
         new AppInfo("masisten", "Asisten AI", "Model bahasa lokal + penglihatan komputer", IconKind.Leaf, 0x9BE0B8),
@@ -198,6 +199,7 @@ public static class Folder
         Report(MMusik.MusikApp.SelfTest()); // Buitenzorg.Media: WAV, the player on the kernel mixer (AUDIO_WRITE)
         Report(MImage.PhotoApp.SelfTest()); // Buitenzorg.Media.Picture: PNG/JPEG/GIF decoded by the host
         Report(MChip8.Chip8App.SelfTest()); // Buitenzorg.Game: an interpreter loop + raw keys
+        Report(MNes.NesApp.SelfTest()); // the host NES core (nes.rs): KEBUN.NES, d-pad, APU sound
         Report(MWeb.BrowserApp.SelfTest()); // Buitenzorg.Net: TCP_OP + HTTP over loopback, the page engine
         Report(MBaca.ReaderApp.SelfTest()); // EPUB through the host ZIP natives + the page engine
         Report(MLabirin.LabirinApp.SelfTest()); // the host ray caster (RayRender), one blit per frame

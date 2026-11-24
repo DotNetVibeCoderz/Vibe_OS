@@ -36,6 +36,9 @@ mod zipapi;
 mod crypto;
 mod cryptoapi;
 mod raycast;
+#[allow(dead_code)]
+mod nes;
+mod nesapi;
 mod flac;
 mod audiodec;
 mod midi;

@@ -1,4 +1,4 @@
-# Reading, a 3D maze, CHIP-8 and game mode
+# Reading, a 3D maze, CHIP-8, NES and game mode
 
 ## Baca, the e-book reader
 
@@ -75,6 +75,44 @@ python scripts/chip8asm.py assets/chip8/tangkap.asm assets/chip8/TANGKAP.CH8
 
 The emulator follows the CHIP-48 conventions for the two ambiguous groups
 (`8xy6`/`8xyE` shift VX in place; `Fx55`/`Fx65` leave I unchanged).
+
+## NES
+
+![Lebah Kebun, rendered by the emulator core](img/nes-lebah-kebun.png)
+
+`run mnes`, or **Start > Hiburan > NES**: an emulator of the Nintendo
+Entertainment System / Famicom. The machine is clrhost's native core
+`userland/clrhost/src/nes.rs` (an interpreted 6502 would be far too slow);
+the managed app `MNes` is its screen, controller and speaker.
+
+- **CPU**: the 6502 with every official opcode and the common unofficial
+  ones (NOPs with operands, LAX, SAX, DCP, ISB, SLO, RLA, SRE, RRA), cycle
+  counts with page-cross penalties, NMI, BRK, OAM DMA. It matches the
+  reference log of kevtris' *nestest* line for line (8,991 instructions,
+  registers and cycle counts; checked on a PC, the ROM is not shipped).
+- **PPU**: background with the loopy scroll registers, 8x8 and 8x16
+  sprites, priority, sprite 0 hit, sprite overflow, the left-column masks,
+  vblank NMI, palette mirroring. Rendering is per scanline, so mid-line
+  tricks are not modelled.
+- **APU**: two pulse channels (envelope, sweep, length counter), triangle
+  (linear counter), noise; the non-linear mixer, 48 kHz mono into the
+  program's mixer stream. No DMC.
+- **Cartridges**: iNES files with mapper 0 (NROM), 2 (UxROM) or 3 (CNROM);
+  another mapper is reported by number.
+- **Controls**: arrows = d-pad, X = A, Z = B, Enter = Start, Space or Right
+  Shift = Select; a USB gamepad works too. The core zooms the picture itself
+  (an `int[]` of 2x / 3x the size gets the zoomed frame), one blit per frame.
+
+The image carries one game, **KEBUN.NES -- *Lebah Kebun***: an original
+homebrew game (fly the bee to the flower, every flower is a point and a
+chirp). `scripts/make-nes-rom.py` builds it: a small two-pass 6502 assembler
+plus the game's source and tiles, all in that one file. **No commercial ROMs
+are included**; put your own `.NES` files on `/disk` and they appear in the
+list.
+
+Natives (clrhost `nesapi.rs`): `NesLoad(byte[])`, `NesFrame(id, buttons,
+int[])`, `NesAudio(id, byte[])`, `NesPeek`, `NesInfo`, `NesFree`. Under QEMU
+TCG one frame takes ~5 ms (the self-test prints it).
 
 ## Game mode
 

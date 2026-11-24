@@ -37,6 +37,7 @@
     <ProjectReference Include="..\MMusik\MMusik.csproj" />
     <ProjectReference Include="..\MWeb\MWeb.csproj" />
     <ProjectReference Include="..\MChip8\MChip8.csproj" />
+    <ProjectReference Include="..\MNes\MNes.csproj" />
     <ProjectReference Include="..\MBaca\MBaca.csproj" />
     <ProjectReference Include="..\MLabirin\MLabirin.csproj" />
     <ProjectReference Include="..\MLompat\MLompat.csproj" />

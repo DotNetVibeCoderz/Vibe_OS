@@ -426,7 +426,24 @@ def doom():
     save(img, "doom")
 
 
-ALL = [mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom]
+def mnes():
+    """A generic game pad with a bee-yellow pair of buttons (no console's own artwork)."""
+    img = background(0xF0C2A8, 0xA8503C)
+    body = shape(lambda d: d.rounded_rectangle([130, 330, 894, 730], radius=150, fill=255))
+    paint(img, body, 0xE9E4DA, gloss=0.3)
+    cross = shape(lambda d: (d.rounded_rectangle([250, 480, 450, 560], radius=14, fill=255),
+                             d.rounded_rectangle([310, 420, 390, 620], radius=14, fill=255)))
+    paint(img, cross, 0x2A2A2E, shadow=False, gloss=0.15, rim=False)
+    for cx, cy in ((640, 560), (770, 480)):
+        btn = shape(lambda d, cx=cx, cy=cy: d.ellipse([cx - 55, cy - 55, cx + 55, cy + 55], fill=255))
+        paint(img, btn, 0xF3C969, shadow=True, gloss=0.35)
+    for x in (470, 560):
+        pill = shape(lambda d, x=x: d.rounded_rectangle([x - 40, 620, x + 40, 650], radius=15, fill=255))
+        paint(img, pill, 0x6A6A70, shadow=False, gloss=0, rim=False, flat=True)
+    save(img, "mnes")
+
+
+ALL = [mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom, mnes]
 
 if __name__ == "__main__":
     want = set(sys.argv[1:])
