@@ -149,11 +149,19 @@ namespace Buitenzorg.Drawing
             if (x1 > _cx1) x1 = _cx1; if (y1 > _cy1) y1 = _cy1;
         }
 
+        /// <summary>An opaque store already inside the bitmap and the clip rectangle; the region still applies.</summary>
+        void Put(int x, int y, int idx, uint v)
+        {
+            if (_region != null && !_region.IsVisible(x, y)) return;
+            _px[idx] = v;
+        }
+
         /// <summary>Alpha-blend color c over the pixel at (x,y).</summary>
         void Blend(int x, int y, Color c)
         {
             if ((uint)x >= (uint)_w || (uint)y >= (uint)_h) return;
             if (_clip && (x < _cx0 || x >= _cx1 || y < _cy0 || y >= _cy1)) return;
+            if (_region != null && !_region.IsVisible(x, y)) return;
             int a = c.A;
             int idx = y * _w + x;
             if (a >= 255) { _px[idx] = c.Argb; return; }
@@ -184,7 +192,7 @@ namespace Buitenzorg.Drawing
         {
             int x0 = Max(0, x), y0 = Max(0, y), x1 = Min(_w, x + w), y1 = Min(_h, y + h);
             ClipRect(ref x0, ref y0, ref x1, ref y1);
-            if (c.A >= 255)
+            if (c.A >= 255 && _region == null)
             {
                 uint v = c.Argb;
                 for (int yy = y0; yy < y1; yy++) { int row = yy * _w; for (int xx = x0; xx < x1; xx++) _px[row + xx] = v; }
@@ -193,7 +201,12 @@ namespace Buitenzorg.Drawing
         }
         public void FillRectangle(Color c, Rectangle r) => FillRectangle(c, r.X, r.Y, r.Width, r.Height);
 
-        void HLine(int x0, int x1, int y, Color c) { if (x0 > x1) { int t = x0; x0 = x1; x1 = t; } for (int x = x0; x <= x1; x++) Blend(x, y, c); }
+        void HLine(int x0, int x1, int y, Color c)
+        {
+            if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+            if (_tex != null) { for (int x = x0; x <= x1; x++) Blend(x, y, new Color(_tex.Sample(x, y))); return; }
+            for (int x = x0; x <= x1; x++) Blend(x, y, c);
+        }
         void VLine(int y0, int y1, int x, Color c) { if (y0 > y1) { int t = y0; y0 = y1; y1 = t; } for (int y = y0; y <= y1; y++) Blend(x, y, c); }
 
         public void DrawRectangle(Color c, int x, int y, int w, int h, int thick)
@@ -317,6 +330,222 @@ namespace Buitenzorg.Drawing
             if (close && n > 1) DrawLine(c, p.PX(n - 1), p.PY(n - 1), p.PX(0), p.PY(0));
         }
 
+        // --- Pen strokes: width, dashes, caps, joins ---------------------------
+
+        Region? _region;
+        TextureBrush? _tex;
+
+        /// <summary>Clip to a region (combined with SetClip's rectangle, if any).</summary>
+        public void SetClip(Region r) => _region = r;
+        public void ResetRegionClip() => _region = null;
+
+        /// <summary>Fill a convex or concave polygon given in device pixels (no transform).</summary>
+        void FillQuad(Color c, int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3)
+        {
+            int[] xs = new int[4]; int[] ys = new int[4];
+            xs[0] = x0; ys[0] = y0; xs[1] = x1; ys[1] = y1; xs[2] = x2; ys[2] = y2; xs[3] = x3; ys[3] = y3;
+            FillPolyRaw(c, xs, ys, 4);
+        }
+
+        void FillTri(Color c, int x0, int y0, int x1, int y1, int x2, int y2)
+        {
+            int[] xs = new int[3]; int[] ys = new int[3];
+            xs[0] = x0; ys[0] = y0; xs[1] = x1; ys[1] = y1; xs[2] = x2; ys[2] = y2;
+            FillPolyRaw(c, xs, ys, 3);
+        }
+
+        /// <summary>A solid thick segment (device pixels), its ends cut flat, in 1/16-pixel precision.</summary>
+        void Segment(Color c, int ax, int ay, int bx, int by, int width)
+        {
+            if (width <= 1) { DrawLineRaw(c, ax, ay, bx, by); return; }
+            long dx = bx - ax, dy = by - ay;
+            int len = ISqrt(dx * dx + dy * dy);
+            if (len == 0) { FillCircle(c, ax, ay, width / 2); return; }
+            // half-width normal, rounded to the nearest pixel
+            int nx = (int)((-dy * width + (dy > 0 ? -len : len)) / (2 * len));
+            int ny = (int)((dx * width + (dx > 0 ? len : -len)) / (2 * len));
+            FillQuad(c, ax + nx, ay + ny, bx + nx, by + ny, bx - nx, by - ny, ax - nx, ay - ny);
+        }
+
+        void Cap(Color c, LineCap cap, int x, int y, int ux, int uy, int len, int width)
+        {
+            // (ux, uy) / len = the direction pointing out of the line at this end
+            int half = width / 2;
+            if (half < 1 || cap == LineCap.Flat) return;
+            if (cap == LineCap.Round) { FillCircle(c, x, y, half); return; }
+            int ox = ux * half / len, oy = uy * half / len;   // outward
+            int nx = -uy * half / len, ny = ux * half / len;  // sideways
+            if (cap == LineCap.Square) FillQuad(c, x + nx, y + ny, x + nx + ox, y + ny + oy, x - nx + ox, y - ny + oy, x - nx, y - ny);
+            else FillTri(c, x + nx, y + ny, x + ox, y + oy, x - nx, y - ny);
+        }
+
+        /// <summary>A line with the pen's width, dash pattern and end caps (respects the transform).</summary>
+        public void DrawLine(Pen pen, int x0, int y0, int x1, int y1)
+        {
+            TP(x0, y0, out int ax, out int ay); TP(x1, y1, out int bx, out int by);
+            StrokeSegment(pen, ax, ay, bx, by, true, true, 0);
+        }
+
+        /// <summary>Stroke one segment; returns the dash phase at its end (for polylines).</summary>
+        int StrokeSegment(Pen pen, int ax, int ay, int bx, int by, bool startCap, bool endCap, int phase)
+        {
+            long dx = bx - ax, dy = by - ay;
+            int len = ISqrt(dx * dx + dy * dy);
+            int[] pat = pen.Pattern();
+            if (pat.Length == 0 || len == 0)
+            {
+                Segment(pen.Color, ax, ay, bx, by, pen.Width);
+            }
+            else
+            {
+                int total = 0;
+                for (int i = 0; i < pat.Length; i++) total += pat[i];
+                int pos = 0, ph = phase % total;
+                while (pos < len)
+                {
+                    // where in the pattern we are
+                    int k = 0, acc = 0;
+                    while (acc + pat[k] <= ph) { acc += pat[k]; k = (k + 1) % pat.Length; if (k == 0) { ph -= total; acc = 0; } }
+                    int run = acc + pat[k] - ph;
+                    int end = pos + run > len ? len : pos + run;
+                    if ((k & 1) == 0)
+                    {
+                        int sx = ax + (int)(dx * pos / len), sy = ay + (int)(dy * pos / len);
+                        int ex = ax + (int)(dx * end / len), ey = ay + (int)(dy * end / len);
+                        Segment(pen.Color, sx, sy, ex, ey, pen.Width);
+                        if (pen.DashStyle != DashStyle.Solid && pen.StartCap == LineCap.Round && pen.Width > 2)
+                        {
+                            FillCircle(pen.Color, sx, sy, pen.Width / 2);
+                            FillCircle(pen.Color, ex, ey, pen.Width / 2);
+                        }
+                    }
+                    ph += end - pos;
+                    pos = end;
+                }
+                phase += len;
+            }
+            if (len > 0)
+            {
+                if (startCap) Cap(pen.Color, pen.StartCap, ax, ay, (int)-dx, (int)-dy, len, pen.Width);
+                if (endCap) Cap(pen.Color, pen.EndCap, bx, by, (int)dx, (int)dy, len, pen.Width);
+            }
+            return phase;
+        }
+
+        /// <summary>The corner between segments (p - q) and (q - r) of a thick polyline.</summary>
+        void Join(Pen pen, int px, int py, int qx, int qy, int rx, int ry)
+        {
+            int half = pen.Width / 2;
+            if (half < 1) return;
+            if (pen.LineJoin == LineJoin.Round) { FillCircle(pen.Color, qx, qy, half); return; }
+            long d1x = qx - px, d1y = qy - py, d2x = rx - qx, d2y = ry - qy;
+            int l1 = ISqrt(d1x * d1x + d1y * d1y), l2 = ISqrt(d2x * d2x + d2y * d2y);
+            if (l1 == 0 || l2 == 0) return;
+            long cross = d1x * d2y - d1y * d2x;
+            if (cross == 0) return;
+            int side = cross > 0 ? -1 : 1; // the outer side of the turn
+            int n1x = (int)(-d1y * half * side / l1), n1y = (int)(d1x * half * side / l1);
+            int n2x = (int)(-d2y * half * side / l2), n2y = (int)(d2x * half * side / l2);
+            // bevel: the triangle between the two outer corners
+            FillTri(pen.Color, qx, qy, qx + n1x, qy + n1y, qx + n2x, qy + n2y);
+            if (pen.LineJoin != LineJoin.Miter) return;
+            // miter tip: the outer edges' intersection, along the bisector
+            long bx = n1x + n2x, by = n1y + n2y;
+            long bl2 = bx * bx + by * by;
+            if (bl2 == 0) return;
+            // tip = b * |n1|^2 / (n1 . b): the point on the bisector whose projection on n1 is n1
+            long dot = (long)n1x * bx + (long)n1y * by;
+            if (dot <= 0) return;
+            long tipx = bx * half * half / dot, tipy = by * half * half / dot;
+            long tl = ISqrt(tipx * tipx + tipy * tipy);
+            if (tl > (long)pen.MiterLimit * half) return; // too sharp: stays a bevel
+            FillQuad(pen.Color, qx + n1x, qy + n1y, qx + (int)tipx, qy + (int)tipy, qx + n2x, qy + n2y, qx, qy);
+        }
+
+        /// <summary>Connected lines through the points, with joins (and caps at the two ends).</summary>
+        public void DrawLines(Pen pen, int[] xs, int[] ys, int n) => DrawPolyline(pen, xs, ys, n, false);
+
+        /// <summary>A closed outline with joins at every corner.</summary>
+        public void DrawPolygon(Pen pen, int[] xs, int[] ys, int n) => DrawPolyline(pen, xs, ys, n, true);
+
+        void DrawPolyline(Pen pen, int[] xs, int[] ys, int n, bool closed)
+        {
+            if (n < 2) return;
+            int[] tx = new int[n]; int[] ty = new int[n];
+            for (int i = 0; i < n; i++) { TP(xs[i], ys[i], out int ox, out int oy); tx[i] = ox; ty[i] = oy; }
+            int segs = closed ? n : n - 1, phase = 0;
+            for (int i = 0; i < segs; i++)
+            {
+                int j = (i + 1) % n;
+                phase = StrokeSegment(pen, tx[i], ty[i], tx[j], ty[j], !closed && i == 0, !closed && i == segs - 1, phase);
+            }
+            if (pen.Width <= 1) return;
+            for (int i = closed ? 0 : 1; i < (closed ? n : n - 1); i++)
+            {
+                int a = (i - 1 + n) % n, b = (i + 1) % n;
+                Join(pen, tx[a], ty[a], tx[i], ty[i], tx[b], ty[b]);
+            }
+        }
+
+        public void DrawRectangle(Pen pen, int x, int y, int w, int h)
+        {
+            int[] xs = new int[4]; int[] ys = new int[4];
+            xs[0] = x; ys[0] = y; xs[1] = x + w; ys[1] = y; xs[2] = x + w; ys[2] = y + h; xs[3] = x; ys[3] = y + h;
+            DrawPolygon(pen, xs, ys, 4);
+        }
+
+        public void DrawEllipse(Pen pen, int x, int y, int w, int h)
+        {
+            var path = new GraphicsPath();
+            path.AddEllipse(x, y, w, h, 48);
+            int n = path.Count;
+            int[] xs = new int[n]; int[] ys = new int[n];
+            for (int i = 0; i < n; i++) { xs[i] = path.PX(i); ys[i] = path.PY(i); }
+            var round = new Pen(pen.Color, pen.Width) { DashStyle = pen.DashStyle, DashPattern = pen.DashPattern, LineJoin = LineJoin.Round };
+            DrawPolygon(round, xs, ys, n);
+        }
+
+        // --- Texture brush fills ---------------------------------------------------
+
+        public void FillRectangle(TextureBrush b, int x, int y, int w, int h)
+        {
+            int x0 = Max(0, x), y0 = Max(0, y), x1 = Min(_w, x + w), y1 = Min(_h, y + h);
+            ClipRect(ref x0, ref y0, ref x1, ref y1);
+            for (int yy = y0; yy < y1; yy++)
+                for (int xx = x0; xx < x1; xx++) Blend(xx, yy, new Color(b.Sample(xx, yy)));
+        }
+
+        public void FillPolygon(TextureBrush b, int[] xs, int[] ys, int n)
+        {
+            _tex = b;
+            FillPolygon(Color.White, xs, ys, n);
+            _tex = null;
+        }
+
+        public void FillEllipse(TextureBrush b, int x, int y, int w, int h)
+        {
+            _tex = b;
+            FillEllipse(Color.White, x, y, w, h);
+            _tex = null;
+        }
+
+        public void FillPath(TextureBrush b, GraphicsPath p)
+        {
+            _tex = b;
+            FillPath(Color.White, p);
+            _tex = null;
+        }
+
+        /// <summary>Every pixel of a region in one colour.</summary>
+        public void FillRegion(Color c, Region r)
+        {
+            var bb = r.GetBounds();
+            int x0 = Max(0, bb.X), y0 = Max(0, bb.Y), x1 = Min(_w, bb.X + bb.Width), y1 = Min(_h, bb.Y + bb.Height);
+            for (int yy = y0; yy < y1; yy++)
+                for (int xx = x0; xx < x1; xx++)
+                    if (r.IsVisible(xx, yy)) Blend(xx, yy, c);
+        }
+
         /// <summary>Vertical linear gradient fill.</summary>
         public void FillGradientV(int x, int y, int w, int h, Color top, Color bottom)
         {
@@ -331,7 +560,7 @@ namespace Buitenzorg.Drawing
                 int b = (top.B * (255 - t) + bottom.B * t) / 255;
                 uint v = 0xFF00_0000u | ((uint)r << 16) | ((uint)g << 8) | (uint)b;
                 int row = yy * _w;
-                for (int xx = x0; xx < x1; xx++) _px[row + xx] = v;
+                for (int xx = x0; xx < x1; xx++) Put(xx, yy, row + xx, v);
             }
         }
 
@@ -348,7 +577,7 @@ namespace Buitenzorg.Drawing
                 int g = (left.G * (255 - t) + right.G * t) / 255;
                 int b = (left.B * (255 - t) + right.B * t) / 255;
                 uint v = 0xFF00_0000u | ((uint)r << 16) | ((uint)g << 8) | (uint)b;
-                for (int yy = y0; yy < y1; yy++) _px[yy * _w + xx] = v;
+                for (int yy = y0; yy < y1; yy++) Put(xx, yy, yy * _w + xx, v);
             }
         }
         /// <summary>Linear gradient, horizontal or vertical.</summary>
@@ -536,6 +765,146 @@ namespace Buitenzorg.Drawing
     }
 
     /// <summary>A sequence of points forming a figure, like GraphicsPath.</summary>
+    // --- Pen / TextureBrush / Region (like System.Drawing's) -------------------
+
+    public enum DashStyle { Solid, Dash, Dot, DashDot, DashDotDot, Custom }
+    public enum LineCap { Flat, Square, Round, Triangle }
+    public enum LineJoin { Miter, Bevel, Round }
+
+    /// <summary>A pen: colour, width, dash pattern, end caps and line joins.</summary>
+    public sealed class Pen
+    {
+        public Color Color;
+        public int Width;
+        public DashStyle DashStyle = DashStyle.Solid;
+        /// <summary>Custom dash: on/off lengths in multiples of the width (DashStyle.Custom).</summary>
+        public int[] DashPattern = new int[0];
+        public LineCap StartCap = LineCap.Flat, EndCap = LineCap.Flat;
+        public LineJoin LineJoin = LineJoin.Miter;
+        /// <summary>A miter longer than this many widths becomes a bevel.</summary>
+        public int MiterLimit = 4;
+        public Pen(Color c) { Color = c; Width = 1; }
+        public Pen(Color c, int width) { Color = c; Width = width < 1 ? 1 : width; }
+
+        /// <summary>On/off lengths in pixels (solid = empty).</summary>
+        internal int[] Pattern()
+        {
+            int u = Width < 1 ? 1 : Width;
+            int[] p;
+            switch (DashStyle)
+            {
+                case DashStyle.Dash: p = new int[] { 3 * u, u }; break;
+                case DashStyle.Dot: p = new int[] { u, u }; break;
+                case DashStyle.DashDot: p = new int[] { 3 * u, u, u, u }; break;
+                case DashStyle.DashDotDot: p = new int[] { 3 * u, u, u, u, u, u }; break;
+                case DashStyle.Custom:
+                    p = new int[DashPattern.Length];
+                    for (int i = 0; i < p.Length; i++) p[i] = (DashPattern[i] < 1 ? 1 : DashPattern[i]) * u;
+                    break;
+                default: p = new int[0]; break;
+            }
+            return p;
+        }
+    }
+
+    /// <summary>Fills with a bitmap, tiled (like TextureBrush with WrapMode.Tile).</summary>
+    public sealed class TextureBrush
+    {
+        public readonly Bitmap Image;
+        public int OffsetX, OffsetY;
+        public TextureBrush(Bitmap image) { Image = image; }
+        internal uint Sample(int x, int y)
+        {
+            int w = Image.Width, h = Image.Height;
+            int u = (x - OffsetX) % w, v = (y - OffsetY) % h;
+            if (u < 0) u += w;
+            if (v < 0) v += h;
+            return Image.Pixels[v * w + u];
+        }
+    }
+
+    /// <summary>An area built from rectangles and ellipses with union, intersect,
+    /// exclude and xor (like System.Drawing.Region): kept as the list of
+    /// operations, a point is inside when the fold of them says so.</summary>
+    public sealed class Region
+    {
+        // per shape: op (0 union, 1 intersect, 2 exclude, 3 xor), kind (0 rect, 1 ellipse), x, y, w, h
+        int[] _s = new int[6 * 8];
+        int _n;
+        bool _infinite;
+
+        public Region() { }
+        public Region(int x, int y, int w, int h) { Union(x, y, w, h); }
+        public static Region Infinite() { var r = new Region(); r._infinite = true; return r; }
+
+        void Add(int op, int kind, int x, int y, int w, int h)
+        {
+            if ((_n + 1) * 6 > _s.Length)
+            {
+                int[] ns = new int[_s.Length * 2];
+                for (int i = 0; i < _n * 6; i++) ns[i] = _s[i];
+                _s = ns;
+            }
+            int o = _n * 6;
+            _s[o] = op; _s[o + 1] = kind; _s[o + 2] = x; _s[o + 3] = y; _s[o + 4] = w; _s[o + 5] = h;
+            _n++;
+        }
+
+        public void Union(int x, int y, int w, int h) => Add(0, 0, x, y, w, h);
+        public void Intersect(int x, int y, int w, int h) => Add(1, 0, x, y, w, h);
+        public void Exclude(int x, int y, int w, int h) => Add(2, 0, x, y, w, h);
+        public void Xor(int x, int y, int w, int h) => Add(3, 0, x, y, w, h);
+        public void UnionEllipse(int x, int y, int w, int h) => Add(0, 1, x, y, w, h);
+        public void IntersectEllipse(int x, int y, int w, int h) => Add(1, 1, x, y, w, h);
+        public void ExcludeEllipse(int x, int y, int w, int h) => Add(2, 1, x, y, w, h);
+        public void MakeEmpty() { _n = 0; _infinite = false; }
+
+        static bool Hit(int kind, int rx, int ry, int rw, int rh, int px, int py)
+        {
+            if (px < rx || py < ry || px >= rx + rw || py >= ry + rh) return false;
+            if (kind == 0) return true;
+            // ellipse: ((px+0.5-cx)/a)^2 + ((py+0.5-cy)/b)^2 <= 1, in units of 1/2 pixel
+            long a = rw, b = rh;
+            long dx = 2 * (px - rx) + 1 - a, dy = 2 * (py - ry) + 1 - b;
+            return dx * dx * b * b + dy * dy * a * a <= a * a * b * b;
+        }
+
+        public bool IsVisible(int px, int py)
+        {
+            bool inside = _infinite;
+            for (int i = 0; i < _n; i++)
+            {
+                int o = i * 6;
+                bool hit = Hit(_s[o + 1], _s[o + 2], _s[o + 3], _s[o + 4], _s[o + 5], px, py);
+                switch (_s[o])
+                {
+                    case 0: inside = inside || hit; break;
+                    case 1: inside = inside && hit; break;
+                    case 2: inside = inside && !hit; break;
+                    default: inside = inside != hit; break;
+                }
+            }
+            return inside;
+        }
+
+        /// <summary>A rectangle holding the region (the union shapes' bounds; huge when infinite).</summary>
+        public Rectangle GetBounds()
+        {
+            if (_infinite) return new Rectangle(-100000, -100000, 200000, 200000);
+            int x0 = 0x7FFFFFFF, y0 = 0x7FFFFFFF, x1 = -0x7FFFFFFF, y1 = -0x7FFFFFFF;
+            for (int i = 0; i < _n; i++)
+            {
+                int o = i * 6;
+                if (_s[o] != 0 && _s[o] != 3) continue;
+                if (_s[o + 2] < x0) x0 = _s[o + 2];
+                if (_s[o + 3] < y0) y0 = _s[o + 3];
+                if (_s[o + 2] + _s[o + 4] > x1) x1 = _s[o + 2] + _s[o + 4];
+                if (_s[o + 3] + _s[o + 5] > y1) y1 = _s[o + 3] + _s[o + 5];
+            }
+            return x1 <= x0 ? new Rectangle(0, 0, 0, 0) : new Rectangle(x0, y0, x1 - x0, y1 - y0);
+        }
+    }
+
     public sealed class GraphicsPath
     {
         int[] _xs, _ys;

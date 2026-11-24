@@ -91,7 +91,7 @@ class StoreApp
     /// <summary>Fill the view from the kernel package registry. Returns the count.</summary>
     static int Load(StoreView view)
     {
-        BzPkgInfo pkgs = BzPkg.List(32);
+        BzPkgInfo pkgs = BzPkg.List(64);
         for (BzPkgInfo p = pkgs; p != null; p = p.Next) view.Add(p);
         return BzPkg.Count(pkgs);
     }
@@ -142,7 +142,7 @@ class StoreApp
             // just in this app's copy.
             char[] nm = new char[pkg.NameLen];
             for (int i = 0; i < pkg.NameLen; i++) nm[i] = pkg.Name[i];
-            BzPkgInfo fresh = BzPkg.List(32);
+            BzPkgInfo fresh = BzPkg.List(64);
             BzPkgInfo again = null;
             for (BzPkgInfo q = fresh; q != null; q = q.Next)
             {

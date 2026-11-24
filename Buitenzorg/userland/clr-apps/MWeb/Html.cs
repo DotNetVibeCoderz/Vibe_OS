@@ -20,7 +20,8 @@ public sealed class Item
     public string Text = "";
     public int Style;          // 0 body, 1 bold, 2 heading
     public int Color;
-    public string? Href;       // a link's target
+    public string? Href;       // a link's target ("js:N" = a script handler, "input:N" = a text field)
+    public int LinkIndex = -1; // index in Page.Links (the host's link number, for HtmlEvent)
     public ImageRef? Image;
 }
 
@@ -70,6 +71,14 @@ public static class Html
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlTexts(long id);
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlFree(long id);
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlAddCss(long id, string css);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlScripts(long id);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlScriptSource(long id, int index, string code);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlRun(long id, string url, long nowMs, int width);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlEvent(long id, int link, int kind, string text);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern int HtmlTick(long id, long nowMs);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlConsole(long id);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlNavigation(long id);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlField(long id, int link);
     }
 
     /// <summary>Add a fetched style sheet (a &lt;link rel=stylesheet&gt;); the rules it held.</summary>
@@ -79,6 +88,71 @@ public static class Html
         int before = p.Rules.Count;
         Css.ParseSheet(css, ref p.CssOrder, p.Rules);
         return p.Rules.Count - before;
+    }
+
+    // ---- JavaScript (on the device: js.rs + dom.rs in the host; off the device pages run no scripts)
+
+    /// <summary>Flags from the script natives.</summary>
+    public const int JsChanged = 1, JsTimers = 2, JsNavigate = 4, JsHandled = 8;
+
+    /// <summary>The page's scripts: "" = inline, else the src address to fetch.</summary>
+    public static List<string> ScriptSources(Page p)
+    {
+        var v = new List<string>();
+        if (p.NativeId <= 0) return v;
+        foreach (var line in Native.HtmlScripts(p.NativeId).Split('\n')) v.Add(line);
+        if (v.Count > 0 && v[v.Count - 1].Length == 0) v.RemoveAt(v.Count - 1);
+        return v;
+    }
+
+    public static void SetScriptSource(Page p, int index, string code) { if (p.NativeId > 0) Native.HtmlScriptSource(p.NativeId, index, code); }
+
+    /// <summary>Run the page's scripts once (they may change it: then re-read it with Refresh).</summary>
+    public static int RunScripts(Page p, string url, long nowMs, int width) => p.NativeId > 0 ? Native.HtmlRun(p.NativeId, url, nowMs, width) : 0;
+
+    /// <summary>A click on a link (handlers run; JsHandled = do not follow the address).</summary>
+    public static int Click(Page p, int link) => p.NativeId > 0 && link >= 0 ? Native.HtmlEvent(p.NativeId, link, 0, "") : 0;
+
+    /// <summary>Text entered into a field (fires input + change).</summary>
+    public static int Input(Page p, int link, string text) => p.NativeId > 0 && link >= 0 ? Native.HtmlEvent(p.NativeId, link, 1, text) : 0;
+
+    /// <summary>Run due timers; -1 = the page has none left.</summary>
+    public static int Tick(Page p, long nowMs) => p.NativeId > 0 ? Native.HtmlTick(p.NativeId, nowMs) : -1;
+
+    /// <summary>console.log lines (and script errors) since the last call.</summary>
+    public static List<string> TakeConsole(Page p)
+    {
+        var v = new List<string>();
+        if (p.NativeId <= 0) return v;
+        foreach (var line in Native.HtmlConsole(p.NativeId).Split('\n')) if (line.Length > 0) v.Add(line);
+        return v;
+    }
+
+    public static string TakeNavigation(Page p) => p.NativeId > 0 ? Native.HtmlNavigation(p.NativeId) : "";
+
+    public static string FieldText(Page p, int link) => p.NativeId > 0 && link >= 0 ? Native.HtmlField(p.NativeId, link) : "";
+
+    /// <summary>After a script changed the page: title, links and images again (loaded pictures kept).</summary>
+    public static void Refresh(Page p)
+    {
+        if (p.NativeId <= 0) return;
+        long id = p.NativeId;
+        p.Title = Native.HtmlInfo(id, 0);
+        var old = new List<ImageRef>(p.Images);
+        p.Images.Clear();
+        foreach (var line in Native.HtmlInfo(id, 1).Split('\n'))
+        {
+            if (line.Length == 0) continue;
+            var f = line.Split('\t');
+            ImageRef? keep = null;
+            foreach (var o in old) if (o.Src == f[0]) { keep = o; break; }
+            var img = keep ?? new ImageRef { Src = f[0] };
+            img.Alt = f.Length > 1 ? f[1] : "";
+            if (f.Length > 3) { int.TryParse(f[2], out img.AttrW); int.TryParse(f[3], out img.AttrH); }
+            p.Images.Add(img);
+        }
+        p.Links.Clear();
+        foreach (var line in Native.HtmlInfo(id, 2).Split('\n')) if (line.Length > 0) p.Links.Add(line);
     }
 
     /// <summary>Forget the host's copy of a page.</summary>
@@ -382,7 +456,7 @@ public static class Html
             };
             int img = data[o + 7], href = data[o + 8];
             if (img >= 0 && img < page.Images.Count) it.Image = page.Images[img];
-            if (href >= 0 && href < page.Links.Count) it.Href = page.Links[href];
+            if (href >= 0 && href < page.Links.Count) { it.Href = page.Links[href]; it.LinkIndex = href; }
             items.Add(it);
         }
         return (items, data[count * 9]);

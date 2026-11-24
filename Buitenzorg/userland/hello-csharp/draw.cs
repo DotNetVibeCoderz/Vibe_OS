@@ -117,13 +117,59 @@ class DrawDemo
         Color aac = bmp.GetPixel(224, 199);                   // center is solid white
         bool aaOk = aac.R > 230 && aac.G > 230 && aac.B > 230;
 
+        // --- Pen (dash / cap / join), TextureBrush, Region on a scratch bitmap ---
+        Bitmap pb = new Bitmap(120, 80);
+        Graphics pg = new Graphics(pb);
+        pg.Clear(Color.Black);
+        Pen dash = new Pen(Color.White, 2) { DashStyle = DashStyle.Dash };   // 6 on, 2 off
+        pg.DrawLine(dash, 0, 5, 100, 5);
+        bool dashOk = pb.GetPixel(2, 5).R > 200 && pb.GetPixel(7, 5).R < 50 && pb.GetPixel(10, 5).R > 200;
+        Pen round = new Pen(Color.Red, 10) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        pg.DrawLine(round, 20, 25, 60, 25);
+        bool capOk = pb.GetPixel(17, 25).R > 200 && pb.GetPixel(40, 29).R > 200 && pb.GetPixel(40, 33).R < 50;
+        Pen flat = new Pen(Color.Green, 10);
+        pg.DrawLine(flat, 70, 25, 100, 25);
+        bool flatOk = pb.GetPixel(67, 25).G < 50 && pb.GetPixel(80, 25).G > 140;
+        // a right-angle polyline with a miter join fills the outer corner
+        int[] lx = new int[3]; int[] ly = new int[3];
+        lx[0] = 10; ly[0] = 70; lx[1] = 40; ly[1] = 70; lx[2] = 40; ly[2] = 45;
+        Pen miter = new Pen(Color.Blue, 8) { LineJoin = LineJoin.Miter };
+        pg.DrawLines(miter, lx, ly, 3);
+        bool joinOk = pb.GetPixel(43, 73).B > 200;
+        Bitmap tile = new Bitmap(2, 2);
+        tile.SetPixel(0, 0, Color.Yellow); tile.SetPixel(1, 0, Color.Cyan);
+        tile.SetPixel(0, 1, Color.Cyan); tile.SetPixel(1, 1, Color.Yellow);
+        pg.FillRectangle(new TextureBrush(tile), 60, 40, 20, 20);
+        bool texOk = pb.GetPixel(60, 40).Rgb24 == Color.Yellow.Rgb24 && pb.GetPixel(61, 40).Rgb24 == Color.Cyan.Rgb24
+                     && pb.GetPixel(62, 41).Rgb24 == Color.Cyan.Rgb24;
+        Region reg = new Region(85, 40, 30, 30);
+        reg.ExcludeEllipse(90, 45, 20, 20);
+        pg.FillRegion(Color.Magenta, reg);
+        bool regOk = pb.GetPixel(86, 41).Rgb24 == Color.Magenta.Rgb24 && pb.GetPixel(100, 55).Rgb24 != Color.Magenta.Rgb24
+                     && reg.IsVisible(114, 69) && !reg.IsVisible(100, 55) && !reg.IsVisible(120, 50);
+        pg.SetClip(reg);
+        pg.FillRectangle(Color.White, 80, 35, 40, 40);
+        pg.ResetRegionClip();
+        bool regClipOk = pb.GetPixel(86, 41).R > 200 && pb.GetPixel(100, 55).R < 250 && pb.GetPixel(82, 37).R < 50;
+        bool penOk = dashOk && capOk && flatOk && joinOk && texOk && regOk && regClipOk;
+        if (!dashOk) Console.WriteLine("Draw: pen dash gagal");
+        if (!capOk) Console.WriteLine("Draw: pen round cap gagal");
+        if (!flatOk) Console.WriteLine("Draw: pen flat cap gagal");
+        if (!joinOk) Console.WriteLine("Draw: pen miter join gagal");
+        if (!texOk) Console.WriteLine("Draw: texture brush gagal");
+        if (!regOk) Console.WriteLine("Draw: region gagal");
+        if (!regClipOk) Console.WriteLine("Draw: region clip gagal");
+        if (penOk)
+            Console.WriteLine("Draw: pen dash/cap/join, texture brush, region OK");
+        g.DrawImage(pb, 236, 120);
+
         // Present the finished frame to a window + a native text label on top.
         Window win = Window.Create("Buitenzorg.Drawing", W, H);
         win.Blit(bmp);
         win.DrawText(20, 220, Color.White, "shapes + gradient + rounded + shadow + AA + path + font");
         win.Present();
 
-        if (ok && pathOk && bmpOk && textOk && clipOk && hatchOk && scaleOk && roundOk && gradHOk && aaOk)
+        if (ok && pathOk && bmpOk && textOk && clipOk && hatchOk && scaleOk && roundOk && gradHOk && aaOk && penOk)
             Console.WriteLine("MILESTONE: DRAW OK");
         else
             Console.WriteLine("Draw: verifikasi gagal (pixel/path/bmp/font/clip/hatch/scale/rounded/gradH/aa)");

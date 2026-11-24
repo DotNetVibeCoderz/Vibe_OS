@@ -14,7 +14,9 @@ namespace MImage;
 public sealed class PhotoView : Control
 {
     Picture? _pic;
+    int _orient = 1;
     int[] _buf = Array.Empty<int>();
+    int[] _phys = Array.Empty<int>();
     string _key = "";
     int _dragX, _dragY;
     double _dragCx, _dragCy;
@@ -38,13 +40,30 @@ public sealed class PhotoView : Control
         _anim.Tick += NextFrame;
     }
 
+    /// <summary>EXIF of the shown photo (null = none).</summary>
+    public Exif? Info;
+    /// <summary>The EXIF orientation applied (1 = as stored).</summary>
+    public int Orientation => _orient;
+    /// <summary>The picture's size as shown (turned for orientations 5..8).</summary>
+    public int LW => _pic == null ? 0 : _orient >= 5 ? _pic.Height : _pic.Width;
+    public int LH => _pic == null ? 0 : _orient >= 5 ? _pic.Width : _pic.Height;
+
+    /// <summary>Show a picture turned as its EXIF says.</summary>
+    public void SetSource(Picture? pic, Exif? info)
+    {
+        Info = info;
+        _orient = info == null ? 1 : info.Orientation;
+        Source = pic;
+    }
+
     public Picture? Source
     {
         get => _pic;
         set
         {
             _pic = value; Frame = 0; Zoom = 0; _key = "";
-            if (value != null) { CenterX = value.Width / 2.0; CenterY = value.Height / 2.0; }
+            if (value == null) _orient = 1;
+            if (value != null) { CenterX = LW / 2.0; CenterY = LH / 2.0; }
             _anim.Stop();
             if (value != null && value.FrameCount > 1) _anim.Start();
             InvalidateVisual();
@@ -63,10 +82,10 @@ public sealed class PhotoView : Control
     {
         if (_pic == null) return 1;
         var (aw, ah) = Area();
-        return Math.Min(1.0, Math.Min((double)aw / _pic.Width, (double)ah / _pic.Height));
+        return Math.Min(1.0, Math.Min((double)aw / LW, (double)ah / LH));
     }
 
-    (int, int) Area() => (Math.Max(16, Bounds.Width - 16), Math.Max(16, Bounds.Height - 36));
+    (int, int) Area() => (Math.Max(16, Bounds.Width - 16), Math.Max(16, Bounds.Height - (Info != null ? 54 : 36)));
 
     public void SetZoom(double z)
     {
@@ -81,8 +100,8 @@ public sealed class PhotoView : Control
     public void PanBy(double dx, double dy)
     {
         if (_pic == null || Zoom == 0) return;
-        CenterX = Math.Clamp(CenterX + dx, 0, _pic.Width);
-        CenterY = Math.Clamp(CenterY + dy, 0, _pic.Height);
+        CenterX = Math.Clamp(CenterX + dx, 0, LW);
+        CenterY = Math.Clamp(CenterY + dy, 0, LH);
         InvalidateVisual();
     }
 
@@ -98,18 +117,30 @@ public sealed class PhotoView : Control
             var (aw, ah) = Area();
             int dw, dh, sx, sy, sw, sh;
             double scale = Zoom == 0 ? FitScale() : Zoom;
-            dw = Math.Max(1, Math.Min(aw, (int)(_pic.Width * scale)));
-            dh = Math.Max(1, Math.Min(ah, (int)(_pic.Height * scale)));
-            sw = Math.Max(1, (int)(dw / scale));
-            sh = Math.Max(1, (int)(dh / scale));
-            sx = Math.Clamp((int)(CenterX - sw / 2.0), 0, Math.Max(0, _pic.Width - sw));
-            sy = Math.Clamp((int)(CenterY - sh / 2.0), 0, Math.Max(0, _pic.Height - sh));
+            int lw = LW, lh = LH;
+            dw = Math.Max(1, Math.Min(aw, (int)(lw * scale)));
+            dh = Math.Max(1, Math.Min(ah, (int)(lh * scale)));
+            sw = Math.Max(1, Math.Min(lw, (int)(dw / scale)));
+            sh = Math.Max(1, Math.Min(lh, (int)(dh / scale)));
+            sx = Math.Clamp((int)(CenterX - sw / 2.0), 0, Math.Max(0, lw - sw));
+            sy = Math.Clamp((int)(CenterY - sh / 2.0), 0, Math.Max(0, lh - sh));
             string key = dw + "," + dh + "," + sx + "," + sy + "," + sw + "," + sh + "," + Frame;
             int delay = 0;
             if (key != _key)
             {
                 if (_buf.Length < dw * dh) _buf = new int[dw * dh];
-                delay = _pic.Render(Frame, _buf, dw, dh, sx, sy, sw, sh);
+                if (_orient == 1) delay = _pic.Render(Frame, _buf, dw, dh, sx, sy, sw, sh);
+                else
+                {
+                    // the stored picture's rectangle under the shown one, rendered, then turned
+                    var (ax, ay) = Orient.Source(_orient, sx, sy, _pic.Width, _pic.Height);
+                    var (bx, by) = Orient.Source(_orient, sx + sw - 1, sy + sh - 1, _pic.Width, _pic.Height);
+                    int px0 = Math.Min(ax, bx), py0 = Math.Min(ay, by), pw = Math.Abs(bx - ax) + 1, ph = Math.Abs(by - ay) + 1;
+                    int bw = _orient >= 5 ? dh : dw, bh = _orient >= 5 ? dw : dh;
+                    if (_phys.Length != bw * bh) _phys = new int[bw * bh];
+                    delay = _pic.Render(Frame, _phys, bw, bh, px0, py0, pw, ph);
+                    if (delay >= 0) Orient.Apply(_buf, _phys, bw, bh, _orient);
+                }
                 _key = delay < 0 ? "" : key;
                 Renders++;
                 if (delay > 0) _anim.IntervalMs = Math.Max(20, delay);
@@ -121,9 +152,10 @@ public sealed class PhotoView : Control
                 else dc.Blit(x, y, dw, dh, _buf);
             }
             ShownW = dw; ShownH = dh;
-            caption = Name + "   " + _pic.Format + " " + _pic.Width + " x " + _pic.Height
+            caption = Name + "   " + _pic.Format + " " + LW + " x " + LH + (_orient != 1 ? " (diputar)" : "")
                     + "   " + (Zoom == 0 ? "pas (" + (int)Math.Round(scale * 100) + "%)" : (int)Math.Round(Zoom * 100) + "%")
                     + (_pic.FrameCount > 1 ? "   bingkai " + (Frame + 1) + "/" + _pic.FrameCount : "");
+            if (Info != null) { string sum = Info.Summary(); if (sum.Length > 0) dc.Text(b.X + 10, b.Y + b.Height - 38, sum, Theme.TextFaint); }
         }
         dc.Text(b.X + 10, b.Y + b.Height - 20, caption, Theme.TextFaint);
     }
@@ -138,8 +170,8 @@ public sealed class PhotoView : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         if (!_dragging || !e.LeftButton || _pic == null || Zoom <= 0) return;
-        CenterX = Math.Clamp(_dragCx - (e.X - _dragX) / Zoom, 0, _pic.Width);
-        CenterY = Math.Clamp(_dragCy - (e.Y - _dragY) / Zoom, 0, _pic.Height);
+        CenterX = Math.Clamp(_dragCx - (e.X - _dragX) / Zoom, 0, LW);
+        CenterY = Math.Clamp(_dragCy - (e.Y - _dragY) / Zoom, 0, LH);
         InvalidateVisual();
         e.Handled = true;
     }
@@ -342,10 +374,13 @@ public sealed class PhotoApp
         if (i < 0 || i >= Paths.Count) return false;
         Current = i;
         _list.SelectedIndex = i;
-        var pic = Picture.Load(Paths[i]);
+        var bytes = Files.ReadAllBytes(Paths[i]);
+        var pic = bytes == null ? null : Picture.FromBytes(bytes);
+        Exif? info = null;
+        try { if (bytes != null) info = Exif.FromFile(bytes); } catch (Exception) { info = null; }
         View.Name = Names[i];
         View.Message = pic == null ? Names[i] + ": formatnya tidak dapat dibaca" : "";
-        View.Source = pic;
+        View.SetSource(pic, info);
         Thumbs?.Reveal(i);
         return pic != null;
     }
@@ -394,6 +429,31 @@ public sealed class PhotoApp
         c.That((half[3] & 0xFF) > 150 && ((half[0] >> 16) & 255) == 255, "scaled to 4x2");
         c.That(pic.FitSize(4, 4) == (4, 2), "fit keeps the aspect");
         c.That(Picture.FromBytes(new byte[10]) == null && Picture.Sniff(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 13, 10, 26, 10 }) == "PNG", "garbage refused, PNG sniffed");
+
+        // EXIF: a sample block (big-endian TIFF in a JPEG APP1), and orientation
+        var ex = Exif.FromFile(Exif.SampleJpeg(Exif.Sample("Gravicode", "Kamera Kebun 1", 6, "2026:11:24 07:30:15", 250, 28, 200, -6.5975, 106.7997)));
+        c.That(ex != null && ex.Make == "Gravicode" && ex.Model == "Kamera Kebun 1" && ex.Orientation == 6 && ex.Iso == 200 && Math.Abs(ex.FNumber - 2.8) < 0.01
+            && Math.Abs(ex.ExposureSeconds - 0.004) < 0.0001 && ex.DateTime == "2026:11:24 07:30:15",
+            "EXIF: camera, date, f-number, exposure, ISO, orientation (" + ex?.Tags + " tags)");
+        c.That(ex != null && ex.HasGps && Math.Abs(ex.Latitude + 6.5975) < 0.001 && Math.Abs(ex.Longitude - 106.7997) < 0.001
+            && ex.Summary().Contains("f/2,8 1/250 s ISO 200") && ex.Summary().Contains("24-11-2026 07.30"), "EXIF: GPS (south latitude) + summary: " + ex?.Summary());
+        c.That(Exif.FromFile(SampleBmp(2, 2)) == null && Exif.FromFile(new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 }) == null, "no EXIF in a BMP or a bare JPEG");
+        {
+            // 3x2 picture with distinct pixels, turned 90 clockwise -> 2x3
+            var src = new int[] { 1, 2, 3, 4, 5, 6 };
+            var dst = new int[6];
+            Orient.Apply(dst, src, 3, 2, 6);
+            bool cw = dst[0] == 4 && dst[1] == 1 && dst[2] == 5 && dst[3] == 2 && dst[4] == 6 && dst[5] == 3;
+            Orient.Apply(dst, src, 3, 2, 3);
+            bool r180 = dst[0] == 6 && dst[5] == 1;
+            Orient.Apply(dst, src, 3, 2, 8);
+            bool ccw = dst[0] == 3 && dst[1] == 6 && dst[4] == 1 && dst[5] == 4;
+            c.That(cw && r180 && ccw, "orientation: turned 90 / 180 / 270 (native " + Orient.NativeUsed + ")");
+            var view = new PhotoView();
+            var rinfo = new Exif { Orientation = 6 };
+            view.SetSource(Picture.FromBytes(SampleBmp(8, 4)), rinfo);
+            c.That(view.LW == 4 && view.LH == 8 && view.Orientation == 6, "EXIF orientation 6: an 8x4 photo is shown 4x8");
+        }
 
         // every non-BMP picture on the media must decode (on the device: the host's PNG/JPEG/GIF decoders)
         var app = new PhotoApp(headless: true);

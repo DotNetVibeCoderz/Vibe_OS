@@ -291,6 +291,36 @@ public sealed class Window : Control
 
     /// <summary>The wheel turned over (x, y): bubbles from the control under the pointer
     /// until a scrollable one takes it (bz-abi pointer_event WHEEL).</summary>
+    /// <summary>Relative pointer mode on / off (games: mouse look). While on and the
+    /// window has the focus, the kernel hides the cursor and holds it at the
+    /// window's centre; motion reaches the focused control's
+    /// <see cref="Control.OnRelativeMotion"/> (and <see cref="RelativeMotion"/>).
+    /// False when the kernel refused (an older one answers NOSYS).</summary>
+    public bool SetPointerLock(bool on)
+    {
+        if (_id != 0)
+        {
+            try { if (Native.WinCtl(7 | ((long)_id << 8), on ? 1 : 0) != 0) return false; }
+            catch (Exception) { return false; }
+        }
+        PointerLocked = on;
+        return true;
+    }
+
+    public bool PointerLocked { get; private set; }
+
+    /// <summary>Movement in relative pointer mode (dx, dy in pixels of mouse motion).</summary>
+    public event Action<int, int>? RelativeMotion;
+
+    /// <summary>Hand relative motion to the focused control and its ancestors (tests call it directly).</summary>
+    public void DispatchRelative(int dx, int dy)
+    {
+        RelativeMotion?.Invoke(dx, dy);
+        for (var c = _focused; c != null; c = c.Parent)
+            if (c.OnRelativeMotion(dx, dy)) break;
+        UpdateLayout();
+    }
+
     public void DispatchWheel(int x, int y, int notches)
     {
         _pointer = new Point(x, y);
@@ -550,6 +580,7 @@ public sealed class Window : Control
                 bool left = ((ev >> 32) & 1) != 0;
                 if (kind == 5) DispatchWheel(x, y, (short)((ev >> 40) & 0xFFFF));
                 else if (kind == 6) Resize(x, y);
+                else if (kind == 7) DispatchRelative(x, y);
                 else DispatchPointer(kind, x, y, left);
             }
             if (RawKeys)

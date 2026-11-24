@@ -4,13 +4,15 @@
 //! Parsing: every track's events merged by absolute tick, running status,
 //! tempo changes (meta 0x51), note on / off, program change, controller 7
 //! (volume) and 10 (pan, ignored in mono), sysex and other meta events
-//! skipped. Synthesis: up to 48 voices, each a phase accumulator through a
-//! timbre picked by the General MIDI program family (piano-like decaying
-//! harmonics, organ, plucked strings, bowed strings, brass/reed, flute,
-//! square-wave synth, bass) with an attack / decay / sustain / release
-//! envelope; channel 10 is percussion (kick, snare, hi-hat and toms from
-//! noise and pitched sine drops). Everything is integer arithmetic over a
-//! sine table, so it runs the same on the soft-float targets.
+//! skipped. Synthesis: up to 48 voices of 2-operator FM (a modulator sine
+//! bending a carrier's phase, as in the DX7 / OPL chips): one patch per
+//! General MIDI family -- frequency ratios, a modulation index that moves
+//! from its attack to its hold value (bright piano and pluck attacks that
+//! mellow, a brass index that swells), optional modulator feedback (reed /
+//! brass buzz) and the carrier's attack / decay / sustain / release; channel
+//! 10 is percussion (kick, snare, hi-hat and toms from noise and pitched sine
+//! drops). Everything is integer arithmetic over a sine table, so it runs the
+//! same on the soft-float targets.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -146,30 +148,66 @@ fn sine_table() -> Vec<i32> {
     t
 }
 
+/// A 2-operator FM voice (one modulator into one carrier, the DX/OPL way):
+/// frequency ratios in quarters, the modulation index (radians x 256) moving
+/// from `index` towards `index_hold` over `index_ms`, and the carrier's ADSR.
+#[derive(Clone, Copy, PartialEq)]
+struct Patch {
+    carrier: u32,
+    modulator: u32,
+    index: i64,
+    index_hold: i64,
+    index_ms: u32,
+    /// attack ms, decay ms, sustain 0..256, release ms
+    env: (u32, u32, u32, u32),
+    /// modulator feedback on itself (0..3): brass / reed buzz
+    feedback: u32,
+}
+
+/// One patch per General MIDI family (program / 8).
+const PATCHES: [Patch; 16] = [
+    // 0 piano: bright attack mellowing out
+    Patch { carrier: 4, modulator: 4, index: 900, index_hold: 180, index_ms: 700, env: (3, 1100, 30, 260), feedback: 0 },
+    // 1 chromatic percussion (bells, celesta, marimba): inharmonic 1 : 3.5
+    Patch { carrier: 4, modulator: 14, index: 1300, index_hold: 100, index_ms: 900, env: (2, 1400, 0, 400), feedback: 0 },
+    // 2 organ: steady, a little growl
+    Patch { carrier: 4, modulator: 8, index: 380, index_hold: 380, index_ms: 1, env: (8, 10, 256, 70), feedback: 1 },
+    // 3 guitar: plucked, index falling fast
+    Patch { carrier: 4, modulator: 12, index: 1100, index_hold: 120, index_ms: 260, env: (2, 700, 10, 160), feedback: 0 },
+    // 4 bass
+    Patch { carrier: 4, modulator: 4, index: 700, index_hold: 260, index_ms: 200, env: (4, 450, 110, 100), feedback: 0 },
+    // 5 strings: slow bow, saw-like
+    Patch { carrier: 4, modulator: 4, index: 300, index_hold: 520, index_ms: 400, env: (90, 250, 200, 320), feedback: 1 },
+    // 6 ensemble / choir
+    Patch { carrier: 4, modulator: 8, index: 200, index_hold: 300, index_ms: 500, env: (120, 300, 210, 400), feedback: 0 },
+    // 7 brass: index swells with the attack
+    Patch { carrier: 4, modulator: 4, index: 250, index_hold: 900, index_ms: 90, env: (35, 180, 190, 150), feedback: 2 },
+    // 8 reed (sax, clarinet: odd harmonics from 1 : 2)
+    Patch { carrier: 4, modulator: 8, index: 500, index_hold: 650, index_ms: 120, env: (25, 150, 200, 120), feedback: 1 },
+    // 9 pipe / flute: almost a sine
+    Patch { carrier: 4, modulator: 4, index: 160, index_hold: 90, index_ms: 150, env: (45, 100, 215, 130), feedback: 0 },
+    // 10 synth lead
+    Patch { carrier: 4, modulator: 4, index: 800, index_hold: 800, index_ms: 1, env: (5, 200, 170, 120), feedback: 3 },
+    // 11 synth pad
+    Patch { carrier: 4, modulator: 2, index: 400, index_hold: 220, index_ms: 900, env: (250, 400, 210, 600), feedback: 0 },
+    // 12 synth effects
+    Patch { carrier: 4, modulator: 7, index: 600, index_hold: 300, index_ms: 600, env: (60, 500, 160, 400), feedback: 1 },
+    // 13 ethnic (sitar, koto: plucked, 1 : 2)
+    Patch { carrier: 4, modulator: 8, index: 1000, index_hold: 300, index_ms: 400, env: (3, 900, 30, 200), feedback: 1 },
+    // 14 percussive (steel drums, woodblock)
+    Patch { carrier: 4, modulator: 11, index: 900, index_hold: 0, index_ms: 150, env: (1, 300, 0, 100), feedback: 0 },
+    // 15 sound effects
+    Patch { carrier: 4, modulator: 5, index: 1500, index_hold: 400, index_ms: 300, env: (10, 400, 100, 300), feedback: 3 },
+];
+
 #[derive(Clone, Copy, PartialEq)]
 enum Timbre {
-    Piano,
-    Organ,
-    Pluck,
-    Strings,
-    Brass,
-    Flute,
-    Square,
-    Bass,
+    Fm(u8),
     Drum(u8),
 }
 
 fn timbre(program: u8) -> Timbre {
-    match program / 8 {
-        0 | 1 => Timbre::Piano, // pianos, chromatic percussion
-        2 => Timbre::Organ,
-        3 => Timbre::Pluck, // guitars
-        4 => Timbre::Bass,
-        5 | 6 => Timbre::Strings, // strings, ensemble
-        7 | 8 => Timbre::Brass,   // brass, reed
-        9 => Timbre::Flute,
-        _ => Timbre::Square, // synths, ethnic, effects
-    }
+    Timbre::Fm((program / 8).min(15))
 }
 
 #[derive(Clone, Copy)]
@@ -180,6 +218,9 @@ struct Voice {
     timbre: Timbre,
     phase: u32, // 10.22 fixed point index into the sine table
     step: u32,
+    mphase: u32, // the modulator's
+    mstep: u32,
+    last_mod: i32, // for feedback
     amp: i32,    // 0..32767 from velocity and channel volume
     age: u32,    // samples since note on
     rel: u32,    // samples since note off (0 = held)
@@ -190,14 +231,10 @@ struct Voice {
 fn envelope(t: Timbre) -> (u32, u32, u32, u32) {
     let ms = |m: u32| m * RATE / 1000;
     match t {
-        Timbre::Piano => (ms(4), ms(900), 40, ms(250)),
-        Timbre::Organ => (ms(8), ms(10), 256, ms(60)),
-        Timbre::Pluck => (ms(3), ms(500), 20, ms(150)),
-        Timbre::Strings => (ms(80), ms(200), 200, ms(300)),
-        Timbre::Brass => (ms(30), ms(150), 190, ms(150)),
-        Timbre::Flute => (ms(40), ms(100), 210, ms(120)),
-        Timbre::Square => (ms(5), ms(200), 150, ms(120)),
-        Timbre::Bass => (ms(5), ms(400), 120, ms(100)),
+        Timbre::Fm(p) => {
+            let e = PATCHES[p as usize].env;
+            (ms(e.0), ms(e.1), e.2, ms(e.3))
+        }
         Timbre::Drum(_) => (ms(1), ms(150), 0, ms(50)),
     }
 }
@@ -232,22 +269,19 @@ fn sample(v: &mut Voice, sine: &[i32]) -> i32 {
     let s = |ph: u32| sine[idx(ph)];
     let ph = v.phase;
     let out = match v.timbre {
-        Timbre::Piano => (s(ph) * 6 + s(ph.wrapping_mul(2)) * 3 + s(ph.wrapping_mul(3))) / 10,
-        Timbre::Organ => (s(ph) * 5 + s(ph.wrapping_mul(2)) * 3 + s(ph.wrapping_mul(4)) * 2) / 10,
-        Timbre::Pluck => {
-            let bright = (256 - (v.age / 40).min(256)) as i32;
-            (s(ph) * 7 + s(ph.wrapping_mul(2)) * 3 * bright / 256 + s(ph.wrapping_mul(3)) * 2 * bright / 256) / 10
+        Timbre::Fm(p) => {
+            let pt = &PATCHES[p as usize];
+            // the index slides linearly from its attack value to its hold value
+            let t = pt.index_ms * RATE / 1000;
+            let idx = if v.age >= t { pt.index_hold } else { pt.index + (pt.index_hold - pt.index) * v.age as i64 / t.max(1) as i64 };
+            // phase offset = sin(mod) * index rad, in 2^32 per turn: 2^32 / 2pi = 683565276
+            let fb = if pt.feedback > 0 { (v.last_mod as i64 * 683_565_276 >> (17 - pt.feedback)) as u32 } else { 0 };
+            let m = s(v.mphase.wrapping_add(fb));
+            v.last_mod = m;
+            let off = (m as i64 * idx * 683_565_276) >> 23;
+            v.mphase = v.mphase.wrapping_add(v.mstep);
+            s(ph.wrapping_add(off as u32))
         }
-        Timbre::Strings => {
-            // a soft sawtooth: harmonics 1/n
-            (s(ph) * 60 + s(ph.wrapping_mul(2)) * 30 + s(ph.wrapping_mul(3)) * 20 + s(ph.wrapping_mul(4)) * 15) / 125
-        }
-        Timbre::Brass => (s(ph) * 5 + s(ph.wrapping_mul(2)) * 4 + s(ph.wrapping_mul(3)) * 3 + s(ph.wrapping_mul(5))) / 13,
-        Timbre::Flute => (s(ph) * 9 + s(ph.wrapping_mul(2))) / 10,
-        Timbre::Square => {
-            if (ph >> 31) == 0 { 18_000 } else { -18_000 }
-        }
-        Timbre::Bass => (s(ph) * 8 + s(ph.wrapping_mul(2)) * 2) / 10,
         Timbre::Drum(n) => {
             v.noise = v.noise.wrapping_mul(1_103_515_245).wrapping_add(12_345);
             let noise = ((v.noise >> 16) as i32 & 0x7FFF) - 0x4000;
@@ -283,7 +317,7 @@ pub fn render(d: &[u8]) -> Option<Vec<u8>> {
     for (k, f) in C4_MILLIHZ.iter().enumerate() {
         semitone[k] = ((f << 32) / (RATE as u64 * 1000)) as u32;
     }
-    let mut voices = [Voice { on: false, ch: 0, note: 0, timbre: Timbre::Piano, phase: 0, step: 0, amp: 0, age: 0, rel: 0, noise: 1 }; VOICES];
+    let mut voices = [Voice { on: false, ch: 0, note: 0, timbre: Timbre::Fm(0), phase: 0, step: 0, mphase: 0, mstep: 0, last_mod: 0, amp: 0, age: 0, rel: 0, noise: 1 }; VOICES];
     let mut program = [0u8; 16];
     let mut volume = [100u32; 16];
     let mut tempo: u64 = 500_000; // microseconds per quarter note
@@ -355,7 +389,14 @@ pub fn render(d: &[u8]) -> Option<Vec<u8>> {
                     .or_else(|| (0..VOICES).filter(|&i| voices[i].rel > 0).max_by_key(|&i| voices[i].rel))
                     .unwrap_or_else(|| (0..VOICES).max_by_key(|&i| voices[i].age).unwrap_or(0));
                 let amp = (e.b as i32 * 258) * volume[ch] as i32 / 127;
-                voices[slot] = Voice { on: true, ch: e.ch, note, timbre: t, phase: 0, step, amp, age: 0, rel: 0, noise: 0x1234_5678 ^ e.tick as u32 };
+                let (step, mstep) = match t {
+                    Timbre::Fm(p) => {
+                        let pt = &PATCHES[p as usize];
+                        ((step as u64 * pt.carrier as u64 / 4) as u32, (step as u64 * pt.modulator as u64 / 4) as u32)
+                    }
+                    Timbre::Drum(_) => (step, 0),
+                };
+                voices[slot] = Voice { on: true, ch: e.ch, note, timbre: t, phase: 0, step, mphase: 0, mstep, last_mod: 0, amp, age: 0, rel: 0, noise: 0x1234_5678 ^ e.tick as u32 };
             }
             0x80 => {
                 for v in voices.iter_mut() {

@@ -125,12 +125,16 @@ dependencies = [
 name = "clrhost"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "getrandom",
+ "hmac",
  "libm",
  "linked_list_allocator",
  "miniz_oxide",
  "nanomp3",
  "opus-pure",
+ "p256",
+ "rsa",
  "rustb-vorbis",
  "rustclr-bcl",
  "rustclr-core",
@@ -139,6 +143,7 @@ dependencies = [
  "rustclr-thread",
  "rustls",
  "rustls-rustcrypto",
+ "sha2",
  "webpki-roots",
  "zune-core",
  "zune-jpeg",

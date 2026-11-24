@@ -15,21 +15,40 @@ use rustclr_core::{ArrayStorage, ClrArray, ExecResult, Interpreter, Value};
 
 use crate::bzapi::{int, string};
 
-struct Tag {
-    name: String,
-    closing: bool,
-    attrs: Vec<(String, String)>,
+#[derive(Clone)]
+pub(crate) struct Tag {
+    pub name: String,
+    pub closing: bool,
+    pub attrs: Vec<(String, String)>,
+    /// a stable id for scripts (0 on closing tags)
+    pub uid: u32,
 }
 
 impl Tag {
-    fn attr(&self, n: &str) -> &str {
+    pub fn attr(&self, n: &str) -> &str {
         self.attrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str()).unwrap_or("")
+    }
+    pub fn set_attr(&mut self, n: &str, v: &str) {
+        match self.attrs.iter_mut().find(|(k, _)| k == n) {
+            Some(slot) => slot.1 = String::from(v),
+            None => self.attrs.push((String::from(n), String::from(v))),
+        }
     }
 }
 
-enum Tok {
+#[derive(Clone)]
+pub(crate) enum Tok {
     Text(String),
     Tag(Tag),
+    /// where a `<script>` stood (index into `Page::scripts`)
+    Script(usize),
+}
+
+/// A page script: inline code, or the address of an external one (its code
+/// arrives through `HtmlScriptSource`).
+pub(crate) struct ScriptSrc {
+    pub code: String,
+    pub href: String,
 }
 
 struct Img {
@@ -37,6 +56,7 @@ struct Img {
     attr_h: i32,
     nat_w: i32,
     nat_h: i32,
+    src: String,
 }
 
 struct Item {
@@ -52,19 +72,29 @@ struct Item {
     text: String,
 }
 
-struct Page {
+pub(crate) struct Page {
     id: i64,
-    title: String,
-    toks: Vec<Tok>,
+    pub title: String,
+    pub toks: Vec<Tok>,
     images: Vec<Img>,
     image_info: Vec<(String, String)>, // src, alt
-    links: Vec<String>,
+    pub links: Vec<String>,
     items: Vec<Item>,
     height: i32,
     /// style sheets (`<style>`, fetched `<link>`s) and the hrefs of linked ones
     rules: Vec<crate::css::Rule>,
     css_order: u32,
     css_links: Vec<String>,
+    pub scripts: Vec<ScriptSrc>,
+    pub next_uid: u32,
+    /// per link index: the element's uid and what a click does
+    /// (0 follow the address, 1 a script handler, 2 a text field)
+    pub link_uids: Vec<u32>,
+    pub link_kind: Vec<u8>,
+    /// elements that have a click handler (scripts keep this up to date)
+    pub clickable: alloc::collections::BTreeSet<u32>,
+    pub js: Option<alloc::boxed::Box<crate::dom::JsState>>,
+    pub console: Vec<String>,
 }
 
 struct Pages {
@@ -246,7 +276,7 @@ fn parse_tag(body: &str) -> Tag {
             attrs.push((an, value));
         }
     }
-    Tag { name, closing, attrs }
+    Tag { name, closing, attrs, uid: 0 }
 }
 
 fn collapse(s: &str) -> String {
@@ -270,7 +300,7 @@ fn collapse(s: &str) -> String {
 }
 
 fn parse(html: &str) -> Page {
-    let mut page = Page { id: 0, title: String::new(), toks: Vec::new(), images: Vec::new(), image_info: Vec::new(), links: Vec::new(), items: Vec::new(), height: 0, rules: Vec::new(), css_order: 0, css_links: Vec::new() };
+    let mut page = Page { id: 0, title: String::new(), toks: Vec::new(), images: Vec::new(), image_info: Vec::new(), links: Vec::new(), items: Vec::new(), height: 0, rules: Vec::new(), css_order: 0, css_links: Vec::new(), scripts: Vec::new(), next_uid: 16, link_uids: Vec::new(), link_kind: Vec::new(), clickable: Default::default(), js: None, console: Vec::new() };
     let b = html.as_bytes();
     let n = b.len();
     let mut i = 0;
@@ -311,8 +341,12 @@ fn parse(html: &str) -> Page {
             i += 1;
             continue;
         }
-        let tag = parse_tag(&html[i + 1..close]);
+        let mut tag = parse_tag(&html[i + 1..close]);
         i = close + 1;
+        if !tag.closing {
+            tag.uid = page.next_uid;
+            page.next_uid += 1;
+        }
         if tag.name.is_empty() {
             continue;
         }
@@ -326,31 +360,86 @@ fn parse(html: &str) -> Page {
             if tag.name == "style" {
                 crate::css::parse_sheet(&html[i..stop], &mut page.css_order, &mut page.rules);
             }
+            if tag.name == "script" {
+                let ty = tag.attr("type").to_ascii_lowercase();
+                if ty.is_empty() || ty.contains("javascript") || ty == "module" {
+                    page.toks.push(Tok::Script(page.scripts.len()));
+                    page.scripts.push(ScriptSrc { code: String::from(&html[i..stop]), href: String::from(tag.attr("src")) });
+                }
+            }
             i = stop;
             continue;
         }
         if tag.name == "link" && tag.attr("rel").to_ascii_lowercase().contains("stylesheet") && !tag.attr("href").is_empty() {
             page.css_links.push(String::from(tag.attr("href")));
         }
-        if tag.name == "img" && !tag.closing {
-            let src = tag.attr("src");
-            if !src.is_empty() {
-                page.images.push(Img {
-                    attr_w: tag.attr("width").parse().unwrap_or(0),
-                    attr_h: tag.attr("height").parse().unwrap_or(0),
-                    nat_w: 0,
-                    nat_h: 0,
-                });
-                page.image_info.push((String::from(src), String::from(tag.attr("alt"))));
-            }
-        }
-        if tag.name == "a" && !tag.closing && !tag.attr("href").is_empty() {
-            page.links.push(String::from(tag.attr("href")));
+        if tag.attrs.iter().any(|(k, _)| k == "onclick") {
+            page.clickable.insert(tag.uid);
         }
         page.toks.push(Tok::Tag(tag));
     }
     page.title = String::from(collapse(&title).trim());
+    reindex(&mut page);
     page
+}
+
+/// An HTML fragment's tokens (innerHTML, document.write); uids are 0.
+pub(crate) fn parse_fragment(html: &str) -> Vec<Tok> {
+    let mut p = parse(html);
+    if !p.title.is_empty() {
+        p.toks.insert(0, Tok::Text(p.title.clone()));
+    }
+    for t in p.toks.iter_mut() {
+        if let Tok::Tag(x) = t {
+            x.uid = 0;
+        }
+    }
+    p.toks
+}
+
+/// Rebuild the image and link lists from the tokens (after parsing, and
+/// after a script changed the page). Loaded image sizes are kept by address.
+pub(crate) fn reindex(page: &mut Page) {
+    let old: Vec<Img> = core::mem::take(&mut page.images);
+    page.image_info.clear();
+    page.links.clear();
+    page.link_uids.clear();
+    page.link_kind.clear();
+    for t in &page.toks {
+        let Tok::Tag(tag) = t else { continue };
+        if tag.closing {
+            continue;
+        }
+        if tag.name == "img" {
+            let src = tag.attr("src");
+            if !src.is_empty() {
+                let (nw, nh) = old.iter().find(|o| o.src == src).map(|o| (o.nat_w, o.nat_h)).unwrap_or((0, 0));
+                page.images.push(Img {
+                    attr_w: tag.attr("width").parse().unwrap_or(0),
+                    attr_h: tag.attr("height").parse().unwrap_or(0),
+                    nat_w: nw,
+                    nat_h: nh,
+                    src: String::from(src),
+                });
+                page.image_info.push((String::from(src), String::from(tag.attr("alt"))));
+            }
+        }
+        let href = tag.attr("href");
+        let field = tag.name == "input" && !matches!(tag.attr("type").to_ascii_lowercase().as_str(), "button" | "submit" | "checkbox" | "radio" | "hidden" | "reset")
+            || tag.name == "textarea";
+        let (link, kind) = if tag.name == "a" && !href.is_empty() {
+            (String::from(href), if page.clickable.contains(&tag.uid) || href.starts_with("javascript:") || href == "#" { 1 } else { 0 })
+        } else if field {
+            (alloc::format!("input:{}", tag.uid), 2)
+        } else if page.clickable.contains(&tag.uid) || tag.name == "button" || (tag.name == "input" && page.js.is_some()) {
+            (alloc::format!("js:{}", tag.uid), 1)
+        } else {
+            continue;
+        };
+        page.links.push(link);
+        page.link_uids.push(tag.uid);
+        page.link_kind.push(kind);
+    }
 }
 
 // ---- layout -----------------------------------------------------------------
@@ -402,6 +491,8 @@ struct Frame {
     /// (first item index, top y, left x, right x) of a block with a background or border
     boxed: Option<(usize, i32, i32, i32)>,
     indent: i32,
+    /// the link index this element made current, and the one before it
+    click_prev: Option<i32>,
 }
 
 fn is_void(n: &str) -> bool {
@@ -527,7 +618,7 @@ impl Lay<'_> {
             3 => false,
             _ => block_default,
         };
-        self.frames.push(Frame { tag: tag.name.clone(), id: String::from(tag.attr("id")), class: String::from(tag.attr("class")), st, block, boxed: None, indent: 0 });
+        self.frames.push(Frame { tag: tag.name.clone(), id: String::from(tag.attr("id")), class: String::from(tag.attr("class")), st, block, boxed: None, indent: 0, click_prev: None });
         st
     }
 
@@ -583,6 +674,9 @@ impl Lay<'_> {
             self.indent = (self.indent - indent).max(0);
             if tag == "a" {
                 self.link_color = None;
+            }
+            if let Some(prev) = self.frames.last().unwrap().click_prev {
+                self.href = prev;
             }
             block = fblock;
             self.frames.pop();
@@ -658,7 +752,7 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
     let mut pre = 0;
     let mut lists: Vec<i32> = Vec::new();
     let mut img_index = 0usize;
-    let mut link_index = 0i32;
+    let link_of: alloc::collections::BTreeMap<u32, i32> = page.link_uids.iter().enumerate().map(|(k, u)| (*u, k as i32)).collect();
     for t in &page.toks {
         if l.hidden.is_some() {
             // inside a display: none element: only track nesting
@@ -667,7 +761,7 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                     if tag.closing {
                         l.frames.iter().rposition(|f| f.tag == tag.name).map(|at| l.frames.truncate(at));
                     } else {
-                        l.frames.push(Frame { tag: tag.name.clone(), id: String::new(), class: String::new(), st: Default::default(), block: false, boxed: None, indent: 0 });
+                        l.frames.push(Frame { tag: tag.name.clone(), id: String::new(), class: String::new(), st: Default::default(), block: false, boxed: None, indent: 0, click_prev: None });
                     }
                 }
             }
@@ -677,6 +771,7 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
             continue;
         }
         match t {
+            Tok::Script(_) => {}
             Tok::Text(s) => {
                 if pre > 0 {
                     for (li, line) in s.split('\n').enumerate() {
@@ -727,6 +822,15 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         continue;
                     }
                     block = l.frames.last().map(|f| f.block).unwrap_or(block);
+                    // a clickable element (a script handler, a text area): what is
+                    // inside it is a link to it
+                    if nm != "a" {
+                        if let Some(k) = link_of.get(&tag.uid) {
+                            let prev = l.href;
+                            l.frames.last_mut().unwrap().click_prev = Some(prev);
+                            l.href = *k;
+                        }
+                    }
                 }
                 'logic: {
                 match nm {
@@ -764,14 +868,42 @@ fn layout(page: &mut Page, width: i32, m: &[i32; 6], pal: &[i32; 5]) {
                         break 'logic;
                     }
                     "a" => {
-                        if closing {
-                            l.href = -1;
-                        } else if !tag.attr("href").is_empty() {
-                            l.href = link_index;
-                            link_index += 1;
-                        } else {
-                            l.href = -1;
+                        l.href = if closing { -1 } else { link_of.get(&tag.uid).copied().unwrap_or(-1) };
+                        break 'logic;
+                    }
+                    "button" => {
+                        l.pending_space = !closing && l.x > l.left();
+                        l.word(if closing { "]" } else { "[" });
+                        l.pending_space = closing;
+                        break 'logic;
+                    }
+                    "input" if !closing => {
+                        let ty = tag.attr("type").to_ascii_lowercase();
+                        let shown = match ty.as_str() {
+                            "hidden" => break 'logic,
+                            "checkbox" | "radio" => String::from(if tag.attrs.iter().any(|(k, _)| k == "checked") { "[x]" } else { "[ ]" }),
+                            "button" | "submit" | "reset" => {
+                                let v = tag.attr("value");
+                                alloc::format!("[{}]", if v.is_empty() { "Kirim" } else { v })
+                            }
+                            _ => {
+                                let v = tag.attr("value");
+                                let mut t = String::from(if v.is_empty() { tag.attr("placeholder") } else { v });
+                                let want = tag.attr("size").parse::<usize>().unwrap_or(16).clamp(4, 40);
+                                while t.chars().count() < want {
+                                    t.push('_');
+                                }
+                                alloc::format!("[{}]", t)
+                            }
+                        };
+                        let prev = l.href;
+                        l.href = link_of.get(&tag.uid).copied().unwrap_or(-1);
+                        if l.pending_space || l.x > l.left() {
+                            l.pending_space = true;
                         }
+                        l.word(&shown);
+                        l.pending_space = true;
+                        l.href = prev;
                         break 'logic;
                     }
                     _ => {}
@@ -1043,6 +1175,154 @@ fn html_add_css(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     Ok(Some(Value::I32((p.rules.len() - before) as i32)))
 }
 
+/// `HtmlScripts(id)`: the page's scripts, one per line: "" for inline code,
+/// else the `src` address to fetch (then hand it over with HtmlScriptSource).
+fn html_scripts(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let id = int(a, 0);
+    let s = {
+        let t = PAGES.lock();
+        match t.pages.iter().find(|p| p.id == id) {
+            None => String::new(),
+            Some(p) => {
+                let mut s = String::new();
+                for sc in &p.scripts {
+                    s.push_str(&sc.href.replace('\n', ""));
+                    s.push('\n');
+                }
+                s
+            }
+        }
+    };
+    ret_str(i, &s)
+}
+
+/// `HtmlScriptSource(id, index, code)`: an external script's code.
+fn html_script_source(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (id, k) = (int(a, 0), int(a, 1).max(0) as usize);
+    let code = string(i, a, 2);
+    let mut t = PAGES.lock();
+    if let Some(sc) = t.pages.iter_mut().find(|p| p.id == id).and_then(|p| p.scripts.get_mut(k)) {
+        sc.code = code;
+    }
+    Ok(Some(Value::I32(0)))
+}
+
+fn console_take(p: &mut Page, log: Vec<String>) {
+    for l in log {
+        if p.console.len() >= 200 {
+            p.console.remove(0);
+        }
+        p.console.push(l);
+    }
+}
+
+/// After a script changed the page: rebuild the link and image lists.
+fn after_script(p: &mut Page, f: i32) -> i32 {
+    if f & crate::dom::CHANGED != 0 {
+        reindex(p);
+    }
+    f
+}
+
+/// `HtmlRun(id, url, nowMs, width)`: run the page's scripts (once). Flags:
+/// 1 page changed (lay it out again and re-read HtmlInfo), 2 timers pending,
+/// 4 the script navigated (HtmlNavigation).
+fn html_run(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let id = int(a, 0);
+    let url = string(i, a, 1);
+    let (now, width) = (int(a, 2).max(0) as u64, int(a, 3) as i32);
+    let mut t = PAGES.lock();
+    let Some(p) = t.pages.iter_mut().find(|p| p.id == id) else { return Ok(Some(Value::I32(0))) };
+    if p.js.is_some() {
+        return Ok(Some(Value::I32(0)));
+    }
+    let mut log = Vec::new();
+    let f = crate::dom::run_scripts(p, &url, now, width, &mut log);
+    console_take(p, log);
+    Ok(Some(Value::I32(after_script(p, f))))
+}
+
+/// `HtmlEvent(id, link, kind, text)`: kind 0 = a click on link `link`
+/// (flag 8 = the script handled it, do not follow the address), 1 = text
+/// typed into the field `link`.
+fn html_event(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (id, k, kind) = (int(a, 0), int(a, 1).max(0) as usize, int(a, 2));
+    let text = string(i, a, 3);
+    let mut t = PAGES.lock();
+    let Some(p) = t.pages.iter_mut().find(|p| p.id == id) else { return Ok(Some(Value::I32(0))) };
+    let mut log = Vec::new();
+    let f = if kind == 1 { crate::dom::input(p, k, &text, &mut log) } else { crate::dom::click(p, k, &mut log) };
+    console_take(p, log);
+    Ok(Some(Value::I32(after_script(p, f))))
+}
+
+/// `HtmlTick(id, nowMs)`: run due timers. Returns flags; -1 = no timers left.
+fn html_tick(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (id, now) = (int(a, 0), int(a, 1).max(0) as u64);
+    let mut t = PAGES.lock();
+    let Some(p) = t.pages.iter_mut().find(|p| p.id == id) else { return Ok(Some(Value::I32(-1))) };
+    if p.js.is_none() {
+        return Ok(Some(Value::I32(-1)));
+    }
+    let mut log = Vec::new();
+    let f = crate::dom::tick(p, now, &mut log);
+    console_take(p, log);
+    let f = after_script(p, f);
+    Ok(Some(Value::I32(if crate::dom::next_timer(p).is_none() && f == 0 { -1 } else { f })))
+}
+
+/// `HtmlConsole(id)`: console lines since the last call (newline separated);
+/// `HtmlNavigation(id)`: an address a script asked for, or "".
+fn html_console(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let id = int(a, 0);
+    let s = {
+        let mut t = PAGES.lock();
+        match t.pages.iter_mut().find(|p| p.id == id) {
+            None => String::new(),
+            Some(p) => {
+                let v = core::mem::take(&mut p.console);
+                v.join("\n")
+            }
+        }
+    };
+    ret_str(i, &s)
+}
+
+fn html_navigation(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let id = int(a, 0);
+    let s = {
+        let mut t = PAGES.lock();
+        t.pages.iter_mut().find(|p| p.id == id).and_then(crate::dom::take_navigation).unwrap_or_default()
+    };
+    ret_str(i, &s)
+}
+
+/// `HtmlField(id, link)`: the current text of a field (link of kind 2).
+fn html_field(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (id, k) = (int(a, 0), int(a, 1).max(0) as usize);
+    let s = {
+        let t = PAGES.lock();
+        t.pages.iter().find(|p| p.id == id).and_then(|p| {
+            let uid = *p.link_uids.get(k)?;
+            let at = p.toks.iter().position(|x| matches!(x, Tok::Tag(g) if !g.closing && g.uid == uid))?;
+            let Tok::Tag(g) = &p.toks[at] else { return None };
+            if g.name == "textarea" {
+                let mut s = String::new();
+                for x in &p.toks[at + 1..] {
+                    match x {
+                        Tok::Text(v) => s.push_str(v),
+                        _ => break,
+                    }
+                }
+                Some(s)
+            } else {
+                Some(String::from(g.attr("value")))
+            }
+        }).unwrap_or_default()
+    };
+    ret_str(i, &s)
+}
+
 fn html_free(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let id = int(a, 0);
     PAGES.lock().pages.retain(|p| p.id != id);
@@ -1050,7 +1330,15 @@ fn html_free(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 }
 
 pub fn register(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 8] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 16] = [
+        ("HtmlScripts", html_scripts),
+        ("HtmlScriptSource", html_script_source),
+        ("HtmlRun", html_run),
+        ("HtmlEvent", html_event),
+        ("HtmlTick", html_tick),
+        ("HtmlConsole", html_console),
+        ("HtmlNavigation", html_navigation),
+        ("HtmlField", html_field),
         ("HtmlAddCss", html_add_css),
         ("HtmlLoad", html_load),
         ("HtmlInfo", html_info),

@@ -1,3 +1,4 @@
+using Buitenzorg.Security.Cryptography;
 // Peramban -- the web browser: an address bar, back / forward / reload, pages
 // over HTTP and HTTPS (Buitenzorg.Net; certificates verified), local files
 // (/disk/X.HTM) and built-in about: pages. Html.cs parses and lays the page
@@ -22,7 +23,7 @@ public sealed class PageView : Control
     public int ContentHeight;
     public int Scroll;
     public Palette Pal;
-    public event Action<string>? LinkClicked;
+    public event Action<Item>? LinkClicked;
     public event Action<string>? Hover;
     readonly Dictionary<Item, (string Key, int[] Px)> _pix = new Dictionary<Item, (string, int[])>();
     string _hover = "";
@@ -132,7 +133,7 @@ public sealed class PageView : Control
     {
         Focus();
         var it = HitLink(e.X, e.Y);
-        if (it != null) { LinkClicked?.Invoke(it.Href!); e.Handled = true; }
+        if (it != null) { LinkClicked?.Invoke(it); e.Handled = true; }
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -172,16 +173,61 @@ public sealed class BrowserApp
     public string CurrentUrl { get; private set; } = "";
     public string Status => _status.Text;
     public string LastError = "";
-    readonly List<string> _back = new List<string>(), _forward = new List<string>();
+    List<string> _back = new List<string>(), _forward = new List<string>();
     int _nav; // navigation id: a late answer to an older request is dropped
     public bool Loading { get; private set; }
     public bool Synchronous; // tests: fetch on the calling thread
+    /// <summary>Script console (console.log, alert, errors) of the current page, newest last.</summary>
+    public readonly List<string> ConsoleLines = new List<string>();
+    /// <summary>Tests move the page's clock forward with this (ms).</summary>
+    public long ClockOffset;
+    readonly DispatcherTimer _jsTimer = new DispatcherTimer(40);
+    readonly DockPanel _fieldBar = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+    readonly TextBox _field = new TextBox();
+    readonly TextBlock _fieldLabel = new TextBlock("Isi kolom:");
+    int _fieldLink = -1;
+
+    /// <summary>One browser tab: its page, address, history and scroll position.
+    /// The active tab's state lives in the app's fields; the others wait here.</summary>
+    public sealed class Tab
+    {
+        public Page? Page;
+        public string Url = "", Title = "";
+        public List<string> Back = new List<string>(), Forward = new List<string>();
+        public int Scroll;
+    }
+    public readonly List<Tab> Tabs = new List<Tab>();
+    public int ActiveTab { get; private set; }
+    readonly StackPanel _tabStrip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 0, 0, 6) };
+    /// <summary>Bookmarks: (address, title), saved in <see cref="BookmarkFile"/>.</summary>
+    public readonly List<(string Url, string Title)> Bookmarks = new List<(string, string)>();
+    public static string BookmarkFile = "/disk/APPDATA/MWEB/TANDA.TXT";
+    static volatile string _bookmarksHtml = "";
+    static readonly System.Diagnostics.Stopwatch _sw = System.Diagnostics.Stopwatch.StartNew();
+    static long _epoch = -1;
+
+    /// <summary>Wall-clock milliseconds since 1970 for scripts (Date.now, timers).</summary>
+    public long NowMs()
+    {
+        if (_epoch < 0)
+        {
+            try { _epoch = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); } catch (Exception) { _epoch = 0; }
+            _epoch -= _sw.ElapsedMilliseconds;
+        }
+        return _epoch + _sw.ElapsedMilliseconds + ClockOffset;
+    }
 
     public BrowserApp(bool headless)
     {
         W = new Window("Peramban", 860, 600, headless);
         View.Pal = new Palette { Text = 0x1F2A24, Link = 0x1565C0, Heading = 0x1B4D2E, Muted = 0x6B7A71, Rule = 0xD5DDD8, Back = 0xFBFCF8 };
-        View.LinkClicked += href => { var u = Resolve(href); if (u != null) Navigate(u); };
+        View.LinkClicked += OnLink;
+        _jsTimer.Tick += TickScripts;
+        _field.KeyDown += (_, e) =>
+        {
+            if (e.Key == Keys.Enter) { SubmitField(); e.Handled = true; }
+            else if (e.Key == (char)27) { CloseField(); e.Handled = true; }
+        };
         View.Hover += h => { if (!Loading) _status.Text = h.Length > 0 ? Resolve(h) ?? h : StatusIdle(); };
         _address.KeyDown += (_, e) => { if (e.Key == Keys.Enter) { Navigate(Normalize(_address.Text)); e.Handled = true; } };
 
@@ -191,6 +237,8 @@ public sealed class BrowserApp
         nav.Children.Add(new Button(">", _ => Forward()).WithClass("subtle"));
         nav.Children.Add(new Button("Muat ulang", _ => Reload()).WithClass("subtle"));
         nav.Children.Add(new Button("Beranda", _ => Navigate("about:home")).WithClass("subtle"));
+        nav.Children.Add(new Button("+ Tanda", _ => AddBookmark()).WithClass("subtle"));
+        nav.Children.Add(new Button("Tanda", _ => Navigate("about:bookmarks")).WithClass("subtle"));
         bar.Children.Add(nav.DockTo(Dock.Left));
         bar.Children.Add(new Button("Buka", _ => Navigate(Normalize(_address.Text))).WithClass("accent").DockTo(Dock.Right));
         _address.Margin = new Thickness(0, 0, 8, 0);
@@ -198,8 +246,15 @@ public sealed class BrowserApp
 
         var root = new DockPanel { Margin = new Thickness(12) };
         root.Children.Add(_titleText.WithClass("strong").DockTo(Dock.Top));
+        root.Children.Add(_tabStrip.DockTo(Dock.Top));
         root.Children.Add(bar.DockTo(Dock.Top));
         root.Children.Add(_status.WithClass("faint").DockTo(Dock.Bottom));
+        _fieldBar.Children.Add(_fieldLabel.DockTo(Dock.Left));
+        _fieldBar.Children.Add(new Button("Isi", _ => SubmitField()).WithClass("accent").DockTo(Dock.Right));
+        _field.Margin = new Thickness(8, 0, 8, 0);
+        _fieldBar.Children.Add(_field);
+        _fieldBar.IsVisible = false;
+        root.Children.Add(_fieldBar.DockTo(Dock.Bottom));
         View.Margin = new Thickness(0, 0, 0, 6);
         root.Children.Add(View);
         W.Content = root;
@@ -207,7 +262,14 @@ public sealed class BrowserApp
         {
             if (e.Key == Keys.F5) { Reload(); e.Handled = true; }
             else if (e.Key == (char)12) { _address.Focus(); e.Handled = true; } // Ctrl+L
+            else if (e.Key == (char)20) { NewTab(); e.Handled = true; }        // Ctrl+T
+            else if (e.Key == (char)23) { CloseTab(ActiveTab); e.Handled = true; } // Ctrl+W
+            else if (e.Key == (char)4) { AddBookmark(); e.Handled = true; }   // Ctrl+D
+            else if (e.Key == Keys.F6) { SwitchTab((ActiveTab + 1) % Tabs.Count); e.Handled = true; }
         };
+        Tabs.Add(new Tab());
+        LoadBookmarks();
+        RebuildTabs();
         Application.Current?.Apply(W);
         W.UpdateLayout();
     }
@@ -239,9 +301,19 @@ public sealed class BrowserApp
 
     public void Navigate(string url, bool record = true)
     {
+        if (url.StartsWith("about:unmark?"))
+        {
+            int n;
+            if (int.TryParse(url.Substring(13), out n)) RemoveBookmark(n);
+            url = "about:bookmarks";
+            record = false;
+        }
+        if (url == "about:bookmarks") _bookmarksHtml = BookmarksPage();
         if (record && CurrentUrl.Length > 0 && CurrentUrl != url) { _back.Add(CurrentUrl); _forward.Clear(); }
         _address.Text = url;
         Loading = true;
+        _jsTimer.Stop();
+        CloseField();
         _status.Text = "Memuat " + url + " ...";
         int id = ++_nav;
         if (Synchronous) { var r = Fetch(url); Show(id, r); LoadImages(id, r.Page, r.Url, sync: true); return; }
@@ -252,6 +324,171 @@ public sealed class BrowserApp
             LoadImages(id, r.Page, r.Url, sync: false);
         });
         t.Start();
+    }
+
+    // ---- tabs ----------------------------------------------------------------
+
+    void SaveTab()
+    {
+        var t = Tabs[ActiveTab];
+        t.Page = Current;
+        t.Url = CurrentUrl;
+        t.Title = Current != null && Current.Title.Length > 0 ? Current.Title : CurrentUrl;
+        t.Back = _back;
+        t.Forward = _forward;
+        t.Scroll = View.Scroll;
+    }
+
+    void LoadTab(int i)
+    {
+        ActiveTab = i;
+        var t = Tabs[i];
+        Current = t.Page;
+        CurrentUrl = t.Url;
+        _back = t.Back;
+        _forward = t.Forward;
+        _address.Text = t.Url;
+        _titleText.Text = t.Title.Length > 0 ? t.Title : "Peramban";
+        ConsoleLines.Clear();
+        _nav++; // an answer still on its way belongs to the tab we left
+        Loading = false;
+        CloseField();
+        if (Current != null)
+        {
+            Relayout();
+            View.Scroll = t.Scroll;
+            _jsTimer.Start(); // its timers run again (TickScripts stops when there are none)
+        }
+        else View.SetItems(new List<Item>(), 0);
+        _status.Text = StatusIdle();
+        RebuildTabs();
+    }
+
+    /// <summary>Open a tab (and go to <paramref name="url"/> in it). Returns its index.</summary>
+    public int NewTab(string url = "about:home")
+    {
+        if (Tabs.Count >= 8) return ActiveTab;
+        SaveTab();
+        _jsTimer.Stop();
+        Tabs.Add(new Tab());
+        LoadTab(Tabs.Count - 1);
+        Navigate(url, record: false);
+        return ActiveTab;
+    }
+
+    public void SwitchTab(int i)
+    {
+        if (i < 0 || i >= Tabs.Count || i == ActiveTab) return;
+        SaveTab();
+        _jsTimer.Stop();
+        LoadTab(i);
+    }
+
+    public void CloseTab(int i)
+    {
+        if (i < 0 || i >= Tabs.Count) return;
+        if (Tabs.Count == 1) { Navigate("about:home"); return; }
+        SaveTab();
+        var gone = Tabs[i];
+        Tabs.RemoveAt(i);
+        if (gone.Page != null) Html.Free(gone.Page);
+        _jsTimer.Stop();
+        int next = i == ActiveTab ? Math.Min(i, Tabs.Count - 1) : (i < ActiveTab ? ActiveTab - 1 : ActiveTab);
+        ActiveTab = next; // LoadTab must not save into the removed slot
+        LoadTab(next);
+    }
+
+    void RebuildTabs()
+    {
+        _tabStrip.Children.Clear();
+        for (int i = 0; i < Tabs.Count; i++)
+        {
+            int k = i;
+            string title = i == ActiveTab ? (Current?.Title.Length > 0 ? Current.Title : CurrentUrl) : Tabs[i].Title;
+            if (title.Length == 0) title = "Tab baru";
+            if (title.Length > 18) title = title.Substring(0, 17) + "~";
+            var b = new Button(title, _ => SwitchTab(k)).WithClass(i == ActiveTab ? "accent" : "subtle");
+            _tabStrip.Children.Add(b);
+        }
+        if (Tabs.Count > 1) _tabStrip.Children.Add(new Button("x", _ => CloseTab(ActiveTab)).WithClass("subtle"));
+        if (Tabs.Count < 8) _tabStrip.Children.Add(new Button("+", _ => NewTab()).WithClass("subtle"));
+    }
+
+    // ---- bookmarks ----------------------------------------------------------------
+
+    public void LoadBookmarks()
+    {
+        Bookmarks.Clear();
+        try
+        {
+            if (Files.GetInfo(BookmarkFile) == null) return;
+            foreach (var line in Files.ReadAllText(BookmarkFile).Split('\n'))
+            {
+                int tab = line.IndexOf('\t');
+                string url = (tab < 0 ? line : line.Substring(0, tab)).Trim();
+                if (url.Length > 0) Bookmarks.Add((url, tab < 0 ? url : line.Substring(tab + 1).Trim()));
+            }
+        }
+        catch (Exception) { }
+    }
+
+    bool SaveBookmarks()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var (u, t) in Bookmarks) { sb.Append(u); sb.Append('\t'); sb.Append(t.Replace('\t', ' ').Replace('\n', ' ')); sb.Append('\n'); }
+        try
+        {
+            int slash = BookmarkFile.LastIndexOf('/');
+            string dir = BookmarkFile.Substring(0, slash);
+            if (Files.GetInfo(dir) == null)
+            {
+                // /disk/APPDATA, then /disk/APPDATA/MWEB
+                int s1 = dir.LastIndexOf('/');
+                if (s1 > 0 && Files.GetInfo(dir.Substring(0, s1)) == null) Files.CreateDirectory(dir.Substring(0, s1));
+                Files.CreateDirectory(dir);
+            }
+            return Files.WriteAllText(BookmarkFile, sb.ToString());
+        }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>Bookmark the page shown (once per address). False when there is none or it is already there.</summary>
+    public bool AddBookmark()
+    {
+        if (CurrentUrl.Length == 0 || CurrentUrl == "about:bookmarks") return false;
+        foreach (var (u, _) in Bookmarks) if (u == CurrentUrl) { _status.Text = "Sudah ditandai: " + CurrentUrl; return false; }
+        string title = Current != null && Current.Title.Length > 0 ? Current.Title : CurrentUrl;
+        Bookmarks.Add((CurrentUrl, title));
+        bool saved = SaveBookmarks();
+        _status.Text = (saved ? "Ditandai: " : "Ditandai (tidak tersimpan): ") + title;
+        return true;
+    }
+
+    public bool RemoveBookmark(int i)
+    {
+        if (i < 0 || i >= Bookmarks.Count) return false;
+        Bookmarks.RemoveAt(i);
+        SaveBookmarks();
+        return true;
+    }
+
+    string BookmarksPage()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<title>Tanda</title><h1>Tanda</h1>");
+        if (Bookmarks.Count == 0) sb.Append("<p>Belum ada tanda. Buka halaman lalu tekan <b>+ Tanda</b> (Ctrl+D).</p>");
+        else
+        {
+            sb.Append("<ul>");
+            for (int i = 0; i < Bookmarks.Count; i++)
+            {
+                sb.Append("<li><a href=\"" + Escape(Bookmarks[i].Url) + "\">" + Escape(Bookmarks[i].Title) + "</a> -- " + Escape(Bookmarks[i].Url));
+                sb.Append(" <a href=\"about:unmark?" + i + "\">[hapus]</a></li>");
+            }
+            sb.Append("</ul>");
+        }
+        sb.Append("<p><a href=\"about:home\">Beranda</a></p>");
+        return sb.ToString();
     }
 
     public void Back() { if (_back.Count == 0) return; string u = _back[_back.Count - 1]; _back.RemoveAt(_back.Count - 1); _forward.Add(CurrentUrl); Navigate(u, record: false); }
@@ -271,6 +508,7 @@ public sealed class BrowserApp
         var r = new Result { Url = url };
         try
         {
+            if (url == "about:bookmarks") { r.Page = Html.Parse(_bookmarksHtml); return r; }
             if (url.StartsWith("about:")) { r.Page = Html.Parse(AboutPage(url)); return r; }
             if (url.StartsWith("/"))
             {
@@ -278,6 +516,7 @@ public sealed class BrowserApp
                 if (bytes == null) throw new NetException("berkas " + url + " tidak ada");
                 r.Page = Picture.IsPictureName(url) ? ImagePage(url) : Html.Parse(Encoding.UTF8.GetString(bytes));
                 LoadCss(r.Page, url);
+                LoadScripts(r.Page, url);
                 return r;
             }
             var http = new HttpClient();
@@ -287,7 +526,7 @@ public sealed class BrowserApp
             r.Info = resp.Status + " " + resp.Reason + (resp.Tls.Length > 0 ? "  -  terenkripsi (" + resp.Tls + ")" : "");
             if (ct.StartsWith("image/")) r.Page = ImagePage(resp.Url);
             else if (ct.StartsWith("text/plain")) r.Page = Html.Parse("<pre>" + Escape(resp.Text) + "</pre>");
-            else { r.Page = Html.Parse(resp.Text); LoadCss(r.Page, resp.Url); }
+            else { r.Page = Html.Parse(resp.Text); LoadCss(r.Page, resp.Url); LoadScripts(r.Page, resp.Url); }
             if (!resp.Ok && r.Page.Title.Length == 0) r.Page.Title = "HTTP " + resp.Status;
         }
         catch (Exception e)
@@ -330,6 +569,132 @@ public sealed class BrowserApp
         return added;
     }
 
+    /// <summary>A page's external scripts (at most 8, each at most 512 KB), fetched
+    /// before they run. A script that fails to load is skipped, like a browser does.</summary>
+    public static int LoadScripts(Page page, string baseUrl)
+    {
+        int loaded = 0;
+        var srcs = Html.ScriptSources(page);
+        for (int k = 0; k < srcs.Count && k < 32; k++)
+        {
+            string href = srcs[k];
+            if (href.Length == 0 || loaded >= 8) continue;
+            try
+            {
+                string code;
+                if (baseUrl.StartsWith("/"))
+                {
+                    string path = href.StartsWith("/") ? href : baseUrl.Substring(0, baseUrl.LastIndexOf('/') + 1) + href;
+                    code = Files.ReadAllText(path);
+                }
+                else
+                {
+                    var u = Url.Parse(baseUrl)?.Resolve(href);
+                    if (u == null) continue;
+                    var resp = new HttpClient().Get(u.ToString());
+                    if (!resp.Ok || resp.Text.Length > 512 * 1024) continue;
+                    code = resp.Text;
+                }
+                Html.SetScriptSource(page, k, code);
+                loaded++;
+            }
+            catch (Exception) { }
+        }
+        return loaded;
+    }
+
+    // ---- scripts ------------------------------------------------------------------
+
+    void OnLink(Item it)
+    {
+        string href = it.Href ?? "";
+        if (Current != null && Current.NativeId > 0 && it.LinkIndex >= 0)
+        {
+            if (href.StartsWith("input:")) { OpenField(it.LinkIndex); return; }
+            int f = Html.Click(Current, it.LinkIndex);
+            bool handled = (f & Html.JsHandled) != 0;
+            HandleScript(f);
+            if (handled || href.StartsWith("js:")) return;
+        }
+        if (href.StartsWith("js:") || href.StartsWith("input:") || href.StartsWith("javascript:") || href == "#") return;
+        var u = Resolve(href);
+        if (u != null) Navigate(u);
+    }
+
+    /// <summary>Click link number <paramref name="link"/> as a person would (tests).</summary>
+    public void ClickLink(int link)
+    {
+        if (Current == null || link < 0 || link >= Current.Links.Count) return;
+        OnLink(new Item { Href = Current.Links[link], LinkIndex = link });
+    }
+
+    void OpenField(int link)
+    {
+        if (Current == null) return;
+        _fieldLink = link;
+        _field.Text = Html.FieldText(Current, link);
+        _fieldBar.IsVisible = true;
+        _field.Focus();
+    }
+
+    void CloseField()
+    {
+        _fieldLink = -1;
+        _fieldBar.IsVisible = false;
+    }
+
+    void SubmitField()
+    {
+        if (Current == null || _fieldLink < 0) { CloseField(); return; }
+        int link = _fieldLink;
+        CloseField();
+        EnterText(link, _field.Text);
+        View.Focus();
+    }
+
+    /// <summary>Put text into field link <paramref name="link"/> (fires input + change).</summary>
+    public void EnterText(int link, string text)
+    {
+        if (Current == null) return;
+        HandleScript(Html.Input(Current, link, text));
+    }
+
+    /// <summary>What a script run did: new console lines, a changed page, timers, a navigation.</summary>
+    void HandleScript(int f)
+    {
+        var page = Current;
+        if (page == null) return;
+        var lines = Html.TakeConsole(page);
+        foreach (var l in lines)
+        {
+            ConsoleLines.Add(l);
+            if (ConsoleLines.Count > 200) ConsoleLines.RemoveAt(0);
+        }
+        if (lines.Count > 0) _status.Text = "konsol: " + lines[lines.Count - 1];
+        if ((f & Html.JsChanged) != 0)
+        {
+            Html.Refresh(page);
+            _titleText.Text = page.Title.Length > 0 ? page.Title : CurrentUrl;
+            Relayout();
+        }
+        if ((f & Html.JsTimers) != 0 && !Synchronous) _jsTimer.Start();
+        if ((f & Html.JsNavigate) != 0)
+        {
+            string to = Html.TakeNavigation(page);
+            var u = to.Length > 0 ? Resolve(to) : null;
+            if (u != null) Navigate(u);
+        }
+    }
+
+    /// <summary>Run the page's due timers (the UI timer, or a test after moving ClockOffset).</summary>
+    public void TickScripts()
+    {
+        if (Current == null) { _jsTimer.Stop(); return; }
+        int f = Html.Tick(Current, NowMs());
+        if (f < 0) { _jsTimer.Stop(); return; }
+        HandleScript(f);
+    }
+
     static Page ImagePage(string url) => Html.Parse("<title>" + Escape(url) + "</title><img src=\"" + Escape(url) + "\">");
 
     public static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
@@ -345,9 +710,15 @@ public sealed class BrowserApp
         _address.Text = r.Url;
         _titleText.Text = r.Page.Title.Length > 0 ? r.Page.Title : r.Url;
         View.Scroll = 0;
+        ConsoleLines.Clear();
+        int w = Math.Max(200, View.Bounds.Width > 0 ? View.Bounds.Width : 800);
+        int jf = Html.RunScripts(r.Page, r.Url, NowMs(), w - 8);
+        HandleScript(jf & ~Html.JsChanged);
+        if ((jf & Html.JsChanged) != 0) { Html.Refresh(r.Page); _titleText.Text = r.Page.Title.Length > 0 ? r.Page.Title : r.Url; }
         Relayout();
         if (!_address.IsFocused) View.Focus(); // the keys scroll the page at once
         _status.Text = r.Error.Length > 0 ? "Gagal: " + r.Error : (r.Info.Length > 0 ? r.Info + "  -  " : "") + StatusIdle();
+        RebuildTabs();
     }
 
     public void Relayout()
@@ -396,26 +767,51 @@ public sealed class BrowserApp
         Relayout();
     }
 
+    /// <summary>A page that exercises the script engine (also the self-test's page).</summary>
+    public const string JsDemoPage =
+        "<title>Demo JavaScript</title><h1 id=\"judul\">Demo JavaScript</h1>" +
+        "<p id=\"info\">Skrip belum berjalan.</p>" +
+        "<p><button id=\"tombol\">Tambah</button> <span id=\"hitung\">Diklik 0 kali</span></p>" +
+        "<p>Nama: <input id=\"nama\" placeholder=\"ketik nama\" size=\"12\"> <span id=\"sapa\"></span></p>" +
+        "<p><a href=\"#\" onclick=\"document.getElementById('warna').classList.toggle('hijau'); document.getElementById('warna').style.color = '#2e7d32'; return false;\">Ubah warna</a> " +
+        "<span id=\"warna\">teks ini</span></p>" +
+        "<ul id=\"daftar\"></ul><p id=\"waktu\">menunggu pengatur waktu...</p>" +
+        "<script>\n" +
+        "var tanaman = ['anggrek', 'kantong semar', 'bunga bangkai'];\n" +
+        "var ul = document.getElementById('daftar');\n" +
+        "tanaman.forEach(function (t, i) { var li = document.createElement('li'); li.textContent = (i + 1) + '. ' + t; ul.appendChild(li); });\n" +
+        "document.getElementById('info').textContent = 'Skrip berjalan: ' + document.querySelectorAll('#daftar li').length + ' butir dibuat.';\n" +
+        "let n = 0;\n" +
+        "document.getElementById('tombol').addEventListener('click', () => { n++; document.querySelector('#hitung').textContent = `Diklik ${n} kali`; });\n" +
+        "document.getElementById('nama').oninput = function (e) { document.getElementById('sapa').textContent = 'Halo, ' + e.target.value + '!'; };\n" +
+        "setTimeout(function () { document.getElementById('waktu').innerHTML = '<b>waktu habis</b> setelah 100 ms'; }, 100);\n" +
+        "console.log('demo siap', JSON.stringify({ butir: tanaman.length }));\n" +
+        "</script>";
+
     public static string AboutPage(string url)
     {
         if (url == "about:home" || url == "about:blank" && false)
             return "<title>Beranda Peramban</title>" +
                 "<h1>Peramban Buitenzorg</h1>" +
                 "<p>Peramban web bawaan Buitenzorg OS: <b>HTTP</b> dan <b>HTTPS</b> (sertifikat diperiksa terhadap " +
-                "akar CA Mozilla), gambar PNG/JPEG/GIF, tautan, riwayat. Tanpa JavaScript dan CSS -- halaman " +
-                "ditampilkan menurut strukturnya.</p>" +
+                "akar CA Mozilla), gambar PNG/JPEG/GIF, CSS dasar, JavaScript (DOM, event, timer), tab, tanda, " +
+                "tautan, riwayat.</p>" +
                 "<h2>Coba</h2><ul>" +
                 "<li><a href=\"https://example.com/\">example.com</a> (HTTPS)</li>" +
                 "<li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">Situs web pertama di dunia</a> (CERN, 1991)</li>" +
                 "<li><a href=\"https://text.npr.org/\">text.npr.org</a> -- berita, versi teks</li>" +
                 "<li><a href=\"https://lite.duckduckgo.com/lite/\">DuckDuckGo Lite</a> -- pencarian</li>" +
                 "<li><a href=\"/disk/KEBUN.JPG\">Foto Kebun Raya</a> (berkas di /disk)</li>" +
+                "<li><a href=\"about:js\">Demo JavaScript</a> -- skrip di halaman</li>" +
+                "<li><a href=\"about:bookmarks\">Tanda</a> -- halaman yang Anda tandai</li>" +
                 "<li><a href=\"about:help\">Bantuan</a></li></ul>" +
                 "<hr><p>Buitenzorg OS -- dibuat oleh Gravicode Studios, dipimpin oleh Kang Fadhil.</p>";
+        if (url == "about:js") return JsDemoPage;
         if (url == "about:help")
             return "<title>Bantuan Peramban</title><h1>Bantuan</h1><ul>" +
                 "<li>Ketik alamat lalu Enter; tanpa http:// dianggap http.</li>" +
                 "<li>Ctrl+L ke kolom alamat, F5 muat ulang.</li>" +
+                "<li>Ctrl+T tab baru, Ctrl+W tutup tab, F6 tab berikutnya, Ctrl+D tandai halaman.</li>" +
                 "<li>Roda tetikus, PageUp/PageDown, panah dan Spasi menggulir.</li>" +
                 "<li>Berkas lokal: /disk/NAMA.HTM atau gambar di /disk.</li></ul>" +
                 "<p><a href=\"about:home\">Beranda</a></p>";
@@ -648,6 +1044,42 @@ public sealed class BrowserApp
             && u.Resolve("//other.org/x")?.ToString() == "https://other.org/x", "relative links resolve");
         c.That(Encoding.ASCII.GetString(HttpClient.Dechunk(Encoding.ASCII.GetBytes("3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"))) == "abcde", "chunked decoding");
 
+        // JavaScript: the host engine runs the page's scripts (off the device pages run none)
+        {
+            var app = new BrowserApp(headless: true) { Synchronous = true };
+            app.Navigate("about:js");
+            var pg = app.Current;
+            if (pg != null && pg.NativeId > 0)
+            {
+                string Text(string start) { var it = app.View.Items.Find(i => i.Text.StartsWith(start)); return it == null ? "" : it.Text; }
+                bool Has(string t) => app.View.Items.Exists(i => i.Text.Contains(t));
+                c.That(Has("Skrip berjalan: 3 butir") && Has("kantong") && !Has("belum berjalan"), "JS: script ran, DOM built (createElement/appendChild/querySelectorAll)");
+                c.That(app.ConsoleLines.Exists(l => l.Contains("demo siap") && l.Contains("{\"butir\":3}")), "JS: console.log + JSON (" + string.Join(" | ", app.ConsoleLines) + ")");
+                int btn = pg.Links.FindIndex(l => l.StartsWith("js:"));
+                app.ClickLink(btn);
+                app.ClickLink(btn);
+                c.That(Has("Diklik 2 kali"), "JS: addEventListener click + closure + template literal (" + Text("Diklik") + ")");
+                int field = pg.Links.FindIndex(l => l.StartsWith("input:"));
+                app.EnterText(field, "Bogor");
+                c.That(Has("Halo, Bogor!") && Html.FieldText(pg, field) == "Bogor", "JS: text field + oninput event");
+                int hash = pg.Links.IndexOf("#");
+                string before = app.CurrentUrl;
+                app.ClickLink(hash);
+                var warna = app.View.Items.Find(i => i.Text.StartsWith("teks"));
+                c.That(app.CurrentUrl == before && warna != null && warna.Color == 0x2E7D32, "JS: inline onclick, style change, no navigation");
+                c.That(Has("menunggu"), "JS: timer not due yet");
+                app.ClockOffset += 200;
+                app.TickScripts();
+                c.That(Has("waktu habis") && !Has("menunggu"), "JS: setTimeout + innerHTML after 100 ms");
+                var ep = Html.Parse("<p id=x>a</p><script>document.getElementById('x').textContent = undefinedThing;</script><script>document.getElementById('x').textContent = 'lanjut';</script>");
+                Html.RunScripts(ep, "about:x", 0, 400);
+                var errs = Html.TakeConsole(ep);
+                var (ei, _) = Html.Layout(ep, 400, default);
+                c.That(errs.Exists(l => l.Contains("ReferenceError") && l.Contains("undefinedThing")) && ei.Exists(i => i.Text == "lanjut"), "JS: an error is reported and the next script still runs");
+                Html.Free(ep);
+            }
+        }
+
         // the network: a server thread in this program, the client over TCP
         bool stop = false;
         TcpServer? server = null;
@@ -684,10 +1116,70 @@ public sealed class BrowserApp
                 c.That(app.Current?.Title == "Uji Peramban", "back");
                 app.Navigate("about:home");
                 c.That(app.Current?.Title == "Beranda Peramban" && app.Current.Links.Count >= 4, "about:home");
+
+                // tabs: a second tab keeps its own page + history, switching back restores the first
+                app.Navigate("about:help");
+                int second = app.NewTab("about:js");
+                bool own = app.Tabs.Count == 2 && second == 1 && app.Current?.Title == "Demo JavaScript" && !app.CanGoBack;
+                app.SwitchTab(0);
+                bool back0 = app.Current?.Title == "Bantuan Peramban" && app.CanGoBack;
+                app.Back();
+                bool hist0 = app.Current?.Title == "Beranda Peramban";
+                app.SwitchTab(1);
+                bool kept1 = app.Current?.Title == "Demo JavaScript";
+                app.CloseTab(1);
+                c.That(own && back0 && hist0 && kept1 && app.Tabs.Count == 1 && app.ActiveTab == 0 && app.Current?.Title == "Beranda Peramban",
+                    "tabs: own page and history per tab, switch, close");
+
+                // bookmarks: add (once), saved to a file, listed on about:bookmarks, removed
+                string keep = BrowserApp.BookmarkFile;
+                BrowserApp.BookmarkFile = Files.ScratchDirectory + "/TANDAUJI.TXT";
+                try
+                {
+                    app.Bookmarks.Clear();
+                    app.Navigate("about:help");
+                    bool added = app.AddBookmark() && !app.AddBookmark();
+                    app.LoadBookmarks();
+                    bool saved = app.Bookmarks.Count == 1 && app.Bookmarks[0].Url == "about:help" && app.Bookmarks[0].Title == "Bantuan Peramban";
+                    app.Navigate("about:bookmarks");
+                    bool listed = app.Current != null && app.Current.Links.Exists(l => l == "about:help");
+                    app.Navigate("about:unmark?0");
+                    app.LoadBookmarks();
+                    c.That(added && saved && listed && app.Bookmarks.Count == 0 && app.Current?.Title == "Tanda", "bookmarks: add once, saved, listed, removed");
+                }
+                finally { BrowserApp.BookmarkFile = keep; app.LoadBookmarks(); }
                 app.Navigate("http://localhost:1/");
                 c.That(app.LastError.Length > 0 && app.Current?.Title == "Tidak dapat memuat", "an unreachable address shows an error page (" + app.LastError + ")");
             }
             catch (Exception e) { c.That(false, "network: " + e.Message); }
+            try
+            {
+                // Buitenzorg.Security.Cryptography: known test vectors
+                c.That(Hash.ToHex(Hash.Sha256("abc")) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+                    && Hash.ToHex(Hash.Hmac(HashAlgorithm.Sha256, Hash.FromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), System.Text.Encoding.UTF8.GetBytes("Hi There")))
+                       == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7", "crypto: SHA-256 (FIPS 180) + HMAC (RFC 4231)");
+                var gcm = new AesGcm(new byte[16]);
+                var ct = gcm.Encrypt(new byte[12], new byte[16]);
+                var bad = new byte[ct.Length]; for (int i = 0; i < ct.Length; i++) bad[i] = ct[i]; bad[3] ^= 1;
+                var pt = gcm.Decrypt(new byte[12], ct);
+                c.That(Hash.ToHex(ct) == "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf" && pt != null && pt.Length == 16 && pt[0] == 0
+                    && gcm.Decrypt(new byte[12], bad) == null, "crypto: AES-GCM (test case 3), tampered ciphertext refused");
+                var ec = EcdsaP256.Generate();
+                var msg = System.Text.Encoding.UTF8.GetBytes("tanda tangan Buitenzorg");
+                var sig = ec.Sign(msg);
+                c.That(ec.PublicKey.Length == 65 && sig.Length == 64 && EcdsaP256.Verify(ec.PublicKey, msg, sig)
+                    && !EcdsaP256.Verify(ec.PublicKey, System.Text.Encoding.UTF8.GetBytes("tanda tangan lain"), sig), "crypto: ECDSA P-256 sign + verify");
+                var rn = Hash.FromHex("ada16516670d6fba84027e5d50ba645fadcbf420e92274b76197c2665aba37866ee4eac532a06d4b71d32a7fe77fd9a2cdfceaaa201e0a7f45cf7894926490f57fd2f39dfb6cf3329ba73c3a139ae54d86acf73f20976c89ae5489d4581319910d9e5e33c3c89e78bfe15961a0aa4e99bcc79082c5596c7dfcb980b848df6bebba0f8128cb27dbfa585241019c663dbc5a81d098a7cf5b19ce40c70ee09ceb4dc5599cdb98353206a937e21aff4453104edaac3700311d4da637dbea40fe1532e66e0784902e1b1d8addf2525d8d309e99137b28907e562ceb6ab100ff8005f2dbc382871487582defa5eea64d2bf25ceeffd23a5773d884d02ba1703d392c09");
+                var rs = Hash.FromHex("aca85bb88c6f23b27f2f6a0c8d08b7dcb82fff483509f4acc3124b1b6dd5853393da792f1b2d006869b780479828d9a6d1f74dffceaf091748a792569448f95fc943dfc603e07f67de78ddd4fce52a13d731785b255927afc0462679902d184d3969d41c1072ec9b384cd389f5dcdafce73f7be48ca0906edbaec8046353cce811ec4c371245e3f17c2b29dc9d413cda7ee374f463d76fd1c594c0c8c93f51eeec52d29f73ff98c8b1790ef1caa4bbd5813a687e1400871497565cb9f8e3c20f2d4a46e4807f1c6fd8c1fbb71bea271a4c7d4c0cb0ad2fbba3bce6c0e3c883ed7be712afa5c16fd37ef00def0fde49e896d5caddee2c29c90ba3b6d9ed8c518a");
+                var e3 = new byte[] { 1, 0, 1 };
+                c.That(Rsa.VerifyPkcs1Sha256(rn, e3, System.Text.Encoding.UTF8.GetBytes("Buitenzorg"), rs)
+                    && !Rsa.VerifyPkcs1Sha256(rn, e3, System.Text.Encoding.UTF8.GetBytes("buitenzorg"), rs), "crypto: RSA-2048 PKCS#1 v1.5 signature (made by Python cryptography)");
+                int roots = RootCertificates.Count;
+                bool isrg = false;
+                for (int i = 0; i < roots; i++) if (RootCertificates.Name(i) == "ISRG Root X1") isrg = true;
+                c.That(roots >= 4 && isrg && SecureRandom.Bytes(32).Length == 32, "crypto: trusted roots (" + roots + ", ISRG Root X1 among them) + random bytes");
+            }
+            catch (Exception e) { c.That(false, "crypto: " + e.Message); }
             try
             {
                 c.That(WebSocket.AcceptKey("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "WebSocket accept key (RFC 6455 example)");

@@ -219,6 +219,15 @@ public sealed class Viewport3D : Control
 
     protected override void OnPointerReleased(PointerEventArgs e) { _drag = false; base.OnPointerReleased(e); }
 
+    protected override bool OnRelativeMotion(int dx, int dy)
+    {
+        Garden.Azimuth -= dx * 0.005f;
+        Garden.Elevation = Math.Clamp(Garden.Elevation + dy * 0.005f, -1.2f, 1.4f);
+        Garden.PlaceCamera();
+        InvalidateVisual();
+        return true;
+    }
+
     protected override void OnPointerWheelChanged(PointerEventArgs e)
     {
         Garden.Distance -= e.WheelDelta * 0.6f;
@@ -239,6 +248,13 @@ public sealed class Viewport3D : Control
             case Keys.Down: g.Elevation -= 0.1f; break;
             case 'w': g.Distance -= 0.6f; break;
             case 's': g.Distance += 0.6f; break;
+            case 'm':
+                // mouse look: the cursor is held in the window, motion turns the camera
+                if (Window is Window win) win.SetPointerLock(!win.PointerLocked);
+                break;
+            case (char)27:
+                if (Window is Window w2 && w2.PointerLocked) w2.SetPointerLock(false); else used = false;
+                break;
             case 'j': g.DropFruit(-2.4f + 0.3f * (g.Fruit.Count % 3 - 1), 0.2f * (g.Fruit.Count % 2)); break;
             default: used = false; break;
         }
@@ -377,6 +393,14 @@ public static class RuangApp
         w.DispatchKey(Keys.Left);
         w.DispatchKey('w');
         c.That(Vector3.Distance(before, g.Camera.Position) > 0.3f, "arrow and W keys move the camera");
+
+        // mouse look: M locks the pointer, relative motion turns the camera, Esc releases
+        w.DispatchKey('m');
+        float az = g.Azimuth;
+        w.DispatchRelative(40, 0);
+        bool turned = MathF.Abs(g.Azimuth - az) > 0.1f;
+        w.DispatchKey((char)27);
+        c.That(turned && !w.PointerLocked, "M = mouse look: relative motion turns the camera, Esc releases it");
 
         // the animation moves the lantern
         var l0 = g.Lantern.Position;

@@ -123,6 +123,8 @@ public sealed class VideoView : Control
     int _w, _h;
     public int Shown = -1;
     public string Message = "";
+    /// <summary>The subtitle on screen now (null = none).</summary>
+    public Cue? Caption;
 
     protected override Size MeasureOverride(Size a) => new Size(Math.Max(160, a.Width), Math.Max(90, a.Height));
 
@@ -172,6 +174,20 @@ public sealed class VideoView : Control
         dc.FillRect(b, 0x0B140F);
         if (_w > 0 && _w <= b.Width && _h <= b.Height) dc.Blit(b.X + (b.Width - _w) / 2, b.Y + (b.Height - _h) / 2, _w, _h, _px);
         if (Message.Length > 0) dc.Text(b.X + 12, b.Y + 12, Message, 0xE0E0E0);
+        if (Caption != null)
+        {
+            int lh = Fonts.LineHeight(1) + 2;
+            int n = Caption.Lines.Count;
+            int y = b.Bottom - 14 - n * lh;
+            for (int i = 0; i < n; i++)
+            {
+                string t = Caption.Lines[i];
+                int w = Math.Min(b.Width - 16, Fonts.Measure(t, 1));
+                int x = b.X + (b.Width - w) / 2;
+                dc.FillRoundRect(new Rect(x - 8, y + i * lh - 2, w + 16, lh), 4, 0x101814);
+                dc.Text(x, y + i * lh, t, 0xFFF6D8, 1);
+            }
+        }
     }
 }
 
@@ -182,6 +198,8 @@ public sealed class VideoApp
     public readonly List<string> Paths = new List<string>();
     public readonly List<string> Names = new List<string>();
     public Avi? Clip { get; private set; }
+    /// <summary>Subtitles of the open clip (a .SRT or .VTT file with the same name), or null.</summary>
+    public Subtitles? Subs { get; private set; }
     readonly ProgressBar _bar = new ProgressBar { Maximum = 1000, Height = 10 };
     readonly TextBlock _time = new TextBlock("0:00 / 0:00");
     readonly TextBlock _playText = new TextBlock("Putar");
@@ -242,6 +260,7 @@ public sealed class VideoApp
 
     public bool Open(int i)
     {
+        Subs = LoadSubtitles(Paths[i]);
         var b = Files.ReadAllBytes(Paths[i]);
         if (b == null) return Load(new Avi { Error = "berkas tidak terbaca" });
         if (Movie.IsMovieName(Paths[i]))
@@ -251,6 +270,26 @@ public sealed class VideoApp
             return Load(m == null ? new Avi { Error = Movie.LastError } : Avi.FromMovie(m));
         }
         return Load(Avi.Parse(b));
+    }
+
+    /// <summary>NAME.SRT or NAME.VTT next to the video.</summary>
+    public static Subtitles? LoadSubtitles(string videoPath)
+    {
+        int dot = videoPath.LastIndexOf('.');
+        if (dot <= 0) return null;
+        string stem = videoPath.Substring(0, dot);
+        foreach (var ext in new[] { ".SRT", ".srt", ".VTT", ".vtt" })
+        {
+            try
+            {
+                if (Files.GetInfo(stem + ext) == null) continue;
+                var t = Files.ReadAllText(stem + ext);
+                var subs = Subtitles.Parse(t);
+                if (subs.Cues.Count > 0) return subs;
+            }
+            catch (Exception) { }
+        }
+        return null;
     }
 
     public bool Load(Avi avi)
@@ -349,6 +388,8 @@ public sealed class VideoApp
         double pos = Position;
         _time.Text = Clock(pos) + " / " + Clock(Clip.Seconds) + "   " + (Clip.Title.Length > 0 ? Clip.Title + "   " : "") + Clip.Width + "x" + Clip.Height + ", " + (int)Math.Round(Clip.Fps) + " fps" + (Clip.HasSound ? ", suara " + Clip.AudioRate / 1000 + " kHz" : ", tanpa suara") + (Clip.Codecs.Length > 0 ? "   (" + Clip.Codecs + ")" : "");
         _bar.Value = Clip.Seconds > 0 ? pos * 1000 / Clip.Seconds : 0;
+        var cap = Subs?.At(pos);
+        if (cap != View.Caption) { View.Caption = cap; View.InvalidateVisual(); }
         _playText.Text = Playing ? "Jeda" : "Putar";
     }
 
@@ -405,6 +446,9 @@ public sealed class VideoApp
         c.That(!app.Playing, "paused");
         app.W.RenderFrame();
         c.That(app.W.LastFrameOps > 5, "drew " + app.W.LastFrameOps + " ops");
+        var subs = Subtitles.Parse("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02,500\n<i>Halo</i> {\\an8}dunia\n\n2\r\n00:00:03,000 --> 00:00:04,000 align:start\r\nbaris satu\r\nbaris &amp; dua\r\n\r\nbukan cue\n");
+        c.That(subs.Cues.Count == 2 && subs.At(1.5)?.Text == "Halo dunia" && subs.At(2.7) == null && subs.At(3.5)?.Lines.Count == 2 && subs.At(3.5)!.Lines[1] == "baris & dua",
+            "subtitles: SRT/VTT times, tags removed, gaps, two lines (" + subs.Cues.Count + " cues)");
         int fajar = app.Names.FindIndex(n => n.ToUpperInvariant() == "FAJAR.AVI");
         if (fajar >= 0)
         {
@@ -412,6 +456,9 @@ public sealed class VideoApp
             int decoded = 0;
             for (int i = 0; i < 120; i += 30) { app.View.Shown = -1; if (app.View.Show(app.Clip!, i)) decoded++; }
             c.That(decoded == 4, "MJPEG frames decoded (" + decoded + " of 4 sampled)");
+            c.That(app.Subs != null && app.Subs.Cues.Count == 4, "FAJAR.SRT found next to the video (" + (app.Subs?.Cues.Count ?? 0) + " cues)");
+            app.Seek(4.0);
+            c.That(app.View.Caption != null && app.View.Caption.Lines.Count == 2 && app.View.Caption.Lines[1] == "matahari baru terbit", "subtitle shown at 0:04 (" + app.View.Caption?.Text + ")");
         }
         // host-read movies (on the device): VP8 + Opus in WebM, Motion JPEG + MP3 in MP4
         string[] mfiles = { "KEBUN.WEB", "SENJA.MP4" };

@@ -50,6 +50,7 @@ public static class SettingsApp
     public sealed class Parts
     {
         public ListBox Nav = null!, Themes = null!, Wallpapers = null!, Savers = null!;
+        public Button SaverPreview = null!;
         public Slider Delay = null!, Volume = null!;
         public ToggleSwitch Animations = null!, Cursor = null!;
         public ComboBox Resolution = null!, Scale = null!, Icons = null!;
@@ -413,7 +414,9 @@ public static class SettingsApp
             parts.DelayText.Text = "Mulai setelah " + v + " detik tanpa input";
             AppSettings.ScreensaverDelaySeconds = v;
         };
-        var saver = Page("Screensaver", "Muncul saat desktop menganggur; gerakkan mouse atau tekan tombol untuk kembali.", parts.Savers, parts.DelayText, parts.Delay);
+        parts.SaverPreview = new Button("Pratinjau", _ => Buitenzorg.App.Shell.Run("saver preview")).WithClass("subtle");
+        parts.SaverPreview.Margin = new Thickness(0, 12, 0, 0);
+        var saver = Page("Screensaver", "Muncul saat desktop menganggur; gerakkan mouse atau tekan tombol untuk kembali.", parts.Savers, parts.DelayText, parts.Delay, parts.SaverPreview);
 
         // Suara
         bool present = AppAudio.IsPresent;

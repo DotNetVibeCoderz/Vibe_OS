@@ -12,6 +12,10 @@
 //!   (camx, camy) -- tile n (1-based) is the n-th tile-sized square of the
 //!   tileset, row by row; 0 is empty
 //!
+//! - `PixOrient(int[] dst, int[] src, sw, sh, orientation)`: `src` turned
+//!   and/or mirrored as an EXIF orientation (1..8) says; `dst` is sh x sw for
+//!   5..8, else sw x sh (the image viewer)
+//!
 //! All clip to the destination. Each returns 0, or -1 for bad arguments.
 
 use alloc::vec::Vec;
@@ -145,8 +149,44 @@ fn pix_tiles(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret(ok)
 }
 
+/// Where logical pixel (lx, ly) of an EXIF-oriented image comes from in the
+/// stored one (sw x sh).
+pub fn orient_source(o: i64, lx: i64, ly: i64, sw: i64, sh: i64) -> (i64, i64) {
+    match o {
+        2 => (sw - 1 - lx, ly),
+        3 => (sw - 1 - lx, sh - 1 - ly),
+        4 => (lx, sh - 1 - ly),
+        5 => (ly, lx),
+        6 => (ly, sh - 1 - lx),
+        7 => (sw - 1 - ly, sh - 1 - lx),
+        8 => (sw - 1 - ly, lx),
+        _ => (lx, ly),
+    }
+}
+
+fn pix_orient(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let src = ints(i, a, 1);
+    let (sw, sh, o) = (int(a, 2), int(a, 3), int(a, 4));
+    if sw <= 0 || sh <= 0 || (src.len() as i64) < sw * sh {
+        return ret(false);
+    }
+    let (lw, lh) = if (5..=8).contains(&o) { (sh, sw) } else { (sw, sh) };
+    let ok = with_dst(i, a, |d| {
+        if (d.len() as i64) < lw * lh {
+            return;
+        }
+        for ly in 0..lh {
+            for lx in 0..lw {
+                let (x, y) = orient_source(o, lx, ly, sw, sh);
+                d[(ly * lw + lx) as usize] = src[(y * sw + x) as usize];
+            }
+        }
+    });
+    ret(ok)
+}
+
 pub fn register(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 3] = [("PixFill", pix_fill), ("PixBlit", pix_blit), ("PixTiles", pix_tiles)];
+    let natives: [(&str, rustclr_core::interp::NativeFn); 4] = [("PixFill", pix_fill), ("PixBlit", pix_blit), ("PixTiles", pix_tiles), ("PixOrient", pix_orient)];
     for (name, f) in natives {
         interp.register_native(alloc::format!("pinvoke:buitenzorg!{}", name), f);
     }
