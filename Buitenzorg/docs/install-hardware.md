@@ -136,7 +136,7 @@ take a photo of it: the panic is not in that file.
 | Graphics | the firmware's framebuffer | no GPU driver on PCs: drawn by the CPU. Tested up to 2560x1440; BIOS image 1280x720 |
 | Keyboard/mouse | USB (xHCI: HID boot protocol) and PS/2 | no USB 2.0-only (EHCI) controllers; **hot-plug** works on root ports and behind USB 2.0 hubs (a stick plugged in later is mounted at `/usb0`; `lsusb` lists what is attached) |
 | Storage | IDE, SATA (AHCI), NVMe, USB sticks on xHCI | 512-byte sectors; no RAID/Intel RST mode (set SATA to AHCI); a USB 3 hub is not supported |
-| Network | Intel e1000 family (82540, 82545, 82574, ...), on-board Intel I217/I218/I219 (verified: I219-LM, Latitude 7290), virtio-net | **no** laptop Wi-Fi yet: `wifi` lists the wireless controller it found (vendor:device), so a driver can target it; `ipconfig` says why the network is off, `netup` retries. Realtek RTL8139 works (QEMU), RTL8169 family untested |
+| Network | Intel e1000 family (82540, 82545, 82574, ...), on-board Intel I217/I218/I219 (verified: I219-LM, Latitude 7290), virtio-net | **no** working laptop Wi-Fi yet: `wifi` lists the wireless controller it found (vendor:device); the Latitude 7290 has an **Intel Wireless 8265** (8086:24fd), and `wifi up` runs driver step 1 for it (load the firmware, wait for ALIVE -- untested on hardware; scan/join are later steps); `ipconfig` says why the network is off, `netup` retries. Realtek RTL8139 works (QEMU), RTL8169 family untested |
 | Sound | Intel HD Audio, AC'97, virtio-sound | HD Audio: output only (speaker/headphone/line out), first codec found |
 | File system | FAT12/16/32 | no journal: use `shutdown` |
 

@@ -12,6 +12,7 @@ pub mod hpet;
 pub mod intel_blt;
 pub mod intel_gpu;
 pub mod intel_render;
+pub mod iwlwifi;
 pub mod mouse;
 pub mod nvme;
 pub mod pci;

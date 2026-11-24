@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, hpet, intel_gpu, mouse, nvme, pci, power, realtek, rtc, serial};
+pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, hpet, intel_gpu, iwlwifi, mouse, nvme, pci, power, realtek, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block

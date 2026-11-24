@@ -748,6 +748,13 @@ fn main() {
             add_file(&mut builder, &mut files, name.into(), bytes);
         }
     }
+    // Intel Wireless 8265 firmware (laptops, platform/pc/iwlwifi.rs), fetched
+    // by scripts/fetch-wifi-firmware.* into kernel/target/wifi; not committed.
+    let iwl = manifest_dir().join("..").join("target").join("wifi").join("IWL8265.UCO");
+    println!("cargo:rerun-if-changed={}", iwl.display());
+    if let Ok(bytes) = std::fs::read(&iwl) {
+        add_file(&mut builder, &mut files, "wifi/iwl8265.uco".into(), bytes);
+    }
     // The C runtime's test programs (scripts/build-c-tests.*, zig cc):
     // POSIX.ELF -- pthreads + BSD sockets (app::posix_self_test)
     let c_dir = manifest_dir().join("..").join("target").join("c");
