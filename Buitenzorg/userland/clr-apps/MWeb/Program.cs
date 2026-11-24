@@ -202,6 +202,11 @@ public sealed class BrowserApp
     /// <summary>Bookmarks: (address, title), saved in <see cref="BookmarkFile"/>.</summary>
     public readonly List<(string Url, string Title)> Bookmarks = new List<(string, string)>();
     public static string BookmarkFile = "/disk/APPDATA/MWEB/TANDA.TXT";
+    /// <summary>Cookies of every page, download and picture (persistent ones are kept in <see cref="CookieFile"/>).</summary>
+    public static CookieJar Jar = CookieJar.Shared;
+    public static string CookieFile = "/disk/APPDATA/MWEB/KUKI.TXT";
+    string _savedCookies = "";
+    readonly bool _headless;
     static volatile string _bookmarksHtml = "";
     static readonly System.Diagnostics.Stopwatch _sw = System.Diagnostics.Stopwatch.StartNew();
     static long _epoch = -1;
@@ -219,6 +224,7 @@ public sealed class BrowserApp
 
     public BrowserApp(bool headless)
     {
+        _headless = headless;
         W = new Window("Peramban", 860, 600, headless);
         View.Pal = new Palette { Text = 0x1F2A24, Link = 0x1565C0, Heading = 0x1B4D2E, Muted = 0x6B7A71, Rule = 0xD5DDD8, Back = 0xFBFCF8 };
         View.LinkClicked += OnLink;
@@ -299,7 +305,8 @@ public sealed class BrowserApp
         return null;
     }
 
-    public void Navigate(string url, bool record = true)
+    /// <summary>Open `url`; `post` = a form's urlencoded body to POST there.</summary>
+    public void Navigate(string url, bool record = true, byte[]? post = null)
     {
         if (url.StartsWith("about:unmark?"))
         {
@@ -316,10 +323,10 @@ public sealed class BrowserApp
         CloseField();
         _status.Text = "Memuat " + url + " ...";
         int id = ++_nav;
-        if (Synchronous) { var r = Fetch(url); Show(id, r); LoadImages(id, r.Page, r.Url, sync: true); return; }
+        if (Synchronous) { var r = Fetch(url, post); Show(id, r); LoadImages(id, r.Page, r.Url, sync: true); return; }
         var t = new Thread(() =>
         {
-            var r = Fetch(url);
+            var r = Fetch(url, post);
             Dispatcher.Post(() => Show(id, r));
             LoadImages(id, r.Page, r.Url, sync: false);
         });
@@ -432,6 +439,37 @@ public sealed class BrowserApp
         catch (Exception) { }
     }
 
+    /// <summary>Read the persistent cookies (the app's start).</summary>
+    public void LoadCookies()
+    {
+        try
+        {
+            if (Files.GetInfo(CookieFile) == null) return;
+            Jar.Load(Files.ReadAllText(CookieFile));
+            _savedCookies = Jar.Save();
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>Write the persistent cookies when they changed (never from a headless test).</summary>
+    void SaveCookies()
+    {
+        if (_headless) return;
+        string now = Jar.Save();
+        if (now == _savedCookies) return;
+        try { if (EnsureFolder(CookieFile) && Files.WriteAllText(CookieFile, now)) _savedCookies = now; } catch (Exception) { }
+    }
+
+    static bool EnsureFolder(string file)
+    {
+        int slash = file.LastIndexOf('/');
+        string dir = file.Substring(0, slash);
+        if (Files.GetInfo(dir) != null) return true;
+        int s1 = dir.LastIndexOf('/');
+        if (s1 > 0 && Files.GetInfo(dir.Substring(0, s1)) == null) Files.CreateDirectory(dir.Substring(0, s1));
+        return Files.CreateDirectory(dir);
+    }
+
     bool SaveBookmarks()
     {
         var sb = new System.Text.StringBuilder();
@@ -503,7 +541,7 @@ public sealed class BrowserApp
     }
 
     /// <summary>Fetch and parse (any thread).</summary>
-    public static Result Fetch(string url)
+    public static Result Fetch(string url, byte[]? post = null)
     {
         var r = new Result { Url = url };
         try
@@ -519,8 +557,8 @@ public sealed class BrowserApp
                 LoadScripts(r.Page, url);
                 return r;
             }
-            var http = new HttpClient();
-            var resp = http.Get(url);
+            var http = new HttpClient { Cookies = Jar };
+            var resp = post != null ? http.Post(url, "application/x-www-form-urlencoded", post) : http.Get(url);
             r.Url = resp.Url;
             string ct = resp.ContentType.ToLowerInvariant();
             r.Info = resp.Status + " " + resp.Reason + (resp.Tls.Length > 0 ? "  -  terenkripsi (" + resp.Tls + ")" : "");
@@ -614,6 +652,7 @@ public sealed class BrowserApp
             int f = Html.Click(Current, it.LinkIndex);
             bool handled = (f & Html.JsHandled) != 0;
             HandleScript(f);
+            if (!handled && Submit(it.LinkIndex, pressed: true)) return;
             if (handled || href.StartsWith("js:")) return;
         }
         if (href.StartsWith("js:") || href.StartsWith("input:") || href.StartsWith("javascript:") || href == "#") return;
@@ -650,6 +689,28 @@ public sealed class BrowserApp
         CloseField();
         EnterText(link, _field.Text);
         View.Focus();
+        Submit(link, pressed: false);
+    }
+
+    /// <summary>Send the form around link `link`: a pressed submit button, or (pressed
+    /// false) Enter in a form's only text field. GET puts the fields in the address,
+    /// POST sends them urlencoded. False = nothing was sent.</summary>
+    public bool Submit(int link, bool pressed)
+    {
+        var page = Current;
+        if (page == null) return false;
+        var form = Html.Form(page, link, pressed, out int flags);
+        HandleScript(flags);
+        if (form == null || Current != page) return false;
+        var target = Resolve(form[1].Length > 0 ? form[1] : CurrentUrl);
+        if (target == null) return false;
+        int h = target.IndexOf('#');
+        if (h >= 0) target = target.Substring(0, h);
+        if (form[0] == "POST") { Navigate(target, post: Encoding.UTF8.GetBytes(form[2])); return true; }
+        int q = target.IndexOf('?');
+        if (q >= 0) target = target.Substring(0, q);
+        Navigate(target + "?" + form[2]);
+        return true;
     }
 
     /// <summary>Put text into field link <paramref name="link"/> (fires input + change).</summary>
@@ -716,6 +777,7 @@ public sealed class BrowserApp
         HandleScript(jf & ~Html.JsChanged);
         if ((jf & Html.JsChanged) != 0) { Html.Refresh(r.Page); _titleText.Text = r.Page.Title.Length > 0 ? r.Page.Title : r.Url; }
         Relayout();
+        SaveCookies();
         if (!_address.IsFocused) View.Focus(); // the keys scroll the page at once
         _status.Text = r.Error.Length > 0 ? "Gagal: " + r.Error : (r.Info.Length > 0 ? r.Info + "  -  " : "") + StatusIdle();
         RebuildTabs();
@@ -747,7 +809,7 @@ public sealed class BrowserApp
                     string? abs = baseUrl.StartsWith("http") ? Url.Parse(baseUrl)?.Resolve(src)?.ToString() : (src.Contains("://") ? src : null);
                     if (abs != null)
                     {
-                        var resp = new HttpClient { MaxBody = 6 << 20 }.Get(abs);
+                        var resp = new HttpClient { MaxBody = 6 << 20, Cookies = Jar }.Get(abs);
                         if (resp.Ok) data = resp.Body;
                     }
                 }
@@ -834,6 +896,17 @@ public sealed class BrowserApp
         return bmp;
     }
 
+    /// <summary>A request header's value ("" = absent).</summary>
+    static string HeaderValue(string request, string name)
+    {
+        foreach (var l in request.Split('\n'))
+        {
+            int colon = l.IndexOf(':');
+            if (colon > 0 && string.Equals(l.Substring(0, colon).Trim(), name, StringComparison.OrdinalIgnoreCase)) return l.Substring(colon + 1).Trim();
+        }
+        return "";
+    }
+
     static void Serve(TcpServer server, Func<bool> stop)
     {
         var img = TestImage();
@@ -854,6 +927,18 @@ public sealed class BrowserApp
                 string line = req.ToString();
                 int sp = line.IndexOf(' '), sp2 = line.IndexOf(' ', sp + 1);
                 string path = sp > 0 && sp2 > sp ? line.Substring(sp + 1, sp2 - sp - 1) : "/";
+                string reqBody = "";
+                {
+                    int headEnd = line.IndexOf("\r\n\r\n");
+                    int cl = HeaderValue(line, "Content-Length").Length > 0 ? int.Parse(HeaderValue(line, "Content-Length")) : 0;
+                    reqBody = headEnd >= 0 ? line.Substring(headEnd + 4) : "";
+                    while (reqBody.Length < cl)
+                    {
+                        int n = c.Read(buf, 0, buf.Length);
+                        if (n <= 0) break;
+                        reqBody += Encoding.ASCII.GetString(buf, 0, n);
+                    }
+                }
                 if (path == "/besar.bin")
                 {
                     // a download: 20000 bytes, honouring "Range: bytes=N-"
@@ -900,6 +985,32 @@ public sealed class BrowserApp
                     var h = Encoding.ASCII.GetBytes("HTTP/1.1 302 Found\r\nLocation: /dua\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                     c.Write(h, 0, h.Length);
                 }
+                else if (path == "/kuki")
+                {
+                    var h = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nSet-Cookie: sesi=abc123; Path=/; HttpOnly\r\n" +
+                        "Set-Cookie: tema=hijau; Max-Age=3600\r\nSet-Cookie: asing=1; Domain=example.com\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+                    c.Write(h, 0, h.Length);
+                }
+                else if (path == "/kuki-hapus")
+                {
+                    var h = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nSet-Cookie: sesi=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    c.Write(h, 0, h.Length);
+                }
+                else if (path == "/kuki-cek")
+                    Reply(c, "200 OK", "text/plain", Encoding.UTF8.GetBytes("cookie=" + HeaderValue(line, "Cookie")), chunked: false);
+                else if (path == "/formulir")
+                    Reply(c, "200 OK", "text/html", Encoding.UTF8.GetBytes("<title>Formulir</title>" +
+                        "<form action=\"/kirim\" method=\"post\"><input name=\"nama\" value=\"Ani\"> <input type=\"checkbox\" name=\"setuju\" checked>" +
+                        "<input type=\"checkbox\" name=\"tidak\"><select name=\"kota\"><option>Bogor</option><option value=\"jkt\" selected>Jakarta</option></select>" +
+                        "<textarea name=\"pesan\">halo dunia</textarea><input type=\"hidden\" name=\"token\" value=\"t&1\">" +
+                        "<input type=\"submit\" name=\"aksi\" value=\"Kirim\"></form>" +
+                        "<form action=\"/cari\"><input name=\"q\" placeholder=\"cari\"></form>" +
+                        "<form action=\"/kirim\" method=\"post\"><input name=\"a\"><input name=\"b\"></form>" +
+                        "<form action=\"/kirim\" method=\"post\" onsubmit=\"document.title = 'batal'; return false\"><input type=\"submit\" value=\"Batal\"></form>"), chunked: false);
+                else if (path == "/kirim")
+                    Reply(c, "200 OK", "text/html", Encoding.UTF8.GetBytes("<title>Terkirim</title><p>" + (line.StartsWith("POST") ? "POST" : "GET") + " diterima: " + Escape(reqBody) + "</p>"), chunked: false);
+                else if (path.StartsWith("/cari?"))
+                    Reply(c, "200 OK", "text/html", Encoding.UTF8.GetBytes("<title>Hasil</title><p>cari: " + Escape(path.Substring(6)) + "</p>"), chunked: false);
                 else if (path == "/gambar.png")
                     Reply(c, "200 OK", img[0] == 'B' ? "image/bmp" : "image/png", img, chunked: false);
                 else
@@ -1098,6 +1209,17 @@ public sealed class BrowserApp
                 var r3 = http.Get("http://localhost:" + TestPort + "/tidak-ada");
                 c.That(r3.Status == 404, "404 reported");
 
+                // cookies: stored from Set-Cookie, sent back, a foreign domain refused, deleted by a past date
+                var jar = new CookieJar();
+                var hc = new HttpClient { TimeoutMs = 8000, Cookies = jar };
+                hc.Get("http://localhost:" + TestPort + "/kuki");
+                string sent = hc.Get("http://localhost:" + TestPort + "/kuki-cek").Text;
+                bool persistOne = jar.Save().Contains("tema\thijau") && !jar.Save().Contains("sesi");
+                hc.Get("http://localhost:" + TestPort + "/kuki-hapus");
+                string after = hc.Get("http://localhost:" + TestPort + "/kuki-cek").Text;
+                c.That(sent.Contains("sesi=abc123") && sent.Contains("tema=hijau") && !sent.Contains("asing") && persistOne
+                    && !after.Contains("sesi") && after.Contains("tema=hijau"), "cookies: set, sent, foreign domain refused, saved, deleted (" + sent + " / " + after + ")");
+
                 var app = new BrowserApp(headless: true) { Synchronous = true };
                 app.Navigate("http://localhost:" + TestPort + "/");
                 c.That(app.Current != null && app.Current.Title == "Uji Peramban" && app.LastError.Length == 0, "browser shows the page: " + (app.Current?.Title ?? app.LastError));
@@ -1114,6 +1236,51 @@ public sealed class BrowserApp
                 c.That(app.Current?.Title == "Halaman Dua", "clicking the link navigates (" + app.Current?.Title + ")");
                 app.Back();
                 c.That(app.Current?.Title == "Uji Peramban", "back");
+                // HTML forms (the page engine is the host's on the device; off it pages have no fields)
+                app.Navigate("http://localhost:" + TestPort + "/formulir");
+                var fp = app.Current;
+                if (fp != null && fp.NativeId > 0)
+                {
+                    int Button(string label) { var it = app.View.Items.Find(i => i.Text == "[" + label + "]" && i.LinkIndex >= 0); return it == null ? -1 : it.LinkIndex; }
+                    app.ClickLink(Button("Kirim"));
+                    bool posted = app.Current?.Title == "Terkirim" && app.View.Items.Exists(i => i.Text.Contains("nama=Ani&setuju=on&kota=jkt&pesan=halo+dunia&token=t%261&aksi=Kirim"));
+                    c.That(posted, "form POST: fields, checkbox, select, textarea, hidden, the button (" + string.Join(" ", app.View.Items.ConvertAll(i => i.Text)) + ")");
+                    // text fields in document order: nama, pesan (textarea), q, a, b
+                    List<int> Fields() { var v = new List<int>(); for (int i = 0; i < app.Current!.Links.Count; i++) if (app.Current.Links[i].StartsWith("input:")) v.Add(i); return v; }
+                    app.Back();
+                    int q = Fields()[2];
+                    app.EnterText(q, "kebun raya");
+                    bool sentGet = app.Submit(q, pressed: false);
+                    c.That(sentGet && app.CurrentUrl.EndsWith("/cari?q=kebun+raya") && app.View.Items.Exists(i => i.Text.Contains("q=kebun+raya")), "form GET by Enter in its only field (" + app.CurrentUrl + ")");
+                    app.Back();
+                    fp = app.Current!;
+                    string at = app.CurrentUrl;
+                    bool none = !app.Submit(Fields()[3], pressed: false);
+                    app.ClickLink(Button("Batal"));
+                    c.That(none && app.CurrentUrl == at && app.Current?.Title == "batal", "Enter in a two-field form without a button sends nothing; onsubmit return false cancels (" + app.Current?.Title + ")");
+                    bool implicitPost = Fields().Count > 0 && app.Submit(Fields()[0], pressed: false) && app.Current?.Title == "Terkirim" && app.View.Items.Exists(i => i.Text.Contains("&aksi=Kirim"));
+                    c.That(implicitPost, "Enter in a field submits through the form's default button");
+                    // DNS AAAA for apps (DNS_RESOLVE6): localhost = our link-local address, then TCP over IPv6 to the test server
+                    var v6 = Dns.Resolve6("localhost");
+                    bool tcp6 = false;
+                    if (v6 != null && v6[0] == 0xFE && v6[1] == 0x80)
+                    {
+                        try
+                        {
+                            var hexs = new List<string>();
+                            for (int k = 0; k < 16; k += 2) hexs.Add(((v6[k] << 8) | v6[k + 1]).ToString("x"));
+                            var conn = TcpConnection.Connect(string.Join(":", hexs), TestPort, 5000);
+                            var rq = Encoding.ASCII.GetBytes("GET /kuki-cek HTTP/1.0\r\n\r\n");
+                            conn.Write(rq, 0, rq.Length);
+                            var rb = new byte[512];
+                            int got = conn.Read(rb, 0, rb.Length);
+                            tcp6 = got > 0 && Encoding.ASCII.GetString(rb, 0, got).StartsWith("HTTP/1.1 200");
+                            conn.Close();
+                        }
+                        catch (Exception) { }
+                    }
+                    c.That(tcp6, "DNS AAAA (localhost) + HTTP over IPv6");
+                }
                 app.Navigate("about:home");
                 c.That(app.Current?.Title == "Beranda Peramban" && app.Current.Links.Count >= 4, "about:home");
 
@@ -1300,6 +1467,7 @@ public static class Program
         }
         if (Array.IndexOf(args, "--bench") >= 0) { Bench(args[args.Length - 1]); return 0; }
         var b = new BrowserApp(headless: false);
+        b.LoadCookies();
         string start = "about:home";
         foreach (var a in args) if (!a.StartsWith("--") && a != "&") start = BrowserApp.Normalize(a);
         b.Navigate(start);

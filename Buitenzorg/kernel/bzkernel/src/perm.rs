@@ -12,7 +12,7 @@
 //!
 //! | permission | syscalls |
 //! |---|---|
-//! | `network` | NET_SOCKET/BIND/SEND/RECV/CLOSE, TCP_OP, DNS_RESOLVE |
+//! | `network` | NET_SOCKET/BIND/SEND/RECV/CLOSE, TCP_OP, DNS_RESOLVE(6) |
 //! | `audio` | AUDIO_SET_VOLUME, AUDIO_TONE, AUDIO_PLAY, AUDIO_WRITE |
 //! | `microphone` | AUDIO_READ (recording) |
 //! | `devices` | HW_GPIO, HW_I2C, HW_SPI, HW_UART, HW_LED |
@@ -136,7 +136,7 @@ pub fn data_dir(pkg: &str) -> String {
 pub fn needed(nr: u64, a0: u64, me: u64) -> u32 {
     use bz_abi::sysno::*;
     match nr {
-        NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE => NETWORK,
+        NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE | DNS_RESOLVE6 => NETWORK,
         AUDIO_SET_VOLUME | AUDIO_TONE | AUDIO_PLAY | AUDIO_WRITE => AUDIO,
         AUDIO_READ => MICROPHONE,
         HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED => DEVICES,
@@ -154,7 +154,7 @@ fn gated(nr: u64) -> bool {
     use bz_abi::sysno::*;
     matches!(
         nr,
-        NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE | AUDIO_SET_VOLUME | AUDIO_TONE | AUDIO_PLAY
+        NET_SOCKET | NET_BIND | NET_SEND | NET_RECV | NET_CLOSE | TCP_OP | DNS_RESOLVE | DNS_RESOLVE6 | AUDIO_SET_VOLUME | AUDIO_TONE | AUDIO_PLAY
             | AUDIO_WRITE | AUDIO_READ | HW_GPIO | HW_I2C | HW_SPI | HW_UART | HW_LED | SHELL_RUN | USER_OP | PKG_SET | SETTING | PROC_KILL | FONT_OP
     )
 }

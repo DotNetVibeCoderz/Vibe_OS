@@ -112,9 +112,14 @@ mundur).
 ## Batasan
 
 - Tanpa gambar SVG (logo di banyak situs tampil sebagai kotak abu-abu).
-- Tanpa CSS, JavaScript, formulir yang terkirim, cookie, atau cache; teks
-  memakai font monospace sistem (karakter di luar ASCII didekati).
-- Hanya IPv4; tanpa HTTP/2, body terkompresi, atau proxy.
+- CSS dan JavaScript berupa subset; tanpa cache HTTP.
+- Formulir terkirim (GET di alamat, POST urlencoded; Enter mengikuti aturan
+  implicit submission HTML; `onsubmit` bisa membatalkan); tanpa unggah berkas.
+- Cookie (`CookieJar`, subset RFC 6265: host/domain, path, Max-Age/Expires,
+  Secure); Peramban menyimpan yang persisten di `/disk/APPDATA/MWEB/KUKI.TXT`.
+  Tanpa SameSite.
+- Nama yang hanya punya alamat IPv6 tetap tersambung (`DNS_RESOLVE6` 77,
+  DNS AAAA). Tanpa HTTP/2, body terkompresi, atau proxy.
 - TCP belum punya window scaling atau SACK -- cukup untuk halaman, lambat
   untuk berkas besar.
 - Satu sambungan per permintaan (tanpa keep-alive).

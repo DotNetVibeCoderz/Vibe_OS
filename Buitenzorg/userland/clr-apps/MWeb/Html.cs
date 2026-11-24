@@ -79,6 +79,7 @@ public static class Html
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlConsole(long id);
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlNavigation(long id);
         [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlField(long id, int link);
+        [System.Runtime.InteropServices.DllImport("buitenzorg")] internal static extern string HtmlForm(long id, int link, int pressed);
     }
 
     /// <summary>Add a fetched style sheet (a &lt;link rel=stylesheet&gt;); the rules it held.</summary>
@@ -129,6 +130,20 @@ public static class Html
     }
 
     public static string TakeNavigation(Page p) => p.NativeId > 0 ? Native.HtmlNavigation(p.NativeId) : "";
+
+    /// <summary>Submit the form around link `link` (pressed = that link is the button
+    /// that was pressed; else Enter in a field). Null = nothing to send (no form, not a
+    /// submit control, or a submit handler cancelled it); else { method, action, body }.
+    /// `flags` = what the submit handlers did. Device only, like scripts.</summary>
+    public static string[]? Form(Page p, int link, bool pressed, out int flags)
+    {
+        flags = 0;
+        if (p.NativeId <= 0 || link < 0) return null;
+        var f = Native.HtmlForm(p.NativeId, link, pressed ? 1 : 0).Split('\n');
+        int.TryParse(f[0], out flags);
+        if (f.Length < 4) return null;
+        return new[] { f[1], f[2], f[3] };
+    }
 
     public static string FieldText(Page p, int link) => p.NativeId > 0 && link >= 0 ? Native.HtmlField(p.NativeId, link) : "";
 

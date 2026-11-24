@@ -6,7 +6,8 @@
 //! `HtmlLoad(string) -> id`, `HtmlInfo(id, what) -> string`,
 //! `HtmlSetImage(id, index, w, h)`, `HtmlLayout(id, width, int[] metrics,
 //! int[] palette) -> items`, `HtmlItems(id, int[])`, `HtmlTexts(id)`,
-//! `HtmlFree(id)`. Keep the two versions in step.
+//! `HtmlFree(id)`, `HtmlForm(id, link, pressed)` (form submission: device
+//! only, like scripts). Keep the two versions in step.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -431,7 +432,9 @@ pub(crate) fn reindex(page: &mut Page) {
             (String::from(href), if page.clickable.contains(&tag.uid) || href.starts_with("javascript:") || href == "#" { 1 } else { 0 })
         } else if field {
             (alloc::format!("input:{}", tag.uid), 2)
-        } else if page.clickable.contains(&tag.uid) || tag.name == "button" || (tag.name == "input" && page.js.is_some()) {
+        } else if page.clickable.contains(&tag.uid) || tag.name == "button"
+            || (tag.name == "input" && (!page.scripts.is_empty() || page.js.is_some() || matches!(tag.attr("type").to_ascii_lowercase().as_str(), "submit" | "image")))
+        {
             (alloc::format!("js:{}", tag.uid), 1)
         } else {
             continue;
@@ -1323,6 +1326,213 @@ fn html_field(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     ret_str(i, &s)
 }
 
+// ---- forms ------------------------------------------------------------------
+
+/// application/x-www-form-urlencoded
+fn form_encode(s: &str, out: &mut String) {
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 15) as usize] as char);
+            }
+        }
+    }
+}
+
+/// Text up to the next tag (a textarea's or an option's content).
+fn text_after(toks: &[Tok], at: usize) -> String {
+    let mut s = String::new();
+    for x in &toks[at + 1..] {
+        match x {
+            Tok::Text(v) => s.push_str(v),
+            _ => break,
+        }
+    }
+    s
+}
+
+/// What submitting the form around link `k` sends: (form uid, method,
+/// action, urlencoded body). `pressed` = link `k` is the button that was
+/// pressed (its name=value goes along; it must be a submit control); else
+/// Enter in a field: the form's first submit button counts as pressed, and a
+/// form without one is sent only when it has a single text field.
+fn form_of(p: &Page, k: usize, pressed: bool) -> Option<(u32, &'static str, String, String)> {
+    let uid = *p.link_uids.get(k)?;
+    let at = p.toks.iter().position(|x| matches!(x, Tok::Tag(g) if !g.closing && g.uid == uid))?;
+    let Tok::Tag(me) = &p.toks[at] else { return None };
+    let ty = me.attr("type").to_ascii_lowercase();
+    if pressed {
+        let submits = match me.name.as_str() {
+            "input" => ty == "submit" || ty == "image",
+            "button" => ty.is_empty() || ty == "submit",
+            _ => false,
+        };
+        if !submits {
+            return None;
+        }
+    }
+    // the enclosing form: the nearest <form> before it that is still open
+    let mut start = None;
+    for j in (0..at).rev() {
+        if let Tok::Tag(g) = &p.toks[j] {
+            if g.name == "form" {
+                if !g.closing {
+                    start = Some(j);
+                }
+                break;
+            }
+        }
+    }
+    let start = start?;
+    let Tok::Tag(form) = &p.toks[start] else { return None };
+    let method = if form.attr("method").eq_ignore_ascii_case("post") { "POST" } else { "GET" };
+    let action = String::from(form.attr("action"));
+    let mut body = String::new();
+    let mut add = |name: &str, value: &str| {
+        if name.is_empty() {
+            return;
+        }
+        if !body.is_empty() {
+            body.push('&');
+        }
+        form_encode(name, &mut body);
+        body.push('=');
+        form_encode(value, &mut body);
+    };
+    let mut text_fields = 0;
+    let (mut has_button, mut default_sent) = (false, false);
+    let mut j = start + 1;
+    while j < p.toks.len() {
+        let Tok::Tag(g) = &p.toks[j] else {
+            j += 1;
+            continue;
+        };
+        if g.name == "form" {
+            break;
+        }
+        let disabled = g.attrs.iter().any(|(k, _)| k == "disabled");
+        if g.closing || disabled {
+            j += 1;
+            continue;
+        }
+        let name = g.attr("name");
+        match g.name.as_str() {
+            "input" => {
+                let t = g.attr("type").to_ascii_lowercase();
+                match t.as_str() {
+                    "submit" | "image" | "button" | "reset" => {
+                        if t == "submit" || t == "image" {
+                            has_button = true;
+                            if if pressed { g.uid == uid } else { !default_sent } {
+                                add(name, g.attr("value"));
+                                default_sent = true;
+                            }
+                        }
+                    }
+                    "checkbox" | "radio" => {
+                        if g.attrs.iter().any(|(k, _)| k == "checked") {
+                            let v = g.attr("value");
+                            add(name, if v.is_empty() { "on" } else { v });
+                        }
+                    }
+                    "file" => {}
+                    "hidden" => add(name, g.attr("value")),
+                    _ => {
+                        text_fields += 1;
+                        add(name, g.attr("value"));
+                    }
+                }
+            }
+            "textarea" => add(name, &text_after(&p.toks, j)),
+            "button" => {
+                let bt = g.attr("type").to_ascii_lowercase();
+                if bt.is_empty() || bt == "submit" {
+                    has_button = true;
+                    if if pressed { g.uid == uid } else { !default_sent } {
+                        add(name, g.attr("value"));
+                        default_sent = true;
+                    }
+                }
+            }
+            "select" => {
+                // the selected option(s), else the first
+                let mut first: Option<String> = None;
+                let mut chosen = false;
+                let mut m = j + 1;
+                while m < p.toks.len() {
+                    if let Tok::Tag(o) = &p.toks[m] {
+                        if o.name == "select" {
+                            break;
+                        }
+                        if o.name == "option" && !o.closing {
+                            let v = if o.attrs.iter().any(|(k, _)| k == "value") {
+                                String::from(o.attr("value"))
+                            } else {
+                                String::from(collapse(&text_after(&p.toks, m)).trim())
+                            };
+                            if o.attrs.iter().any(|(k, _)| k == "selected") {
+                                add(name, &v);
+                                chosen = true;
+                            } else if first.is_none() {
+                                first = Some(v);
+                            }
+                        }
+                    }
+                    m += 1;
+                }
+                if !chosen {
+                    if let Some(v) = first {
+                        add(name, &v);
+                    }
+                }
+                j = m;
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    // implicit submission (HTML): Enter submits through the default button,
+    // or a form without one when it has a single text field
+    if !pressed && !has_button && text_fields != 1 {
+        return None;
+    }
+    Some((form.uid, method, action, body))
+}
+
+/// `HtmlForm(id, link, pressed)`: submit the form around link `link`.
+/// Returns "FLAGS" (nothing to send: no form, not a submit control, or a
+/// submit handler cancelled it) or "FLAGS\nMETHOD\nACTION\nBODY"; FLAGS are
+/// the script flags of the submit handlers.
+fn html_form(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let (id, k, pressed) = (int(a, 0), int(a, 1).max(0) as usize, int(a, 2) != 0);
+    let s = {
+        let mut t = PAGES.lock();
+        match t.pages.iter_mut().find(|p| p.id == id) {
+            None => String::from("0"),
+            Some(p) => match form_of(p, k, pressed) {
+                None => String::from("0"),
+                Some((form, method, action, body)) => {
+                    let mut log = Vec::new();
+                    let f = crate::dom::submit(p, form, &mut log);
+                    console_take(p, log);
+                    let f = after_script(p, f);
+                    if f & crate::dom::PREVENTED != 0 {
+                        alloc::format!("{}", f & !crate::dom::PREVENTED)
+                    } else {
+                        alloc::format!("{}\n{}\n{}\n{}", f, method, action, body)
+                    }
+                }
+            },
+        }
+    };
+    ret_str(i, &s)
+}
+
 fn html_free(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let id = int(a, 0);
     PAGES.lock().pages.retain(|p| p.id != id);
@@ -1330,7 +1540,8 @@ fn html_free(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 }
 
 pub fn register(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 16] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 17] = [
+        ("HtmlForm", html_form),
         ("HtmlScripts", html_scripts),
         ("HtmlScriptSource", html_script_source),
         ("HtmlRun", html_run),

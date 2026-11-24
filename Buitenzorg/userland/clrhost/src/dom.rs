@@ -1317,10 +1317,17 @@ fn note(js: &mut JsState, r: Result<Value, String>, log: &mut Vec<String>) {
     }
 }
 
+/// Any element with an `on...` attribute?
+pub fn has_inline_handlers(page: &Page) -> bool {
+    page.toks.iter().any(|t| matches!(t, Tok::Tag(tag) if !tag.closing && tag.attrs.iter().any(|(k, _)| k.len() > 2 && k.starts_with("on"))))
+}
+
 /// Run a page's scripts in document order, then its load handlers.
 /// `external[k]` is the fetched code of script k (when it has a `src`).
 pub fn run_scripts(page: &mut Page, url: &str, now: u64, width: i32, log: &mut Vec<String>) -> i32 {
-    if page.scripts.is_empty() {
+    // a page needs the engine for its scripts, or for inline handlers alone
+    // (`<form onsubmit="return false">` without any <script>)
+    if page.scripts.is_empty() && !has_inline_handlers(page) {
         return 0;
     }
     let mut js = Box::new(JsState { interp: Interp::new(), st: DomState::default() });
@@ -1436,7 +1443,8 @@ fn dispatch(page: &mut Page, js: &mut JsState, uid: u32, ev: &str, log: &mut Vec
             if !code.is_empty() {
                 interp.set_global("__bz_this", node.clone());
                 interp.set_global("__bz_event", event.clone());
-                let src = format!("(function (event) {{ {} \n}}).call(__bz_this, __bz_event);", code);
+                // `return false` from an inline handler cancels, as in browsers
+                let src = format!("if ((function (event) {{ {} \n}}).call(__bz_this, __bz_event) === false) __bz_event.preventDefault();", code);
                 let r = interp.run(&src, &mut d);
                 note_split(interp, r, log);
             }
@@ -1457,6 +1465,18 @@ fn dispatch(page: &mut Page, js: &mut JsState, uid: u32, ev: &str, log: &mut Vec
         }
     }
     is_prevented(interp, &event, &mut d)
+}
+
+/// A form is about to be sent: its `submit` handlers run (bubbling). Returns
+/// the script flags; PREVENTED = a handler cancelled the submission.
+pub fn submit(page: &mut Page, form_uid: u32, log: &mut Vec<String>) -> i32 {
+    let Some(mut js) = page.js.take() else { return 0 };
+    js.st.changed = false;
+    let prevented = dispatch(page, &mut js, form_uid, "submit", log);
+    process_clicks(page, &mut js, log);
+    let f = flags(page, &js) | if prevented { PREVENTED } else { 0 } | if js.st.changed { CHANGED } else { 0 };
+    page.js = Some(js);
+    f
 }
 
 /// `el.click()` calls queued while a script ran.
@@ -1501,7 +1521,9 @@ pub fn click(page: &mut Page, k: usize, log: &mut Vec<String>) -> i32 {
         note_split(interp, r, log);
         prevented = true;
     }
-    if href == "#" || href.starts_with("js:") {
+    // "js:" links (script-handled elements, submit buttons) have no default
+    // navigation; only a handler's preventDefault() cancels a form's submit
+    if href == "#" {
         prevented = true;
     }
     process_clicks(page, &mut js, log);

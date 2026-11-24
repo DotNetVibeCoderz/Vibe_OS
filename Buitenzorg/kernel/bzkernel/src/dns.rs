@@ -165,6 +165,9 @@ pub fn resolve6(name: &str) -> Result<[u8; 16], String> {
     if let Some(a) = crate::ipv6::parse(name) {
         return Ok(a);
     }
+    if name.eq_ignore_ascii_case("localhost") {
+        return crate::ipv6::link_local().ok_or_else(|| String::from("jaringan mati"));
+    }
     let lower = name.to_ascii_lowercase();
     exchange(name, &lower, 28, parse_answer6).map(|(a, _)| a)
 }

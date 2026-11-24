@@ -153,12 +153,37 @@ NXDOMAIN); the managed suite's **Peramban** self-test serves pages from a
 thread of its own over TCP on the machine's address and browses them
 (redirect, chunked body, image, link click, back).
 
+## Forms and cookies
+
+HTML forms submit: a submit button (`<input type=submit|image>`, `<button>`)
+or Enter in a field sends the form. GET puts the fields in the address
+(`?q=kebun+raya`), POST sends them as `application/x-www-form-urlencoded`.
+Text fields, `textarea`, checkboxes / radios (`on` when checked without a
+`value`), `select` (the selected option, else the first) and hidden fields
+go along; the pressed button's `name=value` too. Enter follows HTML's implicit
+submission: through the form's first submit button, or -- in a form without
+one -- only when it has a single text field. A `submit` event runs first;
+`event.preventDefault()` or an inline `onsubmit="return false"` cancels it.
+No file uploads (`multipart/form-data`).
+
+Cookies (`Buitenzorg.Net.CookieJar`, RFC 6265 subset): `Set-Cookie` is stored
+per host (host-only, or `Domain=` when it covers the host), matched by path,
+expires by `Max-Age` / `Expires`, `Secure` ones go only over HTTPS. Peramban
+keeps one jar for pages, pictures and downloads and saves the persistent
+cookies in `/disk/APPDATA/MWEB/KUKI.TXT`; session cookies end with the app.
+Programs set `HttpClient.Cookies = new CookieJar()` (or `CookieJar.Shared`).
+No `SameSite` handling and no third-party blocking (pages cannot make
+cross-site requests anyway: there is no `fetch`/XHR).
+
+Host names with only an IPv6 address work too: `TcpConnection.Connect` (and so
+`HttpClient`) falls back to `Dns.Resolve6` (syscall `DNS_RESOLVE6` 77, DNS
+AAAA) when a name has no A record.
+
 ## Limits
 
 - No SVG images (logos on many sites show as a gray box).
-- No CSS, no JavaScript, no forms that submit, no cookies, no cache; text in
-  the system's monospaced fonts (characters outside ASCII are approximated).
-- IPv4 only; no HTTP/2, no compressed bodies (the browser asks for
+- CSS and JavaScript are subsets (see below); no HTTP cache.
+- No HTTP/2, no compressed bodies (the browser asks for
   `identity`), no proxy.
 - TCP has no window scaling or SACK -- fine for pages, slow for large files.
 - One connection per request (no keep-alive).

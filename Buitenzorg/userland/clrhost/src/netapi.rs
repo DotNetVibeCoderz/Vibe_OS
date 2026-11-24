@@ -19,6 +19,7 @@ use crate::sys;
 
 const TCP_OP: u64 = 64;
 const DNS_RESOLVE: u64 = 65;
+const DNS_RESOLVE6: u64 = 77;
 const RANDOM: u64 = 57;
 const OP_CONNECT: u64 = 0;
 const OP_SEND: u64 = 1;
@@ -94,6 +95,18 @@ fn dns_resolve(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let name = cstr(&string(i, a, 0));
     let r = sys::syscall(DNS_RESOLVE, name.as_ptr() as u64, 0, 0);
     ret_i64(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `DnsResolve6(string name, byte[] address16)` -> 0, -1 (no AAAA record).
+fn dns_resolve6(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let name = cstr(&string(i, a, 0));
+    let mut ip = [0u8; 16];
+    let r = sys::syscall(DNS_RESOLVE6, name.as_ptr() as u64, ip.as_mut_ptr() as u64, 0);
+    if sys::is_err(r) {
+        return ret_i32(-1);
+    }
+    crate::bzapi::store_bytes(i, a, 1, &ip);
+    ret_i32(0)
 }
 
 fn tcp(op: u64, handle: u64, a1: u64, a2: u64) -> u64 {
@@ -536,8 +549,9 @@ fn tls_close(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 }
 
 pub fn register(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 17] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 18] = [
         ("DnsResolve", dns_resolve),
+        ("DnsResolve6", dns_resolve6),
         ("TcpConnect", tcp_connect),
         ("TcpConnect6", tcp_connect6),
         ("TcpListen", tcp_listen),

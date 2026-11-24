@@ -233,8 +233,11 @@ public static class SyscallNumbers
     /// <summary>The program dies of an unhandled error (description, pc, sp): crash report, debugger stop, exit 134.</summary>
     public const ulong CrashReport = 76;
 
+    /// <summary>Host name -> IPv6 address (DNS AAAA): a0 = NUL-terminated name, a1 = 16-byte buffer; 0 or INVAL.</summary>
+    public const ulong DnsResolve6 = 77;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 77;
+    public const ulong Count = 78;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.WinCtl"/> (mirrors <c>bz_abi::win_ctl</c>).</summary>

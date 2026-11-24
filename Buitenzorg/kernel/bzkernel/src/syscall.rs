@@ -163,6 +163,7 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::AUDIO_APP_VOLUME
             | sysno::TCP_OP
             | sysno::DNS_RESOLVE
+            | sysno::DNS_RESOLVE6
             | sysno::IDLE_INHIBIT
             | sysno::CLIPBOARD
             | sysno::NOTIFY
@@ -401,6 +402,18 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
                 Err(_) => syserr::INVAL,
             },
             None => syserr::INVAL,
+        },
+        sysno::DNS_RESOLVE6 => match read_user_path_checked(a0) {
+            Some(name) if user_write(a1, 16) => match crate::dns::resolve6(&name) {
+                Ok(ip) => {
+                    for (i, b) in ip.iter().enumerate() {
+                        unsafe { core::ptr::write_volatile((a1 + i as u64) as *mut u8, *b) };
+                    }
+                    0
+                }
+                Err(_) => syserr::INVAL,
+            },
+            _ => syserr::INVAL,
         },
         sysno::AUDIO_APP_VOLUME => {
             let pid = if a0 == 0 { crate::aspace::current_id() } else { a0 };

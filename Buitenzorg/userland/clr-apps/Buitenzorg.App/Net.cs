@@ -19,6 +19,7 @@ using System.Collections.Generic;
 internal static class NetNative
 {
     [DllImport("buitenzorg")] internal static extern long DnsResolve(string name);
+    [DllImport("buitenzorg")] internal static extern int DnsResolve6(string name, byte[] address);
     [DllImport("buitenzorg")] internal static extern long TcpConnect(long ip, int port);
     [DllImport("buitenzorg")] internal static extern long TcpConnect6(byte[] address, int port);
     [DllImport("buitenzorg")] internal static extern long TcpListen(int port);
@@ -68,6 +69,25 @@ public static class Dns
         return HostNet.Resolve(host);
     }
 
+    /// <summary>The IPv6 address of `host` (DNS AAAA; a literal is parsed), or null.</summary>
+    public static byte[]? Resolve6(string host)
+    {
+        if (host.StartsWith("[") && host.EndsWith("]")) host = host.Substring(1, host.Length - 2);
+        if (host.IndexOf(':') >= 0) return TcpConnection.ParseIpv6(host);
+        if (NetNative.OnDevice)
+        {
+            var a = new byte[16];
+            return NetNative.DnsResolve6(host, a) == 0 ? a : null;
+        }
+        try
+        {
+            foreach (var ip in System.Net.Dns.GetHostAddresses(host))
+                if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6) return ip.GetAddressBytes();
+        }
+        catch (Exception) { }
+        return null;
+    }
+
     public static long ParseIp(string s)
     {
         var parts = s.Split('.');
@@ -115,6 +135,8 @@ public sealed class TcpConnection : INetStream
         var v6 = host.IndexOf(':') >= 0 ? ParseIpv6(host) : null;
         if (host.IndexOf(':') >= 0 && v6 == null) throw new NetException("alamat IPv6 " + host + " tidak sah");
         long ip = v6 != null ? 0 : Dns.Resolve(host);
+        // a name with only an AAAA record: connect over IPv6
+        if (ip < 0 && v6 == null) { v6 = Dns.Resolve6(host); if (v6 != null) ip = 0; }
         if (ip < 0) throw new NetException("alamat " + host + " tidak ditemukan (DNS)");
         var c = new TcpConnection { RemoteHost = host, RemoteAddress = ip, RemotePort = port };
         if (!NetNative.OnDevice) { c.Host = HostNet.Connect(v6 != null ? host : Dns.Format(ip), port, timeoutMs); return c; }
@@ -442,12 +464,253 @@ public sealed class HttpResponse
 }
 
 /// <summary>HTTP/1.1 (one request per connection), http and https, redirects, chunked bodies.</summary>
+/// <summary>HTTP cookies (an RFC 6265 subset): Set-Cookie from responses, a Cookie
+/// header for requests. Domain (host-only when absent; a domain that does not
+/// cover the host is refused), Path (default: the request's directory),
+/// Expires / Max-Age (a past date deletes), Secure (https only). HttpOnly and
+/// SameSite are accepted and ignored -- there is no script access to cookies.
+/// `Save`/`Load` keep the persistent ones as text (one tab-separated line each).</summary>
+public sealed class CookieJar
+{
+    sealed class Cookie
+    {
+        public string Name = "", Value = "", Domain = "", Path = "/";
+        public bool HostOnly, Secure;
+        /// <summary>Unix seconds; 0 = a session cookie.</summary>
+        public long Expires;
+    }
+
+    readonly List<Cookie> _cookies = new List<Cookie>();
+    readonly object _lock = new object();
+
+    /// <summary>The jar the browser and downloads share.</summary>
+    public static readonly CookieJar Shared = new CookieJar();
+
+    /// <summary>Unix seconds now (replaceable for tests).</summary>
+    public Func<long> Now = UnixNow;
+
+    public int Count { get { lock (_lock) { Expire(); return _cookies.Count; } } }
+
+    public void Clear() { lock (_lock) _cookies.Clear(); }
+
+    static long UnixNow()
+    {
+        DateTime t;
+        try { t = DateTime.UtcNow; } catch (Exception) { t = DateTime.Now; }
+        return Seconds(t.Year, t.Month, t.Day, t.Hour, t.Minute, t.Second);
+    }
+
+    /// <summary>Unix seconds of a UTC calendar time (Hinnant's days_from_civil).</summary>
+    static long Seconds(int y, int m, int d, int hh, int mm, int ss)
+    {
+        y -= m <= 2 ? 1 : 0;
+        long era = (y >= 0 ? y : y - 399) / 400;
+        long yoe = y - era * 400;
+        long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        long days = era * 146097 + doe - 719468;
+        return days * 86400 + hh * 3600 + mm * 60 + ss;
+    }
+
+    static readonly string[] Months = { "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" };
+
+    /// <summary>An Expires date ("Wed, 21 Oct 2015 07:28:00 GMT" and the usual variants); -1 = unreadable.</summary>
+    public static long ParseDate(string s)
+    {
+        int day = -1, month = -1, year = -1, h = -1, mi = 0, se = 0;
+        foreach (var raw in s.Replace(',', ' ').Replace('-', ' ').Split(' '))
+        {
+            string w = raw.Trim().ToLowerInvariant();
+            if (w.Length == 0) continue;
+            if (w.Contains(':'))
+            {
+                var p = w.Split(':');
+                if (p.Length >= 2 && int.TryParse(p[0], out h) && int.TryParse(p[1], out mi)) { if (p.Length > 2) int.TryParse(p[2], out se); }
+                continue;
+            }
+            if (w.Length >= 3)
+            {
+                bool isMonth = false;
+                for (int i = 0; i < 12; i++) if (w.StartsWith(Months[i])) { month = i + 1; isMonth = true; break; }
+                if (isMonth) continue;
+            }
+            if (int.TryParse(w, out int n))
+            {
+                if (day < 0 && n >= 1 && n <= 31 && w.Length <= 2) day = n;
+                else if (year < 0) year = n < 70 ? 2000 + n : n < 100 ? 1900 + n : n;
+            }
+        }
+        if (day < 0 || month < 0 || year < 1601 || h < 0) return -1;
+        return Seconds(year, month, day, h, mi, se);
+    }
+
+    static bool DomainMatches(string host, string domain) =>
+        host == domain || (host.EndsWith("." + domain) && !IsIp(host));
+
+    static bool IsIp(string host)
+    {
+        if (host.Contains(':')) return true;
+        foreach (char c in host) if (c != '.' && (c < '0' || c > '9')) return false;
+        return true;
+    }
+
+    static string PathOnly(string path)
+    {
+        int q = path.IndexOf('?');
+        return q >= 0 ? path.Substring(0, q) : path;
+    }
+
+    static bool PathMatches(string reqPath, string cookiePath)
+    {
+        if (reqPath == cookiePath) return true;
+        if (!reqPath.StartsWith(cookiePath)) return false;
+        return cookiePath.EndsWith("/") || reqPath[cookiePath.Length] == '/';
+    }
+
+    void Expire()
+    {
+        long now = Now();
+        for (int i = _cookies.Count - 1; i >= 0; i--)
+            if (_cookies[i].Expires != 0 && _cookies[i].Expires <= now) _cookies.RemoveAt(i);
+    }
+
+    /// <summary>Take one Set-Cookie header of a response from `u`. False = refused.</summary>
+    public bool Store(Url u, string header)
+    {
+        var parts = header.Split(';');
+        string first = parts[0];
+        int eq = first.IndexOf('=');
+        if (eq <= 0) return false;
+        var c = new Cookie { Name = first.Substring(0, eq).Trim(), Value = first.Substring(eq + 1).Trim() };
+        if (c.Name.Length == 0) return false;
+        if (c.Value.Length >= 2 && c.Value[0] == '"' && c.Value[c.Value.Length - 1] == '"') c.Value = c.Value.Substring(1, c.Value.Length - 2);
+        string domain = "", path = "";
+        long expires = 0;
+        bool maxAge = false;
+        for (int i = 1; i < parts.Length; i++)
+        {
+            string a = parts[i].Trim();
+            int e = a.IndexOf('=');
+            string k = (e >= 0 ? a.Substring(0, e) : a).Trim().ToLowerInvariant();
+            string v = e >= 0 ? a.Substring(e + 1).Trim() : "";
+            if (k == "domain") domain = v.TrimStart('.').ToLowerInvariant();
+            else if (k == "path") path = v;
+            else if (k == "secure") c.Secure = true;
+            else if (k == "max-age")
+            {
+                if (long.TryParse(v, out long s)) { expires = s <= 0 ? 1 : Now() + s; maxAge = true; }
+            }
+            else if (k == "expires" && !maxAge)
+            {
+                long t = ParseDate(v);
+                if (t >= 0) expires = t <= 0 ? 1 : t;
+            }
+        }
+        string host = u.Host.ToLowerInvariant();
+        if (domain.Length > 0)
+        {
+            if (!DomainMatches(host, domain) || !domain.Contains('.') && domain != host) return false;
+            c.Domain = domain;
+        }
+        else { c.Domain = host; c.HostOnly = true; }
+        if (path.Length == 0 || path[0] != '/')
+        {
+            string rp = PathOnly(u.Path);
+            int slash = rp.LastIndexOf('/');
+            path = slash <= 0 ? "/" : rp.Substring(0, slash);
+        }
+        c.Path = path;
+        c.Expires = expires;
+        if (c.Secure && !u.Secure) return false;
+        lock (_lock)
+        {
+            for (int i = 0; i < _cookies.Count; i++)
+            {
+                var o = _cookies[i];
+                if (o.Name == c.Name && o.Domain == c.Domain && o.Path == c.Path) { _cookies.RemoveAt(i); break; }
+            }
+            if (c.Expires == 0 || c.Expires > Now()) _cookies.Add(c);
+            if (_cookies.Count > 500) _cookies.RemoveAt(0);
+        }
+        return true;
+    }
+
+    /// <summary>Every Set-Cookie header of a response.</summary>
+    public void StoreAll(Url u, HttpResponse r)
+    {
+        foreach (var kv in r.Headers)
+            if (string.Equals(kv.Key, "Set-Cookie", StringComparison.OrdinalIgnoreCase)) Store(u, kv.Value);
+    }
+
+    /// <summary>The Cookie header value for a request to `u` ("" = none); longer paths first.</summary>
+    public string Header(Url u)
+    {
+        string host = u.Host.ToLowerInvariant(), path = PathOnly(u.Path);
+        var hits = new List<Cookie>();
+        lock (_lock)
+        {
+            Expire();
+            foreach (var c in _cookies)
+            {
+                if (c.Secure && !u.Secure) continue;
+                if (c.HostOnly ? host != c.Domain : !DomainMatches(host, c.Domain)) continue;
+                if (!PathMatches(path, c.Path)) continue;
+                int at = 0;
+                while (at < hits.Count && hits[at].Path.Length >= c.Path.Length) at++;
+                hits.Insert(at, c);
+            }
+        }
+        var sb = new StringBuilder();
+        foreach (var c in hits)
+        {
+            if (sb.Length > 0) sb.Append("; ");
+            sb.Append(c.Name).Append('=').Append(c.Value);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>The persistent cookies as text (session cookies are not kept).</summary>
+    public string Save()
+    {
+        var sb = new StringBuilder();
+        lock (_lock)
+        {
+            Expire();
+            foreach (var c in _cookies)
+            {
+                if (c.Expires == 0) continue;
+                sb.Append(c.Domain).Append('\t').Append(c.HostOnly ? "1" : "0").Append('\t').Append(c.Path).Append('\t')
+                  .Append(c.Secure ? "1" : "0").Append('\t').Append(c.Expires).Append('\t').Append(c.Name).Append('\t').Append(c.Value).Append('\n');
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Add cookies written by Save (expired lines are skipped).</summary>
+    public int Load(string text)
+    {
+        int n = 0;
+        foreach (var line in text.Split('\n'))
+        {
+            var f = line.Split('\t');
+            if (f.Length < 7 || !long.TryParse(f[4], out long exp)) continue;
+            var c = new Cookie { Domain = f[0], HostOnly = f[1] == "1", Path = f[2], Secure = f[3] == "1", Expires = exp, Name = f[5], Value = f[6].TrimEnd('\r') };
+            if (c.Expires <= Now()) continue;
+            lock (_lock) _cookies.Add(c);
+            n++;
+        }
+        return n;
+    }
+}
+
 public sealed class HttpClient
 {
     public string UserAgent = "Buitenzorg/1.0 (Peramban)";
     public int TimeoutMs = 20000;
     public int MaxRedirects = 5;
     public int MaxBody = 8 << 20;
+    /// <summary>Cookies sent and stored with every request (null = none).</summary>
+    public CookieJar? Cookies;
     /// <summary>Download: bytes gathered before each write to the file.</summary>
     public int DownloadPiece = 256 * 1024;
 
@@ -478,6 +741,7 @@ public sealed class HttpClient
         try
         {
             var r = ReadResponse(s, method == "HEAD");
+            Cookies?.StoreAll(u, r);
             r.Url = u.ToString();
             r.Tls = tls;
             return r;
@@ -502,6 +766,8 @@ public sealed class HttpClient
             sb.Append("\r\nUser-Agent: ").Append(UserAgent);
             sb.Append("\r\nAccept: text/html,text/plain,image/*;q=0.8,*/*;q=0.5\r\nAccept-Encoding: identity\r\nConnection: close\r\n");
             sb.Append(extra);
+            string cookie = Cookies?.Header(u) ?? "";
+            if (cookie.Length > 0) sb.Append("Cookie: ").Append(cookie).Append("\r\n");
             if (body != null)
             {
                 if (contentType != null) sb.Append("Content-Type: ").Append(contentType).Append("\r\n");
@@ -533,6 +799,7 @@ public sealed class HttpClient
             try
             {
                 var r = ReadHead(s, out var rest);
+                Cookies?.StoreAll(u, r);
                 r.Url = u.ToString();
                 r.Tls = tls;
                 if (r.Status >= 300 && r.Status < 400 && r.Header("Location") is string loc && hop < MaxRedirects)
