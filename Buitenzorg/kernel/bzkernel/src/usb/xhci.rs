@@ -26,6 +26,16 @@ const TRB_SETUP: u32 = 2;
 const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
 const TRB_LINK: u32 = 6;
+const TRB_ISOCH: u32 = 5;
+/// Isoch TRB: start the transfer as soon as possible (no frame id).
+const SIA: u32 = 1 << 31;
+const CC_RING_UNDERRUN: u32 = 14;
+const CC_RING_OVERRUN: u32 = 15;
+const CC_MISSED_SERVICE: u32 = 23;
+/// USB audio: packets kept queued (1 ms each) and bytes per packet
+/// (48 frames of 16-bit stereo at 48 kHz).
+const ISO_SLOTS: usize = 32;
+const ISO_PACKET: usize = 192;
 const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_DISABLE_SLOT: u32 = 10;
 const TRB_ADDRESS_DEVICE: u32 = 11;
@@ -276,6 +286,25 @@ struct Msd {
     label: alloc::string::String,
 }
 
+/// A USB Audio Class 1 output stream: an isochronous OUT endpoint fed one
+/// 1 ms packet per TRB, `ISO_SLOTS` queued, each completion refilled.
+struct AudioOut {
+    dci: u32,
+    ring: Ring,
+    /// 16 packets per page.
+    pages: [Page; 2],
+    next: usize,
+    /// Packets completed / failed / underruns (the ring ran dry).
+    done: u64,
+    errors: u64,
+    underruns: u64,
+    /// A test tone (Hz, packets left) played instead of the mixer.
+    tone: (u32, u32),
+    phase: u32,
+    /// Packets that carried mixer audio.
+    mixed: u64,
+}
+
 struct BulkEndpoints {
     iface: u8,
     in_ep: (u8, u32, u32),
@@ -296,6 +325,7 @@ struct Device {
     ep0: Ring,
     intr: Option<Interrupt>,
     msd: Option<Msd>,
+    audio: Option<AudioOut>,
     /// Port path ("3", "1.2") and what it is ("046d:c52b keyboard"), for logs.
     label: alloc::string::String,
     what: alloc::string::String,
@@ -355,6 +385,8 @@ pub struct Xhci {
     pub mice: usize,
     pub hubs: usize,
     pub disks: usize,
+    /// USB audio outputs.
+    pub speakers: usize,
     /// Hot-plug work found while handling events, done by `service`: root
     /// ports with a Port Status Change event, (hub device, changed-port bitmap).
     root_changes: Vec<u32>,
@@ -474,6 +506,7 @@ impl Xhci {
             mice: 0,
             hubs: 0,
             disks: 0,
+            speakers: 0,
             root_changes: Vec::new(),
             hub_changes: Vec::new(),
             new_disks: Vec::new(),
@@ -691,6 +724,7 @@ impl Xhci {
             ep0,
             intr: None,
             msd: None,
+            audio: None,
             label: alloc::string::String::from(label),
             what: alloc::string::String::from("device"),
             hub_ports: 0,
@@ -749,6 +783,12 @@ impl Xhci {
         let mut pad_iface: Option<(u8, u16, bool)> = None;
         let mut storage: Option<u8> = None;
         let (mut bulk_in, mut bulk_out) = (None, None);
+        // USB Audio Class 1 streaming: (interface, alternate setting) of the
+        // current interface descriptor, whether its format is 2 ch / 16 bit /
+        // 48 kHz, and the first such setting with an isochronous OUT endpoint
+        let mut as_iface: Option<(u8, u8)> = None;
+        let mut as_ok = false;
+        let mut audio_out: Option<(u8, u8, u8, u32, u8)> = None;
         while i + 2 <= cfg.len() {
             let len = cfg[i] as usize;
             if len < 2 || i + len > cfg.len() {
@@ -756,6 +796,8 @@ impl Xhci {
             }
             match cfg[i + 1] {
                 4 if len >= 9 => {
+                    as_iface = (cfg[i + 5] == 1 && cfg[i + 6] == 2 && cfg[i + 3] > 0).then_some((cfg[i + 2], cfg[i + 3]));
+                    as_ok = false;
                     iface = if cfg[i + 5] == 3 && cfg[i + 6] == 1 && (cfg[i + 7] == 1 || cfg[i + 7] == 2) {
                         Some((cfg[i + 2], cfg[i + 7]))
                     } else {
@@ -770,6 +812,23 @@ impl Xhci {
                         None
                     };
                 }
+                0x24 if len >= 8 && as_iface.is_some() && cfg[i + 2] == 2 && cfg[i + 3] == 1 => {
+                    // FORMAT_TYPE I: channels, subframe size, bits, rates
+                    let (ch, sub, bits, nrates) = (cfg[i + 4], cfg[i + 5], cfg[i + 6], cfg[i + 7] as usize);
+                    let mut has48 = false;
+                    if nrates == 0 && len >= 14 {
+                        let lo = cfg[i + 8] as u32 | (cfg[i + 9] as u32) << 8 | (cfg[i + 10] as u32) << 16;
+                        let hi = cfg[i + 11] as u32 | (cfg[i + 12] as u32) << 8 | (cfg[i + 13] as u32) << 16;
+                        has48 = lo <= 48000 && 48000 <= hi;
+                    }
+                    for r in 0..nrates {
+                        let o = i + 8 + r * 3;
+                        if o + 3 <= i + len && (cfg[o] as u32 | (cfg[o + 1] as u32) << 8 | (cfg[o + 2] as u32) << 16) == 48000 {
+                            has48 = true;
+                        }
+                    }
+                    as_ok = ch == 2 && sub == 2 && bits == 16 && has48;
+                }
                 0x21 if len >= 9 => {
                     // HID descriptor: the report descriptor's length
                     if let Some((n, _, false)) = pad_iface {
@@ -779,6 +838,12 @@ impl Xhci {
                     }
                 }
                 5 if len >= 7 => {
+                    if let (Some((num, alt)), true, None) = (as_iface, as_ok, audio_out) {
+                        if cfg[i + 3] & 3 == 1 && cfg[i + 2] & 0x80 == 0 {
+                            let mps = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]) as u32 & 0x7FF;
+                            audio_out = Some((num, alt, cfg[i + 2], mps, cfg[i + 6]));
+                        }
+                    }
                     if storage.is_some() && cfg[i + 3] & 3 == 2 {
                         let mps = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]) as u32 & 0x7FF;
                         // SuperSpeed: bMaxBurst in the companion descriptor that follows
@@ -841,6 +906,11 @@ impl Xhci {
                 _ => {}
             }
             i += len;
+        }
+        if let Some((num, alt, ep, mps, b_interval)) = audio_out {
+            crate::println!("[usb] {} port {}: {:04x}:{:04x} {} audio output (USB Audio Class 1, 48000 Hz 2 ch 16-bit)", self.name, label, vid, pid, speed_name(speed));
+            self.devices[di].what = alloc::format!("{:04x}:{:04x} audio", vid, pid);
+            return self.setup_audio(di, num, alt, ep, mps, b_interval);
         }
         if let (Some(iface), Some(in_ep), Some(out_ep)) = (storage, bulk_in, bulk_out) {
             crate::println!("[usb] {} port {}: {:04x}:{:04x} {} mass storage", self.name, label, vid, pid, speed_name(speed));
@@ -1153,6 +1223,111 @@ impl Xhci {
         Ok(())
     }
 
+    /// Configure the isochronous OUT endpoint, select the streaming
+    /// setting, set 48 kHz, and queue the first packets (silence).
+    fn setup_audio(&mut self, di: usize, iface: u8, alt: u8, ep_addr: u8, mps: u32, b_interval: u8) -> Result<(), &'static str> {
+        if (mps as usize) < ISO_PACKET {
+            return Err("usb audio: packets too small for 48 kHz stereo");
+        }
+        let dci = (ep_addr as u32 & 0xF) * 2; // OUT
+        let ring = Ring::new(self.limit)?;
+        let pages = [Page::new(self.limit)?, Page::new(self.limit)?];
+        let dev = &self.devices[di];
+        // full speed: frames -> 125 us exponent (bInterval 1 = every frame = 3);
+        // high speed: 2^(bInterval-1) microframes
+        let interval = if dev.speed >= 3 { (b_interval.max(1) as u32 - 1).min(15) } else { (b_interval.max(1) as u32 - 1 + 3).min(15) };
+        let s = self.csz;
+        let e = (dci as usize + 1) * self.csz;
+        dev.inp.zero(0, 4096);
+        dev.inp.w32(4, 1 | (1 << dci));
+        dev.inp.w32(s, (dci << 27) | (dev.speed << 20) | if dev.mtt { 1 << 25 } else { 0 } | dev.route);
+        dev.inp.w32(s + 4, dev.root_port << 16);
+        dev.inp.w32(s + 8, (dev.tt_port << 8) | dev.tt_slot);
+        dev.inp.w32(e, interval << 16);
+        dev.inp.w32(e + 4, (mps << 16) | (1 << 3)); // isoch OUT, CErr 0
+        dev.inp.w64(e + 8, ring.page.phys | 1);
+        dev.inp.w32(e + 16, (mps << 16) | ISO_PACKET as u32);
+        dev.inp.sync(0, 4096);
+        let (p, slot) = (dev.inp.phys, dev.slot);
+        self.command(p, (TRB_CONFIGURE_EP << 10) | (slot << 24))?;
+        self.control(di, 0x01, 11, alt as u16, iface as u16, 0)?; // SET_INTERFACE
+        // SET_CUR sampling frequency on the endpoint (some devices have one rate and refuse)
+        self.buf.w32(0, 48000);
+        let rate = self.control(di, 0x22, 0x01, 0x0100, ep_addr as u16, 3).is_ok();
+        crate::println!(
+            "[usb] {}: slot {} audio interface {} alt {} endpoint {:#04x} ({} bytes, bInterval {}) -> DCI {}, xHCI interval {}, rate {}",
+            self.name, slot, iface, alt, ep_addr, mps, b_interval, dci, interval, if rate { "48000 Hz set" } else { "fixed" }
+        );
+        self.devices[di].audio = Some(AudioOut { dci, ring, pages, next: 0, done: 0, errors: 0, underruns: 0, tone: (0, 0), phase: 0, mixed: 0 });
+        self.speakers += 1;
+        super::AUDIO_DEVICES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        for _ in 0..ISO_SLOTS {
+            self.queue_audio(di);
+        }
+        Ok(())
+    }
+
+    /// Fill the next packet (tone, mixer or silence) and queue it.
+    fn queue_audio(&mut self, di: usize) {
+        let dev = &mut self.devices[di];
+        let slot = dev.slot;
+        let Some(a) = dev.audio.as_mut() else { return };
+        let k = a.next % ISO_SLOTS;
+        a.next += 1;
+        let (page, off) = (&a.pages[k / 16], (k % 16) * ISO_PACKET);
+        let mut pcm = [0i16; ISO_PACKET / 2];
+        if a.tone.1 > 0 {
+            // a triangle wave, 1/4 of full scale
+            let step = (a.tone.0 as u64 * (1u64 << 32) / 48000) as u32;
+            for f in 0..ISO_PACKET / 4 {
+                let ph = a.phase;
+                let tri = if ph < 0x8000_0000 { (ph >> 15) as i32 - 0x8000 } else { 0x8000 - ((ph - 0x8000_0000) >> 15) as i32 };
+                let v = (tri / 4) as i16;
+                pcm[f * 2] = v;
+                pcm[f * 2 + 1] = v;
+                a.phase = a.phase.wrapping_add(step);
+            }
+            a.tone.1 -= 1;
+        } else if super::AUDIO_SINK.load(core::sync::atomic::Ordering::Relaxed) && crate::mixer::mix(&mut pcm) {
+            a.mixed += 1;
+        }
+        let vol = super::audio_gain();
+        for f in 0..ISO_PACKET / 4 {
+            let l = ((pcm[f * 2] as i32 * vol) >> 8) as i16 as u16 as u32;
+            let r = ((pcm[f * 2 + 1] as i32 * vol) >> 8) as i16 as u16 as u32;
+            page.w32(off + f * 4, l | r << 16);
+        }
+        page.sync(off, ISO_PACKET);
+        let phys = page.phys + off as u64;
+        a.ring.push(phys, ISO_PACKET as u32, (TRB_ISOCH << 10) | IOC | SIA);
+        let dci = a.dci;
+        self.doorbell(slot, dci);
+    }
+
+    /// Play a test tone on every USB audio output for `ms`.
+    pub fn audio_tone(&mut self, hz: u32, ms: u32) -> bool {
+        let mut any = false;
+        for d in self.devices.0.iter_mut().flatten() {
+            if let Some(a) = d.audio.as_mut() {
+                a.tone = (hz, ms);
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// (packets completed, errors, underruns, packets with mixer audio) over
+    /// every USB audio output.
+    pub fn audio_stats(&self) -> (u64, u64, u64, u64) {
+        let mut t = (0, 0, 0, 0);
+        for (_, d) in self.devices.live() {
+            if let Some(a) = d.audio.as_ref() {
+                t = (t.0 + a.done, t.1 + a.errors, t.2 + a.underruns, t.3 + a.mixed);
+            }
+        }
+        t
+    }
+
     fn queue_report(&mut self, di: usize) {
         let dev = &mut self.devices[di];
         let slot = dev.slot;
@@ -1318,6 +1493,26 @@ impl Xhci {
         }
         let slot = ev[3] >> 24;
         let dci = (ev[3] >> 16) & 0x1F;
+        let audio_dev = self.devices.live().find(|(_, d)| d.slot == slot && d.audio.as_ref().is_some_and(|a| a.dci == dci)).map(|(i, _)| i);
+        if let Some(di) = audio_dev {
+            let cc = completion(&ev);
+            let a = self.devices[di].audio.as_mut().unwrap();
+            match cc {
+                CC_SUCCESS | CC_SHORT => a.done += 1,
+                CC_RING_UNDERRUN | CC_RING_OVERRUN => {
+                    // the ring ran dry: nothing completed, refill it (SIA restarts it)
+                    a.underruns += 1;
+                    for _ in 0..ISO_SLOTS {
+                        self.queue_audio(di);
+                    }
+                    return;
+                }
+                CC_MISSED_SERVICE => a.errors += 1,
+                _ => a.errors += 1,
+            }
+            self.queue_audio(di);
+            return;
+        }
         let Some(di) = self.devices.live().find(|(_, d)| d.slot == slot && d.intr.as_ref().is_some_and(|i| i.dci == dci)).map(|(i, _)| i) else { return };
         let cc = completion(&ev);
         let i = self.devices[di].intr.as_mut().unwrap();
@@ -1485,6 +1680,10 @@ impl Xhci {
         }
         if dev.hub_ports > 0 {
             self.hubs = self.hubs.saturating_sub(1);
+        }
+        if dev.audio.is_some() {
+            self.speakers = self.speakers.saturating_sub(1);
+            super::AUDIO_DEVICES.fetch_sub(1, core::sync::atomic::Ordering::Relaxed);
         }
         if dev.msd.is_some() {
             self.disks = self.disks.saturating_sub(1);

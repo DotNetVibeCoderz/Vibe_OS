@@ -229,6 +229,18 @@ fn vol_encode(pct: u32, muted: bool) -> u16 {
 /// Probe the PCI bus for an AC'97 controller and initialize it. Called once at
 /// boot from `kernel_main`. Returns true if a device was brought up.
 pub fn init() -> bool {
+    let up = init_card();
+    if up {
+        // a card of our own plays the mixer; a USB output only plays its test tone
+        crate::usb::AUDIO_SINK.store(false, AOrd::Relaxed);
+    } else if crate::usb::audio_present() {
+        crate::usb::AUDIO_SINK.store(true, AOrd::Relaxed);
+        crate::println!("[audio] no AC'97 / HD Audio card: USB audio plays the mixer");
+    }
+    up
+}
+
+fn init_card() -> bool {
     let devices = pci::scan();
     // AC'97: class 0x04 (multimedia), subclass 0x01 (audio device). QEMU's model
     // is Intel 82801AA (vendor 0x8086, device 0x2415).
@@ -336,9 +348,19 @@ pub fn init() -> bool {
     true
 }
 
+/// An AC'97 or HD Audio card (not counting USB audio).
+pub fn has_card() -> bool {
+    DEVICE.lock().is_some() || super::hda::present()
+}
+
+/// No card of our own, but a USB audio output: it plays the mixer.
+fn usb_out() -> bool {
+    crate::usb::audio_is_sink() && !has_card()
+}
+
 /// Is a sound card present and initialized?
 pub fn is_present() -> bool {
-    DEVICE.lock().is_some() || super::hda::present()
+    has_card() || crate::usb::audio_is_sink()
 }
 
 /// Let the HD Audio stream stop once its sound is over, and keep the
@@ -363,6 +385,9 @@ pub static STREAM_FILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 
 /// Whether the mixer stream is playing.
 pub fn is_streaming() -> bool {
+    if usb_out() {
+        return true; // the isochronous stream always runs
+    }
     if super::hda::present() {
         return super::hda::is_streaming();
     }
@@ -391,6 +416,9 @@ fn fill_from_mixer(buf_virt: u64) -> bool {
 /// the buffers the DMA engine has played (between LVI and the current
 /// index), stop after a whole ring of silence.
 pub fn stream_pump() {
+    if usb_out() {
+        return crate::usb::audio_pump();
+    }
     if super::hda::present() {
         return super::hda::stream_pump();
     }
@@ -574,7 +602,7 @@ pub fn capture_queued_ms() -> u64 {
 
 /// Was the mixer write/readback check successful (proves the NAM path works)?
 pub fn mixer_ok() -> bool {
-    if super::hda::present() {
+    if usb_out() || super::hda::present() {
         return true;
     }
     DEVICE.lock().as_ref().map(|d| d.mixer_ok).unwrap_or(false)
@@ -582,6 +610,9 @@ pub fn mixer_ok() -> bool {
 
 /// Current master volume percentage.
 pub fn volume() -> u32 {
+    if usb_out() {
+        return crate::usb::AUDIO_VOLUME.load(AOrd::Relaxed);
+    }
     if super::hda::present() {
         return super::hda::volume();
     }
@@ -590,6 +621,9 @@ pub fn volume() -> u32 {
 
 /// Is output currently muted?
 pub fn is_muted() -> bool {
+    if usb_out() {
+        return crate::usb::AUDIO_MUTED.load(AOrd::Relaxed);
+    }
     if super::hda::present() {
         return super::hda::is_muted();
     }
@@ -603,6 +637,13 @@ pub fn caps() -> u16 {
 
 /// Set the master output volume (0..=100). Non-zero un-mutes.
 pub fn set_volume(pct: u32) -> bool {
+    if usb_out() {
+        crate::usb::AUDIO_VOLUME.store(pct.min(100), AOrd::Relaxed);
+        if pct > 0 {
+            crate::usb::AUDIO_MUTED.store(false, AOrd::Relaxed);
+        }
+        return true;
+    }
     if super::hda::present() {
         return super::hda::set_volume(pct);
     }
@@ -619,6 +660,11 @@ pub fn set_volume(pct: u32) -> bool {
 /// Toggle mute; returns the new muted state. (Audio-settings UI API.)
 #[allow(dead_code)]
 pub fn toggle_mute() -> bool {
+    if usb_out() {
+        let m = !crate::usb::AUDIO_MUTED.load(AOrd::Relaxed);
+        crate::usb::AUDIO_MUTED.store(m, AOrd::Relaxed);
+        return m;
+    }
     if super::hda::present() {
         return super::hda::toggle_mute();
     }
@@ -782,6 +828,9 @@ pub fn play_pcm(src_ptr: u64, len_bytes: u64) -> bool {
 /// Is the PCM-out DMA engine currently running (not halted)? (UI meter API.)
 #[allow(dead_code)]
 pub fn is_playing() -> bool {
+    if usb_out() {
+        return crate::mixer::has_data();
+    }
     if super::hda::present() {
         return super::hda::is_playing();
     }

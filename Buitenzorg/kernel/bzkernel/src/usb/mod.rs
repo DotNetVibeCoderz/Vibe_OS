@@ -21,6 +21,90 @@ static INPUT_REPORTED: AtomicBool = AtomicBool::new(false);
 static LAST_REPORT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static REPORTS_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(12);
 
+// ---- USB audio (Audio Class 1 output, isochronous) -----------------------
+
+/// USB audio outputs attached now.
+pub static AUDIO_DEVICES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// The USB output plays the mixer (set when the machine has no other sound card).
+pub static AUDIO_SINK: AtomicBool = AtomicBool::new(false);
+/// Output volume 0..=100 and mute.
+pub static AUDIO_VOLUME: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(80);
+pub static AUDIO_MUTED: AtomicBool = AtomicBool::new(false);
+
+pub fn audio_present() -> bool {
+    AUDIO_DEVICES.load(Ordering::Relaxed) > 0
+}
+
+/// Whether USB audio is the machine's sound output (mixer sink).
+pub fn audio_is_sink() -> bool {
+    audio_present() && AUDIO_SINK.load(Ordering::Relaxed)
+}
+
+/// Sample scale in 1/256 (volume, mute).
+pub(crate) fn audio_gain() -> i32 {
+    if AUDIO_MUTED.load(Ordering::Relaxed) {
+        0
+    } else {
+        (AUDIO_VOLUME.load(Ordering::Relaxed).min(100) * 256 / 100) as i32
+    }
+}
+
+/// Keep the USB audio stream fed (refills happen in the event handler).
+pub fn audio_pump() {
+    if let Some(mut list) = CONTROLLERS.try_lock() {
+        for c in list.iter_mut() {
+            c.poll();
+        }
+    }
+}
+
+/// Boot check (`USB AUDIO OK`): a 440 Hz tone for 300 ms on every USB
+/// audio output, polled until the controller completed 250 packets.
+pub fn audio_self_test() -> Option<Result<alloc::string::String, alloc::string::String>> {
+    if !audio_present() {
+        return None;
+    }
+    let before = {
+        let mut list = CONTROLLERS.lock();
+        let b = list.iter().fold((0, 0, 0, 0), |t, c| {
+            let s = c.audio_stats();
+            (t.0 + s.0, t.1 + s.1, t.2 + s.2, t.3 + s.3)
+        });
+        for c in list.iter_mut() {
+            c.audio_tone(440, 300);
+        }
+        b
+    };
+    let t0 = crate::arch::cpu::nanos();
+    let mut now = before;
+    while crate::arch::cpu::nanos() - t0 < 3_000_000_000 {
+        let mut list = CONTROLLERS.lock();
+        now = (0, 0, 0, 0);
+        for c in list.iter_mut() {
+            c.poll();
+            let s = c.audio_stats();
+            now = (now.0 + s.0, now.1 + s.1, now.2 + s.2, now.3 + s.3);
+        }
+        drop(list);
+        if now.0 - before.0 >= 250 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
+    let done = now.0 - before.0;
+    let msg = alloc::format!(
+        "{} output(s), 48000 Hz 2 ch 16-bit isochronous: {} packets of 1 ms in {} ms, {} error(s), {} underrun(s){}",
+        AUDIO_DEVICES.load(Ordering::Relaxed),
+        done,
+        ms,
+        now.1 - before.1,
+        now.2 - before.2,
+        if audio_is_sink() { ", the mixer's output for now" } else { "" }
+    );
+    Some(if done >= 250 { Ok(msg) } else { Err(msg) })
+}
+
 /// Start the xHCI controller mapped at `mmio`, enumerate its devices and keep
 /// it for `poll`. `dma_limit` = the first bus address the controller cannot
 /// reach. Returns (keyboards, mice).
@@ -43,6 +127,10 @@ pub fn add_controller(mmio: u64, dma_limit: u64, name: &'static str) -> Result<(
         crate::println!("[usb] {}: no devices connected", name);
     }
     let disks = c.disks_found();
+    // provisional: the platform's audio init (which may run later) decides
+    if c.speakers > 0 && !crate::audio::has_card() {
+        AUDIO_SINK.store(true, Ordering::Relaxed);
+    }
     let controller = {
         let mut list = CONTROLLERS.lock();
         list.push(c);

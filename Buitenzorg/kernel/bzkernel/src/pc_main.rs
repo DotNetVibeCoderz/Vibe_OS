@@ -1705,6 +1705,11 @@ fn batang_demo() {
     virtio::input::init();
     // USB keyboards and mice on xHCI controllers (roadmap R4).
     usb::init_pci();
+    match usb::audio_self_test() {
+        Some(Ok(s)) => println!("[kernel] MILESTONE: USB AUDIO OK ({})", s),
+        Some(Err(e)) => println!("[kernel] usb audio self-test FAILED: {}", e),
+        None => {}
+    }
     // A virtio GPU mirrors the desktop (the boot framebuffer stays the console).
     if let Some((w, h)) = framebuffer::dimensions() {
         virtio::gpu::init(w, h);

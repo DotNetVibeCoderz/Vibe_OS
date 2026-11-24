@@ -53,7 +53,8 @@ boot() { # boot <media> <log>; QEMU is killed by timeout after the grace period
     ahci) drive=(-smp 2 -drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device ahci,id=ahci0 -device ide-hd,drive=bzdisk,bus=ahci0.0
                  -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1
-                 -device usb-kbd,bus=xhci.0,port=1.1 -device usb-mouse,bus=xhci.0,port=1.2) ;;
+                 -device usb-kbd,bus=xhci.0,port=1.1 -device usb-mouse,bus=xhci.0,port=1.2
+                 -audiodev none,id=usbsnd -device usb-audio,bus=xhci.0,port=2,audiodev=usbsnd) ;;
     nvme) drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
                  -device nvme,drive=bzdisk,serial=bz0001) ;;
     usb)  drive=(-drive "id=bzdisk,format=raw,file=$img,if=none"
@@ -366,7 +367,7 @@ for media in ahci nvme usb; do
   boot "$media" "$root/dist/boot-$media.log"
   require "$root/dist/boot-$media.log" "${basic[@]}"
   if [ "$media" = ahci ]; then
-    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"       "MILESTONE: USB OK (xhci-pci: xHCI, 3 device(s): 1 hub(s), 1 keyboard(s), 1 mouse"
+    require "$root/dist/boot-ahci.log" "MILESTONE: SMP OK (2 CPU(s): 1 AP(s)" "MILESTONE: SMP PERCPU OK"       "MILESTONE: USB OK (xhci-pci: xHCI, 4 device(s): 1 hub(s), 1 keyboard(s), 1 mouse" "MILESTONE: USB AUDIO OK (1 output(s)"
     echo "smoke [ahci]: second CPU started (SMP); USB hub + keyboard + mouse enumerated on xHCI"
   fi
   if [ "$media" = nvme ]; then

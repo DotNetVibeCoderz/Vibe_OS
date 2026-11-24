@@ -77,6 +77,11 @@ pub fn capture_queued_ms() -> u64 {
     snd::capture_queued_ms()
 }
 
+/// A sound device of the platform's own (USB audio then only plays its test tone).
+pub fn has_card() -> bool {
+    true
+}
+
 pub fn is_present() -> bool {
     has_jack() || snd::available()
 }
