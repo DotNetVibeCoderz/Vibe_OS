@@ -22,6 +22,8 @@ use core::ptr::{read_volatile, write_volatile};
 use crate::pci::PciDevice;
 
 const FIRMWARE: &str = "/disk/WIFI/IWL8265.UCO";
+/// SHA-256 pinned in scripts/fetch-wifi-firmware.* (linux-firmware 20241110).
+const FIRMWARE_SHA256: &str = "d7d84c9b6a3b1976acb97a2bec7102e24a6b5d794110c0dcbd107ab5d9877e5f";
 
 // CSR (BAR 0)
 const CSR_HW_IF_CONFIG: usize = 0x000;
@@ -61,6 +63,8 @@ const INT_HW_ERR: u32 = 1 << 29;
 const INT_FH_RX: u32 = 1 << 31;
 
 // periphery registers through the HBUS window
+const HBUS_MEM_RADDR: usize = 0x40C;
+const HBUS_MEM_RDAT: usize = 0x41C;
 const PRPH_WADDR: usize = 0x444;
 const PRPH_RADDR: usize = 0x448;
 const PRPH_WDAT: usize = 0x44C;
@@ -227,6 +231,50 @@ impl Nic {
         if let Some(d) = self.pci {
             let e = crate::pci::dma_error_bits(&d);
             self.note(format!("  {}", e));
+        }
+    }
+
+    /// A word of device SRAM (`iwl_trans_read_mem32`).
+    fn read_mem(&self, addr: u32) -> Option<u32> {
+        if !self.grab() {
+            return None;
+        }
+        self.w(HBUS_MEM_RADDR, addr);
+        let v = self.r(HBUS_MEM_RDAT);
+        self.release();
+        Some(v)
+    }
+
+    /// Read back the first word of every loaded section: tells a DMA or
+    /// file problem apart from a firmware that refuses to start.
+    fn verify_sram(&mut self, secs: &[(u32, &[u8])]) {
+        let mut line = String::from("  sram:");
+        let mut n = 0;
+        for &(dst, data) in secs {
+            if dst == CPU1_CPU2_SEPARATOR || dst == PAGING_SEPARATOR {
+                if dst == PAGING_SEPARATOR {
+                    break;
+                }
+                continue;
+            }
+            if data.len() < 4 {
+                continue;
+            }
+            let want = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let got = self.read_mem(dst);
+            let part = match got {
+                Some(v) if v == want => format!(" {:x}=ok", dst),
+                Some(v) => format!(" {:x}:{:08x}/{:08x}", dst, v, want),
+                None => format!(" {:x}:?", dst),
+            };
+            line.push_str(&part);
+            n += 1;
+            if n % 3 == 0 {
+                self.note(core::mem::replace(&mut line, String::from("  sram:")));
+            }
+        }
+        if n % 3 != 0 {
+            self.note(line);
         }
     }
 
@@ -413,6 +461,20 @@ pub fn bring_up(dev: &PciDevice) -> Vec<String> {
     let mut nic = Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None };
     if let Err(e) = run(dev, &mut nic) {
         nic.note(format!("failed: {}", e));
+        // Firmware loaded but never reported: whatever state the boot
+        // firmware (or an earlier attempt) left the device in, a PCIe
+        // function-level reset clears it. One more try after that.
+        if e.starts_with("no ALIVE") {
+            match crate::pci::function_level_reset(dev) {
+                Ok(()) => {
+                    nic.note(String::from("PCIe function-level reset done; second attempt"));
+                    if let Err(e) = run(dev, &mut nic) {
+                        nic.note(format!("failed again: {}", e));
+                    }
+                }
+                Err(e) => nic.note(format!("no second attempt: {}", e)),
+            }
+        }
     }
     nic.log
 }
@@ -421,6 +483,16 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
     let fw = crate::vfs::read(FIRMWARE)
         .map_err(|_| format!("firmware {} missing (scripts/fetch-wifi-firmware, then rebuild the image)", FIRMWARE))?;
     let (name, init) = sections(&fw, 20)?;
+    {
+        use sha2::{Digest, Sha256};
+        let h = Sha256::digest(&fw);
+        let hex: String = h.iter().map(|b| format!("{:02x}", b)).collect();
+        if hex == FIRMWARE_SHA256 {
+            nic.note(format!("firmware file {} bytes, SHA-256 ok", fw.len()));
+        } else {
+            nic.note(format!("firmware file {} bytes, SHA-256 MISMATCH {}", fw.len(), &hex[..16]));
+        }
+    }
     nic.note(format!("firmware '{}': INIT image {} section(s)", name, init.len()));
     let bar = dev.mem_bar(0).ok_or("no memory BAR")?;
     for line in crate::pci::enable_upstream_bridges(dev) {
@@ -516,6 +588,11 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
     nic.load_cpu(&init, next + 1, 2, page)?;
     let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
     nic.note(format!("INIT image loaded in {} ms; waiting for ALIVE", ms));
+    let sb = |n: &Nic| (n.read_prph(SB_CPU_1_STATUS).unwrap_or(0xFFFF_FFFF), n.read_prph(SB_CPU_2_STATUS).unwrap_or(0xFFFF_FFFF));
+    let (a0, b0) = sb(nic);
+    delay_us(20_000);
+    let (a1, b1) = sb(nic);
+    nic.note(format!("secure boot just after load: CPU1 {:#x} CPU2 {:#x}; +20 ms: CPU1 {:#x} CPU2 {:#x}", a0, b0, a1, b1));
 
     // ALIVE arrives as the first packet on the RX queue.
     let mut t = 0u64;
@@ -534,6 +611,7 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         if t > 2_000_000 {
             nic.dump("no ALIVE");
             nic.firmware_state(stts, bufs[0].1);
+            nic.verify_sram(&init);
             return Err(format!("no ALIVE within 2 s (CSR_INT alive bit {})", int & INT_ALIVE != 0));
         }
         delay_us(100);

@@ -164,6 +164,45 @@ pub fn enable_upstream_bridges(dev: &PciDevice) -> Vec<alloc::string::String> {
     out
 }
 
+/// PCIe function-level reset of `dev` (Device Control bit 15), keeping its
+/// configuration header (BARs, command, 0x40) as it was.
+pub fn function_level_reset(dev: &PciDevice) -> Result<(), alloc::string::String> {
+    let cap = dev
+        .capabilities()
+        .into_iter()
+        .find(|&(id, _)| id == 0x10)
+        .map(|(_, off)| off)
+        .ok_or_else(|| alloc::string::String::from("no PCI Express capability"))?;
+    if dev.read32(cap + 4) & (1 << 28) == 0 {
+        return Err(alloc::string::String::from("device does not support function-level reset"));
+    }
+    // FLR resets the configuration header: save it (Linux pci_save_state).
+    let mut saved = [0u32; 17];
+    for (i, v) in saved.iter_mut().enumerate() {
+        *v = dev.read32((i * 4) as u8);
+    }
+    let ctl = dev.read32(cap + 8);
+    write_config_u32(dev.bus, dev.slot, dev.function, cap + 8, (ctl & 0xFFFF) | 0x8000);
+    // PCIe: wait 100 ms before touching the function again.
+    let t0 = crate::arch::cpu::nanos();
+    while crate::arch::cpu::nanos() - t0 < 100_000_000 {
+        core::hint::spin_loop();
+    }
+    let mut waited = 0;
+    while dev.read32(0) == 0xFFFF_FFFF && waited < 1000 {
+        let t = crate::arch::cpu::nanos();
+        while crate::arch::cpu::nanos() - t < 1_000_000 {
+            core::hint::spin_loop();
+        }
+        waited += 1;
+    }
+    for i in (2..17).rev() {
+        write_config_u32(dev.bus, dev.slot, dev.function, (i * 4) as u8, saved[i]);
+    }
+    write_config_u32(dev.bus, dev.slot, dev.function, 0x04, saved[1] & 0xFFFF);
+    Ok(())
+}
+
 /// Status bits of `dev` and of the bridge above it that record aborted DMA
 /// (primary status 0x06, secondary status 0x1E of the bridge): the first thing
 /// to look at when a device's DMA fails.
