@@ -653,6 +653,7 @@ public sealed partial class Renderer : IDisposable
     {
         long t0 = Environment.TickCount64;
         scene.UpdateWorldTransforms();
+        scene.ApplySkins();
         var cam = camera ?? scene.ActiveCamera;
         Matrix4 view, proj;
         Vector3 eye;

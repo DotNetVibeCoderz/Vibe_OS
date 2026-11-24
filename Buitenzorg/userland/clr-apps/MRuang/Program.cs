@@ -461,8 +461,129 @@ public static class RuangApp
             c.That(withTree == 11 && MathF.Abs(tw.Y - (-0.6f + 1.08f)) < 0.01f, "glTF: the model draws (" + withTree + " objects), world transform (y " + tw.Y.ToString("0.00") + ")");
             pohon.Remove();
         }
+        SkeletalChecks(c);
         r.Dispose();
         return c;
+    }
+
+    /// <summary>Skeletal animation: a two-joint stem bent by hand, a sampled clip, a skinned glTF with an animation.</summary>
+    static void SkeletalChecks(Checks c)
+    {
+        try
+        {
+            var sc = new Scene();
+            var a = sc.CreateNode(null, "pangkal");
+            a.Position = new Vector3(0, -1, 0);
+            var bj = sc.CreateNode(a, "ruas");
+            bj.Position = new Vector3(0, 1, 0);
+            var stem = sc.AddMesh(Geometry.Cylinder(0.1f, 0.1f, 2, 8, false), Material.Lambert(0x6FAF5F), null, "batang");
+            var skin = Skin.BindPose(sc, new[] { a, bj });
+            int nv = stem.Geometry!.VertexCount;
+            var joints = new int[nv * 4];
+            var weights = new float[nv * 4];
+            for (int i = 0; i < nv; i++)
+            {
+                joints[i * 4] = stem.Geometry.Vertices[i * 8 + 1] > 0 ? 1 : 0;
+                weights[i * 4] = 1;
+            }
+            var sm = new SkinnedMesh(stem, skin, joints, weights);
+            bj.EulerAngles = new Vector3(0, 0, MathF.PI / 2);
+            sc.UpdateWorldTransforms();
+            sc.ApplySkins();
+            var tip = sm.VertexPosition(0); // (0, 1, 0.1) in the bind pose
+            var foot = sm.VertexPosition(1); // (0, -1, 0.1)
+            c.That(Near(tip, new Vector3(-1, 0, 0.1f)) && Near(foot, new Vector3(0, -1, 0.1f)) && sm.Updates == 1,
+                "skinning: the upper joint turned 90 degrees bends the tip to (-1, 0) (" + V(tip) + "), the foot stays");
+
+            var clip = new AnimationClip("goyang");
+            clip.Channels.Add(AnimationChannel.RotationEuler(bj, new float[] { 0, 1 }, new[] { Vector3.Zero, new Vector3(0, 0, MathF.PI / 2) }));
+            var anim = new Animator(clip) { Loop = false }.AttachTo(sc.Root);
+            sc.Update(0.5f);
+            bool half = MathF.Abs(bj.EulerAngles.Z - MathF.PI / 4) < 0.01f;
+            sc.Update(0.75f);
+            c.That(half && !anim.Playing && MathF.Abs(bj.EulerAngles.Z - MathF.PI / 2) < 0.01f,
+                "animation: slerp halfway = 45 degrees, a clip without Loop stops at its end");
+
+            var model = Gltf.Load(SkinnedGltf());
+            Node? mesh = null;
+            model?.Traverse(n => { if (n.Skinned != null) mesh = n; });
+            var clips = Gltf.LastAnimations;
+            if (mesh != null && clips.Count == 1)
+            {
+                var gs = new Scene();
+                gs.Root.Add(model!);
+                new Animator(clips[0]) { Loop = false }.AttachTo(gs.Root);
+                gs.Update(1);
+                gs.UpdateWorldTransforms();
+                gs.ApplySkins();
+            }
+            var moved = mesh?.Skinned?.VertexPosition(2) ?? new Vector3(99, 99, 99);
+            c.That(mesh != null && clips.Count == 1 && clips[0].Channels.Count == 1 && Near(moved, new Vector3(-1, 1, 0)) && Near(mesh.Skinned!.VertexPosition(1), new Vector3(1, 0, 0)),
+                "glTF: skin (JOINTS_0, WEIGHTS_0, inverse bind matrices) + rotation animation (" + (mesh == null ? Gltf.LastError : V(moved)) + ")");
+        }
+        catch (Exception e) { c.That(false, "skeletal: " + e.Message); }
+    }
+
+    static bool Near(Vector3 p, Vector3 q) => MathF.Abs(p.X - q.X) < 0.01f && MathF.Abs(p.Y - q.Y) < 0.01f && MathF.Abs(p.Z - q.Z) < 0.01f;
+    static string V(Vector3 p) => p.X.ToString("0.00") + "," + p.Y.ToString("0.00") + "," + p.Z.ToString("0.00");
+
+    /// <summary>A three-vertex skinned glTF: joint 1 at (0, 1, 0) owns vertex (0, 2, 0) and turns 90 degrees about Z in one second.</summary>
+    static byte[] SkinnedGltf()
+    {
+        var buf = new List<byte>();
+        void F(float f) { int b = Bits(f); buf.Add((byte)b); buf.Add((byte)(b >> 8)); buf.Add((byte)(b >> 16)); buf.Add((byte)(b >> 24)); }
+        foreach (var f in new float[] { 0, 0, 0, 1, 0, 0, 0, 2, 0 }) F(f);              // 0: positions, 36 bytes
+        foreach (var j in new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 }) buf.Add(j); // 36: joints, 12
+        for (int v = 0; v < 3; v++) { F(1); F(0); F(0); F(0); }                          // 48: weights, 48
+        foreach (var f in new float[] { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 }) F(f);  // 96: inverse bind 0
+        foreach (var f in new float[] { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1 }) F(f); // 160: inverse bind 1 (column-major)
+        F(0); F(1);                                                                      // 224: key times
+        float h = 0.70710678f;
+        foreach (var f in new float[] { 0, 0, 0, 1, 0, 0, h, h }) F(f);                  // 232: rotations, 32 bytes
+        string data = "data:application/octet-stream;base64," + Base64(buf.ToArray());
+        string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0,1]}]," +
+            "\"nodes\":[{\"name\":\"kulit\",\"mesh\":0,\"skin\":0},{\"name\":\"akar\",\"children\":[2]},{\"name\":\"ujung\",\"translation\":[0,1,0]}]," +
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2}}]}]," +
+            "\"skins\":[{\"joints\":[1,2],\"inverseBindMatrices\":3}]," +
+            "\"animations\":[{\"name\":\"tekuk\",\"samplers\":[{\"input\":4,\"output\":5}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":2,\"path\":\"rotation\"}}]}]," +
+            "\"buffers\":[{\"byteLength\":264,\"uri\":\"" + data + "\"}]," +
+            "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12},{\"buffer\":0,\"byteOffset\":48,\"byteLength\":48}," +
+            "{\"buffer\":0,\"byteOffset\":96,\"byteLength\":128},{\"buffer\":0,\"byteOffset\":224,\"byteLength\":8},{\"buffer\":0,\"byteOffset\":232,\"byteLength\":32}]," +
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5121,\"count\":3,\"type\":\"VEC4\"}," +
+            "{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":3,\"componentType\":5126,\"count\":2,\"type\":\"MAT4\"}," +
+            "{\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"},{\"bufferView\":5,\"componentType\":5126,\"count\":2,\"type\":\"VEC4\"}]}";
+        var bytes = new byte[json.Length];
+        for (int i = 0; i < json.Length; i++) bytes[i] = (byte)json[i];
+        return bytes;
+    }
+
+    /// <summary>IEEE 754 single bits of a normal float or zero (no BitConverter on every BCL).</summary>
+    static int Bits(float f)
+    {
+        if (f == 0) return 0;
+        int sign = f < 0 ? 1 : 0;
+        double v = Math.Abs((double)f);
+        int e = 0;
+        while (v >= 2) { v /= 2; e++; }
+        while (v < 1) { v *= 2; e--; }
+        int mant = (int)Math.Round((v - 1) * 8388608);
+        if (mant == 8388608) { mant = 0; e++; }
+        return sign << 31 | (e + 127) << 23 | mant;
+    }
+
+    static string Base64(byte[] b)
+    {
+        const string t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        var o = new char[(b.Length + 2) / 3 * 4];
+        int k = 0;
+        for (int i = 0; i < b.Length; i += 3)
+        {
+            int n = b[i] << 16 | (i + 1 < b.Length ? b[i + 1] << 8 : 0) | (i + 2 < b.Length ? b[i + 2] : 0);
+            o[k++] = t[n >> 18 & 63]; o[k++] = t[n >> 12 & 63];
+            o[k++] = i + 1 < b.Length ? t[n >> 6 & 63] : '=';
+            o[k++] = i + 2 < b.Length ? t[n & 63] : '=';
+        }
+        return new string(o);
     }
 }
 

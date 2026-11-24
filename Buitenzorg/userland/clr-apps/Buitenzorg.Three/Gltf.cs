@@ -5,8 +5,11 @@
 // scale or a matrix), meshes with any number of triangle primitives
 // (POSITION, NORMAL, TEXCOORD_0, COLOR_0, indices; float, unsigned byte /
 // short / int components, byteStride), and materials' base color factor
-// (alpha < 1 = transparent), double-sidedness and name. Not read: textures,
-// skins, morph targets, animations, cameras, lights, sparse accessors,
+// (alpha < 1 = transparent), double-sidedness and name, skins (JOINTS_0 /
+// WEIGHTS_0 + inverseBindMatrices -> SkinnedMesh) and animations
+// (translation / rotation / scale channels, LINEAR / STEP / CUBICSPLINE
+// sampled at the key values -> Gltf.LastAnimations). Not read: textures,
+// morph targets, cameras, lights, sparse accessors,
 // Draco / meshopt compression, primitive modes other than triangles.
 //
 // Written for the interpreter: the JSON is parsed from a char[] (indexing a
@@ -23,6 +26,8 @@ public static class Gltf
 {
     /// <summary>Why the last load failed ("" after a success).</summary>
     public static string LastError { get; private set; } = "";
+    /// <summary>The animations of the last loaded model (play them with an Animator).</summary>
+    public static List<AnimationClip> LastAnimations { get; private set; } = new List<AnimationClip>();
 
     /// <summary>Load a .glb / .gltf file into a node tree (null + <see cref="LastError"/> on failure).</summary>
     public static Node? LoadFile(string path)
@@ -39,6 +44,7 @@ public static class Gltf
         try
         {
             LastError = "";
+            LastAnimations = new List<AnimationClip>();
             byte[]? bin = null;
             char[] json;
             if (data.Length >= 12 && data[0] == (byte)'g' && data[1] == (byte)'l' && data[2] == (byte)'T' && data[3] == (byte)'F')
@@ -62,7 +68,10 @@ public static class Gltf
             }
             else json = Utf8Chars(data, 0, data.Length);
             var root = new Json(json).Value() as Dictionary<string, object?> ?? throw new FormatException("not a glTF JSON object");
-            return new Reader(root, bin, baseDir).Build();
+            var reader = new Reader(root, bin, baseDir);
+            var top = reader.Build();
+            LastAnimations = reader.Animations;
+            return top;
         }
         catch (Exception e)
         {
@@ -195,6 +204,10 @@ public static class Gltf
         readonly List<byte[]?> _buffers = new List<byte[]?>();
         readonly Material?[] _materials;
         static double[]? _pow2;
+        Node?[] _nodes = new Node?[0];
+        // skinned primitives waiting for their skin: (node with the geometry, skin index, joints, weights)
+        readonly List<(Node, int, int[], float[])> _pendingSkins = new List<(Node, int, int[], float[])>();
+        public readonly List<AnimationClip> Animations = new List<AnimationClip>();
 
         public Reader(Dictionary<string, object?> root, byte[]? glbBin, string baseDir)
         {
@@ -231,14 +244,93 @@ public static class Gltf
                 roots = new List<object?>();
                 for (int i = 0; i < nodes.Count; i++) if (!child[i]) roots.Add((double)i);
             }
+            _nodes = new Node?[nodes.Count];
             foreach (var r in roots) if (r is double d) top.Add(MakeNode((int)d, nodes, 0));
+            BindSkins();
+            ReadAnimations();
             return top;
+        }
+
+        void BindSkins()
+        {
+            var skins = Arr(_root, "skins");
+            var made = new Skin?[skins.Count];
+            foreach (var (node, si, joints, weights) in _pendingSkins)
+            {
+                if (si < 0 || si >= skins.Count || Obj(skins[si]) is not { } so) throw new FormatException("bad skin " + si);
+                if (made[si] == null)
+                {
+                    var js = Arr(so, "joints");
+                    var jn = new Node[js.Count];
+                    for (int i = 0; i < js.Count; i++)
+                    {
+                        int ni = js[i] is double d ? (int)d : -1;
+                        if (ni < 0 || ni >= _nodes.Length || _nodes[ni] == null) throw new FormatException("skin joint is not in the scene");
+                        jn[i] = _nodes[ni]!;
+                    }
+                    var ibm = new Matrix4[jn.Length];
+                    int ia = Int(so, "inverseBindMatrices");
+                    if (ia >= 0)
+                    {
+                        var f = ReadFloats(ia, out int c, out int cnt);
+                        if (c != 16 || cnt < jn.Length) throw new FormatException("inverseBindMatrices");
+                        for (int i = 0; i < jn.Length; i++) ibm[i] = FromColumnMajor(f, i * 16);
+                    }
+                    else for (int i = 0; i < jn.Length; i++) ibm[i] = Matrix4.Identity;
+                    made[si] = new Skin(jn, ibm);
+                }
+                new SkinnedMesh(node, made[si]!, joints, weights);
+            }
+        }
+
+        static Matrix4 FromColumnMajor(float[] m, int o) => new Matrix4
+        {
+            M00 = m[o], M10 = m[o + 1], M20 = m[o + 2], M30 = m[o + 3],
+            M01 = m[o + 4], M11 = m[o + 5], M21 = m[o + 6], M31 = m[o + 7],
+            M02 = m[o + 8], M12 = m[o + 9], M22 = m[o + 10], M32 = m[o + 11],
+            M03 = m[o + 12], M13 = m[o + 13], M23 = m[o + 14], M33 = m[o + 15],
+        };
+
+        void ReadAnimations()
+        {
+            var anims = Arr(_root, "animations");
+            for (int a = 0; a < anims.Count; a++)
+            {
+                if (Obj(anims[a]) is not { } ao) continue;
+                var clip = new AnimationClip(Str(ao, "name"));
+                var samplers = Arr(ao, "samplers");
+                foreach (var ch in Arr(ao, "channels"))
+                {
+                    if (Obj(ch) is not { } co || Obj(co.TryGetValue("target", out var tv) ? tv : null) is not { } to) continue;
+                    int ni = Int(to, "node"), si = Int(co, "sampler");
+                    string path = Str(to, "path");
+                    if (ni < 0 || ni >= _nodes.Length || _nodes[ni] == null || si < 0 || si >= samplers.Count || Obj(samplers[si]) is not { } so) continue;
+                    var p = path == "translation" ? AnimationPath.Translation : path == "rotation" ? AnimationPath.Rotation : path == "scale" ? AnimationPath.Scale : (AnimationPath)(-1);
+                    if ((int)p < 0) continue; // morph target weights
+                    var times = ReadFloats(Int(so, "input"), out _, out int keys);
+                    var vals = ReadFloats(Int(so, "output"), out int comps, out _);
+                    string interp = Str(so, "interpolation");
+                    int w = p == AnimationPath.Rotation ? 4 : 3;
+                    if (comps != w) continue;
+                    var v = new float[keys * w];
+                    bool cubic = interp == "CUBICSPLINE";
+                    for (int k = 0; k < keys; k++)
+                        for (int c = 0; c < w; c++)
+                        {
+                            int src = cubic ? (k * 3 + 1) * w + c : k * w + c; // in-tangent, value, out-tangent
+                            v[k * w + c] = src < vals.Length ? vals[src] : 0;
+                        }
+                    if (keys > 0) clip.Channels.Add(new AnimationChannel(_nodes[ni]!, p, times, v, interp == "STEP"));
+                }
+                if (clip.Channels.Count > 0) Animations.Add(clip);
+            }
         }
 
         Node MakeNode(int index, List<object?> nodes, int depth)
         {
             if (index < 0 || index >= nodes.Count || depth > 64 || Obj(nodes[index]) is not { } o) throw new FormatException("bad node " + index);
             var n = new Node(Str(o, "name"));
+            _nodes[index] = n;
             var m = Floats(o, "matrix");
             if (m != null && m.Length == 16) Decompose(m, n);
             else
@@ -251,7 +343,7 @@ public static class Gltf
                 if (s != null && s.Length == 3) n.Scale = new Vector3(s[0], s[1], s[2]);
             }
             int mesh = Int(o, "mesh");
-            if (mesh >= 0) AddMesh(n, mesh);
+            if (mesh >= 0) AddMesh(n, mesh, Int(o, "skin"));
             foreach (var c in Arr(o, "children")) if (c is double d) n.Add(MakeNode((int)d, nodes, depth + 1));
             return n;
         }
@@ -284,7 +376,7 @@ public static class Gltf
             n.EulerAngles = EulerFrom(m[0] / sx, m[8] / sz, m[1] / sx, m[5] / sy, m[9] / sz, m[2] / sx, m[10] / sz);
         }
 
-        void AddMesh(Node n, int mi)
+        void AddMesh(Node n, int mi, int skin)
         {
             var meshes = Arr(_root, "meshes");
             if (mi >= meshes.Count || Obj(meshes[mi]) is not { } mesh) throw new FormatException("bad mesh " + mi);
@@ -295,8 +387,21 @@ public static class Gltf
                 if (Int(prim, "mode", 4) != 4) continue; // triangles only
                 var (g, mat) = Primitive(prim);
                 if (g == null) continue;
-                if (prims.Count == 1 && n.Geometry == null) { n.Geometry = g; n.Material = mat; }
-                else n.Add(new Node(n.Name + "#" + p) { Geometry = g, Material = mat });
+                Node holder;
+                if (prims.Count == 1 && n.Geometry == null) { n.Geometry = g; n.Material = mat; holder = n; }
+                else holder = n.Add(new Node(n.Name + "#" + p) { Geometry = g, Material = mat });
+                if (skin >= 0 && Obj(prim.TryGetValue("attributes", out var at) ? at : null) is { } attrs
+                    && Int(attrs, "JOINTS_0") is int ja and >= 0 && Int(attrs, "WEIGHTS_0") is int wa and >= 0)
+                {
+                    var jf = ReadFloats(ja, out int jc, out _);
+                    var wf = ReadFloats(wa, out int wc, out _);
+                    if (jc == 4 && wc == 4 && jf.Length == g.VertexCount * 4 && wf.Length == g.VertexCount * 4)
+                    {
+                        var ji = new int[jf.Length];
+                        for (int i = 0; i < ji.Length; i++) ji[i] = (int)jf[i];
+                        _pendingSkins.Add((holder, skin, ji, wf));
+                    }
+                }
             }
         }
 
