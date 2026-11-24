@@ -46,6 +46,14 @@ const CR_RPBM: u8 = 0x01; // run/pause bus master
 const CR_RR: u8 = 0x02; // reset registers
 // PO_SR status bits.
 const SR_DCH: u16 = 0x01; // DMA controller halted
+const CR_IOCE: u8 = 0x10; // interrupt on completion enable
+/// BDL control bit: raise an interrupt when this buffer is done.
+const BDL_IOC: u32 = 1 << 31;
+/// Status bits an interrupt reports (write 1 to clear): last valid buffer,
+/// buffer completion, FIFO error.
+const SR_IRQ_BITS: u16 = 0x1C;
+/// IDT vector of the AC'97 interrupt (an I/O APIC route of its PCI line).
+pub const IRQ_VECTOR: u8 = 0x50;
 
 /// DMA buffers of 4 KiB: a one-shot sound uses the first ones; streaming
 /// (the mixer) cycles through all of them -- 32 x 1024 frames = 680 ms.
@@ -81,6 +89,110 @@ struct Ac97 {
 unsafe impl Send for Ac97 {}
 
 static DEVICE: Mutex<Option<Ac97>> = Mutex::new(None);
+
+// ---- interrupt-driven streaming (2026-11-24) ---------------------------------
+//
+// With an I/O APIC, the card's PCI interrupt is routed to `IRQ_VECTOR`, and the
+// buffers of the streaming and recording rings carry the IOC bit. The
+// interrupt handler only acknowledges the card and wakes the `audio` kernel
+// task, which refills the play ring from the mixer and drains the recording
+// ring -- the mixer's locks are never taken in interrupt context. Without a
+// route (no I/O APIC, or the line cannot be routed) the desktop loop keeps
+// pumping as before.
+
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering as AOrd};
+
+static NABM: AtomicU16 = AtomicU16::new(0);
+static IRQ_GSI: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Interrupts taken (tests, `audio` shell output).
+pub static IRQS: AtomicU64 = AtomicU64::new(0);
+/// Wake-ups of the audio task that refilled the play ring.
+pub static IRQ_REFILLS: AtomicU64 = AtomicU64::new(0);
+static STREAMING: AtomicBool = AtomicBool::new(false);
+static PENDING: AtomicBool = AtomicBool::new(false);
+static SPURIOUS: AtomicU64 = AtomicU64::new(0);
+const TASK_KEY: u64 = 0xA0D1 << 40;
+
+/// Ring state for a failing test.
+pub fn debug_state() -> alloc::string::String {
+    match DEVICE.try_lock() {
+        Some(g) => match g.as_ref() {
+            Some(d) => alloc::format!("picb {} civ {} lvi {} idle {} sr {:#x} cr {:#x} streaming {} irqs {} spurious {}", inw(d.nabm + PO_PICB), inb(d.nabm + PO_CIV), d.lvi, d.idle, inw(d.nabm + PO_SR), inb(d.nabm + PO_CR), d.streaming, IRQS.load(AOrd::Relaxed), SPURIOUS.load(AOrd::Relaxed)),
+            None => alloc::string::String::from("no AC97"),
+        },
+        None => alloc::string::String::from("locked"),
+    }
+}
+
+/// Whether the card's interrupt is routed (refills happen without polling).
+pub fn irq_routed() -> bool {
+    IRQ_GSI.load(AOrd::Relaxed) != u64::MAX
+}
+
+/// The interrupt: acknowledge both DMA engines, wake the audio task. Runs
+/// with interrupts off and takes no lock but the scheduler's (as every IRQ
+/// waker does).
+pub fn on_irq() {
+    let nabm = NABM.load(AOrd::Relaxed);
+    if nabm == 0 {
+        return;
+    }
+    let po = inw(nabm + PO_SR);
+    let pi = inw(nabm + PI_SR);
+    if (po | pi) & SR_IRQ_BITS == 0 {
+        // Not ours. A wrongly configured level-triggered line would fire
+        // for ever: after a run of these, mask it and go back to polling.
+        if SPURIOUS.fetch_add(1, AOrd::Relaxed) > 256 {
+            let gsi = IRQ_GSI.swap(u64::MAX, AOrd::Relaxed);
+            if gsi != u64::MAX {
+                crate::ioapic::mask(gsi as u32);
+            }
+        }
+        return;
+    }
+    SPURIOUS.store(0, AOrd::Relaxed);
+    if po & SR_IRQ_BITS != 0 {
+        outw(nabm + PO_SR, po & SR_IRQ_BITS);
+    }
+    if pi & SR_IRQ_BITS != 0 {
+        outw(nabm + PI_SR, pi & SR_IRQ_BITS);
+    }
+    IRQS.fetch_add(1, AOrd::Relaxed);
+    PENDING.store(true, AOrd::SeqCst);
+    crate::task::futex_wake(TASK_KEY, 1);
+}
+
+/// The audio task: sleeps until an interrupt, then pumps both rings.
+fn audio_task() {
+    loop {
+        crate::task::block_while(TASK_KEY, || !PENDING.load(AOrd::SeqCst));
+        PENDING.store(false, AOrd::SeqCst);
+        let before = STREAM_FILLS.load(AOrd::Relaxed);
+        stream_pump();
+        capture_pump();
+        if STREAM_FILLS.load(AOrd::Relaxed) != before {
+            IRQ_REFILLS.fetch_add(1, AOrd::Relaxed);
+        }
+    }
+}
+
+/// Route the card's PCI interrupt line through the I/O APIC and start the
+/// audio task. Returns the GSI.
+fn enable_irq(dev: &pci::PciDevice, nabm: u16) -> Option<u32> {
+    if !crate::ioapic::active() {
+        return None;
+    }
+    let line = dev.read8(0x3C);
+    let pin = dev.read8(0x3D);
+    if pin == 0 || line == 0 || line == 0xFF {
+        return None;
+    }
+    NABM.store(nabm, AOrd::Relaxed);
+    let gsi = crate::ioapic::route_pci(line, IRQ_VECTOR)?;
+    crate::task::spawn_unlocked("audio", audio_task);
+    IRQ_GSI.store(gsi as u64, AOrd::Relaxed);
+    Some(gsi)
+}
 
 #[inline]
 fn outb(port: u16, val: u8) {
@@ -210,6 +322,17 @@ pub fn init() -> bool {
     crate::println!(
         "[audio] AC'97 up: NAM={nam:#06x} NABM={nabm:#06x} caps={reset_caps:#06x} mixer_ok={mixer_ok} rate={SAMPLE_RATE}"
     );
+    if !irq_routed() {
+        match enable_irq(&dev, nabm) {
+            Some(gsi) => crate::println!(
+                "[audio] interrupt: PCI line {} -> GSI {} -> vector {:#x} (rings refilled by the audio task)",
+                dev.read8(0x3C),
+                gsi,
+                IRQ_VECTOR
+            ),
+            None => crate::println!("[audio] interrupt: not routed -- the desktop loop pumps the rings"),
+        }
+    }
     true
 }
 
@@ -222,6 +345,15 @@ pub fn is_present() -> bool {
 /// mixer's stream fed (desktop loop, AUDIO_WRITE).
 pub fn poll() {
     super::hda::poll();
+    if irq_routed() && IRQS.load(AOrd::Relaxed) > 0 && DEVICE.try_lock().is_some_and(|g| g.is_some()) {
+        // AC'97 with a working interrupt: the audio task refills the rings.
+        // Starting a stream still happens here / in AUDIO_WRITE (an idle
+        // card raises no interrupt).
+        if !is_streaming() && crate::mixer::has_data() {
+            stream_pump();
+        }
+        return;
+    }
     stream_pump();
     capture_pump();
 }
@@ -234,7 +366,10 @@ pub fn is_streaming() -> bool {
     if super::hda::present() {
         return super::hda::is_streaming();
     }
-    DEVICE.try_lock().is_some_and(|g| g.as_ref().is_some_and(|d| d.streaming))
+    // An atomic mirror of `Ac97.streaming`: a `try_lock` here answered
+    // "not streaming" whenever the audio task was refilling the ring, so a
+    // tone could take the hardware from under the stream.
+    STREAMING.load(AOrd::SeqCst)
 }
 
 /// Whether this card can stream (the mixer's AUDIO_WRITE).
@@ -280,15 +415,16 @@ pub fn stream_pump() {
         for i in 0..NUM_BUFFERS {
             unsafe {
                 bdl.add(i * 2).write_volatile(d.bufs[i].0 as u32);
-                bdl.add(i * 2 + 1).write_volatile(WORDS_PER_BUF as u32);
+                bdl.add(i * 2 + 1).write_volatile(WORDS_PER_BUF as u32 | if irq_routed() { BDL_IOC } else { 0 });
             }
         }
         outl(d.nabm + PO_BDBAR, d.bdl_phys as u32);
         d.lvi = NUM_BUFFERS - 1;
         outb(d.nabm + PO_LVI, d.lvi as u8);
         outw(d.nabm + PO_SR, inw(d.nabm + PO_SR));
-        outb(d.nabm + PO_CR, CR_RPBM);
+        outb(d.nabm + PO_CR, CR_RPBM | if irq_routed() { CR_IOCE } else { 0 });
         d.streaming = true;
+        STREAMING.store(true, AOrd::SeqCst);
         d.idle = 0;
         STREAM_FILLS.fetch_add(NUM_BUFFERS as u64, Relaxed);
         return;
@@ -297,6 +433,7 @@ pub fn stream_pump() {
         // ran past the last valid buffer (nobody pumped in time): start over
         outb(d.nabm + PO_CR, 0);
         d.streaming = false;
+        STREAMING.store(false, AOrd::SeqCst);
         return;
     }
     let civ = inb(d.nabm + PO_CIV) as usize % NUM_BUFFERS;
@@ -317,6 +454,7 @@ pub fn stream_pump() {
     if d.idle >= NUM_BUFFERS {
         outb(d.nabm + PO_CR, 0);
         d.streaming = false;
+        STREAMING.store(false, AOrd::SeqCst);
     }
 }
 
@@ -357,13 +495,13 @@ pub fn capture_start() -> bool {
     for i in 0..CAP_BUFFERS {
         unsafe {
             bdl.add(i * 2).write_volatile(d.cap_bufs[i].0 as u32);
-            bdl.add(i * 2 + 1).write_volatile(WORDS_PER_BUF as u32);
+            bdl.add(i * 2 + 1).write_volatile(WORDS_PER_BUF as u32 | if irq_routed() { BDL_IOC } else { 0 });
         }
     }
     outl(d.nabm + PI_BDBAR, d.cap_bdl.0 as u32);
     outb(d.nabm + PI_LVI, (CAP_BUFFERS - 1) as u8);
     outw(d.nabm + PI_SR, inw(d.nabm + PI_SR));
-    outb(d.nabm + PI_CR, CR_RPBM);
+    outb(d.nabm + PI_CR, CR_RPBM | if irq_routed() { CR_IOCE } else { 0 });
     d.capturing = true;
     d.cap_next = 0;
     true
@@ -400,7 +538,7 @@ pub fn capture_pump() {
         // nobody drained in time and the engine stopped: go on from here
         outw(d.nabm + PI_SR, inw(d.nabm + PI_SR));
         outb(d.nabm + PI_LVI, ((d.cap_next + CAP_BUFFERS - 1) % CAP_BUFFERS) as u8);
-        outb(d.nabm + PI_CR, CR_RPBM);
+        outb(d.nabm + PI_CR, CR_RPBM | if irq_routed() { CR_IOCE } else { 0 });
     }
     let civ = inb(d.nabm + PI_CIV) as usize % CAP_BUFFERS;
     let mut q = CAPTURED.lock();

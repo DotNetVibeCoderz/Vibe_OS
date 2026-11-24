@@ -1407,6 +1407,13 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
 pub fn focus_owner() -> u64 {
     let guard = WM.lock();
     let Some(wm) = guard.as_ref() else { return 0 };
+    // While the Start menu (its search box) or the power confirmation is up,
+    // no program owns the keyboard: KEY_READ / KEY_EVENT of the window below
+    // took the typed characters before the desktop loop could give them to
+    // the search box, so typing a query did nothing with an app focused.
+    if wm.start_open || wm.confirm.is_some() {
+        return 0;
+    }
     wm.windows
         .iter()
         .rev()

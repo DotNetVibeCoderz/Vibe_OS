@@ -47,6 +47,18 @@ arrives through the new **`FS_APPEND`** syscall, so nothing is held in memory.
 | `ping example.com` | ping accepts names now |
 | `ipconfig`, `netstat` | address, router, connections |
 
+## IPv6 and network cards
+
+Ethernet cards: virtio-net, Intel e1000 / e1000e (I217-I219), Realtek RTL8139
+and RTL8169/8168/8111/8101 (the latter untested on hardware), GENET on the
+Pi 4. Wi-Fi is not supported.
+
+IPv6 sits next to IPv4: every card gets a link-local address (fe80::, from
+its MAC), and a router advertisement adds a global one (SLAAC). In the
+Terminal: `ipconfig` lists the addresses, `ping6 -r` asks the routers for an
+advertisement, `ping6 ADDRESS [count]` pings. Programs cannot use IPv6 yet:
+there is no UDP/TCP over IPv6 and no DNS AAAA lookup.
+
 ## For programs: `Buitenzorg.Net`
 
 ```csharp

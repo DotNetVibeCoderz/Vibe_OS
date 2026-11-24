@@ -43,6 +43,7 @@ build_prog heap heap.cs
 build_prog statics statics.cs
 build_prog crashme crashme.cs
 build_prog bcl3 bcl3.cs bzbcl.cs bzbcl2.cs bzbcl3.cs
+build_prog bcl4 bcl4.cs bzbcl.cs bzbcl2.cs bzbcl3.cs bzbcl4.cs
 build_prog async async.cs bzbcl.cs bzbcl2.cs bzbcl3.cs bzasync.cs
 build_prog gcmem gcmem.cs
 build_prog mproc mproc.cs

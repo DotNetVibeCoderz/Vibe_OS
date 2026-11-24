@@ -116,6 +116,7 @@ const SYS_THREAD_JOIN: u64 = 17;
 const SYS_THREAD_EXIT: u64 = 18;
 const SYS_FUTEX_WAIT: u64 = 19;
 const SYS_FUTEX_WAKE: u64 = 20;
+const SYS_FUTEX_WAIT_TIMEOUT: u64 = 43;
 const SYS_THREAD_SELF: u64 = 21;
 const SYS_CLOCK_MONO: u64 = 22;
 const SYS_AUDIO_STAT: u64 = 23;
@@ -210,6 +211,13 @@ extern "C" {
 // renamed by tools/ZerolibPatch.) Both are GC safepoints.
 gc_safepoint!("RhpNewFast", new_fast);
 gc_safepoint!("RhpNewArray", new_array);
+// `new T()` for a type with a finalizer (`~T()`): ILC calls this instead of
+// RhpNewFast; the collector records the object (bzgc.rs, finalization).
+gc_safepoint!("RhpNewFinalizable", new_finalizable);
+// GC.SuppressFinalize / ReRegisterForFinalize / WaitForPendingFinalizers
+gc_safepoint!("bz_gc_suppress_finalize", bzgc::suppress_finalize);
+gc_safepoint!("bz_gc_reregister_finalize", bzgc::reregister_finalize);
+gc_safepoint!("bz_gc_wait_finalizers", bzgc::wait_finalizers);
 
 extern "C" {
     fn RhpNewFast(mt: *const u8) -> *mut u8;
@@ -218,6 +226,16 @@ extern "C" {
 unsafe extern "C" fn new_fast(mt: *const u8) -> *mut u8 {
     let size = (*(mt as *const MethodTable)).base_size as usize;
     let obj = bzgc::alloc(size);
+    if obj.is_null() {
+        fatal(b"Unhandled exception: System.OutOfMemoryException\n");
+    }
+    *(obj as *mut *const u8) = mt;
+    obj
+}
+
+unsafe extern "C" fn new_finalizable(mt: *const u8) -> *mut u8 {
+    let size = (*(mt as *const MethodTable)).base_size as usize;
+    let obj = bzgc::alloc_finalizable(size);
     if obj.is_null() {
         fatal(b"Unhandled exception: System.OutOfMemoryException\n");
     }
@@ -559,6 +577,7 @@ gc_safepoint!("bz_thread_join", bz_thread_join_impl);
 gc_safepoint!("bz_futex_wait", bz_futex_wait_impl);
 gc_safepoint!("bz_proc_wait", bz_proc_wait_impl);
 gc_safepoint!("bz_mutex_lock", bz_mutex_lock_impl);
+gc_safepoint!("bz_futex_wait_timeout", bz_futex_wait_timeout_impl);
 
 unsafe extern "C" fn bz_yield_impl() {
     syscall2(SYS_YIELD, 0, 0);
@@ -710,6 +729,12 @@ pub unsafe extern "C" fn bz_spawn_worker(counter: u64) -> u64 {
 /// Futex wait: if *addr == expected, block until woken. Returns 0.
 unsafe extern "C" fn bz_futex_wait_impl(addr: u64, expected: u64) -> u64 {
     syscall2(SYS_FUTEX_WAIT, addr, expected)
+}
+
+/// Futex wait with a timeout in nanoseconds (0 = none): 0 woken or the word
+/// changed, 1 timed out.
+unsafe extern "C" fn bz_futex_wait_timeout_impl(addr: u64, expected: u64, ns: u64) -> u64 {
+    syscall3(SYS_FUTEX_WAIT_TIMEOUT, addr, expected, ns)
 }
 
 /// Futex wake up to `count` waiters on `addr`. Returns the number woken.
@@ -1411,6 +1436,19 @@ unsafe fn mt_tail(mt: *const MethodTable) -> (*const u8, *const u8) {
         sealed = rel32_at(p);
     }
     (map, sealed)
+}
+
+/// The finalizer of a MethodTable with flag 0x0010 (a 32-bit relative
+/// pointer after the dispatch map's), called with the object as `this`.
+pub(crate) unsafe fn mt_finalizer(mt: *const MethodTable) -> Option<unsafe extern "C" fn(usize)> {
+    if mt.is_null() || (*mt).flags & MT_HAS_FINALIZER == 0 {
+        return None;
+    }
+    let mut p = (mt as *const u8).add(24 + 8 * (*mt).vtable_slots as usize + 8 * (*mt).interfaces as usize + 8);
+    if (*mt).flags & MT_HAS_DISPATCH_MAP != 0 {
+        p = p.add(4);
+    }
+    Some(core::mem::transmute::<*const u8, unsafe extern "C" fn(usize)>(rel32_at(p)))
 }
 
 unsafe fn interface_index(mt: *const MethodTable, iface: *const MethodTable) -> Option<u16> {

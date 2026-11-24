@@ -59,6 +59,8 @@ pub const TIMER_VECTOR: u8 = 0xF0;
 pub const IPI_PING_VECTOR: u8 = 0xF1;
 pub const IPI_TLB_VECTOR: u8 = 0xF2;
 pub const SPURIOUS_VECTOR: u8 = 0xFF;
+/// One-shot LAPIC timer of CPU 0: a timed wait's deadline.
+pub const DEADLINE_VECTOR: u8 = 0xF4;
 
 /// Rate of each AP's Local APIC timer.
 pub const AP_TIMER_HZ: u64 = 100;
@@ -166,6 +168,62 @@ pub fn install_vectors(idt: &mut InterruptDescriptorTable) {
     idt[IPI_PING_VECTOR].set_handler_fn(ping_handler);
     idt[IPI_TLB_VECTOR].set_handler_fn(tlb_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_handler);
+    idt[DEADLINE_VECTOR].set_handler_fn(deadline_handler);
+}
+
+// ---- one-shot deadline timer (2026-11-24) ---------------------------------------
+//
+// The system tick is the PIT at 18.2 Hz on CPU 0 (the APs tick at 100 Hz), so
+// a timed wait on CPU 0 used to end up to 55 ms late. CPU 0's Local APIC timer
+// is free while the PIT drives the tick: a timed wait that blocks on CPU 0
+// arms it in one-shot mode for its deadline (the earliest one pending wins),
+// and its interrupt expires the wait at once. Without a free LAPIC timer
+// (no working PIT -- then it *is* the tick) waits keep the tick's resolution.
+
+static ARMED_NS: AtomicU64 = AtomicU64::new(u64::MAX);
+/// One-shot interrupts taken (tests, `cpu`).
+pub static DEADLINE_IRQS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether CPU 0 has a one-shot timer for deadlines.
+pub fn deadline_timer_available() -> bool {
+    PIT_OK.load(Ordering::Relaxed) && !LAPIC_TICKS.load(Ordering::Relaxed) && TIMER_HZ.load(Ordering::Relaxed) != 0
+}
+
+/// Arm CPU 0's one-shot timer for `deadline_ns` (`arch::cpu::nanos`). Only on
+/// CPU 0 (an AP's periodic 100 Hz tick is its resolution); keeps an earlier
+/// deadline already armed. Returns whether a timer is armed for it.
+pub fn arm_deadline(deadline_ns: u64) -> bool {
+    if cpu_index() != 0 || !deadline_timer_available() {
+        return false;
+    }
+    crate::arch::cpu::without_interrupts(|| {
+        let now = crate::arch::cpu::nanos();
+        let armed = ARMED_NS.load(Ordering::Relaxed);
+        if armed > now && armed <= deadline_ns {
+            return true;
+        }
+        // Half of the time left (all of it below 200 us): the LAPIC timer and
+        // the TSC clock behind nanos() need not agree (under emulation they
+        // drift apart), so a single shot can land late. Each interrupt re-arms
+        // for the rest (`task` wake_expired), converging on the deadline.
+        let left = deadline_ns.saturating_sub(now).max(20_000);
+        let delta = if left > 200_000 { left / 2 } else { left };
+        let hz = TIMER_HZ.load(Ordering::Relaxed) as u128;
+        let count = (delta as u128 * hz / 1_000_000_000).clamp(1, u32::MAX as u128) as u32;
+        lapic_write(LAPIC_TIMER_DIV, 0x3);
+        lapic_write(LAPIC_LVT_TIMER, DEADLINE_VECTOR as u32); // one-shot, unmasked
+        lapic_write(LAPIC_TIMER_INIT, count);
+        ARMED_NS.store(now + delta, Ordering::Relaxed);
+        true
+    })
+}
+
+extern "x86-interrupt" fn deadline_handler(frame: InterruptStackFrame) {
+    DEADLINE_IRQS.fetch_add(1, Ordering::Relaxed);
+    ARMED_NS.store(u64::MAX, Ordering::Relaxed);
+    lapic_eoi();
+    // expires the wait; a ring-3 program is switched away from right here
+    crate::task::preempt(frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3);
 }
 
 /// Send a fixed IPI with `vector` to the CPU with Local APIC id `lapic_id`.
@@ -807,16 +865,6 @@ pub fn init() -> (u64, u64) {
         crate::println!("[smp] no MADT: single CPU");
         return (1, 0);
     };
-    if ids.len() <= 1 {
-        crate::println!("[smp] 1 CPU in the MADT -- nothing to start");
-        return (1, 0);
-    }
-    // The trampoline page must be ordinary RAM (on UEFI, low memory can belong
-    // to the firmware); the frame allocator keeps it free (never below 1 MiB).
-    if !memory::is_usable_ram(TRAMPOLINE) {
-        crate::println!("[smp] {:#x} is not usable RAM here -- APs not started", TRAMPOLINE);
-        return (ids.len() as u64, 0);
-    }
     if !map_lapic(lapic_phys) {
         crate::println!("[smp] could not map the Local APIC");
         return (ids.len() as u64, 0);
@@ -839,6 +887,18 @@ pub fn init() -> (u64, u64) {
     CPU_COUNT.store(order.len(), Ordering::Release);
     LAPIC_READY.store(true, Ordering::Release);
     calibrate_timer();
+    // One CPU still gets the calibrated LAPIC (its timer is the one-shot
+    // deadline timer while the PIT is the tick).
+    if ids.len() <= 1 {
+        crate::println!("[smp] 1 CPU in the MADT -- nothing to start");
+        return (1, 0);
+    }
+    // The trampoline page must be ordinary RAM (on UEFI, low memory can belong
+    // to the firmware); the frame allocator keeps it free (never below 1 MiB).
+    if !memory::is_usable_ram(TRAMPOLINE) {
+        crate::println!("[smp] {:#x} is not usable RAM here -- APs not started", TRAMPOLINE);
+        return (ids.len() as u64, 0);
+    }
     let Some(cr3) = temp_tables() else {
         crate::println!("[smp] could not build AP page tables");
         return (ids.len() as u64, 0);

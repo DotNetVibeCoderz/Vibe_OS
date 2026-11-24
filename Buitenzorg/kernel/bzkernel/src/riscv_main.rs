@@ -47,6 +47,7 @@ mod logo;
 mod memory;
 mod model;
 mod net;
+mod ipv6;
 mod pkg;
 mod platform;
 mod process;
@@ -1073,6 +1074,10 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
     }
     if net::counters().0 > 0 {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on RISC-V)");
+    }
+    match ipv6::self_test() {
+        Ok(s) => println!("[kernel] MILESTONE: IPV6 OK ({})", s),
+        Err(e) => println!("[kernel] ipv6 self-test FAILED: {}", e),
     }
     match tcp::self_test() {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),

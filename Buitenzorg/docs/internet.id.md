@@ -50,6 +50,18 @@ datang, lewat syscall baru **`FS_APPEND`** (68). Untuk program:
 | `ping example.com` | ping kini menerima nama |
 | `ipconfig`, `netstat` | alamat, router, sambungan |
 
+## IPv6 dan kartu jaringan
+
+Kartu Ethernet: virtio-net, Intel e1000 / e1000e (I217-I219), Realtek RTL8139
+dan RTL8169/8168/8111/8101 (yang terakhir belum diuji di perangkat keras),
+GENET di Pi 4. Wi-Fi belum didukung.
+
+IPv6 berjalan di samping IPv4: setiap kartu mendapat alamat link-local
+(fe80::, dari MAC-nya), dan iklan router menambah alamat global (SLAAC). Di
+Terminal: `ipconfig` menampilkan alamatnya, `ping6 -r` meminta iklan router,
+`ping6 ALAMAT [jumlah]` mengirim ping. Program belum bisa memakai IPv6: belum
+ada UDP/TCP di atas IPv6 dan belum ada pencarian DNS AAAA.
+
 ## Untuk program: `Buitenzorg.Net`
 
 `HttpClient.Get(url)` / `Post(url, tipe, isi)` (redirect, body chunked,

@@ -457,7 +457,7 @@ fn bring_up(dev: &PciDevice) -> Result<E1000e, &'static str> {
     n.wr(RDLEN, (RX_DESCS * 16) as u32);
     n.wr(RDH, 0);
     n.wr(RDT, RX_DESCS as u32 - 1);
-    n.wr(RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC);
+    n.wr(RCTL, RCTL_EN | RCTL_BAM | 1 << 4 | RCTL_SECRC); // bit 4 MPE: IPv6 multicast
     n.wr(TDBAL, tx_phys as u32);
     n.wr(TDBAH, (tx_phys >> 32) as u32);
     n.wr(TDLEN, (TX_DESCS * 16) as u32);

@@ -35,8 +35,17 @@
 //! recorded pointer up. A thread that runs managed code for 50 ms without
 //! allocating or blocking makes the collection skip (counted in `skipped`)
 //! and the heap grow for now.
+//!
+//! Finalizers: an object of a type with a finalizer comes from
+//! `RhpNewFinalizable` and is recorded in `FIN`. When marking leaves one
+//! unmarked it moves to the ready queue and is marked again, with everything
+//! it references (resurrected until its finalizer ran). A **finalizer
+//! thread**, started with the first ready object, runs the finalizers one by
+//! one; queued objects are roots. `suppress_finalize` drops an object from
+//! `FIN`, `wait_finalizers` waits until the queue is empty. As in .NET,
+//! finalizers do not run when the program exits.
 
-use crate::{bz_mmap, bz_mprotect, syscall2, SYS_CLOCK_NANOS};
+use crate::{bz_mmap, bz_mprotect, syscall2, SYS_CLOCK_NANOS, SYS_FUTEX_WAKE};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 const BLOCK_SHIFT: usize = 16;
@@ -529,7 +538,259 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
         }
     }
     unlock();
+    after_unlock();
     p
+}
+
+// ---- finalization ---------------------------------------------------------------
+
+/// A growable array of object addresses in mmap'd memory (not a root by
+/// itself: `FIN` must not keep objects alive; the ready queue is scanned).
+struct Addrs {
+    p: *mut usize,
+    len: usize,
+    cap: usize,
+}
+
+impl Addrs {
+    unsafe fn push(&mut self, v: usize) -> bool {
+        if self.len == self.cap {
+            let cap = (self.cap * 2).max(512);
+            let n = bz_mmap((cap * 8) as u64, 3);
+            if !ok(n) {
+                return false;
+            }
+            let n = n as *mut usize;
+            if self.len > 0 {
+                core::ptr::copy_nonoverlapping(self.p, n, self.len);
+            }
+            if self.cap > 0 {
+                crate::bz_munmap(self.p as u64, (self.cap * 8) as u64);
+            }
+            self.p = n;
+            self.cap = cap;
+        }
+        *self.p.add(self.len) = v;
+        self.len += 1;
+        true
+    }
+}
+
+/// Finalizable objects not yet found dead (heap lock).
+static mut FIN: Addrs = Addrs { p: core::ptr::null_mut(), len: 0, cap: 0 };
+/// Dead finalizable objects waiting for their finalizer, from `READY_HEAD`
+/// on. Guarded by `READY_LOCK`, a short spin lock of its own: the finalizer
+/// thread takes it while running managed code's caller, so it never waits
+/// for a collection.
+static mut READY: Addrs = Addrs { p: core::ptr::null_mut(), len: 0, cap: 0 };
+static mut READY_HEAD: usize = 0;
+static READY_LOCK: AtomicBool = AtomicBool::new(false);
+/// Futex words: bumped when objects become ready / when one was finalized.
+static FIN_SEQ: AtomicU32 = AtomicU32::new(0);
+static FIN_DONE: AtomicU32 = AtomicU32::new(0);
+/// Objects queued or being finalized.
+static FIN_PENDING: AtomicUsize = AtomicUsize::new(0);
+static FIN_RAN: AtomicUsize = AtomicUsize::new(0);
+static FIN_THREAD: AtomicBool = AtomicBool::new(false);
+/// Set when a collection queued objects; the finalizer thread is woken once
+/// the heap lock is released.
+static FIN_WAKE: AtomicBool = AtomicBool::new(false);
+
+fn ready_lock() {
+    while READY_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+fn ready_unlock() {
+    READY_LOCK.store(false, Ordering::Release);
+}
+
+/// `new T()` for a type with a finalizer: allocated like any object, then
+/// recorded so the collector notices when it dies.
+pub unsafe fn alloc_finalizable(size: usize) -> *mut u8 {
+    let p = alloc(size);
+    if !p.is_null() {
+        lock();
+        #[allow(static_mut_refs)]
+        let ok = FIN.push(p as usize);
+        unlock();
+        if !ok {
+            return core::ptr::null_mut();
+        }
+    }
+    p
+}
+
+unsafe fn is_marked(h: &Heap, obj: usize) -> bool {
+    let i = (obj - h.base) >> BLOCK_SHIFT;
+    let m = meta(h, i);
+    if m.kind == LARGE {
+        return m.marked != 0;
+    }
+    let s = small_hdr(h, i);
+    let idx = (obj - (block_addr(h, i) + (*s).data as usize)) / ((*s).slot as usize).max(1);
+    *bitmap(s, 1).add(idx / 64) & (1u64 << (idx % 64)) != 0
+}
+
+/// After marking (heap lock held, world stopped): queue the finalizable
+/// objects nothing reaches and keep them -- and what they reference -- alive
+/// until their finalizer ran. Returns how many were queued.
+#[allow(static_mut_refs)]
+unsafe fn queue_dead_finalizable(h: &mut Heap) -> usize {
+    let fin = &mut FIN;
+    let (mut keep, mut queued) = (0, 0);
+    ready_lock();
+    let from = READY.len;
+    for i in 0..fin.len {
+        let o = *fin.p.add(i);
+        if is_marked(h, o) || !READY.push(o) {
+            *fin.p.add(keep) = o; // alive (or no room to queue it: next time)
+            keep += 1;
+        } else {
+            queued += 1;
+        }
+    }
+    let to = READY.len;
+    ready_unlock();
+    fin.len = keep;
+    for i in from..to {
+        consider(h, *READY.p.add(i));
+        drain(h);
+    }
+    rescan_marked(h);
+    if queued > 0 {
+        FIN_PENDING.fetch_add(queued, Ordering::SeqCst);
+    }
+    queued
+}
+
+/// The ready queue is a root (heap lock held).
+#[allow(static_mut_refs)]
+unsafe fn scan_ready(h: &mut Heap) {
+    ready_lock();
+    let (from, to) = (READY.p as usize + READY_HEAD * 8, READY.p as usize + READY.len * 8);
+    ready_unlock();
+    if to > from {
+        scan_range(h, from, to);
+        drain(h);
+    }
+}
+
+/// The next object to finalize, or 0.
+#[allow(static_mut_refs)]
+unsafe fn take_ready() -> usize {
+    ready_lock();
+    let mut o = 0;
+    if READY_HEAD < READY.len {
+        o = *READY.p.add(READY_HEAD);
+        READY_HEAD += 1;
+        if READY_HEAD == READY.len {
+            READY_HEAD = 0;
+            READY.len = 0;
+        }
+    }
+    ready_unlock();
+    o
+}
+
+extern "C" {
+    /// Blocking futex wait as a GC safepoint (bzstart.rs).
+    fn bz_futex_wait(addr: u64, expected: u64) -> u64;
+}
+
+/// The finalizer thread: runs queued finalizers, sleeps on `FIN_SEQ`. While
+/// a finalizer runs, the object is on this thread's stack (a root).
+extern "C" fn finalizer_thread(_: u64) {
+    loop {
+        let seq = FIN_SEQ.load(Ordering::SeqCst);
+        loop {
+            let o = unsafe { take_ready() };
+            if o == 0 {
+                break;
+            }
+            unsafe {
+                let mt = *(o as *const *const crate::MethodTable);
+                if let Some(f) = crate::mt_finalizer(mt) {
+                    f(core::hint::black_box(o));
+                }
+            }
+            FIN_RAN.fetch_add(1, Ordering::SeqCst);
+            FIN_PENDING.fetch_sub(1, Ordering::SeqCst);
+            FIN_DONE.fetch_add(1, Ordering::SeqCst);
+            unsafe { syscall2(SYS_FUTEX_WAKE, FIN_DONE.as_ptr() as u64, u32::MAX as u64) };
+        }
+        unsafe { bz_futex_wait(FIN_SEQ.as_ptr() as u64, seq as u64) };
+    }
+}
+
+/// After a collection that queued objects (no lock held): start the
+/// finalizer thread the first time, wake it.
+unsafe fn after_unlock() {
+    if !FIN_WAKE.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if !FIN_THREAD.swap(true, Ordering::SeqCst) && crate::bz_thread_create(finalizer_thread as *const () as u64, 0) == 0 {
+        FIN_THREAD.store(false, Ordering::SeqCst);
+    }
+    FIN_SEQ.fetch_add(1, Ordering::SeqCst);
+    syscall2(SYS_FUTEX_WAKE, FIN_SEQ.as_ptr() as u64, 1);
+}
+
+/// `GC.SuppressFinalize(obj)`: its finalizer will not run. 1 if it was
+/// registered. (Called parked, through `bz_gc_suppress_finalize`.)
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn suppress_finalize(obj: usize) -> u64 {
+    lock();
+    let fin = &mut FIN;
+    let mut found = 0;
+    for i in 0..fin.len {
+        if *fin.p.add(i) == obj {
+            *fin.p.add(i) = *fin.p.add(fin.len - 1);
+            fin.len -= 1;
+            found = 1;
+            break;
+        }
+    }
+    unlock();
+    found
+}
+
+/// `GC.ReRegisterForFinalize(obj)` (called parked).
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn reregister_finalize(obj: usize) -> u64 {
+    lock();
+    let r = FIN.push(obj);
+    unlock();
+    r as u64
+}
+
+/// `GC.WaitForPendingFinalizers()` (called parked): until no object is
+/// queued or being finalized. Returns the finalizers run so far.
+pub unsafe extern "C" fn wait_finalizers() -> u64 {
+    after_unlock();
+    loop {
+        let d = FIN_DONE.load(Ordering::SeqCst);
+        if FIN_PENDING.load(Ordering::SeqCst) == 0 || !FIN_THREAD.load(Ordering::SeqCst) {
+            break;
+        }
+        // 10 ms at most: a wake between the check and the wait is not lost for long
+        crate::syscall3(crate::SYS_FUTEX_WAIT_TIMEOUT, FIN_DONE.as_ptr() as u64, d as u64, 10_000_000);
+    }
+    FIN_RAN.load(Ordering::SeqCst) as u64
+}
+
+/// Finalizer statistics, 3 x u64: finalizers run, objects registered,
+/// objects queued or being finalized.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn bz_gc_finalizer_stats(out: *mut u64) {
+    if out.is_null() {
+        return;
+    }
+    *out.add(1) = FIN.len as u64; // a racy read is fine for statistics
+    *out = FIN_RAN.load(Ordering::SeqCst) as u64;
+    *out.add(2) = FIN_PENDING.load(Ordering::SeqCst) as u64;
 }
 
 // ---- marking ------------------------------------------------------------------
@@ -873,6 +1134,7 @@ extern "C" fn mark_roots(h: *mut Heap, sp: usize) {
         let (ds, de) = (core::ptr::addr_of!(__bz_data_start) as usize, core::ptr::addr_of!(__bz_bss_end) as usize);
         scan_range(h, ds, de);
         drain(h);
+        scan_ready(h);
         // this thread from the spilled registers up; every other live
         // thread (parked: stopped) from where it parked
         let mut mine = false;
@@ -920,6 +1182,9 @@ unsafe fn collect_locked(h: &mut Heap, force: bool) -> bool {
         STOPPED_WORLD.fetch_add(1, Ordering::Relaxed);
     }
     bz_gc_spill_and_mark(h);
+    if queue_dead_finalizable(h) > 0 {
+        FIN_WAKE.store(true, Ordering::SeqCst);
+    }
     if others {
         GC_ACTIVE.store(false, Ordering::SeqCst);
     }
@@ -940,6 +1205,7 @@ pub unsafe extern "C" fn bz_gc_collect() -> u64 {
     let h = heap();
     let r = collect_locked(h, true);
     unlock();
+    after_unlock();
     r as u64
 }
 

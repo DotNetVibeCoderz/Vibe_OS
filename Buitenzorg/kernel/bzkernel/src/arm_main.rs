@@ -46,6 +46,7 @@ mod logo;
 mod memory;
 mod model;
 mod net;
+mod ipv6;
 mod pkg;
 mod platform;
 mod process;
@@ -841,7 +842,7 @@ fn run_boot_programs(info: &boot::BootInfo) {
         }
     };
     let frames0 = memory::frames_in_use();
-    for name in ["hello", "matang", "heap", "statics", "bcl3", "async", "exc", "gc", "gcmem", "bcl", "proctest"] {
+    for name in ["hello", "matang", "heap", "statics", "bcl3", "bcl4", "async", "exc", "gc", "gcmem", "bcl", "proctest"] {
         let Some(image) = find(name) else { continue };
         println!("[arm64] --- program '{}' ({} bytes, from {}) ---", name, image.len(), if from_disk.get() { "/disk" } else { "a Limine module" });
         match app::spawn_image(name, &image) {
@@ -1166,6 +1167,10 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
     if net::counters().0 > 0 {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack, loopback on ARM64)");
     }
+    match ipv6::self_test() {
+        Ok(s) => println!("[kernel] MILESTONE: IPV6 OK ({})", s),
+        Err(e) => println!("[kernel] ipv6 self-test FAILED: {}", e),
+    }
     match tcp::self_test() {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
         Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
@@ -1200,6 +1205,18 @@ fn shared_kernel_setup(info: &boot::BootInfo, fdt: Option<&dtb::Fdt>) {
             if wait(&|| net::counters().0 > icmp0) {
                 println!("[kernel] MILESTONE: VIRTIO NET OK (virtio-net over virtio-mmio: ARP + ICMP echo with the gateway 10.0.2.2)");
                 sync_time("virtio-net");
+            }
+        }
+        if bootmode::selftest() {
+            // IPv6 over the wire: SLAAC from QEMU user-net (fec0::/64), ping6 its host
+            if ipv6::autoconfigure(3000) {
+                let g = ipv6::addresses().last().map(|(a, l)| alloc::format!("{}/{}", ipv6::fmt(a), l)).unwrap_or_default();
+                match ipv6::ping(&ipv6::parse("fec0::2").unwrap(), 1, 2000) {
+                    Some(us) => println!("[kernel] MILESTONE: IPV6 NET OK (virtio-net: SLAAC {}, ping6 fec0::2 in {} us)", g, us),
+                    None => println!("[ipv6] virtio-net: no echo reply from fec0::2"),
+                }
+            } else {
+                println!("[ipv6] virtio-net: no router advertisement");
             }
         }
     }

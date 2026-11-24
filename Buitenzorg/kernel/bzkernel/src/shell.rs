@@ -138,7 +138,7 @@ pub fn command_names() -> Vec<&'static str> {
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "lsusb", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
-    "netup", "ping", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
+    "netup", "ping", "ping6", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
     "settings", "notify", "icons", "cari", "search", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
 ];
 
@@ -891,6 +891,11 @@ fn ipconfig() -> Vec<String> {
         format!("      gateway      {}", if i.gateway == [0; 4] { String::from("-") } else { fmt_ip(i.gateway) }),
         String::from("      DNS          - (belum ada resolver)"),
         format!("      frame        {} terkirim, {} diterima", i.frames_tx, i.frames_rx),
+        format!(
+            "      IPv6         {}",
+            crate::ipv6::addresses().iter().map(|(a, l)| format!("{}/{}", crate::ipv6::fmt(a), l)).collect::<Vec<_>>().join(", ")
+        ),
+        format!("      router IPv6  {}", crate::ipv6::router().map(|r| crate::ipv6::fmt(&r)).unwrap_or_else(|| String::from("- (ketik 'ping6 -r' untuk meminta)"))),
         format!("      UDP          {} terkirim, {} diterima; ICMP balasan {}", i.udp_tx, i.udp_rx, i.icmp_replies),
     ];
     if !i.attached {
@@ -908,6 +913,36 @@ fn ipconfig() -> Vec<String> {
         if ssh_on { "aktif (tcp/22)" } else { "mati" },
         if dep_on { format!("aktif (udp/{}, kode {:04})", crate::deploy::PORT, code) } else { String::from("mati") }
     ));
+    out
+}
+
+fn ping6(args: &[&str]) -> Vec<String> {
+    let Some(target) = args.first() else {
+        return vec![String::from("pakai: ping6 <alamat-ipv6> [jumlah]   (mis. ping6 fe80::1); ping6 -r meminta iklan router (SLAAC)")];
+    };
+    if *target == "-r" {
+        return vec![if crate::ipv6::autoconfigure(3000) {
+            format!("alamat global: {}", crate::ipv6::addresses().last().map(|(a, l)| format!("{}/{}", crate::ipv6::fmt(a), l)).unwrap_or_default())
+        } else {
+            String::from("ping6: tidak ada router IPv6 yang menjawab")
+        }];
+    }
+    let Some(dest) = crate::ipv6::parse(target) else {
+        return vec![format!("ping6: '{}' bukan alamat IPv6 (nama belum didukung: DNS AAAA belum ada)", target)];
+    };
+    let n = args.get(1).and_then(|c| c.parse::<u16>().ok()).unwrap_or(4).clamp(1, 20);
+    let mut out = vec![format!("PING6 {} ({} kali)", crate::ipv6::fmt(&dest), n)];
+    let mut ok = 0;
+    for seq in 1..=n {
+        match crate::ipv6::ping(&dest, seq, 1000) {
+            Some(us) => {
+                ok += 1;
+                out.push(format!("balasan dari {}: seq={} waktu={}.{:03} ms", crate::ipv6::fmt(&dest), seq, us / 1000, us % 1000));
+            }
+            None => out.push(format!("seq={}: tidak ada balasan", seq)),
+        }
+    }
+    out.push(format!("{} terkirim, {} diterima", n, ok));
     out
 }
 
@@ -949,6 +984,13 @@ fn arp() -> Vec<String> {
     let mut out = vec![String::from("alamat IP          alamat MAC")];
     for (ip, mac) in i.arp {
         out.push(format!("{:<18} {}{}", crate::net::fmt_ip(ip), crate::net::fmt_mac(mac), if ip == i.ip { "  (perangkat ini)" } else { "" }));
+    }
+    let nb = crate::ipv6::neighbours();
+    if !nb.is_empty() {
+        out.push(String::from("tetangga IPv6"));
+        for (a, mac) in nb {
+            out.push(format!("{:<28} {}", crate::ipv6::fmt(&a), crate::net::fmt_mac(mac)));
+        }
     }
     out
 }
@@ -1184,6 +1226,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             Effect::None,
         ),
         "ping" => (ping(&args), Effect::None),
+        "ping6" => (ping6(&args), Effect::None),
         "arp" => (arp(), Effect::None),
         "route" => (route(), Effect::None),
         "netstat" => (netstat(), Effect::None),

@@ -45,6 +45,7 @@ try {
         @{src=@("statics.cs");           elf="statics.elf"},
         @{src=@("crashme.cs");           elf="crashme.elf"},
         @{src=@("bcl3.cs", "bzbcl.cs", "bzbcl2.cs", "bzbcl3.cs"); elf="bcl3.elf"},
+        @{src=@("bcl4.cs", "bzbcl.cs", "bzbcl2.cs", "bzbcl3.cs", "bzbcl4.cs"); elf="bcl4.elf"},
         @{src=@("async.cs", "bzbcl.cs", "bzbcl2.cs", "bzbcl3.cs", "bzasync.cs"); elf="async.elf"},
         @{src=@("gcmem.cs");             elf="gcmem.elf"},
         @{src=@("bcl.cs", "bzbcl.cs");   elf="bcl.elf"},

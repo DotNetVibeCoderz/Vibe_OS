@@ -13,7 +13,8 @@
 // (see below) on every architecture: the startup shim implements the real
 // covariant array store and allocates objects on its collected heap.
 //
-// It also adds System.IDisposable (`using`) when zerolib lacks it.
+// It also adds System.IDisposable (`using`) when zerolib lacks it, and
+// System.Object.Finalize (`~T()` finalizers, patch v9).
 //
 // This tool reads a zerolib.dll, adds each missing helper to that class with
 // the IL body of an existing one (zerolib has no exception machinery: every
@@ -240,9 +241,27 @@ if (exTypes.Count > 0)
     Console.WriteLine($"throw helpers: {throwing} now throw managed exceptions");
 }
 
+// ---- finalizers (patch v9) -----------------------------------------------------
+// `~T()` overrides System.Object.Finalize, which zerolib does not declare:
+// without it the C# compiler emits a plain method, ILC sees no finalizer and
+// the type never gets one. Add `protected virtual void Finalize() { }`; ILC
+// then flags finalizable types (MethodTable 0x0010) and allocates them through
+// RhpNewFinalizable, which the startup shim's collector implements.
+int addedFinalize = 0;
+if (objectType is not null && !objectType.Methods.Any(m => m.Name == "Finalize" && m.Parameters.Count == 0))
+{
+    var fin = new MethodDefinition("Finalize",
+        MethodAttributes.Family | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+        voidType);
+    fin.Body.GetILProcessor().Emit(OpCodes.Ret);
+    objectType.Methods.Add(fin);
+    addedFinalize++;
+    Console.WriteLine("System.Object.Finalize: added");
+}
+
 // The shim also allocates every managed object (RhpNewFast / RhpNewArray) on
 // the heap its garbage collector manages (zerolib's versions call malloc).
-string[] shimExports = ["RhpStelemRef", "RhpNewFast", "RhpNewArray"];
+string[] shimExports = ["RhpStelemRef", "RhpNewFast", "RhpNewArray", "RhpNewFinalizable"];
 // zerolib's RhpStelemRef (`array[i] = obj` on a reference-type array)
 // fail-fasts unless obj's type is exactly the element type, so `object[]`,
 // base-class and interface arrays could not hold anything else. The startup

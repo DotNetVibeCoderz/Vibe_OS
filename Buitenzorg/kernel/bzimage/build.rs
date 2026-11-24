@@ -540,6 +540,7 @@ fn main() {
         ("statics.elf", "statics.elf"),
         ("crashme.elf", "crashme.elf"),
         ("bcl3.elf", "bcl3.elf"),
+        ("bcl4.elf", "bcl4.elf"),
         ("async.elf", "async.elf"),
         ("exc.elf", "exc.elf"),
         ("gc.elf", "gc.elf"),

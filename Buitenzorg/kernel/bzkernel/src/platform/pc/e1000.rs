@@ -22,6 +22,7 @@ const IMC: usize = 0x00D8;
 const RCTL: usize = 0x0100;
 const RCTL_EN: u32 = 1 << 1;
 const RCTL_BAM: u32 = 1 << 15; // accept broadcast (a DHCP reply, ARP)
+const RCTL_MPE: u32 = 1 << 4; // every multicast (IPv6 neighbour discovery)
 const RCTL_SECRC: u32 = 1 << 26;
 const TCTL: usize = 0x0400;
 const TCTL_EN: u32 = 1 << 1;
@@ -157,7 +158,7 @@ fn bring_up(dev: &PciDevice) -> Result<E1000, &'static str> {
     n.wr(RDLEN, (RX_DESCS * 16) as u32);
     n.wr(RDH, 0);
     n.wr(RDT, RX_DESCS as u32 - 1);
-    n.wr(RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC); // 2 KiB buffers (BSIZE 0)
+    n.wr(RCTL, RCTL_EN | RCTL_BAM | RCTL_MPE | RCTL_SECRC); // 2 KiB buffers (BSIZE 0); MPE: IPv6 multicast
 
     n.wr(TDBAL, tx_phys as u32);
     n.wr(TDBAH, (tx_phys >> 32) as u32);

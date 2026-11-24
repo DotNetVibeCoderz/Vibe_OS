@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, intel_gpu, mouse, nvme, pci, power, rtc, serial};
+pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, intel_gpu, mouse, nvme, pci, power, realtek, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -46,6 +46,7 @@ mod logo;
 mod memory;
 mod model;
 mod net;
+mod ipv6;
 mod pkg;
 mod process;
 mod profile;
@@ -218,6 +219,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
         }
         None => println!("[kernel] no I/O APIC in the MADT -- device IRQs stay on the 8259 PIC"),
     }
+    deadline_timer_test();
 
     // Pre-install the base app set so `run`/`bz` work out of the box.
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
@@ -370,7 +372,7 @@ fn fast_boot() -> ! {
 }
 
 /// Second half of the normal boot, after the desktop is up.
-/// The network card (virtio-net or an e1000), with an address from DHCP.
+/// The network card (virtio-net, an e1000, a Realtek or an e1000e), with an address from DHCP.
 static NET_BUSY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Shell `netup`: run `network_up` again in its own task (cable plugged in late).
@@ -397,6 +399,8 @@ fn network_up_inner() {
         (alloc::boxed::Box::new(n), "virtio-net")
     } else if let Some(n) = e1000::probe(&pci::scan()) {
         (alloc::boxed::Box::new(n), "e1000")
+    } else if let Some(n) = realtek::probe(&pci::scan()) {
+        n
     } else if let Some(n) = e1000e::probe(&pci::scan(), 10_000) {
         (alloc::boxed::Box::new(n), "e1000e")
     } else {
@@ -617,7 +621,14 @@ fn matang_demo() {
         Ok(code) => println!("[kernel] bcl3 app exited (code {})", code),
         Err(e) => native_not_run("bcl3", e),
     }
-    // Buitenzorg.Bcl part 4: async/await on an event loop (bzasync.cs).
+    // Buitenzorg.Bcl part 4: tuples, Monitor, events, thread pool,
+    // SynchronizationContext, finalizers (bzbcl4.cs + the collector's
+    // finalizer thread).
+    match app::run_named("bcl4") {
+        Ok(code) => println!("[kernel] bcl4 app exited (code {})", code),
+        Err(e) => native_not_run("bcl4", e),
+    }
+    // async/await on an event loop (bzasync.cs).
     match app::run_named("async") {
         Ok(code) => println!("[kernel] async app exited (code {})", code),
         Err(e) => native_not_run("async", e),
@@ -1767,6 +1778,24 @@ fn virtio_net_demo() {
     } else {
         println!("[net] virtio: gateway resolved but no ICMP echo reply");
     }
+    ipv6_net_check("virtio");
+}
+
+/// IPv6 over a real link: SLAAC from QEMU user-net's router advertisement
+/// (prefix fec0::/64), then an ICMPv6 echo to its host fec0::2.
+fn ipv6_net_check(nic: &str) {
+    if !ipv6::autoconfigure(3000) {
+        println!("[ipv6] {}: no router advertisement (no global address)", nic);
+        return;
+    }
+    let host = ipv6::parse("fec0::2").unwrap();
+    match ipv6::ping(&host, 1, 2000) {
+        Some(us) => {
+            let g = ipv6::addresses().last().map(|(a, l)| alloc::format!("{}/{}", ipv6::fmt(a), l)).unwrap_or_default();
+            println!("[kernel] MILESTONE: IPV6 NET OK ({}: SLAAC {}, ping6 fec0::2 in {} us)", nic, g, us);
+        }
+        None => println!("[ipv6] {}: no echo reply from fec0::2", nic),
+    }
 }
 
 /// v0.4 "Tunas": load a NativeAOT-compiled C# program (HELLO.ELF) from disk
@@ -1807,6 +1836,37 @@ fn tunas_demo() {
 /// The mixer streams into the card's ring: a second of tone queued, the pump
 /// refills the buffers the DMA engine played for ~0.6 s, then the ring stops
 /// by itself once the stream is gone.
+/// The one-shot deadline timer: timed waits on CPU 0 end on time instead of
+/// at the next 55 ms PIT tick -> `DEADLINE TIMER OK`.
+fn deadline_timer_test() {
+    use core::sync::atomic::Ordering;
+    if !arch::cpu::deadline_timer() {
+        println!("[kernel] deadline timer: none free (the LAPIC timer drives the tick)");
+        return;
+    }
+    static WORD: u32 = 0;
+    let irq0 = smp::DEADLINE_IRQS.load(Ordering::Relaxed);
+    let (mut worst, mut total) = (0u64, 0u64);
+    const ROUNDS: u64 = 8;
+    for _ in 0..ROUNDS {
+        let want = arch::cpu::nanos() + 7_000_000;
+        while arch::cpu::nanos() < want {
+            task::futex_wait_timeout_if(&WORD as *const u32 as u64, 0, want);
+        }
+        let late = arch::cpu::nanos() - want;
+        worst = worst.max(late);
+        total += late;
+    }
+    let irqs = smp::DEADLINE_IRQS.load(Ordering::Relaxed) - irq0;
+    let avg = total / ROUNDS;
+    // the PIT alone would make the average ~27 ms late
+    if irqs >= ROUNDS / 2 && avg < 6_000_000 {
+        println!("[kernel] MILESTONE: DEADLINE TIMER OK ({} x 7 ms waits on CPU 0: {} us late on average, worst {} us; {} one-shot LAPIC interrupts)", ROUNDS, avg / 1000, worst / 1000, irqs);
+    } else {
+        println!("[kernel] deadline timer: average {} us late, worst {} us, {} interrupts", avg / 1000, worst / 1000, irqs);
+    }
+}
+
 fn audio_stream_test() {
     use core::sync::atomic::Ordering;
     const PID: u64 = u64::MAX - 3;
@@ -1819,13 +1879,25 @@ fn audio_stream_test() {
     }
     let took = mixer::write(PID, &bytes, 0);
     let f0 = audio::STREAM_FILLS.load(Ordering::Relaxed);
+    let (i0, r0) = (audio::IRQS.load(Ordering::Relaxed), audio::IRQ_REFILLS.load(Ordering::Relaxed));
+    // With the card's interrupt routed nothing pumps here: every refill after
+    // the start must come from the audio task, woken by the interrupt.
+    let by_irq = audio::irq_routed() && !platform::pc::hda::present();
     audio::stream_pump();
     let started = audio::is_streaming();
     let t0 = arch::cpu::nanos();
+    let mut by_irq = by_irq;
     while arch::cpu::nanos() - t0 < 600_000_000 {
-        audio::stream_pump();
+        if by_irq && arch::cpu::nanos() - t0 > 200_000_000 && audio::IRQS.load(Ordering::Relaxed) == i0 {
+            println!("[audio] irq test: no interrupt in 200 ms -- pumping");
+            by_irq = false;
+        }
+        if !by_irq {
+            audio::stream_pump();
+        }
         task::yield_now();
     }
+    let (irqs, irq_refills) = (audio::IRQS.load(Ordering::Relaxed) - i0, audio::IRQ_REFILLS.load(Ordering::Relaxed) - r0);
     let refills = audio::STREAM_FILLS.load(Ordering::Relaxed) - f0;
     let left = mixer::queued_ms(PID);
     mixer::on_exit(PID);
@@ -1841,8 +1913,13 @@ fn audio_stream_test() {
     let need = if platform::pc::hda::present() { 20 } else { 32 };
     if took == bytes.len() && started && refills > need && left < 1000 && stopped {
         println!("[kernel] MILESTONE: AUDIO STREAM OK (mixer -> DMA ring: {} buffer fills in 0.6 s, {} ms left of 1000, ring stopped after the stream)", refills, left);
+        if by_irq && irqs > 0 && irq_refills > 0 {
+            println!("[kernel] MILESTONE: AUDIO IRQ OK ({} interrupts, {} refills by the audio task, no polling)", irqs, irq_refills);
+        } else if by_irq {
+            println!("[audio] irq test: interrupt routed but {} interrupts / {} task refills", irqs, irq_refills);
+        }
     } else {
-        println!("[audio] stream test: took {} started {} refills {} left {} ms stopped {}", took, started, refills, left, stopped);
+        println!("[audio] stream test: took {} started {} refills {} left {} ms stopped {} ({}; {} irqs, {} task refills)", took, started, refills, left, stopped, audio::debug_state(), irqs, irq_refills);
     }
 }
 
@@ -2028,6 +2105,10 @@ fn dahan_demo() {
     } else {
         println!("[aio] {} ops in <1 tick (>{} ops/sec)", ops, ops * 182 / 10);
     }
+    match aio::zero_copy_self_test() {
+        Ok(m) => println!("[kernel] MILESTONE: ZERO-COPY AIO OK ({})", m),
+        Err(e) => println!("[aio] zero-copy self-test FAILED: {}", e),
+    }
     aio::shutdown();
     println!("[kernel] MILESTONE: ASYNC IO OK (io_uring-style SQ/CQ, benchmark-able)");
 
@@ -2045,6 +2126,10 @@ fn dahan_demo() {
         println!("[kernel] MILESTONE: NETWORK OK (Ethernet/ARP/IPv4/ICMP stack)");
     } else {
         println!("[net] no ICMP reply (stack error)");
+    }
+    match ipv6::self_test() {
+        Ok(s) => println!("[kernel] MILESTONE: IPV6 OK ({})", s),
+        Err(e) => println!("[kernel] ipv6 self-test FAILED: {}", e),
     }
     match tcp::self_test() {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),

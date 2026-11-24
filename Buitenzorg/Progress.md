@@ -83,8 +83,8 @@
 - [x] VFS (mount table `/disk` rw sejak 2026-11-01 + `/ram` rw)
 - [x] FAT12/16/32 read + **write** (FAT12/16/32 sejak 2026-11-01; teruji lintas reboot)
 - [x] Service/init manager (parallel, dependency-aware)
-- [~] Async I/O io_uring-style (SQ/CQ + benchmark) — *zero-copy & syscall submit belum*
-- [~] Networking: Ethernet/ARP/IPv4/ICMP/UDP/TCP, virtio-net + GENET (Pi 4), DHCP, SNTP, SSH; perintah terminal `ipconfig`/`ping`/`arp`/`route`/`netstat`/`hostname` (2026-11-03) · **DNS resolver** + `nslookup` + ping nama ✓ (2026-11-08) — *WiFi belum*
+- [~] Async I/O io_uring-style (SQ/CQ + benchmark) · [x] **zero-copy** ✓ (2026-11-24): buffer terdaftar (fisik kontigu, `aio::register_buffers`) + `ReadFixed`/`WriteFixed`, perangkat membaca/menulis langsung di buffer, tanpa alokasi/salinan per permintaan (`ZERO-COPY AIO OK`) — *syscall submit dari ring 3 belum*
+- [~] Networking: Ethernet/ARP/IPv4/ICMP/UDP/TCP, virtio-net + GENET (Pi 4), DHCP, SNTP, SSH; perintah terminal `ipconfig`/`ping`/`arp`/`route`/`netstat`/`hostname` (2026-11-03) · **DNS resolver** + `nslookup` + ping nama ✓ (2026-11-08) · [x] **IPv6** ✓ (2026-11-24: link-local, SLAAC, neighbour discovery, ICMPv6 echo, `ping6`; `IPV6 OK` + `IPV6 NET OK`) — *WiFi belum (lihat CHANGELOG: tak ada model QEMU; chip Pi/laptop butuh firmware vendor + stasiun 802.11/WPA2)*
 - [ ] Filesystem kustom journaled · [x] permission broker (`perm.rs`, `permissions=` di manifest, `bz perm`, `MILESTONE: PERMISSIONS OK`; 2026-11-19) · [x] package manager (`pkg.rs`, v0.10)
 
 ### 🖼️ Graphics & Window System
@@ -296,9 +296,9 @@ GC/heap/BCL.)
 - [x] **Regex** — `BzRegex` (bzbcl2.cs): kelas/anchor/kuantifier/alternasi/grup + backtracking lintas grup; *belum: capture, `{n,m}`, lazy, backreference, lookaround*
 - [~] **StringBuilder + string/char/math/random** — inc 6 + v0.16: `BzStringBuilder` (Append string/int/long/char/hex + **Clear/AppendLine/AppendChars/CopyTo**); **`BzMath`** (Abs/Min/Max/Clamp/Sign/Pow/ISqrt/Gcd/Lcm); **`BzRandom`** (xorshift64* PRNG); **`BzStr`** (Equals/Compare/StartsWith/EndsWith/IndexOf/Count/Upper/Lower/IsDigit/IsAlpha — pakai `(object)` cast krn `string ==` tak ada); interpolation/ToString penuh menyusul
 - [~] **Encoding/konversi** — inc 6 + v0.16: **Base64** (`BzBase64`) + **BitConverter** (`BzBitConverter`) + **`BzHex`** (bytes→hex) + **`BzConvert`** (ParseInt/ParseLong/ParseHex + LongToChars) jalan; **UTF-8/ASCII ✓** (`BzEncoding`, bzbcl2.cs)
-- [~] **DateTime** ✓ (`BzDateTime` di atas CMOS RTC) · [x] TimeSpan (`BzTimeSpan`) · [x] Guid (`BzGuid`, syscall `RANDOM`; bzbcl3.cs) · [ ] Tuple
-- [~] **System.Threading**: Thread ✓ (`THREAD_CREATE`) · **Timer ✓** (`BzTimer`, polled) · mutex ✓ (`BzMutex`/futex) · [ ] ThreadPool · [ ] Monitor/condvar · [x] Interlocked (`BzInterlocked`, bzbcl3.cs) · [ ] reset events
-- [~] **Tasks**: `BzTask` Run/Wait/WhenAll ✓ · [x] Task<T> + `async`/`await` (`bzasync.cs`: event loop, Yield/Delay/WhenAll/WhenAny/Task.Run, 2026-11-19) · [ ] SynchronizationContext · [ ] thread pool
+- [~] **DateTime** ✓ (`BzDateTime` di atas CMOS RTC) · [x] TimeSpan (`BzTimeSpan`) · [x] Guid (`BzGuid`, syscall `RANDOM`; bzbcl3.cs) · [x] Tuple (`bzbcl4.cs`, 2026-11-24)
+- [~] **System.Threading**: Thread ✓ (`THREAD_CREATE`) · **Timer ✓** (`BzTimer`, polled) · mutex ✓ (`BzMutex`/futex) · [x] ThreadPool (`BzThreadPool`) · [x] Monitor/condvar (`BzMonitor`) + ManualReset/AutoReset/Semaphore/Countdown · [x] Interlocked · [x] **Finalizer** `~T()` (ZerolibPatch v9 + antrean finalisasi bzgc, thread finalizer; `BCL4 OK`) ✓ (2026-11-24) (`BzInterlocked`, bzbcl3.cs) · [ ] reset events
+- [~] **Tasks**: `BzTask` Run/Wait/WhenAll ✓ · [x] Task<T> + `async`/`await` (`bzasync.cs`: event loop, Yield/Delay/WhenAll/WhenAny/Task.Run, 2026-11-19) · [x] SynchronizationContext · [ ] thread pool
 - [x] **Streams / System.IO**: `BzMemoryStream` + `BzFile` read/write + `BzDir`/`BzPath` di atas VFS (`FS_READ/FS_WRITE/FS_LIST`); *FileStream ber-seek di atas file belum*
 - [x] Sample C# terverifikasi di QEMU — `bcl.cs` + `bcl2.cs` + `bcl3.cs` (LINQ/Regex/StringBuilder/Base64/Collections/Tasks/Streams) → `BCL OK`/`BCL2 OK`/`BCL3 OK`; async/await (`async.cs` → `ASYNC OK`), GC reklamasi (`gc.cs` → `GC OK`) dan exception (`exc.cs` → `EXCEPTIONS OK`)
 - [ ] **(Menyusul) CoreCLR/JIT + reflection penuh + Reflection.Emit** (skenario dinamis di luar batas NativeAOT/trimming)
@@ -443,7 +443,7 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
 - **Prasyarat (kernel & driver)**
   - [x] Multi-proses preemptif (musik di latar saat game/browsing) — ✓ increment 1 (2026-11-01), lihat §Developer Workstation
   - [x] Surface shared-memory zero-copy (ganti salinan per-piksel `BLIT`) + vsync/frame pacing + fullscreen eksklusif (syscall `WIN_CTL` 74; `VSYNC OK`, `SURFACE OK`; sumber vblank Intel belum diuji di perangkat keras) ✓ (2026-11-22)
-  - [~] Timer resolusi tinggi: [x] `SLEEP_UNTIL` (61) presisi ~1 ms (blok + yield) ✓ (2026-11-08) · [ ] APIC timer/HPET one-shot
+  - [~] Timer resolusi tinggi: [x] `SLEEP_UNTIL` (61) presisi ~1 ms (blok + yield) ✓ (2026-11-08) · [x] timer LAPIC one-shot untuk tenggat tunggu di CPU 0 (rata-rata ~0,8 ms terlambat, sebelumnya hingga 55 ms; `DEADLINE TIMER OK`) ✓ (2026-11-24) · [ ] HPET
   - [~] [x] **Ring buffer streaming** ✓ (2026-11-08: AC'97 32 buffer, HDA 16 halaman siklik, diisi pump -- polled, belum IRQ) · [x] driver Intel HDA (`hda.rs`, terbukti di Dell Latitude 7290) · [x] **capture mic**: AC'97 (2026-11-19) · **virtio-snd** di ARM64/RISC-V (`MILESTONE: VIRTIO SND CAPTURE OK`) · **Intel HDA** (jalur ADC <- pin mikrofon / line-in, input stream pertama; smoke `[nvme]` memakai `intel-hda` + `hda-duplex`; 2026-11-20)
   - [x] **Event keyboard tekan/lepas + status tombol** ✓ (2026-11-08): syscall `KEY_EVENT` (59) / `KEY_STATE` (60) dari scancode mentah semua keyboard, `MILESTONE: KEY EVENTS OK` · [ ] mouse relatif/capture
   - [~] Stack USB xHCI + HID keyboard/mouse + mass storage ✓ · [x] **hot-plug** (port root + hub, flashdisk di `/usb0`, `lsusb`, smoke `[hotplug]`, 2026-11-19) · [x] **gamepad** (HID report descriptor generik + XInput Xbox 360 → kode tombol standar `PadA..PadRight` sebagai event key; `MILESTONE: GAMEPAD OK` lewat descriptor/report contoh -- QEMU tak punya model gamepad, belum diuji pada pad sungguhan; 2026-11-20) · [ ] UVC webcam · [ ] audio USB
@@ -457,8 +457,8 @@ Rencana lengkap + urutan fase: [PLAN.md §Multimedia, Internet, Game & Hiburan](
   - [~] Video: [x] **MJPEG + PCM dalam AVI** (`mvideo`, A/V sync mengikuti posisi audio mixer, klip orisinal `FAJAR.AVI` disintesis saat build) ✓ (2026-11-09) · [x] **container MP4/MOV/MKV/WebM** + **VP8** software (port decoder referensi RFC 6386, bit-exact dengan ffmpeg; suara Opus/Vorbis/MP3/PCM; `KEBUN.WEB`, `SENJA.MP4`; H.264/AAC dilaporkan tidak didekode -- paten; 2026-11-20) · [ ] VP9/AV1 · YUV→RGB SIMD · subtitle SRT · decode hardware
   - [~] App: [x] **Video Player** (`mvideo`) · [x] **Music Player** (`mmusik`, 2 lagu orisinal tersintesis di image) ✓ (2026-11-08) · [x] **perpustakaan** (Musik memindai `/disk` 2 tingkat folder + `/usb0..3`, urut judul, kotak cari; 2026-11-20) · [x] **Photo Viewer** (`mimage`: BMP/PNG/JPEG/GIF, zoom, geser, slideshow, GIF animasi; 3 foto contoh) ✓ (2026-11-08) · [x] **Sound Recorder** (`mrekam`: rekam AC'97 lewat syscall `AUDIO_READ` 69, simpan WAV, putar; izin `microphone`; `MILESTONE: AUDIO CAPTURE OK`; 2026-11-19) · Camera · [x] **screenshot** (Print Screen / `layar` → `/disk/LAYAR`, 2026-11-19) · perekam layar · [x] **Now Playing** (tombol taskbar app yang sedang bersuara di mixer diberi not musik; 2026-11-20) · [x] **OSD volume** (2026-11-19)
 - **Internet**
-  - [~] Driver NIC: virtio-net ✓ → e1000 ✓ → [ ] Realtek · [ ] Wi-Fi (jangka panjang)
-  - [~] TCP ✓ (`tcp.rs`, dipakai SSH) · DHCP ✓ · [x] **DNS resolver** (`dns.rs`, cache TTL, `MILESTONE: DNS OK`) · [x] **TCP untuk app** (syscall `TCP_OP` 64 + `DNS_RESOLVE` 65, `appnet.rs`, handle per proses) ✓ (2026-11-08) · [ ] IPv6
+  - [~] Driver NIC: virtio-net ✓ → e1000 ✓ → [x] Realtek (RTL8139 ✓ di QEMU, `NIC OK (rtl8139`; RTL8169/8168 belum diuji di perangkat keras) ✓ (2026-11-24) · [ ] Wi-Fi (jangka panjang)
+  - [~] TCP ✓ (`tcp.rs`, dipakai SSH) · DHCP ✓ · [x] **DNS resolver** (`dns.rs`, cache TTL, `MILESTONE: DNS OK`) · [x] **TCP untuk app** (syscall `TCP_OP` 64 + `DNS_RESOLVE` 65, `appnet.rs`, handle per proses) ✓ (2026-11-08) · [x] IPv6 (dasar; UDP/TCP di atas IPv6 + DNS AAAA belum) ✓ (2026-11-24)
   - [~] Kripto: [x] CSPRNG (`rng.rs`), SHA-2/HMAC/PBKDF2, ChaCha20-Poly1305, X25519, Ed25519 (dipakai SSH, 2026-11-03) · [ ] AES-GCM, RSA/ECDSA, store sertifikat root · [ ] TLS 1.3/1.2
   - [~] [x] **Klien HTTP/1.1 + HTTPS** (`Buitenzorg.Net.HttpClient`; TLS 1.3/1.2 lewat rustls di clrhost, sertifikat diverifikasi terhadap akar CA Mozilla) ✓ (2026-11-08) · [x] **WebSocket** (`Buitenzorg.Net.WebSocket`, RFC 6455 ws/wss klien + sisi server, diuji self-test Peramban; 2026-11-19) · [x] **download manager** (app **Unduhan** `munduh`: antrean, jeda/lanjut via `Range`, daftar persisten; `HttpClient.Download` + syscall `FS_APPEND` 68; 2026-11-19)
   - [~] Browser: [x] parser HTML toleran · [x] **CSS subset** (`<style>`, `<link rel=stylesheet>` diambil, `style=""`; selektor tag/.class/#id/compound/keturunan; color, background, border, bold/size, text-align, display none/block/inline, indentasi kiri; `css.rs` di host + `Css.cs` off-device; 2026-11-20) · [x] layout + gambar · [ ] JS · [~] riwayat (mundur/maju) · [ ] tab/bookmark
@@ -532,3 +532,11 @@ di v0.15 inc 6 (lihat PLAN.md §Eksperimen pasca-v1.0):
 - [ ] Glue entry internal bflat (`__managed__Startup`/`RhInitialize`)
 - [ ] Sisa ~150 simbol PAL (stdio/TLS `__tls_get_addr`/pthread_key/`LowLevelMonitor_*`/new-delete C++) — banyak bisa stub; inti (mmap/thread/futex/clock/malloc) SUDAH dari v0.15
 - [ ] Link `libbootstrapperdll.o`+`libRuntime.WorkstationGC.a` lalu tembus fault startup GC/EEType/cctor
+
+## 2026-11-24 — jaringan, C# native, kernel, Task Manager
+
+- [x] NIC Realtek (RTL8139 terverifikasi di QEMU; keluarga 8169 belum diuji) · [x] IPv6 dasar · [ ] Wi-Fi (di luar cakupan putaran ini, alasan di CHANGELOG)
+- [x] C# native: Tuple, Monitor, event reset, semaphore, countdown, ThreadPool, SynchronizationContext, finalizer (`BCL4 OK`); GroupBy/OrderBy/Distinct sudah ada di `bzbcl3.cs`
+- [x] Kernel: EXIT/THREAD_EXIT/PROC_KILL/THREAD_CREATE/THREAD_JOIN tanpa BKL (klaim teardown sekali) · audio AC'97 lewat IRQ + task `audio` (`AUDIO IRQ OK`; HDA/Pi masih polling) · timer LAPIC one-shot (`DEADLINE TIMER OK`) · async I/O zero-copy dengan buffer terdaftar (`ZERO-COPY AIO OK`)
+- [x] Task Manager (Pemantau): tab Proses / Kinerja / Detail
+- [x] Perbaikan: pencarian menu Mulai saat ada app yang fokus (KEY_READ/KEY_EVENT app mengambil ketikan)

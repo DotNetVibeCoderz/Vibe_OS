@@ -168,6 +168,16 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::NOTIFY
             | sysno::WIN_CTL
             | sysno::FAULT_HANDLER
+            // Process and thread lifecycle (2026-11-24): the scheduler lock
+            // covers create/join/exit; teardown (`app::process_exited` /
+            // `app::kill`) touches only subsystems with locks of their own,
+            // and `app::claim_teardown` makes sure exactly one of a racing
+            // EXIT and PROC_KILL frees the address space.
+            | sysno::EXIT
+            | sysno::THREAD_EXIT
+            | sysno::PROC_KILL
+            | sysno::THREAD_CREATE
+            | sysno::THREAD_JOIN
     )
 }
 
@@ -1589,15 +1599,8 @@ fn sys_proc_args(buf_ptr: u64, max: u64) -> u64 {
 }
 
 fn sys_thread_join(tid: u64) -> u64 {
-    // Cooperative wait: yield until the target thread has finished.
-    let mut spins: u64 = 0;
-    while !task::is_finished(tid) {
-        task::yield_now();
-        spins += 1;
-        if spins > 500_000_000 {
-            return syserr::INVAL; // safety valve against a wedged thread
-        }
-    }
+    // Blocks in the scheduler until the thread ends (woken by its exit).
+    task::join_thread(tid);
     0
 }
 

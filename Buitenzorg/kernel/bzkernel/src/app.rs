@@ -122,13 +122,35 @@ fn spawn_image_full(
 /// syscall or a fatal fault): stop its other threads, leave and drop its
 /// address space, and record the exit code.
 pub fn process_exited(pid: u64, code: u64) {
+    if !claim_teardown(pid) {
+        return; // a PROC_KILL on another CPU is tearing it down
+    }
     let space = task::current_space();
     task::detach_current_from_space(pid);
     destroy_when_home(space);
     crate::crash::on_exit(pid);
     process::app_exit(pid, code);
     crate::debug::on_exit(pid);
+    end_teardown(pid);
     crate::println!("[app] process {} exited with code {:#x}", pid, code);
+}
+
+/// Processes being torn down. EXIT and PROC_KILL run without the BKL, so a
+/// program can exit on one CPU while another kills it: only the first to
+/// claim the pid frees its space and reports its exit.
+static TEARDOWN: spin::Mutex<alloc::vec::Vec<u64>> = spin::Mutex::new(alloc::vec::Vec::new());
+
+fn claim_teardown(pid: u64) -> bool {
+    let mut t = TEARDOWN.lock();
+    if t.contains(&pid) {
+        return false;
+    }
+    t.push(pid);
+    true
+}
+
+fn end_teardown(pid: u64) {
+    TEARDOWN.lock().retain(|&p| p != pid);
 }
 
 /// Free a dead process's address space once no other CPU still runs one of
@@ -151,13 +173,21 @@ fn destroy_when_home(space: aspace::Space) {
 
 /// Terminate spawned process `pid` from outside (PROC_KILL / Task Manager).
 pub fn kill(pid: u64) -> bool {
+    // Claim first: marking the tasks finished while the program is inside
+    // its own exit path would strand that path (a finished task that yields
+    // is never scheduled again) with the address space half torn down.
+    if !claim_teardown(pid) {
+        return true; // it is exiting on another CPU: that path frees it
+    }
     let Some(space) = task::kill_space(pid) else {
+        end_teardown(pid);
         return false;
     };
     destroy_when_home(space);
     crate::crash::on_exit(pid);
     process::app_exit(pid, KILLED_EXIT_CODE);
     crate::debug::on_exit(pid);
+    end_teardown(pid);
     crate::println!("[app] process {} killed", pid);
     true
 }
@@ -314,6 +344,7 @@ fn builtin_app_file(name: &str) -> Option<&'static str> {
         "statics" => Some("STATICS.ELF"),
         "crashme" => Some("CRASHME.ELF"),
         "bcl3" => Some("BCL3.ELF"),
+        "bcl4" => Some("BCL4.ELF"),
         "async" => Some("ASYNC.ELF"),
         "exc" => Some("EXC.ELF"),
         "gc" => Some("GC.ELF"),

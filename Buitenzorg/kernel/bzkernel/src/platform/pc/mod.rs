@@ -15,5 +15,6 @@ pub mod mouse;
 pub mod nvme;
 pub mod pci;
 pub mod power;
+pub mod realtek;
 pub mod rtc;
 pub mod serial;

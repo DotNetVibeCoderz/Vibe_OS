@@ -66,8 +66,8 @@ app. Detail per-fitur: [Progress.md](Progress.md).
   uptime/heap/RAM + bar, dan kill task (demo: kill `idle-demo`).
 - **Varian app**: Widget (`widget.cs`, ter-dock di widget board) + WebView
   (`webview.cs`, mini renderer subset HTML) melengkapi console/desktop.
-- *Belum (backlog)*: engine HTML/CSS/JS penuh, tab terpisah + Details di Task
-  Manager, template SDK web/widget, kill app lain (butuh multi-proses).
+- *Belum (backlog)*: engine HTML/CSS/JS penuh, ~~tab terpisah + Details di Task
+  Manager~~ (✓ 2026-11-24: Proses/Kinerja/Detail), template SDK web/widget, kill app lain (butuh multi-proses).
   *(`Bitmap`/`GraphicsPath`/`Font` sudah ada di `bzgfx.cs` sejak v0.16.)*
 
 ### Catatan v0.10 "Buah" (selesai)
@@ -959,7 +959,7 @@ terikat paten), suara DOOM, webcam UVC, animasi skeletal, JS di browser.
 - **Surface shared-memory zero-copy** — app menggambar langsung ke buffer yang
   dipetakan ke compositor (ganti salinan per-piksel `BLIT`) + **vsync/frame
   pacing** + mode **fullscreen eksklusif**.
-- **Timer resolusi tinggi** (APIC timer/HPET) untuk frame pacing & A/V sync.
+- **Timer resolusi tinggi** (APIC timer/HPET) untuk frame pacing & A/V sync. *(✓ 2026-11-24: LAPIC one-shot untuk tenggat tunggu di CPU 0; HPET belum.)*
 - **Audio berbasis IRQ** + ring buffer latensi rendah + **driver Intel HDA**
   (hampir semua PC modern) + capture mic.
 - **Input game**: syscall event keyboard **tekan/lepas + status tombol**, mouse
@@ -993,7 +993,7 @@ terikat paten), suara DOOM, webcam UVC, animasi skeletal, JS di browser.
   ring-3, DNS, TLS.
 - **Stack jaringan**: driver **virtio-net** (QEMU) → **e1000** → Realtek;
   **TCP** penuh (state machine, retransmit, window), **DHCP**, **DNS resolver**,
-  socket `STREAM` + `poll`, IPv6 menyusul; Wi-Fi jangka panjang.
+  socket `STREAM` + `poll`, IPv6 menyusul; Wi-Fi jangka panjang. *(✓ 2026-11-24: Realtek RTL8139/8169 + IPv6 dasar — SLAAC, ND, ping6.)*
 - **Kriptografi & TLS 1.3/1.2**: CSPRNG (RDRAND/RDSEED + jitter), SHA-2, AES-GCM,
   ChaCha20-Poly1305, X25519, verifikasi RSA/ECDSA, **store sertifikat root**.
 - **`Buitenzorg.Net.Http`** jadi klien sungguhan (HTTP/1.1 + HTTPS, redirect,

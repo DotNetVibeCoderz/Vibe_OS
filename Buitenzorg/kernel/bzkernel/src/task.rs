@@ -366,13 +366,19 @@ impl Scheduler {
             return;
         }
         let now = crate::arch::cpu::nanos();
+        let mut next = u64::MAX;
         for t in self.tasks.iter_mut() {
             if t.state == State::Blocked && t.wake_ns != 0 && now >= t.wake_ns {
                 t.state = State::Runnable;
                 t.wait_key = 0;
                 t.wake_ns = 0;
                 TIMED_WAITERS.fetch_sub(1, Ordering::Relaxed);
+            } else if t.state == State::Blocked && t.wake_ns != 0 {
+                next = next.min(t.wake_ns);
             }
+        }
+        if next != u64::MAX {
+            crate::arch::cpu::arm_deadline(next); // the next one (CPU 0 only)
         }
     }
 
@@ -629,6 +635,9 @@ fn user_thread_body() {
 /// Promote the current task (the app's main thread) to a user thread with its
 /// own private SYSCALL kernel stack. Idempotent.
 pub fn ensure_main_user_thread() {
+    if with_current(|t| t.user.is_some()) {
+        return;
+    }
     let stack = alloc::vec![0u8; SYS_STACK_SIZE].into_boxed_slice();
     let top = (stack.as_ptr() as u64 + stack.len() as u64) & !0xF;
     let c = cpu();
@@ -759,15 +768,16 @@ pub fn wait_space_stopped(space_id: u64) -> bool {
     false
 }
 
-/// True if a runnable user task is waiting for a CPU — the desktop loop yields
-/// to it instead of halting.
+/// True if a runnable task -- a user process or a kernel task such as
+/// `boot_background` -- is waiting for a CPU: the desktop loop yields to it
+/// instead of halting. (It once counted user tasks only, so with a single CPU
+/// the normal boot's background work never ran: no wallpaper, sound, USB or
+/// network. Every smoke boot had two CPUs.)
 pub fn user_work_pending() -> bool {
     interrupts::without_interrupts(|| {
         let guard = SCHEDULER.lock();
         let Some(s) = guard.as_ref() else { return false };
-        s.tasks
-            .iter()
-            .any(|t| t.state == State::Runnable && !t.running && !t.idle && t.space.id != 0)
+        s.tasks.iter().any(|t| t.state == State::Runnable && !t.running && !t.idle)
     })
 }
 
@@ -876,6 +886,7 @@ pub fn futex_wait_timeout_if(addr: u64, expected: u32, deadline_ns: u64) -> bool
         if deadline_ns != 0 {
             t.wake_ns = deadline_ns;
             TIMED_WAITERS.fetch_add(1, Ordering::Relaxed);
+            crate::arch::cpu::arm_deadline(deadline_ns);
         }
         true
     });
@@ -952,6 +963,37 @@ fn wake_matching(key: u64, space: u64, count: u64) -> u64 {
     n
 }
 
+/// Kernel wait key of THREAD_JOIN on thread `id` (woken by `exit_current`).
+const JOIN_KEY: u64 = 0xDA << 48;
+
+/// THREAD_JOIN: block until the thread with `id` has finished (or no longer
+/// exists). The check and the block are one step under the scheduler lock,
+/// and the exiting thread wakes its joiners under the same lock, so the
+/// wake-up cannot be missed. A killed joiner returns at once.
+pub fn join_thread(id: u64) {
+    loop {
+        let blocked = interrupts::without_interrupts(|| {
+            let c = cpu();
+            let mut guard = SCHEDULER.lock();
+            let Some(s) = guard.as_mut() else { return false };
+            let done = s.tasks.iter().find(|t| t.id == id).map(|t| t.state == State::Finished).unwrap_or(true);
+            let cur = s.current[c];
+            let me = &mut s.tasks[cur];
+            if done || me.state == State::Finished || me.id == id {
+                return false;
+            }
+            me.state = State::Blocked;
+            me.wait_key = JOIN_KEY | id;
+            me.wait_space = KERNEL_KEY;
+            true
+        });
+        if !blocked {
+            return;
+        }
+        yield_now();
+    }
+}
+
 /// True if the thread with `id` has finished (or no longer exists).
 pub fn is_finished(id: u64) -> bool {
     interrupts::without_interrupts(|| {
@@ -1025,9 +1067,21 @@ extern "C" fn task_trampoline() -> ! {
 /// Mark the current task finished and switch away for good.
 pub fn exit_current() -> ! {
     interrupts::disable_interrupts();
+    let mut joiners = false;
     switch_with(|sched| {
         let cur = sched.current[cpu()];
         sched.tasks[cur].state = State::Finished;
+        let key = JOIN_KEY | sched.tasks[cur].id;
+        for t in sched.tasks.iter_mut() {
+            if t.state == State::Blocked && t.wait_key == key && t.wait_space == KERNEL_KEY {
+                t.state = State::Runnable;
+                t.wait_key = 0;
+                joiners = true;
+            }
+        }
+        if joiners {
+            crate::smp::wake_others();
+        }
     });
     unreachable!("finished task was rescheduled");
 }
@@ -1415,7 +1469,7 @@ pub fn watchdog(rip: u64, rsp: u64, from_user: bool) {
 /// 100 Hz, but a lone CPU may have nothing but the 18.2 Hz PIT (a 60 Hz vsync
 /// wait then took two ticks, 100 ms), so there it polls for the last 56 ms.
 pub fn precise_wait_margin(fine_ns: u64) -> u64 {
-    if crate::smp::cpus_online() > 1 {
+    if crate::smp::cpus_online() > 1 || crate::arch::cpu::deadline_timer() {
         fine_ns
     } else {
         56_000_000

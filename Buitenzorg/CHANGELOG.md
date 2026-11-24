@@ -13,6 +13,88 @@ in [Progress.md](Progress.md) and [requirements.md](requirements.md) §17.
 
 ## [Unreleased]
 
+### Network, native C# threading, kernel timing + I/O, Task Manager tabs (2026-11-24)
+
+#### Added
+
+- **Realtek NICs** (`platform/pc/realtek.rs`): RTL8139 (QEMU `-device rtl8139`,
+  older PCs) and the RTL8169/8168/8111/8101 "C+" descriptor family, polled,
+  behind `net::NetDevice`. The normal boot brings one up after virtio-net,
+  e1000 and e1000e: DHCP + ping to the router -> `MILESTONE: NIC OK (rtl8139 ...)`,
+  checked by smoke `[fastboot]`. The 8169 family has no QEMU model and is
+  **untested on hardware**.
+- **IPv6** (`ipv6.rs`, every kernel): link-local address from the MAC, SLAAC
+  from router advertisements (EUI-64), neighbour discovery with a cache and
+  router solicitation, ICMPv6 echo. Terminal `ping6 ADDR [n]`, `ping6 -r`;
+  `ipconfig` lists the IPv6 addresses and router. `MILESTONE: IPV6 OK`
+  (self-test of the packet code) and `IPV6 NET OK` (QEMU user-net: SLAAC in
+  fec0::/64, then ping6 fec0::2) on x86 virtio and ARM64. Not done: duplicate
+  address detection, UDP/TCP over IPv6, DNS AAAA, extension headers,
+  fragmentation, DHCPv6.
+- **Native C# (`bzbcl4.cs`):** `Tuple<T1,T2>`/`<T1,T2,T3>` + `Tuple.Create`
+  and named `ValueTuple`s; `BzMonitor` (reentrant Enter/TryEnter/Exit/Wait/Pulse/
+  PulseAll), `BzManualResetEvent`, `BzAutoResetEvent`, `BzSemaphore`,
+  `BzCountdownEvent`, `BzThreadPool` (QueueUserWorkItem, `Run<T>` -> `BzFuture<T>`
+  that rethrows, WaitIdle, uncaught exceptions counted, workers survive),
+  `BzSynchronizationContext` + `BzLoopContext` (Post/Send/Pump/RunUntil).
+  **Finalizers:** `~T()` now runs. ZerolibPatch v9 gives `Object` a virtual
+  `Finalize`, so ILC emits finalizers and allocates such objects through
+  `RhpNewFinalizable`; the shim's collector moves dead finalizable objects to
+  a ready queue (they are kept alive, resurrection works) and a lazily started
+  finalizer thread runs them. `BzFinalizer.SuppressFinalize` /
+  `ReRegisterForFinalize` / `WaitForPendingFinalizers`. `bcl4.cs`: 18 checks
+  -> `MILESTONE: BCL4 OK` (x86 + ARM64). GroupBy/OrderBy/Distinct were already
+  in `bzbcl3.cs`.
+- **Audio by interrupt (AC'97):** buffer descriptors carry IOC and the card's
+  PCI line is routed through the I/O APIC (vector 0x50, CPU 0). The interrupt
+  only acknowledges the card and wakes an `audio` kernel task, which refills
+  the playback and recording rings, so the desktop loop no longer pumps them.
+  A line that fires 256 times without the card asking for it is masked again.
+  `MILESTONE: AUDIO IRQ OK` (IDE boot). Intel HDA and the Pi still poll.
+- **One-shot deadline timer:** CPU 0's Local APIC timer is free while the PIT
+  drives the tick, so a timed wait (FUTEX_WAIT_TIMEOUT, SLEEP_UNTIL,
+  `Thread.Sleep`) arms it in one-shot mode for the earliest deadline. Waits on
+  CPU 0 used to end at the next 55 ms PIT tick; now they are ~0.8 ms late on
+  average (QEMU TCG) -> `MILESTONE: DEADLINE TIMER OK`. On a PC whose PIT does
+  not count, the LAPIC timer is the tick and waits keep its resolution. HPET is
+  not used.
+- **Zero-copy async I/O:** the io_uring-style ring takes registered,
+  physically contiguous buffers (`aio::register_buffers`) and
+  `ReadFixed`/`WriteFixed` requests with a buffer index + offset. The device
+  reads and writes in place: no per-request allocation, no bounce copy.
+  Bounds are checked. `MILESTONE: ZERO-COPY AIO OK` (16 KiB round trip, offset
+  read, 3 refusals; 400 x 4 KiB: 6.6 ms vs 10.7 ms for the copying path).
+  Kernel-internal: there is no ring-3 syscall for it yet.
+- **Task Manager (Pemantau) tabs:** Proses (sortable process grid, an "apps
+  only" toggle, end task), Kinerja (stat cards + CPU and kernel-heap history
+  graphs), and Detail (every task with its CPU share and state).
+
+#### Changed
+
+- **Process teardown and threads leave the BKL:** EXIT, THREAD_EXIT,
+  PROC_KILL, THREAD_CREATE and THREAD_JOIN no longer take the Big Kernel
+  Lock. A process's teardown is claimed once (`app::claim_teardown`), so an
+  exit and a kill on two CPUs cannot both free it. `THREAD_JOIN` blocks on a
+  scheduler key (woken by the exiting thread) instead of yielding in a loop.
+
+#### Fixed
+
+- **Searching in the Start menu while an app has the focus:** the focused
+  program's `KEY_READ` / `KEY_EVENT` took the typed characters before the
+  search box saw them (`KEY_EVENT` even discarded them). While the Start menu
+  or the power dialog is open, no program owns the keyboard now.
+- `audio::is_streaming` used a `try_lock` and said "not streaming" while the
+  audio task held the card, so a tone could take the hardware from a running
+  stream. It reads an atomic flag now.
+
+#### Not done: Wi-Fi
+
+QEMU has no Wi-Fi device to develop against. The Pi 4's CYW43455 (SDIO) and
+the laptop's Intel card both need vendor firmware blobs plus an 802.11
+station with WPA2 (4-way handshake, CCMP) before a single frame can be sent.
+That stays on the long-term list; Ethernet (virtio, e1000, e1000e, Realtek,
+GENET) covers the networking for now.
+
 ### Raspberry Pi 4 test round (2026-11-24)
 
 docs/hardware-test-checklist.md passed on the board: `gpu` reports the virtual

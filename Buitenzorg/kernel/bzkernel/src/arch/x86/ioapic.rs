@@ -133,6 +133,37 @@ fn route(m: &Madt, gsi: u32, flags: u16, vector: u8, lapic_id: u32) {
     write(0x10 + 2 * pin, lo); // unmasked
 }
 
+/// Route PCI interrupt `line` (the legacy IRQ number firmware wrote into
+/// config 0x3C) to `vector` on CPU 0. PCI INTx is level triggered, active
+/// low, unless the MADT overrides that line (QEMU's PIIX: level, active
+/// high). Returns the GSI.
+pub fn route_pci(line: u8, vector: u8) -> Option<u32> {
+    if !active() {
+        return None;
+    }
+    let m = parse_madt()?;
+    let (gsi, flags) = if (line as usize) < 16 { m.overrides[line as usize] } else { (line as u32, 0) };
+    let flags = if flags == 0 { 0b1111 } else { flags };
+    let max_entry = (read(0x01) >> 16) & 0xFF;
+    if gsi < m.gsi_base || gsi - m.gsi_base > max_entry {
+        return None;
+    }
+    let lapic = crate::smp::lapic_id_of(0)?;
+    x86_64::instructions::interrupts::without_interrupts(|| route(&m, gsi, flags, vector, lapic));
+    Some(gsi)
+}
+
+/// Mask the redirection entry of `gsi` (a device line that misbehaves).
+pub fn mask(gsi: u32) {
+    if let Some(m) = parse_madt() {
+        if gsi >= m.gsi_base {
+            let pin = gsi - m.gsi_base;
+            let lo = read(0x10 + 2 * pin);
+            write(0x10 + 2 * pin, lo | 1 << 16);
+        }
+    }
+}
+
 /// Switch device interrupts to the I/O APIC (after `smp::init`). Returns a
 /// description of the routes, or None if there is no I/O APIC (the 8259 stays).
 pub fn init() -> Option<alloc::string::String> {

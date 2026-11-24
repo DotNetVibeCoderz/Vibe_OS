@@ -84,6 +84,7 @@ pub fn init() {
         idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_handler);
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_handler);
         idt[InterruptIndex::Mouse.as_u8()].set_handler_fn(mouse_handler);
+        idt[crate::audio::IRQ_VECTOR].set_handler_fn(audio_handler);
         // Every remaining PIC vector gets an EOI-only stub so a stray IRQ
         // (e.g. from a probed device) can never triple-fault the kernel.
         macro_rules! stub {
@@ -341,6 +342,12 @@ pub fn pause_if_due(frame: &mut InterruptStackFrame) {
             frame.as_mut().update(|f| f.cpu_flags |= x86_64::registers::rflags::RFlags::TRAP_FLAG);
         }
     }
+}
+
+/// The AC'97 card's PCI interrupt (only routed with the I/O APIC active).
+extern "x86-interrupt" fn audio_handler(_frame: InterruptStackFrame) {
+    crate::audio::on_irq();
+    crate::smp::lapic_eoi();
 }
 
 extern "x86-interrupt" fn timer_handler(mut frame: InterruptStackFrame) {

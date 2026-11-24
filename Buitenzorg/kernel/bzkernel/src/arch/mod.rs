@@ -192,6 +192,27 @@ pub mod cpu {
         (timestamp() as u128 * 1_000_000_000 / counter_hz() as u128) as u64
     }
 
+    /// Ask for an interrupt on this CPU at `deadline_ns` ([`nanos`]) -- a
+    /// one-shot timer for timed waits. False when this CPU has none free
+    /// (the wait then ends on the next periodic tick).
+    pub fn arm_deadline(deadline_ns: u64) -> bool {
+        #[cfg(target_arch = "x86_64")]
+        return super::x86::smp::arm_deadline(deadline_ns);
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = deadline_ns;
+            false
+        }
+    }
+
+    /// Whether the boot CPU has a one-shot timer for deadlines.
+    pub fn deadline_timer() -> bool {
+        #[cfg(target_arch = "x86_64")]
+        return super::x86::smp::deadline_timer_available();
+        #[cfg(not(target_arch = "x86_64"))]
+        false
+    }
+
     /// Index of the CPU running this code (0 = the bootstrap CPU).
     #[inline]
     pub fn id() -> usize {

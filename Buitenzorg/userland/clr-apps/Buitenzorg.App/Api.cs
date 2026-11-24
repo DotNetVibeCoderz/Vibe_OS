@@ -691,6 +691,9 @@ public static class SystemInfo
     }
 
     public static long UptimeSeconds { get { long hz = Stat(1); return hz > 0 ? Stat(0) / hz : 0; } }
+    /// <summary>Uptime in timer ticks, and ticks per second (process CPU times are in the same ticks).</summary>
+    public static long UptimeTicks => Stat(0);
+    public static long TickRate => Stat(1);
     public static long KernelHeapUsed => Stat(2);
     public static long KernelHeapTotal => Stat(3);
     public static long TaskCount => Stat(4);

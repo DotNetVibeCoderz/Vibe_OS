@@ -168,6 +168,20 @@ pub fn attach(device: alloc::boxed::Box<dyn NetDevice>, ip: Ipv4Addr) {
     stack.ip = ip;
     stack.arp = vec![(ip, mac)];
     stack.attached = true;
+    drop(guard);
+    crate::ipv6::reset();
+}
+
+/// The attached device's MAC (`None` while the stack is down).
+pub fn device_mac() -> Option<MacAddr> {
+    STACK.lock().as_ref().map(|s| s.device.mac())
+}
+
+/// Send a finished Ethernet frame (IPv6 builds its own).
+pub fn send_frame(frame: &[u8]) {
+    if let Some(s) = STACK.lock().as_mut() {
+        s.tx(frame);
+    }
 }
 
 /// Set the default route (from DHCP): `gateway` for everything outside
@@ -592,6 +606,7 @@ fn handle_frame(frame: &[u8]) {
     match ethertype {
         ETHERTYPE_ARP => handle_arp(&frame[14..]),
         ETHERTYPE_IPV4 => handle_ipv4(frame, &frame[14..]),
+        crate::ipv6::ETHERTYPE_IPV6 => crate::ipv6::input(frame),
         _ => {}
     }
 }
