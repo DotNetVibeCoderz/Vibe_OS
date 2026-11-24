@@ -14,11 +14,13 @@ namespace Buitenzorg.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Collections.Generic;
 
 internal static class NetNative
 {
     [DllImport("buitenzorg")] internal static extern long DnsResolve(string name);
     [DllImport("buitenzorg")] internal static extern long TcpConnect(long ip, int port);
+    [DllImport("buitenzorg")] internal static extern long TcpConnect6(byte[] address, int port);
     [DllImport("buitenzorg")] internal static extern long TcpListen(int port);
     [DllImport("buitenzorg")] internal static extern long TcpAccept(long listener);
     [DllImport("buitenzorg")] internal static extern int TcpSend(long h, byte[] data, int offset, int count);
@@ -109,11 +111,14 @@ public sealed class TcpConnection : INetStream
 
     public static TcpConnection Connect(string host, int port, int timeoutMs = 10000)
     {
-        long ip = Dns.Resolve(host);
+        if (host.StartsWith("[") && host.EndsWith("]")) host = host.Substring(1, host.Length - 2);
+        var v6 = host.IndexOf(':') >= 0 ? ParseIpv6(host) : null;
+        if (host.IndexOf(':') >= 0 && v6 == null) throw new NetException("alamat IPv6 " + host + " tidak sah");
+        long ip = v6 != null ? 0 : Dns.Resolve(host);
         if (ip < 0) throw new NetException("alamat " + host + " tidak ditemukan (DNS)");
         var c = new TcpConnection { RemoteHost = host, RemoteAddress = ip, RemotePort = port };
-        if (!NetNative.OnDevice) { c.Host = HostNet.Connect(Dns.Format(ip), port, timeoutMs); return c; }
-        c.Handle = NetNative.TcpConnect(ip, port);
+        if (!NetNative.OnDevice) { c.Host = HostNet.Connect(v6 != null ? host : Dns.Format(ip), port, timeoutMs); return c; }
+        c.Handle = v6 != null ? NetNative.TcpConnect6(v6, port) : NetNative.TcpConnect(ip, port);
         if (c.Handle <= 0) throw new NetException("tidak bisa membuka sambungan ke " + host);
         long until = Environment.TickCount64 + timeoutMs;
         while (true)
@@ -146,6 +151,43 @@ public sealed class TcpConnection : INetStream
     }
 
     public void Write(string text) { var b = Encoding.UTF8.GetBytes(text); Write(b, 0, b.Length); }
+
+    /// <summary>A textual IPv6 address ("fe80::1", "2001:db8::a:b") as 16 bytes, or null.</summary>
+    public static byte[]? ParseIpv6(string s)
+    {
+        int pct = s.IndexOf('%');
+        if (pct >= 0) s = s.Substring(0, pct); // zone id
+        var head = new List<int>();
+        var tail = new List<int>();
+        var cur = head;
+        bool gap = false;
+        int i = 0, n = s.Length;
+        if (n >= 2 && s[0] == ':' && s[1] == ':') { gap = true; cur = tail; i = 2; }
+        while (i < n)
+        {
+            int v = 0, d = 0;
+            while (i < n && d < 5)
+            {
+                char ch = s[i];
+                int h = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+                if (h < 0) break;
+                v = v * 16 + h; d++; i++;
+            }
+            if (d == 0 || d > 4) return null;
+            cur.Add(v);
+            if (i == n) break;
+            if (s[i] != ':') return null;
+            i++;
+            if (i < n && s[i] == ':') { if (gap) return null; gap = true; cur = tail; i++; }
+            else if (i == n) return null;
+        }
+        int total = head.Count + tail.Count;
+        if (gap ? total > 7 : total != 8) return null;
+        var b = new byte[16];
+        for (int k = 0; k < head.Count; k++) { b[k * 2] = (byte)(head[k] >> 8); b[k * 2 + 1] = (byte)head[k]; }
+        for (int k = 0; k < tail.Count; k++) { int at = 16 - (tail.Count - k) * 2; b[at] = (byte)(tail[k] >> 8); b[at + 1] = (byte)tail[k]; }
+        return b;
+    }
 
     public int Read(byte[] buffer, int offset, int count)
     {

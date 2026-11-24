@@ -210,7 +210,7 @@ pub fn poll() {
     // TCP: new clients, then whole frames from each
     if st.tcp_listening {
         while let Some(id) = crate::tcp::accept(PORT) {
-            let peer = crate::tcp::peer(id).map_or(String::from("tcp ?"), |(ip, p)| alloc::format!("tcp {}:{}", crate::net::fmt_ip(ip), p));
+            let peer = crate::tcp::peer(id).map_or(String::from("tcp ?"), |(ip, p)| alloc::format!("tcp {}:{}", ip, p));
             st.tcp.push(StreamConn { id, peer, buf: Vec::new() });
         }
     }

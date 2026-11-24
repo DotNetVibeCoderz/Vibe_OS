@@ -1239,6 +1239,10 @@ public sealed class BrowserApp
                 Files.Delete(dl);
             }
             catch (Exception e) { c.That(false, "download: " + e.Message); }
+            var a6 = TcpConnection.ParseIpv6("fe80::1:a");
+            var b6 = TcpConnection.ParseIpv6("2001:db8:0:0:0:0:0:ff");
+            c.That(a6 != null && a6[0] == 0xfe && a6[1] == 0x80 && a6[13] == 1 && a6[15] == 0x0a && b6 != null && b6[3] == 0xb8 && b6[15] == 0xff
+                && TcpConnection.ParseIpv6("1::2::3") == null && TcpConnection.ParseIpv6("12345::") == null, "IPv6 address literals for TCP over IPv6");
             stop = true;
             th.Join();
         }

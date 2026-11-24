@@ -1090,6 +1090,10 @@ fn shared_kernel_setup(info: &boot::BootInfo) {
         Ok(s) => println!("[kernel] MILESTONE: TCP OK ({})", s),
         Err(e) => println!("[kernel] tcp self-test FAILED: {}", e),
     }
+    match tcp::self_test6() {
+        Ok(s) => println!("[kernel] MILESTONE: TCP6 OK ({})", s),
+        Err(e) => println!("[kernel] tcp6 self-test FAILED: {}", e),
+    }
     if let Err(e) = dns::self_test() {
         println!("[kernel] dns self-test FAILED: {}", e);
     }

@@ -108,6 +108,7 @@ public class AbiContractTests
         Assert.Equal(2ul, ClipboardOp.Seq);
         Assert.Equal(65536ul, ClipboardOp.MaxBytes);
         Assert.Equal(6ul, TcpOp.Accept);
+        Assert.Equal(7ul, TcpOp.Connect6);
         Assert.Equal(3ul, TcpState.Closed);
     }
 

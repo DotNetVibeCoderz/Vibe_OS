@@ -769,7 +769,7 @@ pub fn poll() {
         let v = alloc::format!("{}\r\n", VERSION);
         crate::tcp::send(conn, v.as_bytes());
         if let Some((ip, _)) = crate::tcp::peer(conn) {
-            crate::println!("[ssh] connection from {}", crate::net::fmt_ip(ip));
+            crate::println!("[ssh] connection from {}", ip);
         }
         s.inbuf.clear();
         srv.sessions.push(s);

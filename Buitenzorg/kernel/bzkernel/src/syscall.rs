@@ -1464,6 +1464,15 @@ fn sys_tcp_op(a0: u64, a1: u64, a2: u64) -> u64 {
             }
             crate::appnet::connect(me, (a1 as u32).to_be_bytes(), a2 as u16).unwrap_or(syserr::INVAL)
         }
+        tcp_op::CONNECT6 => {
+            if a2 == 0 || a2 > 65535 || !crate::memory::validate_user_range(a1, 16, false) {
+                return syserr::INVAL;
+            }
+            let b = copy_user_bytes(a1, 16);
+            let mut ip = [0u8; 16];
+            ip.copy_from_slice(&b);
+            crate::appnet::connect6(me, ip, a2 as u16).unwrap_or(syserr::INVAL)
+        }
         tcp_op::LISTEN => {
             if a2 == 0 || a2 > 65535 {
                 return syserr::INVAL;

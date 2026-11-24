@@ -55,6 +55,15 @@ pub fn connect(pid: u64, ip: [u8; 4], port: u16) -> Result<u64, &'static str> {
     Ok(add(pid, Kind::Conn(c)))
 }
 
+pub fn connect6(pid: u64, ip: [u8; 16], port: u16) -> Result<u64, &'static str> {
+    if port == 0 {
+        return Err("port 0");
+    }
+    crate::net::poll();
+    let c = tcp::connect6(&ip, port)?;
+    Ok(add(pid, Kind::Conn(c)))
+}
+
 pub fn listen(pid: u64, port: u16) -> Result<u64, &'static str> {
     if port == 0 {
         return Err("port 0");

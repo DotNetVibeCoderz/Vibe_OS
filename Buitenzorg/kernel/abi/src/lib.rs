@@ -725,6 +725,9 @@ pub mod tcp_op {
     pub const LISTEN: u64 = 5;
     /// The next connection a listener took, or 0.
     pub const ACCEPT: u64 = 6;
+    /// Open a connection over IPv6: a1 = pointer to the 16-byte address,
+    /// a2 = port. Listeners take connections of both families.
+    pub const CONNECT6: u64 = 7;
 }
 
 /// What [`tcp_op::STATE`] returns.
@@ -1244,6 +1247,7 @@ mod tests {
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
+        assert_eq!(tcp_op::CONNECT6, 7);
         assert_eq!(tcp_state::CLOSED, 3);
     }
 

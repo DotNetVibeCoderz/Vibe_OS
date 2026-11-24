@@ -6,9 +6,13 @@
 //! peer retransmits), no SACK / window scaling / Nagle / congestion control,
 //! no TIME_WAIT (a closed connection is freed at once).
 //!
-//! Locking: `TCP` is never taken while `net::STACK` is held. Input arrives
-//! from `net::handle_ipv4` (no lock held); segments to send are collected
-//! under `TCP` and handed to `net::send_ipv4` after it is released.
+//! IPv4 and IPv6: a connection's addresses are an [`Addr`]; segments arrive
+//! through `input` (IPv4) / `input6` (IPv6) and leave through `emit`, which
+//! picks the family. A listener takes connections of both families.
+//!
+//! Locking: `TCP` is never taken while `net::STACK` or `ipv6::STATE` is
+//! held. Input arrives with no lock held; segments to send are collected
+//! under `TCP` and handed to the IP layer after it is released.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -18,6 +22,8 @@ use crate::net::Ipv4Addr;
 
 pub const IPPROTO_TCP: u8 = 6;
 const MSS: usize = 1460;
+/// 1500 - 40 (IPv6) - 20 (TCP).
+const MSS6: usize = 1440;
 const RCV_WINDOW: usize = 32 * 1024;
 const RTO_NS: u64 = 400_000_000;
 const MAX_RETRIES: u32 = 8;
@@ -42,11 +48,36 @@ pub enum State {
     Closed,
 }
 
+/// An IPv4 or IPv6 address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Addr {
+    V4(Ipv4Addr),
+    V6([u8; 16]),
+}
+
+impl Addr {
+    fn mss(&self) -> usize {
+        match self {
+            Addr::V4(_) => MSS,
+            Addr::V6(_) => MSS6,
+        }
+    }
+}
+
+impl core::fmt::Display for Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Addr::V4(a) => f.write_str(&crate::net::fmt_ip(*a)),
+            Addr::V6(a) => write!(f, "[{}]", crate::ipv6::fmt(a)),
+        }
+    }
+}
+
 struct Conn {
     id: u64,
-    local_ip: Ipv4Addr,
+    local_ip: Addr,
     local_port: u16,
-    remote_ip: Ipv4Addr,
+    remote_ip: Addr,
     remote_port: u16,
     state: State,
     /// Oldest unacknowledged sequence number / next one to send.
@@ -81,8 +112,23 @@ struct Tcp {
 
 static TCP: Mutex<Tcp> = Mutex::new(Tcp { conns: Vec::new(), listeners: Vec::new(), next_id: 1, iss: 0x1000_0000, ephemeral: 49152 });
 
-/// A segment to send: (destination, TCP header + payload).
-type Out = (Ipv4Addr, Vec<u8>);
+/// A segment to send: (source, destination, TCP header + payload).
+type Out = (Addr, Addr, Vec<u8>);
+
+/// Hand segments to the IP layer (no TCP lock held). An IPv6 segment whose
+/// next hop is not known yet is dropped after a neighbour solicitation:
+/// this may run inside `net::poll`, which must not wait; TCP retransmits.
+fn emit(out: Vec<Out>) {
+    for (src, dst, s) in out {
+        match (src, dst) {
+            (_, Addr::V4(d)) => crate::net::send_ipv4(d, IPPROTO_TCP, &s),
+            (Addr::V6(sa), Addr::V6(da)) => {
+                crate::ipv6::send_l4_nowait(&sa, &da, IPPROTO_TCP, &s);
+            }
+            _ => {}
+        }
+    }
+}
 
 fn now() -> u64 {
     crate::arch::cpu::nanos()
@@ -96,7 +142,7 @@ fn seq_le(a: u32, b: u32) -> bool {
     a == b || seq_lt(a, b)
 }
 
-fn checksum(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8]) -> u16 {
+fn checksum(src: &Addr, dst: &Addr, seg: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut add = |b: &[u8]| {
         let mut i = 0;
@@ -108,10 +154,21 @@ fn checksum(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8]) -> u16 {
             sum += (b[i] as u32) << 8;
         }
     };
-    add(&src);
-    add(&dst);
-    add(&[0, IPPROTO_TCP]);
-    add(&(seg.len() as u16).to_be_bytes());
+    match (src, dst) {
+        (Addr::V6(a), Addr::V6(b)) => {
+            add(a);
+            add(b);
+            add(&(seg.len() as u32).to_be_bytes());
+            add(&[0, 0, 0, IPPROTO_TCP]);
+        }
+        (Addr::V4(a), Addr::V4(b)) => {
+            add(a);
+            add(b);
+            add(&[0, IPPROTO_TCP]);
+            add(&(seg.len() as u16).to_be_bytes());
+        }
+        _ => return 0xFFFF, // mixed families: never valid
+    }
     add(seg);
     while sum > 0xFFFF {
         sum = (sum & 0xFFFF) + (sum >> 16);
@@ -134,15 +191,15 @@ fn segment(c: &Conn, seq: u32, flags: u8, data: &[u8]) -> Out {
     s.extend_from_slice(&[0, 0, 0, 0]); // checksum, urgent pointer
     if syn {
         s.extend_from_slice(&[2, 4]); // MSS option
-        s.extend_from_slice(&(MSS as u16).to_be_bytes());
+        s.extend_from_slice(&(c.local_ip.mss() as u16).to_be_bytes());
     }
     s.extend_from_slice(data);
-    let cs = checksum(c.local_ip, c.remote_ip, &s);
+    let cs = checksum(&c.local_ip, &c.remote_ip, &s);
     s[16..18].copy_from_slice(&cs.to_be_bytes());
-    (c.remote_ip, s)
+    (c.local_ip, c.remote_ip, s)
 }
 
-fn rst_for(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8], len: usize) -> Option<Out> {
+fn rst_for(src: Addr, dst: Addr, seg: &[u8], len: usize) -> Option<Out> {
     let flags = seg[13];
     if flags & RST != 0 {
         return None;
@@ -164,9 +221,9 @@ fn rst_for(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8], len: usize) -> Option<Out> 
     s.push(5 << 4);
     s.push(f);
     s.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
-    let cs = checksum(dst, src, &s);
+    let cs = checksum(&dst, &src, &s);
     s[16..18].copy_from_slice(&cs.to_be_bytes());
-    Some((src, s))
+    Some((dst, src, s))
 }
 
 impl Tcp {
@@ -174,7 +231,7 @@ impl Tcp {
         self.conns.iter_mut().find(|c| c.id == id)
     }
 
-    fn new_conn(&mut self, local_ip: Ipv4Addr, local_port: u16, remote_ip: Ipv4Addr, remote_port: u16, state: State) -> Conn {
+    fn new_conn(&mut self, local_ip: Addr, local_port: u16, remote_ip: Addr, remote_port: u16, state: State) -> Conn {
         self.iss = self.iss.wrapping_add(0x0010_3f05 ^ (now() as u32 & 0xFFFF));
         let id = self.next_id;
         self.next_id += 1;
@@ -189,7 +246,7 @@ impl Tcp {
             snd_nxt: self.iss,
             unacked: VecDeque::new(),
             pending: VecDeque::new(),
-            peer_window: MSS,
+            peer_window: local_ip.mss(),
             rcv_nxt: 0,
             rx: VecDeque::new(),
             fin_queued: false,
@@ -215,7 +272,7 @@ fn push(c: &mut Conn, out: &mut Vec<Out>) {
         if c.pending.is_empty() || room == 0 {
             break;
         }
-        let n = c.pending.len().min(MSS).min(room);
+        let n = c.pending.len().min(c.local_ip.mss()).min(room);
         let data: Vec<u8> = c.pending.drain(..n).collect();
         out.push(segment(c, c.snd_nxt, ACK | PSH, &data));
         c.snd_nxt = c.snd_nxt.wrapping_add(n as u32);
@@ -236,20 +293,28 @@ fn push(c: &mut Conn, out: &mut Vec<Out>) {
 pub fn input(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8]) {
     let out = {
         let mut t = TCP.lock();
-        input_locked(&mut t, src, dst, seg)
+        input_locked(&mut t, Addr::V4(src), Addr::V4(dst), seg)
     };
-    for (dest, s) in out {
-        crate::net::send_ipv4(dest, IPPROTO_TCP, &s);
-    }
+    emit(out);
 }
 
-fn input_locked(t: &mut Tcp, src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8]) -> Vec<Out> {
+/// A TCP segment arrived over IPv6 (`seg` = header + payload). Called by
+/// `ipv6::input` with no lock held.
+pub fn input6(src: &[u8; 16], dst: &[u8; 16], seg: &[u8]) {
+    let out = {
+        let mut t = TCP.lock();
+        input_locked(&mut t, Addr::V6(*src), Addr::V6(*dst), seg)
+    };
+    emit(out);
+}
+
+fn input_locked(t: &mut Tcp, src: Addr, dst: Addr, seg: &[u8]) -> Vec<Out> {
     let mut out = Vec::new();
     if seg.len() < 20 {
         return out;
     }
     let doff = ((seg[12] >> 4) as usize) * 4;
-    if doff < 20 || doff > seg.len() || checksum(src, dst, seg) != 0 {
+    if doff < 20 || doff > seg.len() || checksum(&src, &dst, seg) != 0 {
         return out;
     }
     let (sport, dport) = (u16::from_be_bytes([seg[0], seg[1]]), u16::from_be_bytes([seg[2], seg[3]]));
@@ -376,7 +441,7 @@ pub fn timers() {
                 State::SynReceived => out.push(segment(c, c.snd_una, SYN | ACK, &[])),
                 _ => {
                     if !c.unacked.is_empty() {
-                        let len = c.unacked.len().min(MSS);
+                        let len = c.unacked.len().min(c.local_ip.mss());
                         let data: Vec<u8> = c.unacked.iter().take(len).copied().collect();
                         out.push(segment(c, c.snd_una, ACK | PSH, &data));
                     } else if c.fin_sent {
@@ -388,9 +453,7 @@ pub fn timers() {
         t.conns.retain(|c| !(c.state == State::Closed && (c.released || (c.listener.is_some() && !c.accepted))));
         out
     };
-    for (dest, s) in out {
-        crate::net::send_ipv4(dest, IPPROTO_TCP, &s);
-    }
+    emit(out);
 }
 
 // ---- the application side ---------------------------------------------------
@@ -420,6 +483,17 @@ pub fn accept(port: u16) -> Option<u64> {
 /// Open a connection to `ip:port` (returns at once; see [`state`]).
 pub fn connect(ip: Ipv4Addr, port: u16) -> Result<u64, &'static str> {
     let local_ip = crate::net::local_ip().ok_or("no network")?;
+    connect_from(Addr::V4(local_ip), Addr::V4(ip), port)
+}
+
+/// Open a connection to `[ip]:port` over IPv6. Resolves the next hop first
+/// (waits up to a second; not for use inside `net::poll`).
+pub fn connect6(ip: &[u8; 16], port: u16) -> Result<u64, &'static str> {
+    let src = crate::ipv6::prepare_send(ip)?;
+    connect_from(Addr::V6(src), Addr::V6(*ip), port)
+}
+
+fn connect_from(local_ip: Addr, ip: Addr, port: u16) -> Result<u64, &'static str> {
     let (id, out) = {
         let mut t = TCP.lock();
         t.ephemeral = if t.ephemeral >= 65000 { 49152 } else { t.ephemeral + 1 };
@@ -432,7 +506,7 @@ pub fn connect(ip: Ipv4Addr, port: u16) -> Result<u64, &'static str> {
         t.conns.push(c);
         (id, syn)
     };
-    crate::net::send_ipv4(out.0, IPPROTO_TCP, &out.1);
+    emit(alloc::vec![out]);
     Ok(id)
 }
 
@@ -442,7 +516,7 @@ pub fn state(id: u64) -> State {
 
 /// (remote ip, remote port) of a connection.
 #[allow(dead_code)]
-pub fn peer(id: u64) -> Option<(Ipv4Addr, u16)> {
+pub fn peer(id: u64) -> Option<(Addr, u16)> {
     TCP.lock().conn(id).map(|c| (c.remote_ip, c.remote_port))
 }
 
@@ -459,9 +533,7 @@ pub fn send(id: u64, data: &[u8]) -> usize {
         push(c, &mut out);
         out
     };
-    for (dest, s) in out {
-        crate::net::send_ipv4(dest, IPPROTO_TCP, &s);
-    }
+    emit(out);
     data.len()
 }
 
@@ -480,12 +552,10 @@ pub fn recv(id: u64, max: usize) -> Vec<u8> {
         let n = c.rx.len().min(max);
         let data: Vec<u8> = c.rx.drain(..n).collect();
         // a window that reopens is announced (the peer may be waiting on it)
-        let out = if was_full && n > 0 { Some(segment(c, c.snd_nxt, ACK, &[])) } else { None };
+        let out = if was_full && n > 0 { alloc::vec![segment(c, c.snd_nxt, ACK, &[])] } else { Vec::new() };
         (data, out)
     };
-    if let Some((dest, s)) = out {
-        crate::net::send_ipv4(dest, IPPROTO_TCP, &s);
-    }
+    emit(out);
     data
 }
 
@@ -515,14 +585,12 @@ pub fn close(id: u64) {
         }
         out
     };
-    for (dest, s) in out {
-        crate::net::send_ipv4(dest, IPPROTO_TCP, &s);
-    }
+    emit(out);
 }
 
 /// (local port, remote ip, remote port, state) of every connection, and the
 /// listening ports (`netstat`).
-pub fn snapshot() -> (Vec<(u16, Ipv4Addr, u16, State)>, Vec<u16>) {
+pub fn snapshot() -> (Vec<(u16, Addr, u16, State)>, Vec<u16>) {
     let t = TCP.lock();
     (t.conns.iter().map(|c| (c.local_port, c.remote_ip, c.remote_port, c.state)).collect(), t.listeners.clone())
 }
@@ -537,10 +605,21 @@ pub fn connections() -> usize {
 /// 64 KiB each way (many segments, the window), close both sides.
 pub fn self_test() -> Result<alloc::string::String, &'static str> {
     let ip = crate::net::local_ip().ok_or("no network")?;
-    const PORT: u16 = 7071;
-    listen(PORT)?;
+    loopback_test(7071, 65536, &|| connect(ip, 7071), &crate::net::fmt_ip(ip))
+}
+
+/// The same over IPv6 to our own link-local address (`TCP6 OK`): 1440-byte
+/// segments, the IPv6 pseudo-header checksum, and the listener taking a
+/// connection of the other family.
+pub fn self_test6() -> Result<alloc::string::String, &'static str> {
+    let ip = crate::ipv6::link_local().ok_or("no IPv6 address")?;
+    loopback_test(7072, 32768, &|| connect6(&ip, 7072), &alloc::format!("[{}]", crate::ipv6::fmt(&ip)))
+}
+
+fn loopback_test(port: u16, size: u32, open: &dyn Fn() -> Result<u64, &'static str>, name: &str) -> Result<alloc::string::String, &'static str> {
+    listen(port)?;
     let result = (|| {
-        let client = connect(ip, PORT)?;
+        let client = open()?;
         let mut server = None;
         let spin = |cond: &mut dyn FnMut() -> bool| -> bool {
             let start = now();
@@ -554,14 +633,14 @@ pub fn self_test() -> Result<alloc::string::String, &'static str> {
         };
         if !spin(&mut || {
             if server.is_none() {
-                server = accept(PORT);
+                server = accept(port);
             }
             server.is_some() && state(client) == State::Established
         }) {
             return Err("handshake did not complete");
         }
         let server = server.unwrap();
-        let msg: Vec<u8> = (0..65536u32).map(|i| (i * 7 + 3) as u8).collect();
+        let msg: Vec<u8> = (0..size).map(|i| (i * 7 + 3) as u8).collect();
         let mut got = Vec::new();
         let mut echoed = Vec::new();
         let mut sent = 0;
@@ -591,9 +670,9 @@ pub fn self_test() -> Result<alloc::string::String, &'static str> {
         if !spin(&mut || state(client) == State::Closed && state(server) == State::Closed) {
             return Err("close did not finish");
         }
-        Ok(alloc::format!("loopback {}:{}: handshake, 64 KiB echoed both ways, FIN close", crate::net::fmt_ip(ip), PORT))
+        Ok(alloc::format!("loopback {}:{}: handshake, {} KiB echoed both ways, FIN close", name, port, size / 1024))
     })();
-    unlisten(PORT);
+    unlisten(port);
     timers();
     result
 }

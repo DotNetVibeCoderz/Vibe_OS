@@ -22,6 +22,7 @@ pub type Ipv6Addr = [u8; 16];
 pub const ETHERTYPE_IPV6: u16 = 0x86DD;
 const NEXT_ICMPV6: u8 = 58;
 const NEXT_UDP: u8 = 17;
+const NEXT_TCP: u8 = 6;
 const HOP_LIMIT: u8 = 64;
 
 const ECHO_REQUEST: u8 = 128;
@@ -235,6 +236,35 @@ pub fn udp_send(dst: &Ipv6Addr, sport: u16, dport: u16, data: &[u8]) -> Result<(
     Ok(())
 }
 
+/// Resolve the next hop towards `dst` (soliciting it, waiting up to a
+/// second) and return the source address to use. For TCP's connect.
+pub fn prepare_send(dst: &Ipv6Addr) -> Result<Ipv6Addr, &'static str> {
+    let mac = crate::net::device_mac().ok_or("no network device")?;
+    resolve(dst, mac).ok_or("no neighbour answered")?;
+    Ok(source_for(dst, mac, &STATE.lock()))
+}
+
+/// Send an upper-layer message (checksum already filled in) without
+/// waiting: when the next hop's MAC is unknown a neighbour solicitation goes
+/// out instead and the message is dropped (false). Safe inside `net::poll`.
+pub fn send_l4_nowait(src: &Ipv6Addr, dst: &Ipv6Addr, next: u8, msg: &[u8]) -> bool {
+    let Some(mac) = crate::net::device_mac() else { return false };
+    let hop = {
+        let s = STATE.lock();
+        next_hop(dst, mac, &s)
+    };
+    match hop {
+        Ok(m) => {
+            crate::net::send_frame(&wrap(mac, m, src, dst, next, HOP_LIMIT, msg));
+            true
+        }
+        Err(target) => {
+            crate::net::send_frame(&solicit(mac, src, &target));
+            false
+        }
+    }
+}
+
 /// (sent, received, dropped for a bad checksum) since boot.
 pub fn udp_stats() -> (u64, u64, u64) {
     *UDP6_STATS.lock()
@@ -394,7 +424,7 @@ pub fn input(f: &[u8]) {
     dst.copy_from_slice(&ip[24..40]);
     let msg = &ip[40..40 + plen];
     let src_mac: MacAddr = [f[6], f[7], f[8], f[9], f[10], f[11]];
-    if next == NEXT_UDP {
+    if next == NEXT_UDP || next == NEXT_TCP {
         let ours = {
             let mut s = STATE.lock();
             let ok = is_ours(&dst, mac, &s) || dst[0] == 0xff && accepts(&dst, mac, &s);
@@ -403,8 +433,10 @@ pub fn input(f: &[u8]) {
             }
             ok
         };
-        if ours {
+        if ours && next == NEXT_UDP {
             udp_input(&src, &dst, msg);
+        } else if ours && dst[0] != 0xff {
+            crate::tcp::input6(&src, &dst, msg);
         }
         return;
     }

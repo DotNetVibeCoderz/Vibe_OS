@@ -436,7 +436,7 @@ public static class HwStatus
 /// <summary>Operations of <see cref="SyscallNumbers.TcpOp"/>.</summary>
 public static class TcpOp
 {
-    public const ulong Connect = 0, Send = 1, Recv = 2, State = 3, Close = 4, Listen = 5, Accept = 6;
+    public const ulong Connect = 0, Send = 1, Recv = 2, State = 3, Close = 4, Listen = 5, Accept = 6, Connect6 = 7;
 }
 
 /// <summary>What <see cref="TcpOp.State"/> returns.</summary>

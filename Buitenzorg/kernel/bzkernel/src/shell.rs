@@ -1016,7 +1016,7 @@ fn netstat() -> Vec<String> {
         out.push(format!("tcp    *:{:<14} *:*                  LISTEN", p));
     }
     for (lp, rip, rp, st) in conns {
-        let remote = format!("{}:{}", crate::net::fmt_ip(rip), rp);
+        let remote = format!("{}:{}", rip, rp);
         out.push(format!("tcp    *:{:<14} {:<20} {:?}", lp, remote, st));
     }
     if let Some(i) = crate::net::info() {

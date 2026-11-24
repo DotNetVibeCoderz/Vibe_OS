@@ -27,6 +27,7 @@ const OP_STATE: u64 = 3;
 const OP_CLOSE: u64 = 4;
 const OP_LISTEN: u64 = 5;
 const OP_ACCEPT: u64 = 6;
+const OP_CONNECT6: u64 = 7;
 
 fn ret_i64(v: i64) -> ExecResult<Option<Value>> {
     Ok(Some(Value::I64(v)))
@@ -102,6 +103,16 @@ fn tcp(op: u64, handle: u64, a1: u64, a2: u64) -> u64 {
 /// `TcpConnect(long ip, int port)` -> handle, -1.
 fn tcp_connect(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let r = tcp(OP_CONNECT, 0, int(a, 0) as u32 as u64, int(a, 1) as u64);
+    ret_i64(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `TcpConnect6(byte[] address16, int port)` -> handle, -1 (IPv6).
+fn tcp_connect6(interp: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let ip = byte_range(interp, a, 0, 0, 16);
+    if ip.len() != 16 {
+        return ret_i64(-1);
+    }
+    let r = tcp(OP_CONNECT6, 0, ip.as_ptr() as u64, int(a, 1) as u64);
     ret_i64(if sys::is_err(r) { -1 } else { r as i64 })
 }
 
@@ -525,9 +536,10 @@ fn tls_close(_: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 }
 
 pub fn register(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 16] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 17] = [
         ("DnsResolve", dns_resolve),
         ("TcpConnect", tcp_connect),
+        ("TcpConnect6", tcp_connect6),
         ("TcpListen", tcp_listen),
         ("TcpAccept", tcp_accept),
         ("TcpSend", tcp_send),
