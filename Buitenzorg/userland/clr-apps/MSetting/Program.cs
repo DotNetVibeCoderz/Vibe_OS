@@ -49,6 +49,7 @@ public static class SettingsApp
 
     public sealed class Parts
     {
+        public MJaring.NetworkPanel Network = null!;
         public ListBox Nav = null!, Themes = null!, Wallpapers = null!, Savers = null!;
         public Button SaverPreview = null!;
         public Slider Delay = null!, Volume = null!;
@@ -432,6 +433,9 @@ public static class SettingsApp
 
         var users = UsersPage(w, parts);
         var fonts = FontsPage(parts);
+        // Jaringan: the same panel as the Jaringan app (tray network icon)
+        parts.Network = new MJaring.NetworkPanel(headless);
+        var network = Page("Jaringan", "Status kabel dan Wi-Fi, cari dan sambungkan jaringan nirkabel.", new ScrollViewer { Content = parts.Network.Root, Height = 330 });
         var pages = new List<(string, IconKind, Control)>
         {
             ("Tampilan", IconKind.Sun, look),
@@ -440,6 +444,7 @@ public static class SettingsApp
             ("Screensaver", IconKind.Moon, saver),
             ("Suara", IconKind.Play, sound),
             ("Pengguna", IconKind.Home, users),
+            ("Jaringan", IconKind.Refresh, network),
         };
         var host = new Border { Padding = new Thickness(16, 0, 0, 0) };
         var nav = new ListBox { BorderThickness = 0, Background = Color.Transparent, CornerRadius = 0, Padding = new Thickness(6), Width = 168 };
@@ -547,6 +552,9 @@ public static class SettingsApp
             p.AdminPassword.Text = "";
         }
         FontChecks(c, p);
+        p.Nav.SelectedIndex = 6;
+        w.RenderFrame();
+        c.That(p.Network.Link.Text.Length > 0 && w.LastFrameOps > 20, "Jaringan page: " + p.Network.Link.Text);
         p.Nav.SelectedIndex = 5;
         w.RenderFrame();
         c.That(w.LastFrameOps > 30, "frame drew " + w.LastFrameOps + " ops");

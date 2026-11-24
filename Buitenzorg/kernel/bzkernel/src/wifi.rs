@@ -7,6 +7,40 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// The Wi-Fi adapter this machine has and how far its driver goes:
+/// (description, can scan + join).
+pub fn adapter() -> Option<(String, bool)> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::platform::virt::cyw43::present().then(|| (String::from("Broadcom CYW43455 (Raspberry Pi)"), true))
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let d = crate::pci::scan().into_iter().find(|d| d.class == 0x02 && d.subclass == 0x80)?;
+        Some(if crate::iwlwifi::supported(&d) {
+            (String::from("Intel Wireless 8265 (driver tahap awal: belum bisa memindai)"), false)
+        } else {
+            (alloc::format!("{:04x}:{:04x} (belum ada driver)", d.vendor_id, d.device_id), false)
+        })
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        None
+    }
+}
+
+/// The saved Wi-Fi network ("" = none).
+pub fn saved_ssid() -> String {
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::platform::virt::cyw43::saved_ssid()
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        String::new()
+    }
+}
+
 pub fn command(args: &[&str]) -> Vec<String> {
     #[cfg(target_arch = "aarch64")]
     {

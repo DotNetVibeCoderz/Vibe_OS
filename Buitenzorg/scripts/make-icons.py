@@ -443,7 +443,17 @@ def mnes():
     save(img, "mnes")
 
 
-ALL = [mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom, mnes]
+def mjaring():
+    img = background(0x8FB8E8, 0x2D5C8E)
+    for r, w in ((330, 70), (230, 70), (130, 70)):
+        arc = shape(lambda d, r=r, w=w: d.arc([512 - r, 600 - r, 512 + r, 600 + r], start=225, end=315, fill=255, width=w))
+        paint(img, arc, 0xEAF6F4, gloss=0.25)
+    dot = shape(lambda d: d.ellipse([462, 580, 562, 680], fill=255))
+    paint(img, dot, 0xF3C969)
+    save(img, "mjaring")
+
+
+ALL = [mjaring, mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom, mnes]
 
 if __name__ == "__main__":
     want = set(sys.argv[1:])

@@ -10,5 +10,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+    <ProjectReference Include="..\MJaring\MJaring.csproj" />
   </ItemGroup>
 </Project>

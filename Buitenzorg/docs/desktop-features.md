@@ -81,6 +81,31 @@ built-in icons: an app the pack has an icon for uses it, the others keep
 theirs. `icons list`, `icons daun`, `icons bawaan` in the shell; the sample
 pack `DAUN.BIN` (every icon in two leaf greens) is built by bzimage.
 
+## Network: tray icon, Jaringan, Pengaturan > Jaringan
+
+The tray has a network icon left of the bell: a screen when a cable is up, signal
+bars when Wi-Fi is up, a dimmed screen with a red mark when only the loopback
+exists. The kernel keeps the link kind in an atomic (`net::link_kind()`, set by
+`net::attach` from `NetDevice::wireless()`), so drawing it takes no lock; the
+desktop loop redraws when it changes (DHCP finishes in the background).
+
+Clicking it opens **Jaringan** (`mjaring`, also in Start > Pengaturan): the link,
+IPv4/prefix, gateway, DNS, MAC, IPv6, "Sambungkan ulang" (= `netup`), and -- when
+the machine has a Wi-Fi adapter whose driver can join -- scan, a network list with
+signal bars, SSID + password and Sambungkan / Lupakan. The same panel
+(`MJaring.NetworkPanel`) is Pengaturan's **Jaringan** page (`run msetting --page 6`).
+
+Under it: shell `netinfo` (key=value: `link`, `mac`, `ip`, `prefix`, `gateway`,
+`dns`, `tx`, `rx`, `ipv6`, `status`, `wifi`, `wifi_scan`, `wifi_saved`),
+`wifi scan --raw` (`@bss<TAB>rssi<TAB>channel<TAB>wpa|open<TAB>ssid`), and
+`wifi connect 'SSID' 'PASSWORD'` -- `wifi` now takes the tokenized words, so names
+and passwords may contain spaces. Managed: `Buitenzorg.Net.NetworkConfig`
+(BZAPP.DLL `NetConfig.cs`: `Status`, `Scan`, `Connect`, `Forget`, `Renew`; off the
+device a simulated machine). Joining works only where `wifi connect` works: the
+Raspberry Pi 4 driver (untested on a board); the laptop's Intel 8265 is listed as
+an adapter that cannot join yet. Screenshots `docs/img/network-app.png`,
+`docs/img/settings-network.png`.
+
 ## Display: zero-copy surfaces, vsync, full screen (`WIN_CTL`, 74)
 
 | Operation | What it does |

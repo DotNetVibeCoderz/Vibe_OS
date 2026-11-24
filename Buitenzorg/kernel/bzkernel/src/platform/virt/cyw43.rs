@@ -1223,6 +1223,22 @@ impl crate::net::NetDevice for WifiNet {
             format!("wifi: {}; join ssid {:?} link {:?} keyed {:?} dropped {}", c.summary(), j.ssid_set, j.link, j.keyed, j.dropped)
         })
     }
+    fn wireless(&self) -> bool {
+        true
+    }
+}
+
+/// The network saved in WIFI.CFG ("" = none).
+pub fn saved_ssid() -> String {
+    let Ok(cfg) = crate::vfs::read(CONFIG) else { return String::new() };
+    String::from_utf8_lossy(&cfg).lines().find_map(|l| l.strip_prefix("ssid=")).unwrap_or("").trim().to_string()
+}
+
+/// Is there a CYW43455 on this board (Raspberry Pi 4 / 400)?
+pub fn present() -> bool {
+    let Some(phys) = crate::boot::info().firmware.dtb else { return false };
+    let Ok(f) = (unsafe { crate::dtb::Fdt::from_phys(phys) }) else { return false };
+    f.nodes[0].strings("compatible").any(|c| c == "raspberrypi,4-model-b" || c == "raspberrypi,400")
 }
 
 /// Join, take a DHCP lease and make Wi-Fi the network device.
@@ -1276,6 +1292,11 @@ pub fn command(args: &[&str]) -> Vec<String> {
                 if let Some(c) = g.as_mut() {
                     match c.scan(6_000) {
                         Err(e) => out.push(format!("wifi scan: {}", e)),
+                        Ok(_) if args.get(1) == Some(&"--raw") => {
+                            for b in c.scan.iter().take(40) {
+                                out.push(format!("@bss\t{}\t{}\t{}\t{}", b.rssi, b.channel, if b.secured { "wpa" } else { "open" }, b.ssid));
+                            }
+                        }
                         Ok(n) => {
                             out.push(format!("{} network(s){}:", n, if c.scan_done { "" } else { " (the scan did not finish)" }));
                             for b in c.scan.iter().take(30) {

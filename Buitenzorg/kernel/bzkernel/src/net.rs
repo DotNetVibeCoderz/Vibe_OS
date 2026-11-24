@@ -32,6 +32,24 @@ pub trait NetDevice: Send {
     fn diag(&self) -> Option<alloc::string::String> {
         None
     }
+    /// A radio (Wi-Fi) rather than a cable: shown in the tray.
+    fn wireless(&self) -> bool {
+        false
+    }
+}
+
+/// The attached link, for the tray icon (lock-free: read during every compose).
+pub mod link {
+    /// only the loopback device
+    pub const NONE: u8 = 0;
+    pub const WIRED: u8 = 1;
+    pub const WIRELESS: u8 = 2;
+}
+static LINK: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(link::NONE);
+
+/// `link::NONE` / `WIRED` / `WIRELESS`.
+pub fn link_kind() -> u8 {
+    LINK.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// Loopback: every transmitted frame is queued straight back for receive.
@@ -164,6 +182,7 @@ pub fn attach(device: alloc::boxed::Box<dyn NetDevice>, ip: Ipv4Addr) {
     let mut guard = STACK.lock();
     let Some(stack) = guard.as_mut() else { return };
     let mac = device.mac();
+    LINK.store(if device.wireless() { link::WIRELESS } else { link::WIRED }, core::sync::atomic::Ordering::Relaxed);
     stack.device = device;
     stack.ip = ip;
     stack.arp = vec![(ip, mac)];

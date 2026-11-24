@@ -99,6 +99,7 @@ pub fn run() -> ! {
     let mut saver_active = false;
     let mut preview_until = 0u64;
     let mut last_notes = crate::notify::generation();
+    let mut last_link = crate::net::link_kind();
     let mut settings_restored = false;
     let started = crate::interrupts::ticks();
     let mut last_save = started;
@@ -200,6 +201,13 @@ pub fn run() -> ! {
         let notes = crate::notify::generation();
         if notes != last_notes || crate::notify::toast_expired(now) {
             last_notes = crate::notify::generation();
+            input = true;
+            other = true;
+        }
+        // the tray's network icon: a cable or Wi-Fi came up (DHCP in the background)
+        let link = crate::net::link_kind();
+        if link != last_link {
+            last_link = link;
             input = true;
             other = true;
         }

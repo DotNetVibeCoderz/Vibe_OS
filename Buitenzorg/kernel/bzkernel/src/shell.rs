@@ -138,7 +138,7 @@ pub fn command_names() -> Vec<&'static str> {
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "lsusb", "wifi", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
-    "netup", "ping", "ping6", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
+    "netinfo", "netup", "ping", "ping6", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
     "settings", "notify", "icons", "cari", "search", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
 ];
 
@@ -843,6 +843,14 @@ fn exec(argv: &[String], stdin: Option<&[String]>) -> (Vec<String>, Effect, bool
     if crate::bzsh::is_builtin(name) {
         return crate::bzsh::builtin(argv);
     }
+    // `wifi connect "My Network" "pass word"`: names and passwords may hold
+    // spaces, so it takes the tokenized words, not the legacy re-split line
+    if name == "wifi" {
+        let args: Vec<&str> = argv[1..].iter().map(|s| s.as_str()).collect();
+        let lines = crate::wifi::command(&args);
+        let failed = lines.first().is_some_and(|l| l.starts_with("wifi: ") && !l.contains("connected") && !l.contains("removed") && !l.starts_with("wifi: up"));
+        return (lines, Effect::None, !failed);
+    }
     if !LEGACY_COMMANDS.contains(&name.as_str()) {
         // a package whose entry is a script, a script (path to a .SH, or
         // NAME.SH in $PATH), else a program
@@ -878,6 +886,44 @@ pub enum Effect {
 }
 
 // ---- network commands -------------------------------------------------------
+
+/// `netinfo`: the network state as `key=value` lines (read by apps).
+fn netinfo() -> Vec<String> {
+    use crate::net::{fmt_ip, fmt_mac};
+    let mut out = Vec::new();
+    let kind = match crate::net::link_kind() {
+        crate::net::link::WIRED => "wired",
+        crate::net::link::WIRELESS => "wifi",
+        _ => "none",
+    };
+    out.push(format!("link={}", kind));
+    if let Some(i) = crate::net::info() {
+        let prefix: u32 = i.mask.iter().map(|b| b.count_ones()).sum();
+        out.push(format!("mac={}", fmt_mac(i.mac)));
+        out.push(format!("ip={}", if i.attached { fmt_ip(i.ip) } else { String::new() }));
+        out.push(format!("prefix={}", prefix));
+        out.push(format!("gateway={}", if i.gateway == [0; 4] { String::new() } else { fmt_ip(i.gateway) }));
+        out.push(format!("dns={}", crate::net::dns_server().map(fmt_ip).unwrap_or_default()));
+        out.push(format!("tx={}", i.frames_tx));
+        out.push(format!("rx={}", i.frames_rx));
+    }
+    for (a, l) in crate::ipv6::addresses() {
+        out.push(format!("ipv6={}/{}", crate::ipv6::fmt(&a), l));
+    }
+    out.push(format!("status={}", crate::net::status().unwrap_or_default().replace('\n', " ")));
+    match crate::wifi::adapter() {
+        Some((name, ok)) => {
+            out.push(format!("wifi={}", name));
+            out.push(format!("wifi_scan={}", if ok { 1 } else { 0 }));
+        }
+        None => {
+            out.push(String::from("wifi="));
+            out.push(String::from("wifi_scan=0"));
+        }
+    }
+    out.push(format!("wifi_saved={}", crate::wifi::saved_ssid()));
+    out
+}
 
 fn ipconfig() -> Vec<String> {
     use crate::net::{fmt_ip, fmt_mac};
@@ -1219,6 +1265,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "deploy" => (deploy_cmd(&args), Effect::None),
         "ssh" | "sshd" => (ssh_cmd(args.first().copied()), Effect::None),
         "ipconfig" | "ifconfig" | "ip" => (ipconfig(), Effect::None),
+        "netinfo" => (netinfo(), Effect::None),
         "netup" | "dhcp" => (
             vec![String::from(if crate::net::retry() {
                 "jaringan: mencoba lagi di latar belakang (10-15 detik), lalu 'ipconfig'"

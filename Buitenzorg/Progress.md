@@ -535,7 +535,7 @@ di v0.15 inc 6 (lihat PLAN.md §Eksperimen pasca-v1.0):
 
 ## 2026-11-24 — jaringan, C# native, kernel, Task Manager
 
-- [x] NIC Realtek (RTL8139 terverifikasi di QEMU; keluarga 8169 belum diuji) · [x] IPv6 dasar · [~] Wi-Fi Pi 4 (driver CYW43455, belum diuji di papan) · [~] Wi-Fi laptop (Intel 8265: tahap 1 firmware + ALIVE ✓ di Latitude 7290; tahap 2 NVM/MAC + kalibrasi INIT belum diuji)
+- [x] Ikon jaringan di tray + app **Jaringan** (`mjaring`) + halaman Pengaturan > Jaringan (status kabel/Wi-Fi, sambung ulang, pindai + sambung Wi-Fi; `netinfo`) ✓ (2026-11-25) · [x] NIC Realtek (RTL8139 terverifikasi di QEMU; keluarga 8169 belum diuji) · [x] IPv6 dasar · [~] Wi-Fi Pi 4 (driver CYW43455, belum diuji di papan) · [~] Wi-Fi laptop (Intel 8265: tahap 1 firmware + ALIVE ✓ di Latitude 7290; tahap 2 NVM/MAC + kalibrasi INIT belum diuji)
 - [x] C# native: Tuple, Monitor, event reset, semaphore, countdown, ThreadPool, SynchronizationContext, finalizer (`BCL4 OK`); GroupBy/OrderBy/Distinct sudah ada di `bzbcl3.cs`
 - [x] Kernel: EXIT/THREAD_EXIT/PROC_KILL/THREAD_CREATE/THREAD_JOIN tanpa BKL (klaim teardown sekali) · audio AC'97 lewat IRQ + task `audio` (`AUDIO IRQ OK`; HDA/Pi masih polling) · timer LAPIC one-shot (`DEADLINE TIMER OK`) · async I/O zero-copy dengan buffer terdaftar (`ZERO-COPY AIO OK`)
 - [x] Task Manager (Pemantau): tab Proses / Kinerja / Detail

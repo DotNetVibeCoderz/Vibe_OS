@@ -86,7 +86,7 @@ const CATEGORIES: [Category; 6] = [
     Category {
         name: "Pengaturan",
         leaf: gfx::rgb(0xD9, 0xB3, 0x8C),
-        apps: &[("msetting", "Pengaturan"), ("mwaktu", "Tanggal & Waktu"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
+        apps: &[("msetting", "Pengaturan"), ("mwaktu", "Tanggal & Waktu"), ("mjaring", "Jaringan"), ("@wallpaper", "Wallpaper"), ("@theme", "Tema")],
     },
     Category {
         name: "Hiburan",
@@ -1052,10 +1052,50 @@ fn confirm_rects(width: i32, height: i32) -> ((i32, i32, i32, i32), (i32, i32, i
     ((x, y, w, h), ok, cancel)
 }
 
+/// The tray's network icon: a screen for a cable, signal bars for Wi-Fi, a
+/// dimmed screen with a red mark when only the loopback is up.
+fn draw_net_icon(canvas: &mut Canvas, th: &theme::Theme, (x, y, w, h): (i32, i32, i32, i32), hover: bool, glass: bool) {
+    if hover {
+        fill_rounded(canvas, x, y, w, h, 6, shift(th.taskbar_bg, 18));
+    }
+    let on = if glass { crate::theme::LICHEN } else { th.text };
+    let kind = crate::net::link_kind();
+    let (mx, my) = (x + w / 2, y + h / 2);
+    if kind == crate::net::link::WIRELESS {
+        // four signal bars, rising left to right
+        for i in 0..4 {
+            let bh = 4 + i * 3;
+            canvas.fill_rect(mx - 8 + i * 4, my + 7 - bh, 3, bh, on);
+        }
+        return;
+    }
+    let c = if kind == crate::net::link::WIRED { on } else { darken(on, 90) };
+    // the screen: a frame, a stand and a foot
+    canvas.fill_rect(mx - 8, my - 7, 16, 2, c);
+    canvas.fill_rect(mx - 8, my + 3, 16, 2, c);
+    canvas.fill_rect(mx - 8, my - 7, 2, 12, c);
+    canvas.fill_rect(mx + 6, my - 7, 2, 12, c);
+    canvas.fill_rect(mx - 1, my + 5, 2, 2, c);
+    canvas.fill_rect(mx - 4, my + 7, 8, 2, c);
+    if kind == crate::net::link::NONE {
+        let red = gfx::rgb(0xE0, 0x48, 0x3B);
+        fill_rounded(canvas, mx + 3, my, 9, 9, 4, red);
+        let white = gfx::rgb(0xFF, 0xFF, 0xFF);
+        canvas.draw_line(mx + 5, my + 2, mx + 9, my + 6, white);
+        canvas.draw_line(mx + 9, my + 2, mx + 5, my + 6, white);
+    }
+}
+
 /// The tray's notification bell (left of the date and time).
 fn bell_rect(width: i32, height: i32) -> (i32, i32, i32, i32) {
     let (cx0, _) = clock_area(width);
     (cx0 - 34, height - TASKBAR_H + 5, 30, TASKBAR_H - 10)
+}
+
+/// The tray's network icon (left of the bell): opens Jaringan.
+fn net_rect(width: i32, height: i32) -> (i32, i32, i32, i32) {
+    let (bx, by, _, bh) = bell_rect(width, height);
+    (bx - 32, by, 30, bh)
 }
 
 /// The action center panel above the tray.
@@ -1340,6 +1380,14 @@ pub fn self_test() -> bool {
     handle_mouse(c3x, c3y, true);
     handle_mouse(c3x, c3y, false);
     let managed = matches!(take_pending_launch().as_deref(), Some("hellogui"));
+    // The tray's network icon opens Jaringan.
+    let net = {
+        let width = WM.lock().as_ref().map_or(0, |w| w.width);
+        let (nx, ny, nw, nh) = net_rect(width, height);
+        handle_mouse(nx + nw / 2, ny + nh / 2, true);
+        handle_mouse(nx + nw / 2, ny + nh / 2, false);
+        matches!(take_pending_launch().as_deref(), Some("mjaring"))
+    };
     // Right-click on the desktop opens the menu; its fourth item tidies windows.
     // (Boot demos leave many windows: find a spot of bare desktop first.)
     let spot = {
@@ -1430,10 +1478,10 @@ pub fn self_test() -> bool {
         open && removed && closed
     };
     crate::println!(
-        "[wm] self-test: start menu {} / {} / {}, right-click menu {}, power confirm {}, search {}, title double-click {}, action center {}",
-        first, game, managed, ctx, power, searched, dbl, center
+        "[wm] self-test: start menu {} / {} / {}, right-click menu {}, power confirm {}, search {}, title double-click {}, action center {}, network icon {}",
+        first, game, managed, ctx, power, searched, dbl, center, net
     );
-    let launched = first && game && managed && ctx && power && searched && dbl && center;
+    let launched = first && game && managed && ctx && power && searched && dbl && center && net;
     // Reset shell state so the real desktop starts clean.
     if let Some(wm) = WM.lock().as_mut() {
         wm.start_open = false;
@@ -2215,6 +2263,13 @@ impl Wm {
             crate::notify::dismiss_toast();
             self.center_open = true;
             crate::notify::mark_all_read();
+            return true;
+        }
+        // The network icon in the tray opens Jaringan (status, Wi-Fi).
+        if hit(cx, cy, net_rect(self.width, self.height)) {
+            self.pending = Some(String::from("mjaring"));
+            self.start_open = false;
+            self.center_open = false;
             return true;
         }
         // The bell in the tray opens / closes the action center.
@@ -3184,6 +3239,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         k = gfx::mix(k, self.workspace as u64);
         k = gfx::mix(gfx::mix(k, crate::notify::unread() as u64), self.center_open as u64);
         k = gfx::mix(k, hit(self.cursor.0, self.cursor.1, bell_rect(self.width, self.height)) as u64);
+        k = gfx::mix(gfx::mix(k, crate::net::link_kind() as u64), hit(self.cursor.0, self.cursor.1, net_rect(self.width, self.height)) as u64);
         let (cx, cy) = self.cursor;
         let ws_hover = (0..WORKSPACES).position(|ws| hit(cx, cy, ws_button_rect(self.width, self.height, ws)));
         k = gfx::mix(k, ws_hover.map_or(u64::MAX, |i| i as u64));
@@ -3271,6 +3327,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         canvas.fill_rect(mx0 - 6, my0 + 6, 12, 6, bc);
         canvas.fill_rect(mx0 - 8, my0 + 12, 16, 2, bc);
         canvas.fill_rect(mx0 - 2, my0 + 15, 4, 3, bc);
+        draw_net_icon(canvas, th, net_rect(self.width, self.height), hit(self.cursor.0, self.cursor.1, net_rect(self.width, self.height)), glass);
         let unread = crate::notify::unread();
         if unread > 0 {
             let label = if unread > 9 { String::from("9+") } else { alloc::format!("{}", unread) };
@@ -3312,7 +3369,7 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
         let start_x = 6 + START_W + 8; // keep in sync with taskbar_click
         let mut bx = start_x;
         let playing = playing_pids();
-        let strip_end = rx.min(bell_rect(self.width, self.height).0);
+        let strip_end = rx.min(net_rect(self.width, self.height).0);
         for win in self.windows.iter().filter(|w| w.workspace == self.workspace) {
             if bx + 116 > strip_end - 4 {
                 break; // no room before the tray

@@ -57,6 +57,7 @@ public static class Folder
         new AppInfo("mgallery", "Galeri Kontrol", "Semua kontrol Buitenzorg.UI", IconKind.Info, 0xC7A6E0),
         new AppInfo("msetting", "Pengaturan", "Tema, wallpaper, screensaver, suara", IconKind.Gear, 0xD9B38C),
         new AppInfo("mwaktu", "Tanggal & Waktu", "Atur waktu, zona, bahasa dan format", IconKind.Clock, 0xD3E07A),
+        new AppInfo("mjaring", "Jaringan", "Kabel, Wi-Fi, alamat IP, sambung ulang", IconKind.Refresh, 0x8FB8E8),
         new AppInfo("mhwlab", "Lab Perangkat", "Sensor, LED, GPIO, I2C, SPI (Raspberry Pi)", IconKind.Cpu, 0x9BD08F),
         new AppInfo("hellogui", "Jam Analog", "Demo GUI pertama RustCLR", IconKind.Sun, 0xE3615A),
     };
@@ -194,6 +195,7 @@ public static class Folder
         Report(MHwLab.LabApp.SelfTest()); // board I/O: a quick "no board" check off a Raspberry Pi
         Report(MSettings.SettingsApp.SelfTest()); // the SETTING syscall, end to end (restores every value)
         Report(MWaktu.WaktuApp.SelfTest()); // time zone / language / 12-24 h / setting the clock (restores them)
+        Report(MJaring.JaringApp.SelfTest()); // netinfo, the panel (tray network icon + Pengaturan's Jaringan page)
         Report(MRuang.RuangApp.SelfTest()); // G3: the scene graph through the kernel's 3D rasterizer (GFX3D)
         Report(MUlar.UlarApp.SelfTest()); // Buitenzorg.Game: the loop, raw key events, drawing
         Report(MMusik.MusikApp.SelfTest()); // Buitenzorg.Media: WAV, the player on the kernel mixer (AUDIO_WRITE)
