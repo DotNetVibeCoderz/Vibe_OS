@@ -134,6 +134,56 @@ impl PciDevice {
     }
 }
 
+/// Turn on memory decoding + bus mastering in every PCI-to-PCI bridge between
+/// the host and `dev` (Linux `pci_enable_bridge`). A root port the firmware
+/// never used may have bus mastering off, and then the device's DMA reads are
+/// aborted at the port: an Intel 8265 behind a Latitude 7290 root port
+/// reported a hardware error on its first firmware chunk. Returns one line per
+/// bridge (`bb:ss.f command old -> new`).
+pub fn enable_upstream_bridges(dev: &PciDevice) -> Vec<alloc::string::String> {
+    let mut out = Vec::new();
+    for b in scan() {
+        if !(b.class == 0x06 && b.subclass == 0x04) {
+            continue;
+        }
+        let buses = read_config_u32(b.bus, b.slot, b.function, 0x18);
+        let (secondary, subordinate) = ((buses >> 8) as u8, (buses >> 16) as u8);
+        if dev.bus < secondary || dev.bus > subordinate {
+            continue;
+        }
+        let cmd = read_config_u32(b.bus, b.slot, b.function, 0x04);
+        if cmd & 0x6 != 0x6 {
+            write_config_u32(b.bus, b.slot, b.function, 0x04, cmd | 0x6);
+        }
+        let now = read_config_u32(b.bus, b.slot, b.function, 0x04);
+        out.push(alloc::format!(
+            "bridge {:02x}:{:02x}.{} buses {}-{} command {:#06x} -> {:#06x}",
+            b.bus, b.slot, b.function, secondary, subordinate, cmd & 0xFFFF, now & 0xFFFF
+        ));
+    }
+    out
+}
+
+/// Status bits of `dev` and of the bridge above it that record aborted DMA
+/// (primary status 0x06, secondary status 0x1E of the bridge): the first thing
+/// to look at when a device's DMA fails.
+pub fn dma_error_bits(dev: &PciDevice) -> alloc::string::String {
+    let mut s = alloc::format!("dev status {:#06x}", dev.read16(0x06));
+    for b in scan() {
+        if !(b.class == 0x06 && b.subclass == 0x04) {
+            continue;
+        }
+        let buses = read_config_u32(b.bus, b.slot, b.function, 0x18);
+        if dev.bus >= (buses >> 8) as u8 && dev.bus <= (buses >> 16) as u8 {
+            s.push_str(&alloc::format!(
+                ", bridge {:02x}:{:02x}.{} status {:#06x} sec-status {:#06x}",
+                b.bus, b.slot, b.function, b.read16(0x06), (read_config_u32(b.bus, b.slot, b.function, 0x1C) >> 16) as u16
+            ));
+        }
+    }
+    s
+}
+
 fn probe(bus: u8, slot: u8, function: u8) -> Option<PciDevice> {
     let id = read_config_u32(bus, slot, function, 0x00);
     let vendor_id = (id & 0xFFFF) as u16;

@@ -118,6 +118,7 @@ fn delay_us(us: u64) {
 struct Nic {
     regs: *mut u8,
     log: Vec<String>,
+    pci: Option<PciDevice>,
 }
 
 impl Nic {
@@ -198,16 +199,25 @@ impl Nic {
 
     fn dump(&mut self, why: &str) {
         let s = format!(
-            "{}: INT {:#010x} FH_INT {:#010x} RESET {:#010x} GP_CNTRL {:#010x} GP1 {:#010x} RX_STATUS {:#010x}",
+            "{}: INT {:#010x} FH_INT {:#010x} RESET {:#010x}",
             why,
             self.r(CSR_INT),
             self.r(CSR_FH_INT_STATUS),
             self.r(CSR_RESET),
-            self.r(CSR_GP_CNTRL),
-            self.r(CSR_UCODE_DRV_GP1),
-            self.r(FH_RX_STATUS)
         );
         self.note(s);
+        let s = format!(
+            "  GP_CNTRL {:#010x} GP1 {:#010x} RX_STATUS {:#010x} LOAD_STATUS {:#010x}",
+            self.r(CSR_GP_CNTRL),
+            self.r(CSR_UCODE_DRV_GP1),
+            self.r(FH_RX_STATUS),
+            self.r(FH_UCODE_LOAD_STATUS)
+        );
+        self.note(s);
+        if let Some(d) = self.pci {
+            let e = crate::pci::dma_error_bits(&d);
+            self.note(format!("  {}", e));
+        }
     }
 
     /// `iwl_pcie_prepare_card_hw`.
@@ -273,7 +283,7 @@ impl Nic {
                 return Ok(());
             }
             if t > 5_000_000 {
-                self.dump("chunk timeout");
+                self.dump(&format!("chunk timeout (page {:#x})", phys));
                 return Err(format!("firmware chunk to {:#x} ({} bytes) never completed", dst, len));
             }
             delay_us(20);
@@ -352,7 +362,7 @@ fn sections(fw: &[u8], kind: u32) -> Result<(String, Vec<(u32, &[u8])>), String>
 
 /// `wifi up` on a PC: bring the adapter up to the firmware's ALIVE.
 pub fn bring_up(dev: &PciDevice) -> Vec<String> {
-    let mut nic = Nic { regs: core::ptr::null_mut(), log: Vec::new() };
+    let mut nic = Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None };
     if let Err(e) = run(dev, &mut nic) {
         nic.note(format!("failed: {}", e));
     }
@@ -365,7 +375,14 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
     let (name, init) = sections(&fw, 20)?;
     nic.note(format!("firmware '{}': INIT image {} section(s)", name, init.len()));
     let bar = dev.mem_bar(0).ok_or("no memory BAR")?;
+    for line in crate::pci::enable_upstream_bridges(dev) {
+        nic.note(line);
+    }
     dev.enable_mem_and_bus_master();
+    // Linux iwl_pci_probe: PCI retry timeout off (config 0x41).
+    let r40 = dev.read32(0x40);
+    crate::pci::write_config_u32(dev.bus, dev.slot, dev.function, 0x40, r40 & !0xFF00);
+    nic.pci = Some(*dev);
     let va = crate::memory::map_mmio(bar, 0x2000).ok_or("cannot map the registers")?;
     nic.regs = va as *mut u8;
     let rev = nic.r(CSR_HW_REV);
@@ -429,7 +446,7 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
     if !nic.write_prph(RELEASE_CPU_RESET, RELEASE_CPU_RESET_BIT) {
         return Err("no NIC access to release the CPU reset".into());
     }
-    nic.note(format!("CPU reset released (WFPM_GP2 was {:#x?})", wfpm));
+    nic.note(format!("CPU reset released (WFPM_GP2 was {:#x})", wfpm.unwrap_or(0xFFFF_FFFF)));
     let page = crate::memory::alloc_dma_frame().ok_or("out of memory")?;
     let t0 = crate::arch::cpu::nanos();
     let next = nic.load_cpu(&init, 0, 1, page)?;
