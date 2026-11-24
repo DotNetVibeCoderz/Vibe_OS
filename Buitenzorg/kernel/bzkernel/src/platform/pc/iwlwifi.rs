@@ -61,6 +61,9 @@ const INT_SW_ERR: u32 = 1 << 25;
 const INT_FH_TX: u32 = 1 << 27;
 const INT_HW_ERR: u32 = 1 << 29;
 const INT_FH_RX: u32 = 1 << 31;
+/// CSR_INI_SET_MASK: FH_RX, HW_ERR, FH_TX, SW_ERR, RF_KILL, SW_RX, WAKEUP,
+/// RX_PERIODIC, ALIVE.
+const INI_SET_MASK: u32 = (1 << 31) | (1 << 29) | (1 << 27) | (1 << 25) | (1 << 7) | (1 << 3) | (1 << 1) | (1 << 28) | 1;
 
 // periphery registers through the HBUS window
 const HBUS_MEM_RADDR: usize = 0x40C;
@@ -81,6 +84,21 @@ const UMAC_CURRENT_PC: u32 = 0xA05C18;
 const LMAC1_CURRENT_PC: u32 = 0xA05C1C;
 const LMPM_CHICK_EXTENDED: u32 = 0x01;
 const SCD_TXFACT: u32 = 0xA02C00 + 0x10;
+const SCD_GP_CTRL: u32 = 0xA02C00 + 0x1A8;
+const SCD_GP_AUTO_ACTIVE: u32 = 1 << 18;
+const SCD_GP_31_QUEUES: u32 = 1 << 0;
+/// TX queues of the 8000 family (`num_of_queues`).
+const TX_QUEUES: usize = 31;
+/// FH_MEM_CBBC_QUEUE: where the device finds queue `q`'s TFD ring.
+const fn fh_cbbc(q: usize) -> usize {
+    if q < 16 {
+        0x19D0 + 4 * q
+    } else if q < 20 {
+        0x1BF0 + 4 * (q - 16)
+    } else {
+        0x1B20 + 4 * (q - 20)
+    }
+}
 
 // flow handler
 const FH_SRVC_CHNL: usize = 9;
@@ -245,37 +263,51 @@ impl Nic {
         Some(v)
     }
 
-    /// Read back the first word of every loaded section: tells a DMA or
-    /// file problem apart from a firmware that refuses to start.
+    /// Read back every loaded section, one word per 4 KiB plus its last
+    /// word (addresses in the extended range read with LMPM_CHICK set, as
+    /// they were written): tells a DMA or address-mapping problem apart
+    /// from a firmware that refuses to start.
     fn verify_sram(&mut self, secs: &[(u32, &[u8])]) {
-        let mut line = String::from("  sram:");
-        let mut n = 0;
+        let mut bad_total = 0;
+        let mut ok_secs = String::new();
         for &(dst, data) in secs {
-            if dst == CPU1_CPU2_SEPARATOR || dst == PAGING_SEPARATOR {
-                if dst == PAGING_SEPARATOR {
-                    break;
+            if dst == PAGING_SEPARATOR {
+                break;
+            }
+            if dst == CPU1_CPU2_SEPARATOR || data.len() < 4 {
+                continue;
+            }
+            let mut offs: Vec<usize> = (0..data.len() / 4096 + 1).map(|i| i * 4096).filter(|&o| o + 4 <= data.len()).collect();
+            offs.push((data.len() - 4) & !3);
+            let (mut good, mut first_bad) = (0, None);
+            for &o in &offs {
+                let at = dst + o as u32;
+                let want = u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+                let ext = (EXTENDED_START..=EXTENDED_END).contains(&at);
+                if ext {
+                    let v = self.read_prph(LMPM_CHICK).unwrap_or(0);
+                    self.write_prph(LMPM_CHICK, v | LMPM_CHICK_EXTENDED);
                 }
-                continue;
+                let got = self.read_mem(at);
+                if ext {
+                    let v = self.read_prph(LMPM_CHICK).unwrap_or(0);
+                    self.write_prph(LMPM_CHICK, v & !LMPM_CHICK_EXTENDED);
+                }
+                if got == Some(want) {
+                    good += 1;
+                } else if first_bad.is_none() {
+                    first_bad = Some((o, got.unwrap_or(0xFFFF_FFFF), want));
+                }
             }
-            if data.len() < 4 {
-                continue;
-            }
-            let want = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-            let got = self.read_mem(dst);
-            let part = match got {
-                Some(v) if v == want => format!(" {:x}=ok", dst),
-                Some(v) => format!(" {:x}:{:08x}/{:08x}", dst, v, want),
-                None => format!(" {:x}:?", dst),
-            };
-            line.push_str(&part);
-            n += 1;
-            if n % 3 == 0 {
-                self.note(core::mem::replace(&mut line, String::from("  sram:")));
+            match first_bad {
+                None => ok_secs.push_str(&format!(" {:x}", dst)),
+                Some((o, g, w)) => {
+                    bad_total += 1;
+                    self.note(format!("  sram {:x}: {}/{} words ok; first bad +{:#x}: {:08x}, want {:08x}", dst, good, offs.len(), o, g, w));
+                }
             }
         }
-        if n % 3 != 0 {
-            self.note(line);
-        }
+        self.note(format!("  sram all words ok:{}{}", ok_secs, if bad_total == 0 { "" } else { " (others above)" }));
     }
 
     /// What iwlmvm logs when ALIVE times out: secure-boot status per CPU
@@ -373,10 +405,10 @@ impl Nic {
         }
     }
 
-    fn load_section(&mut self, dst: u32, data: &[u8], page: (u64, *mut u8)) -> Result<(), String> {
+    fn load_section(&mut self, dst: u32, data: &[u8], page: (u64, *mut u8, usize)) -> Result<(), String> {
         let mut off = 0;
         while off < data.len() {
-            let n = (data.len() - off).min(4096);
+            let n = (data.len() - off).min(page.2);
             unsafe { core::ptr::copy_nonoverlapping(data[off..].as_ptr(), page.1, n) };
             crate::arch::cpu::dma_sync(page.1 as u64, n);
             let at = dst + off as u32;
@@ -398,7 +430,7 @@ impl Nic {
 
     /// `iwl_pcie_load_cpu_sections_8000`: the sections of one CPU, up to the
     /// separator; returns the index after it.
-    fn load_cpu(&mut self, secs: &[(u32, &[u8])], from: usize, cpu: u32, page: (u64, *mut u8)) -> Result<usize, String> {
+    fn load_cpu(&mut self, secs: &[(u32, &[u8])], from: usize, cpu: u32, page: (u64, *mut u8, usize)) -> Result<usize, String> {
         let shift = if cpu == 1 { 0 } else { 16 };
         let mut sec_num: u32 = 1;
         let mut i = from;
@@ -415,6 +447,8 @@ impl Nic {
             loaded += data.len();
             i += 1;
         }
+        // iwl_enable_interrupts (the PCI INTx line is disabled: we poll).
+        self.w(CSR_INT_MASK, INI_SET_MASK);
         self.write_direct(FH_UCODE_LOAD_STATUS, if cpu == 1 { 0xFFFF } else { 0xFFFF_FFFF });
         let s = format!("CPU{}: {} section(s), {} KiB", cpu, sec_num.count_ones() - 1, loaded / 1024);
         self.note(s);
@@ -499,6 +533,9 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         nic.note(line);
     }
     dev.enable_mem_and_bus_master();
+    // We poll CSR_INT: keep the legacy interrupt line quiet (command bit 10).
+    let cmd = dev.read32(0x04);
+    crate::pci::write_config_u32(dev.bus, dev.slot, dev.function, 0x04, (cmd & 0xFFFF) | 0x400);
     // Linux iwl_pci_probe: PCI retry timeout off (config 0x41).
     let r40 = dev.read32(0x40);
     crate::pci::write_config_u32(dev.bus, dev.slot, dev.function, 0x40, r40 & !0xFF00);
@@ -570,6 +607,14 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
     unsafe { write_volatile(nic.regs.add(CSR_INT_COALESCING), 0x40u8) };
     nic.write_direct(FH_RX_WPTR, RX_POSTED);
     nic.write_prph(SCD_TXFACT, 0);
+    // iwl_pcie_tx_init: every queue's TFD ring base (one zeroed ring for
+    // now -- nothing is queued before ALIVE), then the scheduler modes.
+    let (tfd_phys, _) = crate::memory::alloc_dma_contiguous(8).ok_or("out of memory")?;
+    for q in 0..TX_QUEUES {
+        nic.write_direct(fh_cbbc(q), (tfd_phys >> 8) as u32);
+    }
+    let gp = nic.read_prph(SCD_GP_CTRL).unwrap_or(0);
+    nic.write_prph(SCD_GP_CTRL, gp | SCD_GP_AUTO_ACTIVE | SCD_GP_31_QUEUES);
 
     nic.w(CSR_UCODE_DRV_GP1_CLR, GP1_SW_RFKILL);
     nic.w(CSR_UCODE_DRV_GP1_CLR, GP1_CMD_BLOCKED);
@@ -582,7 +627,16 @@ fn run(dev: &PciDevice, nic: &mut Nic) -> Result<(), String> {
         return Err("no NIC access to release the CPU reset".into());
     }
     nic.note(format!("CPU reset released (WFPM_GP2 was {:#x})", wfpm.unwrap_or(0xFFFF_FFFF)));
-    let page = crate::memory::alloc_dma_frame().ok_or("out of memory")?;
+    // Chunks of FH_MEM_TB_MAX_LENGTH (128 KiB) like Linux; one page if no
+    // contiguous run is free.
+    let page = match crate::memory::alloc_dma_contiguous(32) {
+        Some((p, v)) => (p, v, 0x20000),
+        None => {
+            let (p, v) = crate::memory::alloc_dma_frame().ok_or("out of memory")?;
+            (p, v, 4096)
+        }
+    };
+    nic.note(format!("load chunks of {} KiB", page.2 / 1024));
     let t0 = crate::arch::cpu::nanos();
     let next = nic.load_cpu(&init, 0, 1, page)?;
     nic.load_cpu(&init, next + 1, 2, page)?;
