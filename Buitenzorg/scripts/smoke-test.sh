@@ -378,7 +378,7 @@ for media in ahci nvme usb; do
     nvme) on="nvme0" ;;
     usb) on="usb" ;;
   esac
-  require "$root/dist/boot-$media.log" "mounted /disk (FAT16, rw) on $on"
+  require "$root/dist/boot-$media.log" "mounted /disk (FAT16, rw, journaled) on $on"
   echo "smoke [$media]: boots to READY with /disk on $on"
 done
 
@@ -452,7 +452,7 @@ if [ -n "$ovmf_code" ] && [ -f "$root/dist/buitenzorg-uefi.img" ]; then
   sleep 2
   kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null
   require "$log" "[boot] mode: normal" "framebuffer 2560x1440" "4 CPU(s) / 3 AP(s)" "1 keyboard(s), 1 mouse/mice, 1 disk(s)" \
-    "mounted /disk (FAT16, rw) on usb" "MILESTONE: NIC OK (e1000" "[boot] background start-up done"
+    "mounted /disk (FAT16, rw, journaled) on usb" "MILESTONE: NIC OK (e1000" "[boot] background start-up done"
   if grep -qaE "PANIC|mounted /disk .* on ahci" "$log"; then
     echo "SMOKE TEST FAILED (boot-realpc.log): panic, or /disk went to the other disk" >&2; exit 1
   fi

@@ -401,7 +401,7 @@ foreach ($media in @("ahci", "nvme", "usb")) {
         Write-Host "smoke [nvme]: Intel HD Audio: mixer stream out, line-in recorded through the input stream"
     }
     $on = @{ ahci = "ahci0"; nvme = "nvme0"; usb = "usb" }[$media]
-    Assert-Markers -Log $log -Markers @("mounted /disk (FAT16, rw) on $on")
+    Assert-Markers -Log $log -Markers @("mounted /disk (FAT16, rw, journaled) on $on")
     Write-Host "smoke [$media]: boots to READY with /disk on $on"
 }
 
@@ -468,7 +468,7 @@ if ((Test-Path (Join-Path $ovmf "code.fd")) -and (Test-Path $uefiImage)) {
     Start-Sleep -Seconds 2
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $p.WaitForExit() }
     Assert-Markers -Log $log -Markers @("[boot] mode: normal", "framebuffer 2560x1440", "4 CPU(s) / 3 AP(s)", "1 keyboard(s), 1 mouse/mice, 1 disk(s)",
-        "mounted /disk (FAT16, rw) on usb", "MILESTONE: NIC OK (e1000", "[boot] background start-up done")
+        "mounted /disk (FAT16, rw, journaled) on usb", "MILESTONE: NIC OK (e1000", "[boot] background start-up done")
     if (Select-String -Path $log -Pattern "PANIC|mounted /disk .* on ahci" -Quiet) { throw "SMOKE TEST FAILED (boot-realpc.log): panic, or /disk went to the other disk" }
     if ((Get-FileHash $other).Hash -ne $otherSum) { throw "SMOKE TEST FAILED (boot-realpc.log): the other disk was written to" }
     $stickText = $latin.GetString([IO.File]::ReadAllBytes($stick))
