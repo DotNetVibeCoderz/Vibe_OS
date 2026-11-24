@@ -41,6 +41,29 @@ pub fn showing() -> bool {
     SHOWING.load(core::sync::atomic::Ordering::Acquire)
 }
 
+/// A preview was asked for (Pengaturan, `saver preview`): the desktop loop
+/// starts the screensaver at its next turn, idle or not.
+static PREVIEW: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static PREVIEWS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+pub fn request_preview() {
+    PREVIEW.store(true, core::sync::atomic::Ordering::Release);
+}
+
+/// True once per request (the desktop loop).
+pub fn take_preview() -> bool {
+    let hit = PREVIEW.swap(false, core::sync::atomic::Ordering::AcqRel);
+    if hit {
+        PREVIEWS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+    hit
+}
+
+/// Previews started so far (tests).
+pub fn previews() -> u32 {
+    PREVIEWS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 static CONFIG: Mutex<Config> = Mutex::new(Config {
     saver: Saver::Starfield,
     enabled: true,

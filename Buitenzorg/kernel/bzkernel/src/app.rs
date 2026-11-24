@@ -258,6 +258,25 @@ pub fn doom_self_test() {
     }
 }
 
+/// The C runtime's POSIX layer (`userland/c`: pthreads over THREAD_* +
+/// FUTEX_*, BSD sockets over TCP_OP / NET_* / DNS_RESOLVE): POSIX.ELF from
+/// scripts/build-c-tests.* runs its checks and prints `MILESTONE: POSIX OK`.
+pub fn posix_self_test() {
+    if crate::vfs::stat("/disk/POSIX.ELF").is_err() {
+        crate::println!("[posix] /disk/POSIX.ELF not on this image (scripts/build-c-tests): test skipped");
+        return;
+    }
+    match spawn_with_args("/disk/POSIX.ELF", "") {
+        Ok(pid) => {
+            let code = wait(pid);
+            if code != 0 {
+                crate::println!("[posix] test failed: exit code {:#x}", code);
+            }
+        }
+        Err(e) => crate::println!("[posix] could not start: {}", e),
+    }
+}
+
 /// Self-test of the local LLM (`userland/clrhost/src/llm.rs`) with the
 /// model on every image, `/disk/STORIES.GGU` (stories260K, llama, MIT): the
 /// tokenizer and greedy text against a numpy reference, then the same text

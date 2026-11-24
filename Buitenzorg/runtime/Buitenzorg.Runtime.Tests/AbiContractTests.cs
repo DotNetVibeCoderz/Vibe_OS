@@ -98,6 +98,8 @@ public class AbiContractTests
         Assert.Equal(6ul, WinCtl.Resizable);
         Assert.Equal(5ul, PointerEvent.Wheel);
         Assert.Equal(6ul, PointerEvent.Resize);
+        Assert.Equal(7ul, WinCtl.PointerLock);
+        Assert.Equal(7ul, PointerEvent.Relative);
         Assert.Equal(1ul, FaultKind.Divide);
         Assert.Equal(5ul, ComputeOp.Gemv);
         Assert.Equal(3ul, ComputeKind.Intel);

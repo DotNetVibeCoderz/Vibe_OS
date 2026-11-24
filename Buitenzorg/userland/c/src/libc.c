@@ -50,7 +50,21 @@ static void *map(size_t n)
     return BZ_IS_ERROR(r) ? NULL : (void *)r;
 }
 
+/* threads (pthread.c) share the heap: one lock around it */
+static volatile uint32_t heap_lock;
+static void heap_take(void) { int n = 0; while (__atomic_exchange_n(&heap_lock, 1, __ATOMIC_ACQUIRE)) if (++n > 64) { bz_yield(); n = 0; } }
+static void heap_give(void) { __atomic_store_n(&heap_lock, 0, __ATOMIC_RELEASE); }
+static void *malloc_locked(size_t n);
+
 void *malloc(size_t n)
+{
+    heap_take();
+    void *p = malloc_locked(n);
+    heap_give();
+    return p;
+}
+
+static void *malloc_locked(size_t n)
 {
     if (n == 0) n = 1;
     int c = size_class(n + 16);
@@ -82,8 +96,10 @@ void free(void *p)
     if (!p) return;
     struct block *b = (struct block *)((char *)p - 16);
     int c = size_class(b->size);
+    heap_take();
     b->next = free_lists[c];
     free_lists[c] = b;
+    heap_give();
 }
 
 void *calloc(size_t n, size_t size)
@@ -749,9 +765,18 @@ int stat(const char *path, struct stat *st)
 }
 int access(const char *path, int mode) { struct stat st; (void)mode; return stat(path, &st); }
 int isatty(int fd) { (void)fd; return 0; }
-int close(int fd) { (void)fd; return 0; }
-ssize_t read(int fd, void *p, size_t n) { (void)fd; (void)p; (void)n; return -1; }
-ssize_t write(int fd, const void *p, size_t n) { if (fd == 1 || fd == 2) { bz_write(p, n); return (ssize_t)n; } return -1; }
+/* descriptors >= 64 are sockets (socket.c) */
+int bz_sock_close(int fd);
+ssize_t bz_sock_read(int fd, void *p, size_t n);
+ssize_t bz_sock_write(int fd, const void *p, size_t n);
+int close(int fd) { return fd >= 64 ? bz_sock_close(fd) : 0; }
+ssize_t read(int fd, void *p, size_t n) { if (fd >= 64) return bz_sock_read(fd, p, n); return -1; }
+ssize_t write(int fd, const void *p, size_t n)
+{
+    if (fd >= 64) return bz_sock_write(fd, p, n);
+    if (fd == 1 || fd == 2) { bz_write(p, n); return (ssize_t)n; }
+    return -1;
+}
 char *getcwd(char *buf, size_t n) { snprintf(buf, n, "/disk"); return buf; }
 int chdir(const char *path) { (void)path; return 0; }
 void perror(const char *s) { fprintf(stderr, "%s: %s\n", s ? s : "", strerror(errno)); }

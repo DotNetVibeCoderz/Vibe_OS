@@ -509,6 +509,9 @@ fn main() {
     // DISK_MARKER): a real PC has other FAT partitions, and /disk gets written.
     add_file(&mut builder, &mut files, "bzdisk.id".into(), b"Buitenzorg OS /disk volume
 ".to_vec());
+    // The metadata journal (kernel journal.rs): 256 KiB of zeros = an empty
+    // journal; every mutating FAT operation commits through it.
+    add_file(&mut builder, &mut files, "journal.sys".into(), vec![0u8; 256 * 1024]);
     // Test file for the v0.3 "Batang" milestone: the kernel reads this back
     // through its own IDE PIO driver + FAT parser ("baca file dari disk").
     add_file(&mut builder, &mut files, 
@@ -745,6 +748,28 @@ fn main() {
             add_file(&mut builder, &mut files, name.into(), bytes);
         }
     }
+    // The C runtime's test programs (scripts/build-c-tests.*, zig cc):
+    // POSIX.ELF -- pthreads + BSD sockets (app::posix_self_test)
+    let c_dir = manifest_dir().join("..").join("target").join("c");
+    let c_tests = |arch: &str| -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(c_dir.join(arch)) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.ends_with(".ELF") {
+                    if let Ok(bytes) = std::fs::read(e.path()) {
+                        out.push((name, bytes));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    };
+    println!("cargo:rerun-if-changed={}", c_dir.display());
+    for (name, bytes) in c_tests("x86_64") {
+        add_file(&mut builder, &mut files, name.to_lowercase(), bytes);
+    }
 
     // A glTF 2.0 model (scripts/make-gltf-model.py) for Buitenzorg.Three's loader
     {
@@ -757,6 +782,14 @@ fn main() {
 
     // Video: an original 12-second animation with music, MJPEG + PCM in AVI
     add_file(&mut builder, &mut files, "fajar.avi".into(), synth_video());
+    // ... and its subtitles (SRT next to the video, same name)
+    {
+        let p = manifest_dir().join("..").join("..").join("assets").join("video").join("fajar.srt");
+        println!("cargo:rerun-if-changed={}", p.display());
+        if let Ok(bytes) = std::fs::read(&p) {
+            add_file(&mut builder, &mut files, "fajar.srt".into(), bytes);
+        }
+    }
 
     // Baca: an original short story as an EPUB (assets/books/benih, zipped
     // here with deflate -- the reader inflates it in the managed host)
@@ -857,6 +890,7 @@ fn main() {
     if let Ok(bytes) = std::fs::read(doom_dir.join("aarch64").join("DOOM.ELF")) {
         arm_files.push(("DOOM.ELF".into(), bytes));
     }
+    arm_files.extend(c_tests("aarch64"));
     let arm_ok = arm_kernel.exists()
         && limine_image_with("BOOTAA64.EFI", &limine_dir, &arm_kernel, &arm_files, &modules, &[], &arm_path).unwrap_or(false);
     println!("cargo:rustc-env=ARM64_IMAGE={}", if arm_ok { arm_path.display().to_string() } else { String::new() });
@@ -900,6 +934,7 @@ fn main() {
     if let Ok(bytes) = std::fs::read(doom_dir.join("riscv64").join("DOOM.ELF")) {
         rv_files.push(("DOOM.ELF".into(), bytes));
     }
+    rv_files.extend(c_tests("riscv64"));
     let rv_ok = rv_kernel.exists()
         && limine_image_with("BOOTRISCV64.EFI", &limine_dir, &rv_kernel, &rv_files, &rv_modules, &[], &rv_path).unwrap_or(false);
     println!("cargo:rustc-env=RISCV64_IMAGE={}", if rv_ok { rv_path.display().to_string() } else { String::new() });

@@ -1,6 +1,6 @@
 //! Virtual filesystem (v0.5 "Dahan"): a mount table over block devices, with
 //! path resolution `/<mount>/<FILE.EXT>`. Backed by the FAT driver today; the
-//! trait leaves room for the custom journaled FS (§8.1) later.
+//! FAT volumes with `JOURNAL.SYS` are journaled (`journal.rs`).
 //!
 //! Paths: `/disk/BATANG.TXT`, `/ram/DAHAN.TXT`, `/disk/APPS/DEMO/A.TXT`
 //! (folders inside a volume, 8.3 names per component).
@@ -24,10 +24,11 @@ static MOUNTS: Mutex<Vec<Mount>> = Mutex::new(Vec::new());
 pub fn mount(name: &str, mut device: Box<dyn BlockDevice>, read_only: bool) -> Result<(), &'static str> {
     let volume = FatVolume::mount(device.as_mut())?;
     crate::println!(
-        "[vfs] mounted /{} ({}, {}) on {}",
+        "[vfs] mounted /{} ({}, {}{}) on {}",
         name,
         volume.kind_name(),
         if read_only { "ro" } else { "rw" },
+        if volume.journal_capacity().is_some() { ", journaled" } else { "" },
         device.name()
     );
     MOUNTS.lock().push(Mount {
@@ -281,4 +282,67 @@ pub fn folder_self_test(base: &str) -> Result<String, &'static str> {
         return Err("cleanup left the folder behind");
     }
     Ok(format!("{}: nested mkdir, 20 files in a sub-folder (chain grew), move, rename, non-empty delete refused, append (5568 bytes in 6 pieces, no leak), cleanup", base))
+}
+
+/// Whether the mount `/name` keeps a metadata journal, and its capacity.
+pub fn journal_info(name: &str) -> Option<usize> {
+    MOUNTS.lock().iter().find(|m| m.name == name).and_then(|m| m.volume.journal_capacity())
+}
+
+/// Mount the volume of `/name` again from its device (what a reboot does:
+/// a committed journal transaction is replayed).
+fn remount(name: &str) -> Result<(), &'static str> {
+    with_mount(name, |m| {
+        m.volume = FatVolume::mount(m.device.as_mut())?;
+        Ok(())
+    })
+}
+
+/// Crash consistency of the journal on the mount `base` (`/disk`): a write
+/// interrupted after its commit record is replayed by the next mount, one
+/// interrupted before it leaves the old version, and nothing leaks.
+pub fn journal_self_test(base: &str) -> Result<String, &'static str> {
+    let name = base.trim_start_matches('/');
+    let cap = journal_info(name).ok_or("the volume has no JOURNAL.SYS")?;
+    let p = format!("{}/JTEST.TXT", base);
+    let _ = remove(&p);
+    let free_before = free_space(base)?.0;
+    let v1: &[u8] = b"versi satu";
+    let v2: Vec<u8> = (0..3000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    let v3: &[u8] = b"versi tiga, tak pernah sampai";
+    write(&p, v1)?;
+    // 1. crash after the commit record: the home writes never happened
+    crate::journal::simulate_crash(1);
+    if write(&p, &v2).is_ok() {
+        return Err("the simulated crash did not happen");
+    }
+    if read(&p)? != v1 {
+        return Err("home locations changed before the commit was applied");
+    }
+    remount(name)?;
+    if read(&p)? != v2 {
+        return Err("the committed transaction was not replayed");
+    }
+    // 2. crash before the commit record: the old version survives
+    crate::journal::simulate_crash(2);
+    if write(&p, v3).is_ok() {
+        return Err("the second simulated crash did not happen");
+    }
+    remount(name)?;
+    if read(&p)? != v2 {
+        return Err("an uncommitted transaction changed the file");
+    }
+    remove(&p)?;
+    // the replayed write freed v1's chain; v3's data clusters were never
+    // linked, so they are free as well
+    if free_space(base)?.0 != free_before {
+        return Err("clusters leaked across the crashes");
+    }
+    if write(&format!("{}/{}", base, crate::journal::FILE), b"x").is_ok() {
+        return Err("JOURNAL.SYS was writable");
+    }
+    Ok(format!(
+        "{}: crash after commit replayed on remount, crash before commit kept the old file, no leak, {} sectors per transaction",
+        base, cap
+    ))
 }

@@ -21,6 +21,7 @@ pub type Ipv6Addr = [u8; 16];
 
 pub const ETHERTYPE_IPV6: u16 = 0x86DD;
 const NEXT_ICMPV6: u8 = 58;
+const NEXT_UDP: u8 = 17;
 const HOP_LIMIT: u8 = 64;
 
 const ECHO_REQUEST: u8 = 128;
@@ -136,11 +137,150 @@ fn fold(mut acc: u32) -> u16 {
 
 /// The ICMPv6 checksum (RFC 4443 2.3: over the pseudo-header).
 fn icmp_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, msg: &[u8]) -> u16 {
+    l4_checksum(src, dst, NEXT_ICMPV6, msg)
+}
+
+/// The upper-layer checksum over the IPv6 pseudo-header (RFC 8200 8.1).
+fn l4_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, next: u8, msg: &[u8]) -> u16 {
     let mut acc = sum16(src, 0);
     acc = sum16(dst, acc);
     acc += msg.len() as u32;
-    acc += NEXT_ICMPV6 as u32;
+    acc += next as u32;
     fold(sum16(msg, acc))
+}
+
+/// Ethernet + IPv6 header around an upper-layer payload already complete.
+fn wrap(src_mac: MacAddr, dst_mac: MacAddr, src: &Ipv6Addr, dst: &Ipv6Addr, next: u8, hop: u8, msg: &[u8]) -> Vec<u8> {
+    let mut f = Vec::with_capacity(54 + msg.len());
+    f.extend_from_slice(&dst_mac);
+    f.extend_from_slice(&src_mac);
+    f.extend_from_slice(&ETHERTYPE_IPV6.to_be_bytes());
+    f.extend_from_slice(&[0x60, 0, 0, 0]);
+    f.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+    f.push(next);
+    f.push(hop);
+    f.extend_from_slice(src);
+    f.extend_from_slice(dst);
+    f.extend_from_slice(msg);
+    f
+}
+
+// ---- UDP over IPv6 -------------------------------------------------------------
+
+/// One bound UDP port: received datagrams (source, source port, data), at
+/// most 32 kept.
+struct Udp6Port {
+    port: u16,
+    queue: alloc::collections::VecDeque<(Ipv6Addr, u16, Vec<u8>)>,
+}
+
+static UDP6: Mutex<Vec<Udp6Port>> = Mutex::new(Vec::new());
+static UDP6_STATS: Mutex<(u64, u64, u64)> = Mutex::new((0, 0, 0)); // sent, received, bad checksum
+
+/// Listen on a UDP port over IPv6. False when it is taken.
+pub fn udp_bind(port: u16) -> bool {
+    let mut t = UDP6.lock();
+    if port == 0 || t.iter().any(|p| p.port == port) {
+        return false;
+    }
+    t.push(Udp6Port { port, queue: alloc::collections::VecDeque::new() });
+    true
+}
+
+pub fn udp_unbind(port: u16) {
+    UDP6.lock().retain(|p| p.port != port);
+}
+
+/// The oldest datagram waiting on `port`: (source, source port, data).
+pub fn udp_recv(port: u16) -> Option<(Ipv6Addr, u16, Vec<u8>)> {
+    crate::net::poll();
+    UDP6.lock().iter_mut().find(|p| p.port == port)?.queue.pop_front()
+}
+
+/// Wait up to `ms` for a datagram on `port`.
+pub fn udp_recv_wait(port: u16, ms: u64) -> Option<(Ipv6Addr, u16, Vec<u8>)> {
+    let t0 = crate::arch::cpu::nanos();
+    loop {
+        if let Some(d) = udp_recv(port) {
+            return Some(d);
+        }
+        if crate::arch::cpu::nanos() - t0 >= ms * 1_000_000 {
+            return None;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Send one UDP datagram over IPv6 (resolving the next hop's MAC first).
+pub fn udp_send(dst: &Ipv6Addr, sport: u16, dport: u16, data: &[u8]) -> Result<(), &'static str> {
+    if data.len() > 1400 {
+        return Err("datagram too large");
+    }
+    let mac = crate::net::device_mac().ok_or("no network device")?;
+    let dst_mac = resolve(dst, mac).ok_or("no neighbour answered")?;
+    let src = source_for(dst, mac, &STATE.lock());
+    let mut m = Vec::with_capacity(8 + data.len());
+    m.extend_from_slice(&sport.to_be_bytes());
+    m.extend_from_slice(&dport.to_be_bytes());
+    m.extend_from_slice(&((8 + data.len()) as u16).to_be_bytes());
+    m.extend_from_slice(&[0, 0]);
+    m.extend_from_slice(data);
+    let mut c = l4_checksum(&src, dst, NEXT_UDP, &m);
+    if c == 0 {
+        c = 0xFFFF; // 0 means "no checksum", which IPv6 forbids
+    }
+    m[6..8].copy_from_slice(&c.to_be_bytes());
+    crate::net::send_frame(&wrap(mac, dst_mac, &src, dst, NEXT_UDP, HOP_LIMIT, &m));
+    UDP6_STATS.lock().0 += 1;
+    Ok(())
+}
+
+/// (sent, received, dropped for a bad checksum) since boot.
+pub fn udp_stats() -> (u64, u64, u64) {
+    *UDP6_STATS.lock()
+}
+
+fn udp_input(src: &Ipv6Addr, dst: &Ipv6Addr, msg: &[u8]) {
+    if msg.len() < 8 {
+        return;
+    }
+    let len = u16::from_be_bytes([msg[4], msg[5]]) as usize;
+    if len < 8 || len > msg.len() {
+        return;
+    }
+    let msg = &msg[..len];
+    if u16::from_be_bytes([msg[6], msg[7]]) == 0 || l4_checksum(src, dst, NEXT_UDP, msg) != 0 {
+        UDP6_STATS.lock().2 += 1;
+        return;
+    }
+    let (sport, dport) = (u16::from_be_bytes([msg[0], msg[1]]), u16::from_be_bytes([msg[2], msg[3]]));
+    let mut t = UDP6.lock();
+    if let Some(p) = t.iter_mut().find(|p| p.port == dport) {
+        if p.queue.len() >= 32 {
+            p.queue.pop_front();
+        }
+        p.queue.push_back((*src, sport, msg[8..].to_vec()));
+        UDP6_STATS.lock().1 += 1;
+    }
+}
+
+/// The MAC to send to for `dst`, soliciting the neighbour when unknown.
+fn resolve(dst: &Ipv6Addr, mac: MacAddr) -> Option<MacAddr> {
+    let hop = {
+        let s = STATE.lock();
+        next_hop(dst, mac, &s)
+    };
+    match hop {
+        Ok(m) => Some(m),
+        Err(target) => {
+            let src = source_for(&target, mac, &STATE.lock());
+            crate::net::send_frame(&solicit(mac, &src, &target));
+            if !wait(1000, &|| STATE.lock().neighbours.iter().any(|(a, _)| *a == target)) {
+                return None;
+            }
+            next_hop(dst, mac, &STATE.lock()).ok()
+        }
+    }
 }
 
 /// Ethernet + IPv6 + an ICMPv6 message whose checksum field is filled in here.
@@ -254,6 +394,20 @@ pub fn input(f: &[u8]) {
     dst.copy_from_slice(&ip[24..40]);
     let msg = &ip[40..40 + plen];
     let src_mac: MacAddr = [f[6], f[7], f[8], f[9], f[10], f[11]];
+    if next == NEXT_UDP {
+        let ours = {
+            let mut s = STATE.lock();
+            let ok = is_ours(&dst, mac, &s) || dst[0] == 0xff && accepts(&dst, mac, &s);
+            if ok {
+                learn(&mut s, src, src_mac);
+            }
+            ok
+        };
+        if ours {
+            udp_input(&src, &dst, msg);
+        }
+        return;
+    }
     if next != NEXT_ICMPV6 || msg.len() < 4 || icmp_checksum(&src, &dst, msg) != 0 {
         return;
     }
@@ -524,5 +678,27 @@ pub fn self_test() -> Result<String, String> {
     if !answered {
         return Err(String::from("a neighbour solicitation got no advertisement"));
     }
-    Ok(alloc::format!("link-local {}, echo to self in {} us, NS -> NA, text form", fmt(&ll), rtt))
+    // UDP: a datagram to our own link-local address arrives on the bound port
+    // with its source port; a corrupted one is dropped by the checksum
+    if !udp_bind(5353) {
+        return Err(String::from("UDP port 5353 taken"));
+    }
+    let r = (|| {
+        udp_send(&ll, 40001, 5353, b"halo lewat UDP di IPv6").map_err(String::from)?;
+        let (from, sport, data) = udp_recv_wait(5353, 500).ok_or("no UDP datagram arrived")?;
+        if from != ll || sport != 40001 || data != b"halo lewat UDP di IPv6" {
+            return Err(String::from("UDP datagram arrived wrong"));
+        }
+        let bad0 = udp_stats().2;
+        let mut m = alloc::vec![0x9c, 0x41, 0x14, 0xe9, 0, 12, 0x12, 0x34, b'r', b'u', b's', b'k'];
+        m[6] = 0x12; // a checksum that cannot be right
+        crate::net::send_frame(&wrap(mac, mac, &ll, &ll, NEXT_UDP, HOP_LIMIT, &m));
+        if udp_recv_wait(5353, 200).is_some() || udp_stats().2 != bad0 + 1 {
+            return Err(String::from("a datagram with a bad checksum was not dropped"));
+        }
+        Ok(())
+    })();
+    udp_unbind(5353);
+    r?;
+    Ok(alloc::format!("link-local {}, echo to self in {} us, NS -> NA, UDP datagram to self (bad checksum dropped), text form", fmt(&ll), rtt))
 }

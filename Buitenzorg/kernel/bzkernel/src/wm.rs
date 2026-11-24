@@ -467,6 +467,10 @@ struct Wm {
     /// App window holding the pointer capture (a press in its client area,
     /// until the release).
     capture: Option<u32>,
+    /// the window in relative pointer mode (WIN_CTL POINTER_LOCK), and the
+    /// buttons it was last told about
+    pointer_lock: Option<u32>,
+    lock_buttons: u8,
     /// App window the pointer was last over (for LEAVE).
     pointer_in: Option<u32>,
     /// Active click ripple: (x, y, start_frame).
@@ -502,29 +506,46 @@ struct Wm {
     confirm: Option<u8>,
     /// Window open / close animations in flight.
     anims: Vec<Anim>,
+    /// a workspace switch sliding in: (start tick, direction +1 / -1)
+    ws_anim: Option<(u64, i32)>,
     /// The action center (notifications) is open.
     center_open: bool,
     /// Start-menu search: the query, its results, the highlighted one.
     search: String,
     results: Vec<crate::search::Hit>,
     sel: usize,
+    /// The card the gamepad points at in the Start menu (None = mouse only).
+    pad_card: Option<usize>,
     /// The window in exclusive full screen, with the geometry and state to
     /// restore.
     fullscreen: Option<(u32, (i32, i32, i32, i32), WinState)>,
 }
 
-/// A window opening (grows in, the window itself shows when it ends) or
-/// closing (shrinks and fades out): a ghost of its frame.
+/// A window ghost moving from one rectangle to another while it fades:
+/// opening (grows in, the window itself shows when it ends), closing (shrinks
+/// and fades out), minimizing (flies to its taskbar button), restoring (flies
+/// back from it).
 #[derive(Clone)]
 struct Anim {
     id: u32,
-    rect: (i32, i32, i32, i32),
+    from: (i32, i32, i32, i32),
+    to: (i32, i32, i32, i32),
+    /// opacity at the start and the end (0..=255)
+    alpha: (i32, i32),
     start: u64,
+    /// the window is not drawn until the ghost arrives
     opening: bool,
 }
 
 /// Length of a window animation (timer ticks, 18.2 per second): ~0.22 s.
 const ANIM_TICKS: u64 = 4;
+/// Length of a workspace slide: ~0.27 s.
+const WS_TICKS: u64 = 5;
+
+fn scaled_rect(r: (i32, i32, i32, i32), pct: i32) -> (i32, i32, i32, i32) {
+    let (w, h) = (r.2 * pct / 100, r.3 * pct / 100);
+    (r.0 + (r.2 - w) / 2, r.1 + (r.3 - h) / 2, w, h)
+}
 
 static WM: Mutex<Option<Wm>> = Mutex::new(None);
 
@@ -541,6 +562,8 @@ pub fn init(width: usize, height: usize) {
         workspace: 0,
         hover: None,
         capture: None,
+        pointer_lock: None,
+        lock_buttons: 0,
         pointer_in: None,
         ripple: None,
         frame: 0,
@@ -558,10 +581,12 @@ pub fn init(width: usize, height: usize) {
         last_title: (0, 0),
         confirm: None,
         anims: Vec::new(),
+        ws_anim: None,
         center_open: false,
         search: String::new(),
         results: Vec::new(),
         sel: 0,
+        pad_card: None,
         fullscreen: None,
     });
 }
@@ -637,6 +662,138 @@ pub fn shell_key(c: char) -> bool {
     }
 }
 
+/// A gamepad button for the desktop (see `keyboard::Hotkey::Pad`): Start
+/// opens / closes the Start menu (with a program focused only together with
+/// Select, so a game keeps its own Start button); in the menu the d-pad moves
+/// over the cards, L / R change category, A launches, B closes. Returns true
+/// when the screen changed.
+pub fn pad_button(b: u8, app_focused: bool, select_held: bool) -> bool {
+    let mut g = WM.lock();
+    let Some(wm) = g.as_mut() else { return false };
+    if wm.confirm.is_some() {
+        match b {
+            0 => wm.pending_power = wm.confirm.take().unwrap_or(0),
+            1 => wm.confirm = None,
+            _ => return false,
+        }
+        return true;
+    }
+    if !wm.start_open {
+        if b == 7 && (!app_focused || select_held) {
+            wm.start_open = true;
+            wm.ctx_menu = None;
+            wm.center_open = false;
+            wm.pad_card = Some(0);
+            return true;
+        }
+        return false;
+    }
+    if !wm.search.is_empty() {
+        // the search results: a list
+        match b {
+            16 => wm.sel = wm.sel.saturating_sub(1),
+            17 => {
+                if wm.sel + 1 < wm.results.len().min(MAX_RESULTS) {
+                    wm.sel += 1;
+                }
+            }
+            0 => {
+                if let Some(h) = wm.results.get(wm.sel) {
+                    wm.pending = Some(h.action.clone());
+                    wm.close_start();
+                }
+            }
+            1 => wm.search.clear(),
+            7 => wm.close_start(),
+            _ => return false,
+        }
+        return true;
+    }
+    let k = CATEGORIES.len();
+    let n = CATEGORIES[wm.start_cat].apps.len();
+    let cur = wm.pad_card.unwrap_or(0).min(n.saturating_sub(1));
+    match b {
+        0 => {
+            let name = CATEGORIES[wm.start_cat].apps[cur].0;
+            wm.pending = Some(String::from(name));
+            wm.close_start();
+        }
+        1 | 7 => wm.close_start(),
+        4 | 5 => {
+            wm.start_cat = if b == 4 { (wm.start_cat + k - 1) % k } else { (wm.start_cat + 1) % k };
+            wm.pad_card = Some(0);
+        }
+        16 => wm.pad_card = Some(if cur >= 3 { cur - 3 } else { cur }),
+        17 => wm.pad_card = Some(if cur + 3 < n { cur + 3 } else { cur }),
+        18 => {
+            // left past the first column = the previous category
+            if cur % 3 == 0 {
+                wm.start_cat = (wm.start_cat + k - 1) % k;
+                wm.pad_card = Some(0);
+            } else {
+                wm.pad_card = Some(cur - 1);
+            }
+        }
+        19 => {
+            if cur % 3 == 2 || cur + 1 >= n {
+                wm.start_cat = (wm.start_cat + 1) % k;
+                wm.pad_card = Some(0);
+            } else {
+                wm.pad_card = Some(cur + 1);
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Self-test of the pad launcher: Start opens the menu (not with a program
+/// focused unless Select is held), R moves to the next category, the d-pad
+/// walks the cards, A queues the card's launch and closes the menu, B closes.
+pub fn pad_self_test() -> bool {
+    if WM.lock().is_none() {
+        crate::println!("[gamepad] pad launcher: no window manager, skipped");
+        return true;
+    }
+    let state = || {
+        let g = WM.lock();
+        let w = g.as_ref().unwrap();
+        (w.start_open, w.start_cat, w.pad_card, w.pending.clone())
+    };
+    let saved_pending = WM.lock().as_mut().unwrap().pending.take();
+    let mut ok = true;
+    ok &= !pad_button(7, true, false) && !state().0; // a game keeps its Start
+    ok &= pad_button(7, true, true) && state().0 && state().2 == Some(0);
+    let cat0 = state().1;
+    pad_button(5, false, false);
+    let cat1 = state().1;
+    ok &= cat1 == (cat0 + 1) % CATEGORIES.len();
+    pad_button(19, false, false); // card 1
+    pad_button(17, false, false); // card 4 when there is one, else 1
+    let card = state().2.unwrap_or(99);
+    let n = CATEGORIES[cat1].apps.len();
+    ok &= card == if n > 4 { 4 } else { 1 };
+    pad_button(0, false, false);
+    let (open, _, _, launched) = state();
+    ok &= !open && card < n && launched.as_deref() == Some(CATEGORIES[cat1].apps[card.min(n - 1)].0);
+    let launched = launched.unwrap_or_default();
+    pad_button(7, false, false);
+    pad_button(1, false, false);
+    ok &= !state().0;
+    {
+        let mut g = WM.lock();
+        let w = g.as_mut().unwrap();
+        w.pending = saved_pending;
+        w.start_cat = 0;
+    }
+    if ok {
+        crate::println!("MILESTONE: PAD LAUNCHER OK (Start opens the menu, L/R + d-pad move, A launched {}, B closes)", launched);
+    } else {
+        crate::println!("[gamepad] FAIL: pad launcher (category {} -> {}, card {})", cat0, cat1, card);
+    }
+    ok
+}
+
 /// The Start menu's search query.
 pub fn search_text() -> String {
     WM.lock().as_ref().map(|w| w.search.clone()).unwrap_or_default()
@@ -675,6 +832,20 @@ pub fn win_ctl(a0: u64, a1: u64) -> u64 {
         _ => {}
     }
     let caller = crate::aspace::current_id();
+    if opn == op::POINTER_LOCK {
+        let mut g = WM.lock();
+        let Some(wm) = g.as_mut() else { return syserr::INVAL };
+        if !wm.windows.iter().any(|w| w.id == id && (caller == 0 || w.owner == caller)) {
+            return syserr::INVAL;
+        }
+        if a1 != 0 {
+            wm.pointer_lock = Some(id);
+            wm.lock_buttons = 0;
+        } else if wm.pointer_lock == Some(id) {
+            wm.pointer_lock = None;
+        }
+        return 0;
+    }
     if opn == op::RESIZABLE {
         let mut g = WM.lock();
         let Some(wm) = g.as_mut() else { return syserr::INVAL };
@@ -1353,7 +1524,13 @@ pub fn tick_animation(frame: u64) -> bool {
     wm.frame = frame;
     let before = wm.anims.len();
     wm.anims.retain(|a| frame.saturating_sub(a.start) <= ANIM_TICKS);
-    let anim = before > 0;
+    let mut anim = before > 0;
+    if let Some((start, _)) = wm.ws_anim {
+        if frame.saturating_sub(start) > WS_TICKS {
+            wm.ws_anim = None;
+        }
+        anim = true;
+    }
     if let Some((_, _, start)) = wm.ripple {
         if frame.saturating_sub(start) > 8 {
             wm.ripple = None;
@@ -1744,6 +1921,44 @@ pub fn maximize(id: u32) {
     }
 }
 
+/// Relative pointer mode (the desktop loop, each sample): when a window in
+/// pointer-lock mode has the focus, hand it the motion (`dx`, `dy`) and
+/// button changes as events and return the screen point to hold the pointer
+/// at (its client centre). None = normal pointer handling.
+pub fn pointer_lock_feed(dx: i64, dy: i64, buttons: u8) -> Option<(i32, i32)> {
+    use bz_abi::pointer_event::{DOWN, RELATIVE, UP};
+    let mut guard = WM.lock();
+    let wm = guard.as_mut()?;
+    if let Some(id) = wm.pointer_lock {
+        if !wm.windows.iter().any(|w| w.id == id) {
+            wm.pointer_lock = None; // its window is gone
+        }
+    }
+    let id = wm.lock_active()?;
+    let old = wm.lock_buttons;
+    wm.lock_buttons = buttons & 7;
+    let w = wm.windows.iter_mut().find(|w| w.id == id)?;
+    let (ox, oy) = w.client_origin();
+    let (cw, ch) = ((w.w - 2 * BORDER).max(1), (w.h - TITLE_H - 2 * BORDER).max(1));
+    let (cx, cy) = (cw / 2, ch / 2);
+    let (mut rx, mut ry) = (dx, dy);
+    while rx != 0 || ry != 0 {
+        let (sx, sy) = (rx.clamp(-32767, 32767), ry.clamp(-32767, 32767));
+        w.push_event(pack_event(RELATIVE, sx as i32, sy as i32, buttons as u64 & 7));
+        rx -= sx;
+        ry -= sy;
+    }
+    let (was, now) = (old & 1 != 0, buttons & 1 != 0);
+    if now && !was {
+        w.push_event(pack_event(DOWN, cx, cy, 1));
+    } else if was && !now {
+        w.push_event(pack_event(UP, cx, cy, 0));
+    }
+    let center = (ox + cx, oy + cy);
+    wm.cursor = center;
+    Some(center)
+}
+
 /// Minimize a window.
 pub fn minimize(id: u32) {
     if let Some(wm) = WM.lock().as_mut() {
@@ -1762,8 +1977,7 @@ pub fn close(id: u32) {
 pub fn switch_workspace(n: u8) -> u8 {
     let mut guard = WM.lock();
     let Some(wm) = guard.as_mut() else { return 0 };
-    wm.workspace = n % WORKSPACES;
-    wm.drag = Drag::None;
+    wm.set_workspace(n % WORKSPACES);
     wm.workspace
 }
 
@@ -2118,19 +2332,84 @@ impl Wm {
         self.search.clear();
         self.results.clear();
         self.sel = 0;
+        self.pad_card = None;
     }
 
     /// Start a window animation (only on the live desktop, with animations
     /// on). Not before its first frame: the session's own windows grew in at
     /// their creation rects and then jumped to the laid-out ones.
     fn animate(&mut self, id: u32, rect: (i32, i32, i32, i32), opening: bool) {
-        if !self.animations || !crate::interactive::is_active() || !crate::boot::first_frame_shown() {
+        if opening {
+            self.animate_move(id, scaled_rect(rect, 70), rect, (90, 200), true);
+        } else {
+            self.animate_move(id, rect, scaled_rect(rect, 75), (200, 30), false);
+        }
+    }
+
+    fn animations_live(&self) -> bool {
+        self.animations && crate::interactive::is_active() && crate::boot::first_frame_shown()
+    }
+
+    fn animate_move(&mut self, id: u32, from: (i32, i32, i32, i32), to: (i32, i32, i32, i32), alpha: (i32, i32), opening: bool) {
+        if !self.animations_live() {
             return;
         }
         self.anims.retain(|a| a.id != id);
         if self.anims.len() < 16 {
-            self.anims.push(Anim { id, rect, start: crate::interrupts::ticks(), opening });
+            self.anims.push(Anim { id, from, to, alpha, start: crate::interrupts::ticks(), opening });
         }
+    }
+
+    /// Switch the visible workspace; the new one's windows slide in.
+    fn set_workspace(&mut self, ws: u8) {
+        if ws != self.workspace && self.animations_live() {
+            self.ws_anim = Some((crate::interrupts::ticks(), if ws > self.workspace { 1 } else { -1 }));
+        }
+        self.workspace = ws;
+        self.drag = Drag::None;
+    }
+
+    /// The compositor's copy of the scene mid-slide: its windows shifted
+    /// (eased out) toward their places. Hit-testing uses the real rects.
+    fn apply_transition(&mut self) {
+        let Some((start, dir)) = self.ws_anim else { return };
+        let age = self.frame.max(crate::interrupts::ticks()).saturating_sub(start).min(WS_TICKS) as i32;
+        let left = WS_TICKS as i32 - age;
+        let off = dir * self.width / 3 * left * left / (WS_TICKS as i32 * WS_TICKS as i32);
+        if off == 0 {
+            return;
+        }
+        let ws = self.workspace;
+        for w in self.windows.iter_mut().filter(|w| w.workspace == ws) {
+            w.x += off;
+        }
+    }
+
+    /// The window in pointer-lock mode while it has the focus (the top window
+    /// of the workspace, not minimized, no shell menu open).
+    fn lock_active(&self) -> Option<u32> {
+        let id = self.pointer_lock?;
+        if self.start_open || self.ctx_menu.is_some() || self.confirm.is_some() || self.center_open {
+            return None;
+        }
+        let top = self.windows.iter().filter(|w| w.workspace == self.workspace && w.state != WinState::Minimized).next_back()?;
+        (top.id == id).then_some(id)
+    }
+
+    /// Where window `id`'s taskbar button is (mirrors `draw_taskbar`).
+    fn task_button_rect(&self, id: u32) -> (i32, i32, i32, i32) {
+        let y = self.height - TASKBAR_H + 5;
+        let mut bx = 6 + START_W + 8;
+        for w in self.windows.iter().filter(|w| w.workspace == self.workspace) {
+            if bx + 116 > self.width - 160 {
+                break;
+            }
+            if w.id == id {
+                return (bx, y, 110, TASKBAR_H - 10);
+            }
+            bx += 116;
+        }
+        (self.width / 2 - 55, y, 110, TASKBAR_H - 10)
     }
 
     /// Which title button (if any) is under (x, y), on the top-most window there.
@@ -2166,13 +2445,22 @@ impl Wm {
                 }
             }
             TitleButton::Minimize => {
+                let mut fly = None;
+                let ws = self.workspace;
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                     if w.state != WinState::Minimized {
                         if w.state == WinState::Normal {
                             w.saved = (w.x, w.y, w.w, w.h);
                         }
+                        if w.workspace == ws {
+                            fly = Some((w.x, w.y, w.w, w.h));
+                        }
                         w.state = WinState::Minimized;
                     }
+                }
+                if let Some(r) = fly {
+                    let to = self.task_button_rect(id);
+                    self.animate_move(id, r, to, (210, 60), false);
                 }
             }
             TitleButton::Maximize => self.toggle_maximize(id),
@@ -2224,6 +2512,7 @@ impl Wm {
     fn focus(&mut self, id: u32) {
         if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
             if self.windows[idx].state == WinState::Minimized {
+                let from = self.task_button_rect(id);
                 let (sx, sy, sw, sh) = self.windows[idx].saved;
                 let w = &mut self.windows[idx];
                 w.x = sx;
@@ -2232,6 +2521,7 @@ impl Wm {
                 w.h = sh;
                 w.state = WinState::Normal;
                 self.sync_client(id);
+                self.animate_move(id, from, (sx, sy, sw, sh), (60, 210), true);
             }
             let win = self.windows.remove(idx);
             self.windows.push(win);
@@ -2244,8 +2534,7 @@ impl Wm {
         let y = self.height - TASKBAR_H + TASKBAR_H / 2;
         for ws in 0..WORKSPACES {
             if hit(x, y, ws_button_rect(self.width, self.height, ws)) {
-                self.workspace = ws;
-                self.drag = Drag::None;
+                self.set_workspace(ws);
                 return;
             }
         }
@@ -2266,12 +2555,18 @@ impl Wm {
         for id in ids {
             if x >= bx && x < bx + 110 {
                 // Un-minimize on taskbar click, then focus.
+                let from = (bx, self.height - TASKBAR_H + 5, 110, TASKBAR_H - 10);
+                let mut restored = None;
                 if let Some(win) = self.windows.iter_mut().find(|w| w.id == id) {
                     if win.state == WinState::Minimized {
                         win.state = WinState::Normal;
+                        restored = Some((win.x, win.y, win.w, win.h));
                     }
                 }
                 self.focus(id);
+                if let Some(r) = restored {
+                    self.animate_move(id, from, r, (60, 210), true);
+                }
                 return;
             }
             bx += 116;
@@ -2494,16 +2789,18 @@ impl Wm {
         for a in &self.anims {
             let age = self.frame.saturating_sub(a.start).min(ANIM_TICKS) as i32;
             let t = ANIM_TICKS as i32;
-            // scale in 1/100: opening 70 -> 100, closing 100 -> 75
-            let (scale, alpha) = if a.opening { (70 + 30 * age / t, 90 + 110 * age / t) } else { (100 - 25 * age / t, 200 - 170 * age / t) };
-            let (x, y, w, h) = a.rect;
-            let (sw, sh) = (w * scale / 100, h * scale / 100);
-            let (sx, sy) = (x + (w - sw) / 2, y + (h - sh) / 2);
+            // eased out: fast at first, settling at the end
+            let k = 256 - 256 * (t - age) * (t - age) / (t * t);
+            let lerp = |p: i32, q: i32| p + (q - p) * k / 256;
+            let (sx, sy, sw, sh) = (lerp(a.from.0, a.to.0), lerp(a.from.1, a.to.1), lerp(a.from.2, a.to.2), lerp(a.from.3, a.to.3));
+            let alpha = lerp(a.alpha.0, a.alpha.1).clamp(0, 255);
             if sw < 8 || sh < 8 {
                 continue;
             }
-            blend_rounded(canvas, sx, sy, sw, sh, radius, th.win_body, alpha as u8);
-            blend_rounded(canvas, sx, sy, sw, (TITLE_H * scale / 100).max(4), radius, th.win_title_active, alpha as u8);
+            let title = (TITLE_H * sh / a.to.3.max(a.from.3).max(1)).clamp(4, TITLE_H);
+            let r = radius.min(sh / 2).min(sw / 2);
+            blend_rounded(canvas, sx, sy, sw, sh, r, th.win_body, alpha as u8);
+            blend_rounded(canvas, sx, sy, sw, title, r, th.win_title_active, alpha as u8);
         }
     }
 
@@ -2733,12 +3030,14 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
             || self.confirm.is_some()
             || self.center_open
             || !self.anims.is_empty()
+            || self.ws_anim.is_some()
             || toast.is_some();
         global = gfx::mix(global, toast.map_or(0, |n| n.id as u64));
         global = gfx::mix(gfx::mix(global, crate::notify::generation()), self.center_open as u64);
         global = gfx::mix(global, self.confirm.map_or(0, |c| c as u64 + 1));
         global = gfx::mix_bytes(gfx::mix(global, self.sel as u64), self.search.as_bytes());
         global = gfx::mix(global, self.results.len() as u64);
+        global = gfx::mix(global, self.pad_card.map_or(0, |c| c as u64 + 1) | (self.start_cat as u64) << 8 | (self.start_open as u64) << 16);
         let fs = self.fs_window().map(|w| w.id);
         global = gfx::mix(global, fs.map_or(0, |i| i as u64 + 1));
         if let Some((text, level, _)) = &self.osd {
@@ -2797,13 +3096,15 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
     /// the cursor's own pixels. None = not eligible (a menu is open, a drag
     /// or a ripple is running: the pointer position matters to the scene).
     fn cursor_key(&self) -> Option<u64> {
-        if self.start_open
+        if self.lock_active().is_some()
+            || self.start_open
             || self.ctx_menu.is_some()
             || self.ripple.is_some()
             || self.osd.is_some()
             || self.confirm.is_some()
             || self.center_open
             || !self.anims.is_empty()
+            || self.ws_anim.is_some()
             || crate::notify::toast(crate::interrupts::ticks()).is_some()
             || !matches!(self.drag, Drag::None)
         {
@@ -3162,9 +3463,14 @@ fn draw_ansi_line(canvas: &mut Canvas, x: i32, y: i32, line: &str, default: Colo
 
         for (j, (name, label)) in cat.apps.iter().enumerate() {
             let (cx, cy, cw, ch) = card_rect(self.height, j);
-            let hot = hit(mx, my, (cx, cy, cw, ch));
+            let pad = self.pad_card == Some(j);
+            let hot = hit(mx, my, (cx, cy, cw, ch)) || pad;
             if hot {
                 fill_rounded(canvas, cx, cy, cw, ch, 10, shift(th.taskbar_bg, 24));
+            }
+            if pad {
+                outline_rounded(canvas, cx, cy, cw, ch, 10, 2, cat.leaf);
+            } else if hot {
                 outline_rounded(canvas, cx, cy, cw, ch, 10, 1, shift(line, 20));
             }
             let isz = crate::icons::size(true);
@@ -3456,7 +3762,14 @@ struct FramePointer {
 fn present_scene(back: &mut [u32], width: usize, height: usize, scene: SceneDesc, ptr: FramePointer, record: bool) {
     use core::sync::atomic::Ordering::Relaxed;
     let th = theme::current();
-    let (gpu_hw, fb_hw) = sync_hw_cursors(&th, ptr.pos, ptr.scale);
+    // pointer lock: no cursor on any output
+    let hidden = ptr.pos.0 <= HIDDEN_POINTER.0;
+    let (gpu_hw, fb_hw) = if hidden {
+        hide_hw_cursors();
+        (false, false)
+    } else {
+        sync_hw_cursors(&th, ptr.pos, ptr.scale)
+    };
     let gpu_on = crate::virtio::gpu::active();
     let mut on_screen = ON_SCREEN.lock();
     // The desktop loop and `present_now` compose on different CPUs: the one
@@ -3506,7 +3819,7 @@ fn present_scene(back: &mut [u32], width: usize, height: usize, scene: SceneDesc
             hw: (gpu_hw, fb_hw),
         });
     }
-    if sw {
+    if sw && !hidden {
         draw_cursor_at(&mut Canvas::new(back, width, height), &th, ptr.pos, ptr.scale);
     }
     // 3. the console framebuffer, and a GPU without its own cursor
@@ -3516,6 +3829,9 @@ fn present_scene(back: &mut [u32], width: usize, height: usize, scene: SceneDesc
     }
     *on_screen = Some(scene);
 }
+
+/// Where a frame's pointer is while a window holds it (pointer lock): off screen.
+const HIDDEN_POINTER: (i32, i32) = (-10_000, -10_000);
 
 /// The pointer's bounding box: (x, y, w, h).
 fn cursor_rect(cursor: (i32, i32), scale: i32) -> (i32, i32, i32, i32) {
@@ -3966,7 +4282,8 @@ fn compose_scene(back: &mut [u32], width: usize, height: usize) -> Option<(Scene
         let guard = WM.lock();
         (guard.clone(), SNAPSHOT_ORDER.fetch_add(1, Ordering::Relaxed) + 1)
     };
-    let wm = snapshot?;
+    let mut wm = snapshot?;
+    wm.apply_transition();
     COMPOSE_SEQ.fetch_add(1, Ordering::AcqRel);
     COMPOSING.fetch_add(1, Ordering::Relaxed);
     // Described before drawing: a canvas changed during the compose then
@@ -3975,7 +4292,8 @@ fn compose_scene(back: &mut [u32], width: usize, height: usize) -> Option<(Scene
     let scene = wm.scene_desc();
     compose_parallel(&wm, back, width, height);
     COMPOSING.fetch_sub(1, Ordering::Relaxed);
-    Some((scene, FramePointer { pos: wm.cursor, scale: wm.cursor_scale, key: wm.cursor_key(), order }))
+    let pos = if wm.lock_active().is_some() { HIDDEN_POINTER } else { wm.cursor };
+    Some((scene, FramePointer { pos, scale: wm.cursor_scale, key: wm.cursor_key(), order }))
 }
 
 fn clip_rect(r: (i32, i32, i32, i32), width: usize, height: usize) -> (usize, usize, usize, usize) {

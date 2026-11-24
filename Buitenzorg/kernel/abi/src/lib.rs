@@ -345,6 +345,13 @@ pub mod win_ctl {
     /// Without it a window keeps the size it was created with. Returns the
     /// client size `w | h << 16`.
     pub const RESIZABLE: u64 = 6;
+    /// Relative pointer mode on (`a1` = 1) or off (0): while the window is the
+    /// focused one the cursor is hidden and held at its client centre, and
+    /// motion arrives as [`crate::pointer_event::RELATIVE`] events (x, y =
+    /// the movement); buttons still come as DOWN / UP. Needs a relative
+    /// pointing device (PS/2, USB or virtio mouse; a tablet moves nothing).
+    /// Returns 0.
+    pub const POINTER_LOCK: u64 = 7;
 }
 
 /// Kinds of [`sysno::FAULT_HANDLER`].
@@ -843,6 +850,9 @@ pub mod pointer_event {
     /// The client area of a resizable window (`win_ctl::RESIZABLE`) changed
     /// size: x = new width, y = new height. Its pixels are cleared: redraw.
     pub const RESIZE: u64 = 6;
+    /// Pointer movement of a window in relative mode (`win_ctl::POINTER_LOCK`):
+    /// x / y = the motion since the last event (signed 16-bit), buttons as usual.
+    pub const RELATIVE: u64 = 7;
 }
 
 /// Operations for [`DrawCmd::op`].
@@ -1224,6 +1234,8 @@ mod tests {
         assert_eq!(win_ctl::SURFACE_SIZE, 5);
         assert_eq!(win_ctl::RESIZABLE, 6);
         assert_eq!(pointer_event::RESIZE, 6);
+        assert_eq!(win_ctl::POINTER_LOCK, 7);
+        assert_eq!(pointer_event::RELATIVE, 7);
         assert_eq!(fault_kind::DIVIDE, 1);
         assert_eq!(compute_op::GEMV, 5);
         assert_eq!(compute_kind::INTEL, 3);

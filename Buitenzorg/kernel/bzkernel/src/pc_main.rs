@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, intel_gpu, mouse, nvme, pci, power, realtek, rtc, serial};
+pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, hpet, intel_gpu, mouse, nvme, pci, power, realtek, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -36,6 +36,7 @@ mod desktop;
 mod driver;
 mod elf;
 mod fat;
+mod journal;
 mod framebuffer;
 mod gfx;
 mod icons;
@@ -208,6 +209,11 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     } else {
         println!("[kernel] smp: only {} of {} application processors came online", aps, cpus - 1);
     }
+    match hpet::self_test() {
+        Some(Ok(r)) => println!("[kernel] MILESTONE: HPET OK ({})", r),
+        Some(Err(why)) => println!("[kernel] hpet self-test FAILED: {}", why),
+        None => println!("[kernel] hpet: none (no ACPI HPET table)"),
+    }
     // Device interrupts through the I/O APIC, spread over the CPUs.
     match ioapic::init() {
         Some(routes) => {
@@ -242,6 +248,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     clr::boot_demo("x86-64");
     // C programs: DOOM through userland/c (when the image carries it)
     app::doom_self_test();
+    app::posix_self_test();
     app::llm_self_test();
 
     // v1.0 hardening: syscalls must refuse user pointers the caller does not
@@ -286,6 +293,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     icons::self_test();
     desktop::hotkey_self_test();
     usb::hid::pad_self_test();
+    wm::pad_self_test();
     terminal::self_test("helloclr", "Hello from managed C#");
     println!("[kernel] BUITENZORG READY -- terminal ('run xox', 'script py', 'vm start nanovm').");
 
@@ -2006,6 +2014,10 @@ fn disk_persist_demo() {
             "[kernel] disk write self-test FAILED (wrote={} read_back={} no_leak={} created={} deleted={} shell={})",
             wrote, read_back, no_leak, created, deleted, shell_ok
         );
+    }
+    match vfs::journal_self_test("/disk") {
+        Ok(s) => println!("[kernel] MILESTONE: JOURNAL OK ({})", s),
+        Err(e) => println!("[kernel] journal self-test FAILED: {}", e),
     }
 }
 

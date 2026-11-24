@@ -37,6 +37,13 @@ fn read_u32(phys: u64, off: u64) -> u32 {
 fn read_u64(phys: u64, off: u64) -> u64 {
     unsafe { core::ptr::read_unaligned(phys_to_virt(phys + off) as *const u64) }
 }
+/// A u32 / u64 field of an ACPI table found by [`find_table`] (physical address).
+pub fn table_u32(table: u64, off: u64) -> u32 {
+    read_u32(table, off)
+}
+pub fn table_u64(table: u64, off: u64) -> u64 {
+    read_u64(table, off)
+}
 fn signature(phys: u64) -> [u8; 4] {
     unsafe {
         let p = phys_to_virt(phys) as *const u8;

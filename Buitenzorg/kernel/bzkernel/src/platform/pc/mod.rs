@@ -8,6 +8,7 @@ pub mod bochs_vbe;
 pub mod e1000;
 pub mod e1000e;
 pub mod hda;
+pub mod hpet;
 pub mod intel_blt;
 pub mod intel_gpu;
 pub mod intel_render;

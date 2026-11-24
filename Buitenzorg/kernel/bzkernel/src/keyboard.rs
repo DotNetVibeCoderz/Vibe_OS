@@ -42,6 +42,10 @@ pub enum Hotkey {
     VolumeUp,
     VolumeDown,
     Mute,
+    /// A gamepad button was pressed: 0..7 = A B X Y L R Select Start,
+    /// 16..19 = Up Down Left Right (the desktop's pad launcher; programs get
+    /// the raw events too).
+    Pad(u8),
 }
 
 static HOTKEYS: Mutex<VecDeque<Hotkey>> = Mutex::new(VecDeque::new());
@@ -54,6 +58,8 @@ fn hotkey_of(code: u32) -> Option<Hotkey> {
         0x130 => Some(Hotkey::VolumeUp),
         0x12E => Some(Hotkey::VolumeDown),
         0x120 => Some(Hotkey::Mute),
+        c if (PAD_A..PAD_A + 8).contains(&c) => Some(Hotkey::Pad((c - PAD_A) as u8)),
+        c if (PAD_UP..PAD_UP + 4).contains(&c) => Some(Hotkey::Pad((c - PAD_UP + 16) as u8)),
         _ => None,
     }
 }

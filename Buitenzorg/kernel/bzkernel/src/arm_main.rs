@@ -35,6 +35,7 @@ mod driver;
 mod dtb;
 mod elf;
 mod fat;
+mod journal;
 mod framebuffer;
 mod gfx;
 mod icons;
@@ -219,6 +220,10 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
             Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
         }
+        match vfs::journal_self_test("/disk") {
+            Ok(s) => println!("[kernel] MILESTONE: JOURNAL OK ({})", s),
+            Err(e) => println!("[kernel] journal self-test FAILED: {}", e),
+        }
         match perm::self_test() {
             Ok(s) => println!("[kernel] MILESTONE: PERMISSIONS OK ({})", s),
             Err(e) => println!("[kernel] permissions self-test FAILED: {}", e),
@@ -310,6 +315,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         // The managed C# path (RustCLR) next to the native one (bflat).
         clr::boot_demo("ARM64");
         app::doom_self_test();
+        app::posix_self_test();
         app::llm_self_test();
         show_desktop();
     } else {
@@ -358,6 +364,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         }
         desktop::hotkey_self_test();
         usb::hid::pad_self_test();
+        wm::pad_self_test();
         virtio::snd::stream_self_test();
         terminal::self_test("helloclr", "Hello from managed C#");
     }

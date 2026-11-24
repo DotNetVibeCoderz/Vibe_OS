@@ -4,9 +4,13 @@
 //! like `APPS/DEMO/README.TXT` (relative to the volume), folders created with
 //! `.` / `..` entries, rename / move by relinking the 32-byte entry.
 //!
-//! Write ordering (no journal yet): new data clusters -> FAT chain (every FAT
-//! copy) -> directory entry -> free the old chain. A crash in between can leak
-//! clusters but never leaves a directory entry pointing at unwritten data.
+//! Write ordering: new data clusters -> FAT chain (every FAT copy) ->
+//! directory entry -> free the old chain. On a volume with `JOURNAL.SYS`
+//! (every Buitenzorg image) the metadata part of each operation is one
+//! journaled transaction (`journal.rs`), so a crash leaves either the old or
+//! the new state -- no leaked clusters, no half-updated FAT copies. Without a
+//! journal a crash can leak clusters but never leaves a directory entry
+//! pointing at unwritten data.
 
 use alloc::{string::String, vec::Vec};
 
@@ -41,6 +45,8 @@ pub struct FatVolume {
     /// it every file read did one extra PIO sector read per cluster. Only
     /// `fat_set` writes FAT sectors, and it drops the entry.
     fat_cache: spin::Mutex<(u64, [u8; SECTOR_SIZE])>,
+    /// The metadata journal (`JOURNAL.SYS`), when the volume has one.
+    journal: Option<crate::journal::Journal>,
 }
 
 /// A directory: the volume root (fixed area on FAT12/16, a chain on FAT32)
@@ -100,12 +106,76 @@ impl FatVolume {
         for start in Self::partitions(dev)? {
             if let Ok(vol) = Self::parse_vbr(dev, start) {
                 if vol.has_marker(dev) {
-                    return Ok(vol);
+                    first = Some(vol);
+                    break;
                 }
                 first.get_or_insert(vol);
             }
         }
-        first.ok_or("no FAT volume found on device")
+        let mut vol = first.ok_or("no FAT volume found on device")?;
+        vol.attach_journal(dev);
+        Ok(vol)
+    }
+
+    /// Find `JOURNAL.SYS` in the root and replay a transaction a crash left.
+    fn attach_journal(&mut self, dev: &mut dyn BlockDevice) {
+        let Ok((_, _, _, e)) = self.lookup(dev, crate::journal::FILE) else { return };
+        if e.is_dir || e.cluster < 2 {
+            return;
+        }
+        let mut lbas = Vec::new();
+        let mut c = e.cluster;
+        let want = (e.size as u64).div_ceil(SECTOR_SIZE as u64);
+        while (lbas.len() as u64) < want {
+            let first = self.cluster_to_sector(c);
+            for s in 0..self.sectors_per_cluster {
+                lbas.push(first + s);
+            }
+            match self.next_cluster(dev, c) {
+                Ok(Some(n)) if lbas.len() < 65536 => c = n,
+                _ => break,
+            }
+        }
+        lbas.truncate(want as usize);
+        if lbas.len() < 16 {
+            return;
+        }
+        let j = crate::journal::Journal::new(lbas);
+        match j.replay(dev) {
+            Ok(0) => {}
+            Ok(n) => crate::println!("[fat] journal: replayed {} sector(s) of an interrupted transaction", n),
+            Err(e) => crate::println!("[fat] journal: {}", e),
+        }
+        self.drop_fat_cache();
+        self.journal = Some(j);
+    }
+
+    /// Sectors one journaled transaction can hold (None = no journal).
+    pub fn journal_capacity(&self) -> Option<usize> {
+        self.journal.as_ref().map(|j| j.capacity())
+    }
+
+    /// Run a mutating operation as one transaction.
+    fn transact<R>(
+        &self,
+        dev: &mut dyn BlockDevice,
+        f: impl FnOnce(&Self, &mut dyn BlockDevice) -> Result<R, &'static str>,
+    ) -> Result<R, &'static str> {
+        let mut tx = crate::journal::Tx::new(dev);
+        let r = f(self, &mut tx);
+        // The FAT cache may hold sectors seen through the transaction.
+        self.drop_fat_cache();
+        let v = r?;
+        tx.commit(self.journal.as_ref())?;
+        Ok(v)
+    }
+
+    /// The journal file itself is not writable through the file API.
+    fn guard(&self, path: &str) -> Result<(), &'static str> {
+        if self.journal.is_some() && path.trim_matches('/').eq_ignore_ascii_case(crate::journal::FILE) {
+            return Err("JOURNAL.SYS is a system file");
+        }
+        Ok(())
     }
 
     /// Whether this is Buitenzorg's own volume. The kernel only ever mounts
@@ -224,6 +294,7 @@ impl FatVolume {
                 0
             },
             fat_cache: spin::Mutex::new((u64::MAX, [0u8; SECTOR_SIZE])),
+            journal: None,
         })
     }
 
@@ -808,7 +879,7 @@ impl FatVolume {
         let first = self.cluster_to_sector(new);
         let zero = [0u8; SECTOR_SIZE];
         for s in 0..self.sectors_per_cluster {
-            dev.write_sector(first + s, &zero)?;
+            dev.write_data(first + s, &zero)?;
         }
         self.fat_set(dev, new, self.eoc())?;
         let mut last = head;
@@ -850,6 +921,10 @@ impl FatVolume {
 
     /// Create the folder `path` (its parent must exist).
     pub fn mkdir(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<(), &'static str> {
+        self.transact(dev, |v, d| v.mkdir_in(d, path))
+    }
+
+    fn mkdir_in(&self, dev: &mut dyn BlockDevice, path: &str) -> Result<(), &'static str> {
         let (parent, name) = split_parent(path);
         let wanted = encode_83(name)?;
         let dir = self.resolve_dir(dev, parent)?;
@@ -864,7 +939,7 @@ impl FatVolume {
         let first = self.cluster_to_sector(new);
         let zero = [0u8; SECTOR_SIZE];
         for s in 1..self.sectors_per_cluster {
-            dev.write_sector(first + s, &zero)?;
+            dev.write_data(first + s, &zero)?;
         }
         let mut sector = [0u8; SECTOR_SIZE];
         let parent_cluster = match dir {
@@ -885,6 +960,12 @@ impl FatVolume {
     /// must not exist). The 32-byte entry is relinked, so the data stays put;
     /// a moved folder gets its ".." updated.
     pub fn rename(&self, dev: &mut dyn BlockDevice, from: &str, to: &str) -> Result<(), &'static str> {
+        self.guard(from)?;
+        self.guard(to)?;
+        self.transact(dev, |v, d| v.rename_in(d, from, to))
+    }
+
+    fn rename_in(&self, dev: &mut dyn BlockDevice, from: &str, to: &str) -> Result<(), &'static str> {
         let (_, src_lba, src_off, e) = self.lookup(dev, from)?;
         let (to_parent, to_name) = split_parent(to);
         let wanted = encode_83(to_name)?;
@@ -940,12 +1021,12 @@ impl FatVolume {
     }
 
     /// Create or overwrite the file at a volume-relative path with `data`.
-    pub fn write_file(
-        &self,
-        dev: &mut dyn BlockDevice,
-        name: &str,
-        data: &[u8],
-    ) -> Result<(), &'static str> {
+    pub fn write_file(&self, dev: &mut dyn BlockDevice, name: &str, data: &[u8]) -> Result<(), &'static str> {
+        self.guard(name)?;
+        self.transact(dev, |v, d| v.write_file_in(d, name, data))
+    }
+
+    fn write_file_in(&self, dev: &mut dyn BlockDevice, name: &str, data: &[u8]) -> Result<(), &'static str> {
         let (parent, file) = split_parent(name);
         let wanted = encode_83(file)?;
         let dir = self.resolve_dir(dev, parent)?;
@@ -973,7 +1054,7 @@ impl FatVolume {
                     let len = core::cmp::min(SECTOR_SIZE, data.len() - file_off);
                     sector[..len].copy_from_slice(&data[file_off..file_off + len]);
                 }
-                dev.write_sector(first + s, &sector)?;
+                dev.write_data(first + s, &sector)?;
             }
         }
         // 2. Link the chain (each entry -> next, last -> end of chain).
@@ -1000,9 +1081,14 @@ impl FatVolume {
     /// same order as `write_file` (data, FAT, entry), so a crash in between
     /// leaves the old file intact (at worst leaked clusters).
     pub fn append_file(&self, dev: &mut dyn BlockDevice, name: &str, data: &[u8]) -> Result<(), &'static str> {
+        self.guard(name)?;
+        self.transact(dev, |v, d| v.append_file_in(d, name, data))
+    }
+
+    fn append_file_in(&self, dev: &mut dyn BlockDevice, name: &str, data: &[u8]) -> Result<(), &'static str> {
         let (lba, off, e) = match self.lookup(dev, name) {
             Ok((_, lba, off, e)) => (lba, off, e),
-            Err(_) => return self.write_file(dev, name, data),
+            Err(_) => return self.write_file_in(dev, name, data),
         };
         if e.is_dir {
             return Err("a folder with that name exists");
@@ -1017,7 +1103,7 @@ impl FatVolume {
         }
         if size == 0 || e.cluster < 2 {
             // nothing on disk yet: the plain writer does exactly this
-            return self.write_file(dev, name, data);
+            return self.write_file_in(dev, name, data);
         }
         self.invalidate_fsinfo(dev)?;
         let bps = self.bytes_per_sector;
@@ -1043,7 +1129,7 @@ impl FatVolume {
                 }
                 let n = core::cmp::min(SECTOR_SIZE - in_sec, data.len() - done);
                 sector[in_sec..in_sec + n].copy_from_slice(&data[done..done + n]);
-                dev.write_sector(base + s, &sector)?;
+                dev.write_data(base + s, &sector)?;
                 done += n;
                 pos += n as u64;
             }
@@ -1061,7 +1147,7 @@ impl FatVolume {
                         let n = core::cmp::min(SECTOR_SIZE, rest.len() - o);
                         sector[..n].copy_from_slice(&rest[o..o + n]);
                     }
-                    dev.write_sector(first + s, &sector)?;
+                    dev.write_data(first + s, &sector)?;
                 }
             }
             for i in 0..chain.len() {
@@ -1083,6 +1169,11 @@ impl FatVolume {
 
     /// Delete a file, or an empty folder, and free its clusters.
     pub fn delete_file(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<(), &'static str> {
+        self.guard(name)?;
+        self.transact(dev, |v, d| v.delete_file_in(d, name))
+    }
+
+    fn delete_file_in(&self, dev: &mut dyn BlockDevice, name: &str) -> Result<(), &'static str> {
         let (_, lba, off, e) = self.lookup(dev, name).map_err(|_| "file not found")?;
         if e.is_dir && e.cluster >= 2 && !self.entries(dev, Dir::Cluster(e.cluster))?.is_empty() {
             return Err("folder is not empty");

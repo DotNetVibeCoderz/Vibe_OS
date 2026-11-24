@@ -247,6 +247,7 @@ public static class WinCtl
     public const ulong VsyncInfo = 4;
     public const ulong SurfaceSize = 5;
     public const ulong Resizable = 6;
+    public const ulong PointerLock = 7;
 }
 
 /// <summary>Kinds of packed pointer events from <c>WIN_EVENT</c> (mirrors <c>bz_abi::pointer_event</c>).</summary>
@@ -258,6 +259,7 @@ public static class PointerEvent
     public const ulong Leave = 4;
     public const ulong Wheel = 5;
     public const ulong Resize = 6;
+    public const ulong Relative = 7;
 }
 
 /// <summary>Kinds of <see cref="SyscallNumbers.FaultHandler"/> (mirrors <c>bz_abi::fault_kind</c>).</summary>

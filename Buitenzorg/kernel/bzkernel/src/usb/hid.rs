@@ -495,6 +495,14 @@ pub fn pad_self_test() -> bool {
         events += 1;
     }
     check(down && up && events == 4, "presses + releases as raw key events");
+    // ... and each press is a hotkey for the desktop's pad launcher
+    let mut pads = 0u32;
+    while let Some(h) = crate::keyboard::take_hotkey() {
+        if let crate::keyboard::Hotkey::Pad(b) = h {
+            pads |= 1 << b;
+        }
+    }
+    check(pads == (1 << 1 | 1 << 18), "presses reach the pad launcher (B, Left)");
     // a mouse descriptor is not a gamepad
     #[rustfmt::skip]
     let mouse = [0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x75, 0x01, 0x95, 0x03, 0x81, 0x02, 0xC0];

@@ -15,4 +15,21 @@ extern int errno;
 #define EBADF 9
 #define EINVAL 22
 #define ERANGE 34
+#define EINTR 4
+#define EBUSY 16
+#define EMFILE 24
+#define EPIPE 32
+#define EDEADLK 35
+#define ENOSYS 38
+#define ENOTSOCK 88
+#define EPROTONOSUPPORT 93
+#define EAFNOSUPPORT 97
+#define EADDRINUSE 98
+#define ECONNRESET 104
+#define EISCONN 106
+#define ENOTCONN 107
+#define ETIMEDOUT 110
+#define ECONNREFUSED 111
+#define EINPROGRESS 115
+#define EWOULDBLOCK EAGAIN
 #endif

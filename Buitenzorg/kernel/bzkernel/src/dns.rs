@@ -41,6 +41,11 @@ pub fn server() -> Option<Ipv4Addr> {
 
 /// Build a query for the A record of `name`.
 pub fn query(id: u16, name: &str) -> Option<Vec<u8>> {
+    query_type(id, name, 1)
+}
+
+/// Build a query for records of `qtype` (1 = A, 28 = AAAA) of `name`.
+pub fn query_type(id: u16, name: &str, qtype: u16) -> Option<Vec<u8>> {
     let mut q = Vec::with_capacity(18 + name.len());
     q.extend_from_slice(&id.to_be_bytes());
     q.extend_from_slice(&[0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]); // RD, 1 question
@@ -51,7 +56,9 @@ pub fn query(id: u16, name: &str) -> Option<Vec<u8>> {
         q.push(label.len() as u8);
         q.extend_from_slice(label.as_bytes());
     }
-    q.extend_from_slice(&[0, 0, 1, 0, 1]); // root, type A, class IN
+    q.push(0); // root
+    q.extend_from_slice(&qtype.to_be_bytes());
+    q.extend_from_slice(&[0, 1]); // class IN
     Some(q)
 }
 
@@ -72,6 +79,26 @@ fn skip_name(m: &[u8], mut p: usize) -> Option<usize> {
 /// The first A record of an answer to query `id`: (address, ttl seconds).
 /// Err(text) for an answer that says the name does not exist.
 pub fn parse_answer(m: &[u8], id: u16) -> Option<Result<(Ipv4Addr, u32), &'static str>> {
+    let r = parse_records(m, id, 1, 4)?;
+    Some(r.map(|(d, ttl)| ([d[0], d[1], d[2], d[3]], ttl)).map_err(|e| if e.is_empty() { "tidak ada alamat IPv4" } else { e }))
+}
+
+/// The first AAAA record of an answer to query `id`: (IPv6 address, ttl).
+pub fn parse_answer6(m: &[u8], id: u16) -> Option<Result<([u8; 16], u32), &'static str>> {
+    let r = parse_records(m, id, 28, 16)?;
+    Some(
+        r.map(|(d, ttl)| {
+            let mut a = [0u8; 16];
+            a.copy_from_slice(&d[..16]);
+            (a, ttl)
+        })
+        .map_err(|e| if e.is_empty() { "tidak ada alamat IPv6" } else { e }),
+    )
+}
+
+/// The first record of type `want` (rdata of `size` bytes) in an answer to
+/// query `id`, skipping CNAMEs; Err("") when the answer has none.
+fn parse_records(m: &[u8], id: u16, want: u16, size: usize) -> Option<Result<(Vec<u8>, u32), &'static str>> {
     if m.len() < 12 || u16::from_be_bytes([m[0], m[1]]) != id || m[2] & 0x80 == 0 {
         return None;
     }
@@ -95,13 +122,12 @@ pub fn parse_answer(m: &[u8], id: u16) -> Option<Result<(Ipv4Addr, u32), &'stati
         let ttl = u32::from_be_bytes([h[4], h[5], h[6], h[7]]);
         let len = u16::from_be_bytes([h[8], h[9]]) as usize;
         p += 10;
-        if ty == 1 && class == 1 && len == 4 {
-            let d = m.get(p..p + 4)?;
-            return Some(Ok(([d[0], d[1], d[2], d[3]], ttl)));
+        if ty == want && class == 1 && len == size {
+            return Some(Ok((m.get(p..p + size)?.to_vec(), ttl)));
         }
-        p += len; // CNAME and others: the A record follows
+        p += len; // CNAME and others: the record follows
     }
-    Some(Err("tidak ada alamat IPv4"))
+    Some(Err(""))
 }
 
 /// Resolve a host name (or dotted quad) to an IPv4 address.
@@ -122,6 +148,30 @@ pub fn resolve(name: &str) -> Result<Ipv4Addr, String> {
             return Ok(e.ip);
         }
     }
+    let (ip, ttl) = exchange(name, &lower, 1, parse_answer)?;
+    let keep = (ttl.clamp(30, 3600) as u64) * 1000;
+    let mut c = CACHE.lock();
+    if c.len() >= 64 {
+        c.remove(0);
+    }
+    c.push(Entry { name: lower.clone(), ip, expires_ms: now_ms() + keep });
+    Ok(ip)
+}
+
+/// Resolve a host name (or an IPv6 literal) to an IPv6 address (AAAA),
+/// asking the same (IPv4) DNS server.
+pub fn resolve6(name: &str) -> Result<[u8; 16], String> {
+    let name = name.trim().trim_end_matches('.');
+    if let Some(a) = crate::ipv6::parse(name) {
+        return Ok(a);
+    }
+    let lower = name.to_ascii_lowercase();
+    exchange(name, &lower, 28, parse_answer6).map(|(a, _)| a)
+}
+
+/// One DNS question over UDP: resend every 2 s, accept an answer to any of
+/// our queries, give up after 8 s.
+fn exchange<T>(name: &str, lower: &str, qtype: u16, parse: fn(&[u8], u16) -> Option<Result<(T, u32), &'static str>>) -> Result<(T, u32), String> {
     let server = server().ok_or_else(|| String::from("tidak ada server DNS (jaringan belum tersambung)"))?;
     let sock = net::udp_socket();
     if sock == 0 {
@@ -148,7 +198,7 @@ pub fn resolve(name: &str) -> Result<Ipv4Addr, String> {
         while now_ms() - start < 8000 {
             if now_ms() >= next_send && ids.len() < 4 {
                 let id = NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                let q = query(id, &lower).ok_or_else(|| String::from("nama tidak sah"))?;
+                let q = query_type(id, lower, qtype).ok_or_else(|| String::from("nama tidak sah"))?;
                 net::udp_send(sock, server, 53, &q).map_err(String::from)?;
                 ids.push(id);
                 next_send = now_ms() + 2000;
@@ -156,16 +206,8 @@ pub fn resolve(name: &str) -> Result<Ipv4Addr, String> {
             net::poll();
             while let Some((_, _, reply)) = net::udp_recv(sock) {
                 for &id in &ids {
-                    match parse_answer(&reply, id) {
-                        Some(Ok((ip, ttl))) => {
-                            let keep = (ttl.clamp(30, 3600) as u64) * 1000;
-                            let mut c = CACHE.lock();
-                            if c.len() >= 64 {
-                                c.remove(0);
-                            }
-                            c.push(Entry { name: lower.clone(), ip, expires_ms: now_ms() + keep });
-                            return Ok(ip);
-                        }
+                    match parse(&reply, id) {
+                        Some(Ok(v)) => return Ok(v),
                         Some(Err(e)) => return Err(alloc::format!("{}: {}", name, e)),
                         None => {}
                     }
@@ -209,10 +251,30 @@ pub fn self_test() -> Result<(), &'static str> {
     if !matches!(parse_answer(&a, 0x1234), Some(Err(_))) {
         return Err("NXDOMAIN");
     }
+    // AAAA: the same name, type 28, a 16-byte record behind the CNAME
+    let q6 = query_type(0x4321, "www.example.com", 28).ok_or("query6")?;
+    if q6[q6.len() - 4..] != [0, 28, 0, 1] {
+        return Err("AAAA query type");
+    }
+    let mut a6 = q6.clone();
+    a6[2] = 0x81;
+    a6[3] = 0x80;
+    a6[7] = 2;
+    a6.extend_from_slice(&[0xC0, 12, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 0xC0, 16]);
+    a6.extend_from_slice(&[0xC0, 16, 0, 28, 0, 1, 0, 0, 0x0E, 0x10, 0, 16]);
+    let want6 = crate::ipv6::parse("2606:2800:220:1:248:1893:25c8:1946").ok_or("ipv6 parse")?;
+    a6.extend_from_slice(&want6);
+    match parse_answer6(&a6, 0x4321) {
+        Some(Ok((got, 3600))) if got == want6 => {}
+        _ => return Err("AAAA answer with CNAME"),
+    }
+    if !matches!(parse_answer(&a6, 0x4321), Some(Err(_))) {
+        return Err("an AAAA-only answer gave an IPv4 address");
+    }
     if parse_ip("10.0.2.2") != Some([10, 0, 2, 2]) || parse_ip("10.0.2") .is_some() || query(1, "a..b").is_some() {
         return Err("parse_ip / labels");
     }
-    println!("[kernel] MILESTONE: DNS OK (query, CNAME + A answer, NXDOMAIN, cache; server {})",
+    println!("[kernel] MILESTONE: DNS OK (query, CNAME + A answer, AAAA answer, NXDOMAIN, cache; server {})",
         server().map(net::fmt_ip).unwrap_or_else(|| String::from("none yet")));
     Ok(())
 }

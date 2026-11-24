@@ -927,8 +927,9 @@ fn ping6(args: &[&str]) -> Vec<String> {
             String::from("ping6: tidak ada router IPv6 yang menjawab")
         }];
     }
-    let Some(dest) = crate::ipv6::parse(target) else {
-        return vec![format!("ping6: '{}' bukan alamat IPv6 (nama belum didukung: DNS AAAA belum ada)", target)];
+    let dest = match crate::dns::resolve6(target) {
+        Ok(a) => a,
+        Err(e) => return vec![format!("ping6: {}", e)],
     };
     let n = args.get(1).and_then(|c| c.parse::<u16>().ok()).unwrap_or(4).clamp(1, 20);
     let mut out = vec![format!("PING6 {} ({} kali)", crate::ipv6::fmt(&dest), n)];
@@ -1241,9 +1242,16 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
                     for (n, ip) in crate::dns::cached() {
                         l.push(format!("  {}  {}", crate::net::fmt_ip(ip), n));
                     }
-                    l.push(String::from("pakai: nslookup NAMA"));
+                    l.push(String::from("pakai: nslookup NAMA (IPv4) | nslookup -6 NAMA (IPv6, AAAA)"));
                     l
                 }
+                Some(&"-6") => match args.get(1) {
+                    None => vec![String::from("pakai: nslookup -6 NAMA")],
+                    Some(name) => match crate::dns::resolve6(name) {
+                        Ok(a) => vec![format!("{}: {} (AAAA)", name, crate::ipv6::fmt(&a))],
+                        Err(e) => vec![format!("nslookup: {}", e)],
+                    },
+                },
                 Some(name) => match crate::dns::resolve(name) {
                     Ok(ip) => vec![format!("{}: {}", name, crate::net::fmt_ip(ip))],
                     Err(e) => vec![format!("nslookup: {}", e)],
@@ -1983,6 +1991,10 @@ fn bg_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
 fn saver_cmd(arg: Option<&str>) -> (Vec<String>, Effect) {
     match arg {
         None => (vec![format!("screensaver: {}", screensaver::name())], Effect::None),
+        Some("preview") | Some("pratinjau") => {
+            screensaver::request_preview();
+            (vec![format!("screensaver: pratinjau '{}' (gerakkan mouse atau tekan tombol untuk berhenti)", screensaver::name())], Effect::None)
+        }
         Some("list") => {
             let mut out = vec![String::from("screensaver:")];
             for n in screensaver::NAMES {

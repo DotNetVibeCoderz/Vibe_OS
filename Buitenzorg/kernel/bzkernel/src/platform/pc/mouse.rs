@@ -179,6 +179,7 @@ pub fn handle_byte(byte: u8) {
             }
             move_axis(&X, dx, &MAX_X);
             move_axis(&Y, -dy, &MAX_Y); // screen y grows downward
+            note_raw(dx, -dy);
             set_buttons(flags);
             PACKETS.fetch_add(1, Ordering::Relaxed);
         }
@@ -188,6 +189,7 @@ pub fn handle_byte(byte: u8) {
 /// Pointer motion from another device (virtio mouse): relative move plus
 /// button state (bit 0 left, 1 right, 2 middle), counted as one packet.
 pub fn inject_relative(dx: i64, dy: i64, buttons: u8) {
+    note_raw(dx, dy);
     move_axis(&X, dx, &MAX_X);
     move_axis(&Y, dy, &MAX_Y);
     set_buttons(buttons);
@@ -207,6 +209,26 @@ pub fn inject_absolute(x: i64, y: i64, max_x: i64, max_y: i64, buttons: u8) {
     }
     set_buttons(buttons);
     PACKETS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Motion of relative devices not yet taken (a window in pointer-lock mode).
+static RAW_DX: AtomicI64 = AtomicI64::new(0);
+static RAW_DY: AtomicI64 = AtomicI64::new(0);
+
+fn note_raw(dx: i64, dy: i64) {
+    RAW_DX.fetch_add(dx, Ordering::Relaxed);
+    RAW_DY.fetch_add(dy, Ordering::Relaxed);
+}
+
+/// The relative motion since the last call (screen directions: y grows down).
+pub fn take_raw() -> (i64, i64) {
+    (RAW_DX.swap(0, Ordering::Relaxed), RAW_DY.swap(0, Ordering::Relaxed))
+}
+
+/// Put the pointer at (x, y) (pointer lock holds it at a window's centre).
+pub fn warp(x: i64, y: i64) {
+    X.store(x, Ordering::Relaxed);
+    Y.store(y, Ordering::Relaxed);
 }
 
 /// Wheel notches not yet taken by the desktop (positive = away from the user,

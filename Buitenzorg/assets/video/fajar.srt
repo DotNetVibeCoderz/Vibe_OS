@@ -1,0 +1,16 @@
+1
+00:00:00,500 --> 00:00:03,000
+Fajar di Kebun Raya
+
+2
+00:00:03,200 --> 00:00:06,500
+Embun turun di daun-daun
+<i>matahari baru terbit</i>
+
+3
+00:00:06,800 --> 00:00:09,500
+Burung-burung mulai bernyanyi
+
+4
+00:00:09,800 --> 00:00:11,900
+Selamat pagi, Buitenzorg!

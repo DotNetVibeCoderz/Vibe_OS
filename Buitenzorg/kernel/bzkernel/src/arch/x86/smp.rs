@@ -417,8 +417,8 @@ fn pm_timer_tsc_hz() -> Option<u64> {
 /// Without a PIT: the TSC rate from the ACPI PM timer (else CPUID), the LAPIC
 /// timer measured against the TSC, and CPU 0's LAPIC timer as the system tick.
 fn calibrate_without_pit() -> bool {
-    let (tsc_hz, from) = match pm_timer_tsc_hz() {
-        Some(hz) => (hz, "the ACPI PM timer"),
+    let (tsc_hz, from) = match crate::hpet::tsc_hz(10_000).map(|h| (h, "the HPET")).or_else(|| pm_timer_tsc_hz().map(|h| (h, "the ACPI PM timer"))) {
+        Some(found) => found,
         None => match cpuid_tsc_hz() {
             Some(hz) => (hz, "CPUID"),
             None => {
@@ -508,6 +508,7 @@ pub fn report() -> Vec<String> {
         TIMER_HZ.load(Ordering::Relaxed) / 1_000_000,
         cpu_index()
     ));
+    out.push(crate::hpet::summary());
     for (i, c) in CPUS[..n].iter().enumerate() {
         let state = if !c.online.load(Ordering::Relaxed) {
             "offline"

@@ -97,6 +97,7 @@ pub fn run() -> ! {
     let mut last_input = interrupts::ticks();
     let mut last_keys = keyboard::pushed();
     let mut saver_active = false;
+    let mut preview_until = 0u64;
     let mut last_notes = crate::notify::generation();
     let mut settings_restored = false;
     let started = crate::interrupts::ticks();
@@ -232,6 +233,20 @@ pub fn run() -> ! {
         }
 
         let (mx, my, buttons, packets) = mouse::state();
+        let (raw_dx, raw_dy) = mouse::take_raw();
+        // a window in pointer-lock mode takes motion + buttons as events
+        if !saver_active {
+            if let Some((hx, hy)) = wm::pointer_lock_feed(raw_dx, raw_dy, buttons) {
+                mouse::warp(hx as i64, hy as i64);
+                if packets != last_packets {
+                    last_input = now; // keeps the screensaver away, no desktop redraw
+                }
+                last_packets = packets;
+                last_left = buttons & 1 != 0;
+                last_presses = mouse::presses();
+                last_right = mouse::right_presses();
+            }
+        }
         let left = buttons & 0x01 != 0;
         let notches = mouse::take_wheel();
         if notches != 0 && !saver_active {
@@ -337,7 +352,8 @@ pub fn run() -> ! {
 
         if input {
             last_input = now;
-            if saver_active {
+            // a preview ignores input for a second: the click that asked for it
+            if saver_active && now >= preview_until {
                 saver_active = false; // dismiss screensaver on any input
                 screensaver::set_showing(false);
             }
@@ -348,6 +364,10 @@ pub fn run() -> ! {
             let mut canvas = gfx::Canvas::new(&mut back, w, h);
             screensaver::render(&mut canvas, now);
             framebuffer::present(&back);
+        } else if screensaver::take_preview() {
+            saver_active = true;
+            preview_until = now + 18;
+            screensaver::set_showing(true);
         } else if screensaver::enabled() && now.saturating_sub(last_input) > screensaver::timeout() && !process::idle_inhibited() {
             saver_active = true;
             screensaver::set_showing(true);
@@ -368,6 +388,11 @@ static MUTED_FROM: spin::Mutex<u32> = spin::Mutex::new(0);
 pub fn hotkey(h: keyboard::Hotkey) {
     use keyboard::Hotkey;
     match h {
+        Hotkey::Pad(b) => {
+            let app = process::is_alive(wm::focus_owner());
+            let select = keyboard::is_down(keyboard::PAD_A + 6);
+            wm::pad_button(b, app, select);
+        }
         Hotkey::Screenshot => match crate::screenshot::save_screen() {
             Ok(path) => {
                 println!("[desktop] screenshot saved: {}", path);

@@ -35,7 +35,7 @@ for arch in $arches; do
             -fno-sanitize=all -fno-omit-frame-pointer -nostdinc -isystem "$rt/include"
             -Wno-everything -D__BUZORG__=1 -DNORMALUNIX -DFEATURE_SOUND)
     objs=()
-    for f in "$rt/src/crt0.c" "$rt/src/libc.c" "$rt/src/sdl.c"; do
+    for f in "$rt/src/crt0.c" "$rt/src/libc.c" "$rt/src/pthread.c" "$rt/src/socket.c" "$rt/src/sdl.c"; do
         o="$out/obj/rt_$(basename "${f%.c}").o"
         "$zig" cc "${cflags[@]}" -fno-builtin -c "$f" -o "$o"
         objs+=("$o")

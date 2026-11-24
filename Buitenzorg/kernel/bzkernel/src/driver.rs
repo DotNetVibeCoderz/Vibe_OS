@@ -28,6 +28,13 @@ pub trait BlockDevice: Send {
     fn write_sector(&mut self, _lba: u64, _buf: &[u8; SECTOR_SIZE]) -> Result<(), &'static str> {
         Err("block device is read-only")
     }
+
+    /// Write a sector of bulk file data. The same as `write_sector` on a
+    /// device; a journal transaction (`journal::Tx`) sends it straight to the
+    /// device instead of journaling it.
+    fn write_data(&mut self, lba: u64, buf: &[u8; SECTOR_SIZE]) -> Result<(), &'static str> {
+        self.write_sector(lba, buf)
+    }
 }
 
 static BLOCK_DEVICES: Mutex<Vec<Box<dyn BlockDevice>>> = Mutex::new(Vec::new());
