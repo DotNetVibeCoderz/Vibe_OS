@@ -14,7 +14,7 @@ mod platform;
 // Architecture- and platform-specific modules keep their short crate paths
 // (`crate::gdt`, `crate::serial`, …) while living under arch/ and platform/.
 pub(crate) use arch::x86::{aspace, gdt, interrupts, ioapic, smp, usermode, vmx};
-pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, hpet, intel_gpu, iwlwifi, mouse, nvme, pci, power, realtek, rtc, serial};
+pub(crate) use platform::pc::{ahci, ata, audio, bochs_vbe, e1000, e1000e, hpet, intel_gpu, iwlmvm, iwlwifi, mouse, nvme, pci, power, realtek, rtc, serial};
 
 /// Tracks whether the OS has reached the interactive desktop. Boot-demo apps
 /// run with this `false` (no user is at the keyboard, so they must not block
@@ -100,6 +100,7 @@ mod vsync;
 mod gfx3d;
 mod bootmode;
 mod dhcp;
+mod wpa;
 
 use core::panic::PanicInfo;
 
@@ -453,7 +454,7 @@ fn boot_background() {
     let t0 = interrupts::ticks();
     // kernel tasks are not preempted: yield between the steps, so the
     // desktop's compose helper (and anything else) gets this CPU in between
-    let steps: [fn(); 7] = [
+    let steps: [fn(); 8] = [
         || {
             // first: on a PC booted from a USB stick /disk lives there, and
             // the wallpaper, icons and everything else come from /disk
@@ -480,7 +481,8 @@ fn boot_background() {
         },
         || model::seed(),
         || intel_gpu::init(&pci::scan()),
-        network_up, // last: without a DHCP server it takes seconds
+        network_up, // without a DHCP server it takes seconds
+        iwlmvm::autostart, // last: joins the saved Wi-Fi network when no cable is up
     ];
     for (i, step) in steps.iter().enumerate() {
         task::yield_now();
@@ -2160,6 +2162,7 @@ fn dahan_demo() {
     if let Err(e) = dns::self_test() {
         println!("[kernel] dns self-test FAILED: {}", e);
     }
+    wpa::self_test();
     virtio_net_demo();
 
     // --- C# service running as a ring-3 process ---------------------------

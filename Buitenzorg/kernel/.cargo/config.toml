@@ -10,8 +10,8 @@ bindeps = true
 # the result of this operator"). sha2 gets the `force-soft` feature in
 # bzkernel/Cargo.toml.
 [target.x86_64-unknown-none]
-rustflags = ["--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
+rustflags = ["--cfg", "aes_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
 [target.aarch64-unknown-none-softfloat]
-rustflags = ["--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
+rustflags = ["--cfg", "aes_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
 [target.riscv64imac-unknown-none-elf]
-rustflags = ["--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
+rustflags = ["--cfg", "aes_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
