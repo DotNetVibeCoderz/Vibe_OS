@@ -520,6 +520,26 @@ pub(super) fn sections(fw: &[u8], kind: u32) -> Result<(String, Vec<(u32, &[u8])
     Ok((name, out))
 }
 
+/// Names of firmware error ids (`advanced_lookup` in Linux `fw/dump.c`).
+fn error_name(id: u32) -> &'static str {
+    match id {
+        0x35 => "SYSASSERT",
+        0x37 => "UCODE_VERSION_MISMATCH",
+        0x38 | 0x39 => "BAD_COMMAND",
+        0x3C => "NMI_INTERRUPT_DATA_ACTION_PT",
+        0x3D => "FATAL_ERROR",
+        0x46 => "NMI_TRM_HW_ERR",
+        0x4C => "NMI_INTERRUPT_TRM",
+        0x54 => "NMI_INTERRUPT_BREAK_POINT",
+        0x5C => "NMI_INTERRUPT_WDG_RXF_FULL",
+        0x64 => "NMI_INTERRUPT_WDG_NO_RBD_RXF_FULL",
+        0x6C => "NMI_INTERRUPT_HW_ERROR",
+        0x84 => "NMI_INTERRUPT_UNKNOWN",
+        0x8C => "NMI_INTERRUPT_UMAC_FATAL",
+        _ => "ADVANCED_SYSASSERT",
+    }
+}
+
 /// IWL_UCODE_TLV_ENABLED_CAPABILITIES (type 30): is capability `bit` set?
 pub(super) fn tlv_capa(fw: &[u8], bit: u32) -> bool {
     let mut p = 88;
@@ -802,10 +822,13 @@ pub(super) fn start_fw(nic: &mut Nic, hw: &Hw, fw: &[u8], img: &[(u32, &[u8])], 
     if status != 0xCAFE {
         return Err(format!("ALIVE status {:#x} (expected 0xcafe)", status));
     }
-    // iwl_alive_ntf_v3: status, lmac (major, minor, ver, timestamp, error
-    // table, log table, cpu regs, dbgm, alive counter, scd base, ...).
-    let scd_alive = rd(8 + 4 + 40);
-    nic.err_tables = (rd(32), rd(72));
+    // iwl_alive_ntf_v3 after the 8-byte packet header: u16 status + u16
+    // flags (8), lmac: major (12), minor (16), ver bytes (20), timestamp (24),
+    // error table (28), log table (32), cpu regs (36), dbgm (40), alive
+    // counter (44), scd base (48), st_fwrd addr/size (52/56); umac: major
+    // (60), minor (64), error_info_addr (68), dbg_print_buff (72).
+    let scd_alive = rd(48);
+    nic.err_tables = (rd(28), rd(68));
     nic.note(format!("ALIVE ok (status 0xcafe, ucode {}.{}), SCD base {:#x}", rd(12), rd(16), scd_alive));
     Ok((rx, scd_alive))
 }
@@ -1229,6 +1252,26 @@ impl Nic {
                 .collect();
             for (n, chunk) in w.chunks(8).enumerate() {
                 self.note(format!("  {} err @{:#x} [{}]: {}", name, addr, n * 8, chunk.join(" ")));
+            }
+            let v = |i: usize| self.read_mem(addr + 4 * i as u32).unwrap_or(0);
+            if name == "LMAC" {
+                // iwl_error_event_table: valid, error_id, trm_hw_status0/1,
+                // blink2, ilink1, ilink2, data1-3, ..., hcmd (23).
+                let id = v(1);
+                let s = format!(
+                    "  LMAC: valid {} error {:#x} ({}) blink2 {:#x} ilink1 {:#x} ilink2 {:#x} data {:#x} {:#x} {:#x} hcmd {:#x}",
+                    v(0), id, error_name(id), v(4), v(5), v(6), v(7), v(8), v(9), v(23)
+                );
+                self.note(s);
+            } else {
+                // iwl_umac_error_event_table: valid, error_id, blink1, blink2,
+                // ilink1, ilink2, data1-3, major, minor, frame, stack, cmd_header.
+                let id = v(1);
+                let s = format!(
+                    "  UMAC: valid {} error {:#x} ({}) blink1 {:#x} blink2 {:#x} ilink1 {:#x} ilink2 {:#x} data {:#x} {:#x} {:#x} last cmd {:#x}",
+                    v(0), id, error_name(id), v(2), v(3), v(4), v(5), v(6), v(7), v(8), v(13)
+                );
+                self.note(s);
             }
         }
     }
