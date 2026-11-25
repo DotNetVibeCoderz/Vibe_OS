@@ -242,9 +242,10 @@ fn start(dev: &PciDevice, nic: &mut Nic) -> Result<Mvm, String> {
     let (_, rt) = iwl::sections(&fw, 19)?;
     nic.note(format!("runtime image: {} section(s)", rt.len()));
     let t0 = crate::arch::cpu::nanos();
-    let (rx, scd) = iwl::start_fw(nic, &hw, &fw, &rt)?;
     tx.ring.clear();
     tx.wr = 0;
+    nic.cmd_dumped = false;
+    let (rx, scd) = iwl::start_fw(nic, &hw, &fw, &rt, tx.ring.tfd_phys)?;
     nic.tx_start(scd, &tx.ring)?;
     let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
     nic.note(format!("runtime firmware ALIVE after {} ms", ms));

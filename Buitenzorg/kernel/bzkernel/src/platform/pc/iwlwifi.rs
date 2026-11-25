@@ -119,6 +119,12 @@ pub(super) const LMAC1_CURRENT_PC: u32 = 0xA05C1C;
 pub(super) const LMPM_CHICK_EXTENDED: u32 = 0x01;
 pub(super) const SCD_TXFACT: u32 = 0xA02C00 + 0x10;
 pub(super) const SCD_GP_CTRL: u32 = 0xA02C00 + 0x1A8;
+/// SCD_EN_CTRL: which queues the scheduler serves (iwlmvm sets
+/// `scd_set_active`: 0 while the command queue is configured, then BIT(0)).
+pub(super) const SCD_EN_CTRL: u32 = 0xA02C00 + 0x254;
+pub(super) const fn scd_queue_wrptr(q: u32) -> u32 {
+    if q < 20 { 0xA02C00 + 0x18 + 4 * q } else { 0xA02C00 + 0x284 + 4 * (q - 20) }
+}
 pub(super) const SCD_GP_AUTO_ACTIVE: u32 = 1 << 18;
 pub(super) const SCD_GP_31_QUEUES: u32 = 1 << 0;
 /// TX queues of the 8000 family (`num_of_queues`).
@@ -185,6 +191,8 @@ pub(super) struct Nic {
     pub(super) regs: *mut u8,
     pub(super) log: Vec<String>,
     pub(super) pci: Option<PciDevice>,
+    /// A command failure was already dumped (once per bring-up).
+    pub(super) cmd_dumped: bool,
 }
 
 impl Nic {
@@ -526,7 +534,7 @@ pub(super) fn tlv_u32(fw: &[u8], kind: u32) -> Option<u32> {
 
 impl Nic {
     pub(super) fn new() -> Nic {
-        Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None }
+        Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None, cmd_dumped: false }
     }
 }
 
@@ -651,7 +659,7 @@ pub(super) fn stop_device(nic: &mut Nic) {
 /// `iwl_trans_pcie_start_fw` for one image (TLV 20 INIT, 19 runtime): card
 /// ready, APM, NIC config, RX + TX rings, load the image, then the ALIVE
 /// packet. Returns the RX queue and the scheduler's SRAM base from ALIVE.
-pub(super) fn start_fw(nic: &mut Nic, hw: &Hw, fw: &[u8], img: &[(u32, &[u8])]) -> Result<(Rx, u32), String> {
+pub(super) fn start_fw(nic: &mut Nic, hw: &Hw, fw: &[u8], img: &[(u32, &[u8])], cmd_tfd: u64) -> Result<(Rx, u32), String> {
     nic.prepare()?;
     nic.w(CSR_RESET, RESET_SW);
     delay_us(6000);
@@ -704,8 +712,11 @@ pub(super) fn start_fw(nic: &mut Nic, hw: &Hw, fw: &[u8], img: &[(u32, &[u8])]) 
     // iwl_pcie_tx_init: every queue's TFD ring base (one zeroed ring until
     // a queue is enabled -- nothing is queued before ALIVE), then the
     // scheduler modes.
+    // The command queue gets its real ring now, before the firmware runs
+    // (Linux iwl_pcie_tx_init writes every base before the load).
     for q in 0..TX_QUEUES {
-        nic.write_direct(fh_cbbc(q), (hw.tfd_zero >> 8) as u32);
+        let base = if q == CMD_QUEUE as usize { cmd_tfd } else { hw.tfd_zero };
+        nic.write_direct(fh_cbbc(q), (base >> 8) as u32);
     }
     let gp = nic.read_prph(SCD_GP_CTRL).unwrap_or(0);
     nic.write_prph(SCD_GP_CTRL, gp | SCD_GP_AUTO_ACTIVE | SCD_GP_31_QUEUES);
@@ -795,12 +806,13 @@ pub(super) fn init_calibrate(dev: &PciDevice, nic: &mut Nic, hw: &Hw, fw: &[u8])
     let (name, init) = sections(fw, 20)?;
     nic.note(format!("firmware '{}': INIT image {} section(s)", name, init.len()));
     let t0 = crate::arch::cpu::nanos();
-    let (mut rx, scd_alive) = start_fw(nic, hw, fw, &init)?;
+    let ring = CmdRing::new()?;
+    ring.clear();
+    let (mut rx, scd_alive) = start_fw(nic, hw, fw, &init, ring.tfd_phys)?;
     let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
     crate::println!("[kernel] MILESTONE: IWLWIFI ALIVE OK (Intel {:04x}, INIT firmware in {} ms)", dev.device_id, ms);
 
     // ---- scheduler + command queue (iwl_pcie_tx_start) ----
-    let ring = CmdRing::new()?;
     nic.tx_start(scd_alive, &ring)?;
     let mut tx = Tx { ring, wr: 0 };
 
@@ -850,7 +862,7 @@ pub(super) fn init_calibrate(dev: &PciDevice, nic: &mut Nic, hw: &Hw, fw: &[u8])
         }
     }
     if sections_ok == 0 {
-        return Err(String::from("no NVM section could be read (command queue not working)"));
+        return Err(String::from("no NVM section could be read (command queue not working; details: dmesg iwl)"));
     }
     nic.note(format!("MAC address {}", mac_str(&mac)));
     crate::println!("[kernel] MILESTONE: IWLWIFI NVM OK (MAC {}, {} section(s))", mac_str(&mac), sections_ok);
@@ -1062,9 +1074,10 @@ impl Nic {
         }
         self.write_prph(SCD_DRAM_BASE_ADDR, (ring.bc_phys >> 10) as u32);
         self.write_prph(SCD_CHAINEXT_EN, 0);
-        // command queue 0 -> FIFO 7
+        // command queue 0 -> FIFO 7 (iwl_trans_pcie_txq_enable)
         let q = CMD_QUEUE;
         self.write_direct(fh_cbbc(q as usize), (ring.tfd_phys >> 8) as u32);
+        self.write_prph(SCD_EN_CTRL, 0);
         self.write_prph(scd_queue_status(q), 1 << 19);
         let aggr = self.read_prph(SCD_AGGR_SEL).unwrap_or(0);
         self.write_prph(SCD_AGGR_SEL, aggr & !(1 << q));
@@ -1075,6 +1088,7 @@ impl Nic {
         self.write_mem(ctx + 4, (64 & 0x7F) | ((64 << 16) & 0x7F_0000));
         // active | FIFO | WSL | SCD_QUEUE_STTS_REG_MSK
         self.write_prph(scd_queue_status(q), (1 << 3) | CMD_FIFO | (1 << 4) | 0x017F_0000);
+        self.write_prph(SCD_EN_CTRL, 1 << q);
         // all TX FIFOs + DMA channels on, scheduler auto-retry
         self.write_prph(SCD_TXFACT, 0xFF);
         for ch in 0..8 {
@@ -1083,6 +1097,7 @@ impl Nic {
         let chick = self.read_direct(FH_TX_CHICKEN_BITS).unwrap_or(0);
         self.write_direct(FH_TX_CHICKEN_BITS, chick | 0x2);
         self.note(format!("scheduler at SRAM {:#x}; command queue {} on FIFO {}", scd, q, CMD_FIFO));
+        self.queue_state("after tx_start");
         Ok(())
     }
 
@@ -1139,6 +1154,9 @@ impl Nic {
         let t0 = crate::arch::cpu::nanos();
         let mut others = Vec::new();
         let result = loop {
+            // rx.advance() -> write_direct() drops MAC_ACCESS_REQ; the 8000
+            // family wants it held until the reply (apmg_wake_up_wa).
+            self.set(CSR_GP_CNTRL, GP_MAC_ACCESS_REQ);
             let waited = (crate::arch::cpu::nanos() - t0) / 1000;
             if waited > 1_000_000 {
                 break Err(format!("command {:#x}/{}: no reply within 1 s (CSR_INT {:#010x})", id, group, self.r(CSR_INT)));
@@ -1155,6 +1173,45 @@ impl Nic {
         };
         self.release();
         rx.backlog.splice(0..0, others);
+        if result.is_err() && !self.cmd_dumped {
+            // Once per bring-up: where the command got stuck.
+            self.cmd_dumped = true;
+            self.dump("command failed");
+            self.queue_state("command failed");
+            let rd = |p: *mut u8, i: usize| unsafe { read_volatile((p as *const u32).add(i)) };
+            crate::arch::cpu::dma_sync(rx.stts as u64, 16);
+            let tfd = unsafe { tx.ring.tfd.add(((tx.wr + 255) % 256) * TFD_SIZE) };
+            let s = format!(
+                "  rx: closed {} (we are at rb {} +{}), tfd {:08x} {:08x} {:08x}",
+                rd(rx.stts, 0) & 0xFFF, rx.rb, rx.off, rd(tfd, 0), rd(tfd, 1), rd(tfd, 2)
+            );
+            self.note(s);
+            if self.r(CSR_INT) & INT_SW_ERR != 0 {
+                self.note(String::from("  firmware SW error (assert)"));
+            }
+        }
         result
+    }
+
+    /// Scheduler + TX DMA state of the command queue (what
+    /// `iwl_txq_log_scd_error` prints).
+    pub(super) fn queue_state(&mut self, why: &str) {
+        let q = CMD_QUEUE;
+        let p = |n: &Nic, a| n.read_prph(a).map(|v| format!("{:#x}", v)).unwrap_or_else(|| String::from("?"));
+        let d = |n: &Nic, a| n.read_direct(a).map(|v| format!("{:#x}", v)).unwrap_or_else(|| String::from("?"));
+        let s = format!(
+            "  {}: SCD status {} rdptr {} wrptr {} EN_CTRL {} TXFACT {} GP_CTRL {}; CBBC {} TSSR {} TCSR7 {}",
+            why,
+            p(self, scd_queue_status(q)),
+            p(self, scd_queue_rdptr(q)),
+            p(self, scd_queue_wrptr(q)),
+            p(self, SCD_EN_CTRL),
+            p(self, SCD_TXFACT),
+            p(self, SCD_GP_CTRL),
+            d(self, fh_cbbc(q as usize)),
+            d(self, FH_TSSR_TX_STATUS),
+            d(self, fh_tcsr_config(7)),
+        );
+        self.note(s);
     }
 }
