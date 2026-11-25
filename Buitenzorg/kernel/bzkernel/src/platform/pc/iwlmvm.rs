@@ -50,6 +50,7 @@ const TIME_QUOTA_CMD: u8 = 0x2c;
 const FW_PAGING_BLOCK_CMD: u8 = 0x4f;
 const PHY_DB_CMD: u8 = 0x6c;
 const POWER_TABLE_CMD: u8 = 0x77;
+const MCC_UPDATE_CMD: u8 = 0xc8;
 const BT_CONFIG: u8 = 0x9b;
 const MAC_PM_POWER_TABLE: u8 = 0xa9;
 const REPLY_RX_PHY_CMD: u8 = 0xc0;
@@ -256,6 +257,7 @@ fn start(dev: &PciDevice, nic: &mut Nic) -> Result<Mvm, String> {
     let mut own = Nic::new();
     own.regs = regs;
     own.pci = nic.pci;
+    own.err_tables = nic.err_tables;
     let mut m = Mvm {
         nic: own,
         hw,
@@ -413,6 +415,7 @@ impl Mvm {
         self.phy_ctx(ACTION_ADD, 1)?;
         // device power: always on (no POWER_SAVE_ENA)
         self.cmd(POWER_TABLE_CMD, &[0u8; 4])?;
+        self.init_mcc(fw);
         self.scan_config()?;
         self.mac_ctx(ACTION_ADD)?;
         self.nic.note(format!(
@@ -484,10 +487,36 @@ impl Mvm {
         Ok(())
     }
 
-    /// SCAN_CFG_CMD (API v1).
+    /// iwl_mvm_init_mcc: with location-aware regulatory (LAR) the firmware
+    /// picks the country itself; ask for the current one ("ZZ"). Linux does
+    /// this right before the scan configuration. Not fatal.
+    fn init_mcc(&mut self, fw: &[u8]) {
+        if !iwl::tlv_capa(fw, 1) {
+            self.nic.note(String::from("no LAR support: MCC update skipped"));
+            return;
+        }
+        // LAR_MULTI_MCC (29) -> API v2 (28 bytes) and MCC_SOURCE_GET_CURRENT
+        let multi = iwl::tlv_capa(fw, 29);
+        let mut c = alloc::vec![0u8; if multi { 28 } else { 4 }];
+        w16(&mut c, 0, 0x5A5A);
+        c[2] = if multi { 0x10 } else { 0 };
+        match self.cmd(MCC_UPDATE_CMD, &c) {
+            Ok(r) => {
+                let st = r32(&r, 0);
+                let mcc = if r.len() >= 6 { u16::from_le_bytes([r[4], r[5]]) } else { 0 };
+                let cc = [(mcc >> 8) as u8 as char, (mcc & 0xFF) as u8 as char];
+                self.nic.note(format!("MCC update: status {:#x}, country {}{} ({} bytes)", st, cc[0], cc[1], r.len()));
+            }
+            Err(e) => self.nic.note(format!("MCC update failed: {}", e)),
+        }
+    }
+
+    /// SCAN_CFG_CMD (API v1): sized like Linux, the fixed part + the
+    /// firmware's channel-array size (TLV N_SCAN_CHANNELS).
     fn scan_config(&mut self) -> Result<(), String> {
-        let n = self.channels.len().min(63);
-        let mut c = alloc::vec![0u8; (36 + n + 3) & !3];
+        let n = self.channels.len().min(self.n_scan_channels).min(63);
+        let mut c = alloc::vec![0u8; 36 + self.n_scan_channels.max(n)];
+        self.nic.note(format!("scan config: {} channel(s), array {}", n, self.n_scan_channels));
         let flags: u32 = 1 | (1 << 3) | (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 17) | ((n as u32) << 26);
         w32(&mut c, 0, flags);
         w32(&mut c, 4, self.tx_ant);

@@ -193,6 +193,8 @@ pub(super) struct Nic {
     pub(super) pci: Option<PciDevice>,
     /// A command failure was already dumped (once per bring-up).
     pub(super) cmd_dumped: bool,
+    /// SRAM addresses of the firmware's LMAC / UMAC error tables (ALIVE).
+    pub(super) err_tables: (u32, u32),
 }
 
 impl Nic {
@@ -518,6 +520,24 @@ pub(super) fn sections(fw: &[u8], kind: u32) -> Result<(String, Vec<(u32, &[u8])
     Ok((name, out))
 }
 
+/// IWL_UCODE_TLV_ENABLED_CAPABILITIES (type 30): is capability `bit` set?
+pub(super) fn tlv_capa(fw: &[u8], bit: u32) -> bool {
+    let mut p = 88;
+    while p + 8 <= fw.len() {
+        let t = u32::from_le_bytes([fw[p], fw[p + 1], fw[p + 2], fw[p + 3]]);
+        let l = u32::from_le_bytes([fw[p + 4], fw[p + 5], fw[p + 6], fw[p + 7]]) as usize;
+        if t == 30 && l >= 8 && p + 16 <= fw.len() {
+            let idx = u32::from_le_bytes([fw[p + 8], fw[p + 9], fw[p + 10], fw[p + 11]]);
+            let flags = u32::from_le_bytes([fw[p + 12], fw[p + 13], fw[p + 14], fw[p + 15]]);
+            if idx == bit / 32 {
+                return flags & (1 << (bit % 32)) != 0;
+            }
+        }
+        p += 8 + ((l + 3) & !3);
+    }
+    false
+}
+
 /// The first 32-bit value of a TLV of type `kind` (PHY_SKU and the like).
 pub(super) fn tlv_u32(fw: &[u8], kind: u32) -> Option<u32> {
     let mut p = 88;
@@ -534,7 +554,7 @@ pub(super) fn tlv_u32(fw: &[u8], kind: u32) -> Option<u32> {
 
 impl Nic {
     pub(super) fn new() -> Nic {
-        Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None, cmd_dumped: false }
+        Nic { regs: core::ptr::null_mut(), log: Vec::new(), pci: None, cmd_dumped: false, err_tables: (0, 0) }
     }
 }
 
@@ -785,6 +805,7 @@ pub(super) fn start_fw(nic: &mut Nic, hw: &Hw, fw: &[u8], img: &[(u32, &[u8])], 
     // iwl_alive_ntf_v3: status, lmac (major, minor, ver, timestamp, error
     // table, log table, cpu regs, dbgm, alive counter, scd base, ...).
     let scd_alive = rd(8 + 4 + 40);
+    nic.err_tables = (rd(32), rd(72));
     nic.note(format!("ALIVE ok (status 0xcafe, ucode {}.{}), SCD base {:#x}", rd(12), rd(16), scd_alive));
     Ok((rx, scd_alive))
 }
@@ -1189,8 +1210,27 @@ impl Nic {
             if self.r(CSR_INT) & INT_SW_ERR != 0 {
                 self.note(String::from("  firmware SW error (assert)"));
             }
+            self.error_tables();
         }
         result
+    }
+
+    /// The firmware's LMAC and UMAC error tables (`iwl_mvm_dump_nic_error_log`):
+    /// valid != 0 = the firmware asserted (error id, program counters); the
+    /// UMAC table's cmd_header (word 13) is the last host command it took.
+    pub(super) fn error_tables(&mut self) {
+        let (lmac, umac) = self.err_tables;
+        for (name, addr, words) in [("LMAC", lmac, 24usize), ("UMAC", umac, 16)] {
+            if addr == 0 {
+                continue;
+            }
+            let w: Vec<String> = (0..words)
+                .map(|i| self.read_mem(addr + 4 * i as u32).map(|v| format!("{:08x}", v)).unwrap_or_else(|| String::from("?")))
+                .collect();
+            for (n, chunk) in w.chunks(8).enumerate() {
+                self.note(format!("  {} err @{:#x} [{}]: {}", name, addr, n * 8, chunk.join(" ")));
+            }
+        }
     }
 
     /// Scheduler + TX DMA state of the command queue (what
