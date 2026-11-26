@@ -1187,9 +1187,7 @@ pub fn start() -> Result<(), String> {
     let fw = crate::vfs::read("/disk/WIFI/FW.BIN").map_err(|_| String::from("firmware /disk/WIFI/FW.BIN missing (scripts/fetch-wifi-firmware, then rebuild the image)"))?;
     let nvram = crate::vfs::read("/disk/WIFI/FW.TXT").map_err(|_| String::from("NVRAM /disk/WIFI/FW.TXT missing"))?;
     let clm = crate::vfs::read("/disk/WIFI/FW.CLM").unwrap_or_default();
-    if !super::rpi_io::wifi_power_on() {
-        return Err("could not switch WL_REG_ON on (firmware GPIO 129)".into());
-    }
+    super::rpi_io::wifi_power_on()?;
     let va = crate::memory::map_mmio(pa, 0x1000).ok_or("cannot map the SDIO controller")?;
     let chip = Cyw43::start(va, super::rpi_io::emmc_clock(), &fw, &nvram, &clm)?;
     set_status(format!("up: {}", chip.summary()));

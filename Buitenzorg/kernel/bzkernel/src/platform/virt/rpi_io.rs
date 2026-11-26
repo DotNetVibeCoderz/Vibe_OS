@@ -180,32 +180,66 @@ pub fn init(gpio_phys: u64) -> bool {
 /// The Wi-Fi chip's SDIO lines (GPIO 34-39 on ALT3 = the Arasan "mmcnr"
 /// controller; pull-ups on CMD/DATA, none on CLK) and WL_REG_ON (firmware
 /// expander GPIO 129): power-cycled off -> on, as Linux's mmc-pwrseq does.
-pub fn wifi_power_on() -> bool {
+pub fn wifi_power_on() -> Result<(), alloc::string::String> {
     {
         let guard = IO.lock();
-        let Some(io) = guard.as_ref() else { return false };
+        let Some(io) = guard.as_ref() else {
+            return Err("Pi I/O block not initialised (rpi_io::init did not run)".into());
+        };
         for pin in 34..=39 {
             io.fsel(pin, alt(3));
             io.pull(pin, if pin == 34 { 0 } else { 1 });
         }
     }
-    let mut off = [129, 0];
-    let mut on = [129, 1];
-    if !firmware_property(0x0003_8041, &mut off) {
-        return false;
-    }
+    // Like Linux raspberrypi-exp-gpio: GET_GPIO_CONFIG, then SET_GPIO_CONFIG
+    // as an output (direction 1) before driving it with SET_GPIO_STATE.
+    let mut cfg = [WL_REG_ON_FW_GPIO, 0, 0, 0, 0];
+    let got = firmware_property(0x0003_0043, &mut cfg);
+    crate::println!(
+        "[wifi] WL_REG_ON get-config: {} status={:#x} gpio-status={:#x} dir={} pol={} term={} pull={}",
+        got, crate::arch::aarch64::rpi::last_property_status(), cfg[0], cfg[1], cfg[2], cfg[3], cfg[4]
+    );
+    let polarity = if got && cfg[0] == 0 { cfg[2] } else { 0 };
+    let mut set = [WL_REG_ON_FW_GPIO, 1, polarity, 0, 0, 0];
+    let ok = firmware_property(0x0003_8043, &mut set);
+    crate::println!(
+        "[wifi] WL_REG_ON set-config output-low: {} status={:#x} gpio-status={:#x}",
+        ok, crate::arch::aarch64::rpi::last_property_status(), set[0]
+    );
+    wl_state(0)?;
     let t0 = cpu::timestamp();
     while since_us(t0) < 20_000 {
         core::hint::spin_loop();
     }
-    if !firmware_property(0x0003_8041, &mut on) {
-        return false;
-    }
+    wl_state(1)?;
     let t0 = cpu::timestamp();
     while since_us(t0) < 150_000 {
         core::hint::spin_loop();
     }
-    true
+    Ok(())
+}
+
+/// Firmware expander GPIO 1 = WL_ON (bcm2711-rpi-4-b.dts `expgpio` line names).
+const WL_REG_ON_FW_GPIO: u32 = 128 + 1;
+
+/// SET_GPIO_STATE on WL_REG_ON. Accepts an answer whose buffer code says
+/// success even when the tag's own code lacks bit 31 -- Linux's
+/// `rpi_firmware_property` checks only the buffer code.
+fn wl_state(state: u32) -> Result<(), alloc::string::String> {
+    let mut v = [WL_REG_ON_FW_GPIO, state];
+    if firmware_property(0x0003_8041, &mut v) {
+        return Ok(());
+    }
+    let st = crate::arch::aarch64::rpi::last_property_status();
+    crate::println!("[wifi] WL_REG_ON set-state {}: status={:#x}", state, st);
+    if st != u64::MAX && (st >> 32) as u32 == 0x8000_0000 {
+        return Ok(());
+    }
+    Err(alloc::format!(
+        "could not switch WL_REG_ON {} (firmware GPIO 129, mailbox status {:#x})",
+        if state != 0 { "on" } else { "off" },
+        st
+    ))
 }
 
 /// The Arasan controller's base clock (firmware clock 1, "EMMC"), Hz.

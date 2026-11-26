@@ -325,6 +325,15 @@ fn videocore_clock_rate(id: u32) -> u32 {
 /// boot-time helpers above run before anything else can).
 static MBOX_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
+/// The last `firmware_property` answer: buffer response code << 32 | tag
+/// response code (u64::MAX = the mailbox itself did not answer).
+static LAST_PROPERTY: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// `LAST_PROPERTY` for diagnostics.
+pub fn last_property_status() -> u64 {
+    LAST_PROPERTY.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// One VideoCore firmware property: `tag` with request words `values` (at
 /// most 8); the answer's words replace them. False if the firmware did not
 /// answer or rejected the tag.
@@ -345,10 +354,13 @@ pub fn firmware_property(tag: u32, values: &mut [u32]) -> bool {
         m.add(5 + n).write_volatile(0);
     }
     if !mailbox_call(m, (total * 4) as u64) {
+        LAST_PROPERTY.store(u64::MAX, core::sync::atomic::Ordering::Relaxed);
         return false;
     }
+    let (code, tag_code) = unsafe { (m.add(1).read_volatile(), m.add(4).read_volatile()) };
+    LAST_PROPERTY.store((code as u64) << 32 | tag_code as u64, core::sync::atomic::Ordering::Relaxed);
     // bit 31 of the tag's response code = "answered"
-    if unsafe { m.add(4).read_volatile() } & 0x8000_0000 == 0 {
+    if tag_code & 0x8000_0000 == 0 {
         return false;
     }
     for (i, v) in values.iter_mut().take(n).enumerate() {
