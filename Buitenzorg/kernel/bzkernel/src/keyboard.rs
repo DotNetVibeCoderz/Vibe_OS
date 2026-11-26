@@ -250,8 +250,13 @@ static SERIAL_STATE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8
 /// Enter is CR, Backspace is DEL, arrows and Home/End/Delete/PageUp/PageDown
 /// are VT100 escape sequences. Lets a board without a keyboard driver (the
 /// Raspberry Pi before USB) be used from a PC.
+/// Set once anything was typed on the serial port: the terminal then echoes
+/// each command's output there too, so a serial session sees the answers.
+pub static SERIAL_TYPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn feed_serial(byte: u8) {
     use core::sync::atomic::Ordering::Relaxed;
+    SERIAL_TYPED.store(true, Relaxed);
     let nav = |n: u32| char::from_u32(NAV_FIRST as u32 + n);
     match SERIAL_STATE.load(Relaxed) {
         1 => {

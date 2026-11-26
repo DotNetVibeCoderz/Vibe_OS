@@ -418,6 +418,12 @@ fn run_line(tab_id: u32, line: &str) -> Effect {
     shell::swap_state(&mut state);
     let spawned = core::mem::take(&mut *SPAWNED.lock());
     let early = core::mem::take(&mut *EARLY.lock());
+    if crate::keyboard::SERIAL_TYPED.load(Ordering::Relaxed) {
+        crate::serial::_print(format_args!("$ {}\n", line));
+        for l in output.iter() {
+            crate::serial::_print(format_args!("{}\n", l));
+        }
+    }
     {
         let mut guard = TERMINAL.lock();
         if let Some(term) = guard.as_mut() {
