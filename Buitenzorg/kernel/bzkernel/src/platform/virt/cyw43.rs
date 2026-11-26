@@ -476,18 +476,21 @@ impl Cyw43 {
             }
             let nmw = (v2 & 0x0007_C000) >> 14;
             let nsw = (v2 & 0x00F8_0000) >> 19;
-            if nmw + nsw == 0 {
-                continue;
+            if nmw + nsw == 0 && id != 0x827 && id != 0x840 {
+                continue; // no ports (PMU and GCI are kept, as in Linux)
             }
             // addresses: the first slave address = registers, the first
-            // wrapper of the right type = the AI wrapper
+            // wrapper of the right type = the AI wrapper. A core with a master
+            // port uses its master wrapper (DMP_SLAVE_TYPE_MWRAP 3), others
+            // their slave wrapper (SWRAP 2) -- brcmf_chip_dmp_get_regaddr.
             let (v3, t3) = desc(self, &mut erom)?;
             let wraptype = if t3 == 0x3 {
-                2
+                3
             } else if t3 == 0x5 {
                 erom -= 4;
-                3
+                2
             } else {
+                erom -= 4;
                 continue;
             };
             let _ = v3;
