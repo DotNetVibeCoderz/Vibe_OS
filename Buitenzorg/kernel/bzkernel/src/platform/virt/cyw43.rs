@@ -1297,10 +1297,12 @@ impl Cyw43 {
         }
     }
 
-    /// Install an AES-CCMP key: "wsec_key" with Linux's 160-byte
-    /// `brcmf_wsec_key_le` (pairwise = the AP's address + PRIMARY flag).
+    /// Install an AES-CCMP key: "wsec_key" with Linux's `brcmf_wsec_key_le`
+    /// (pairwise = the AP's address + PRIMARY flag). The struct is not
+    /// packed: rxiv is {hi u32, lo u16, pad u16}, so it is 164 bytes with
+    /// `ea` at 156 (160 bytes -> BCME_BUFTOOSHORT, seen on the board).
     fn set_key(&mut self, index: u32, key: &[u8], ea: Option<[u8; 6]>) -> Result<(), String> {
-        let mut k = [0u8; 160];
+        let mut k = [0u8; 164];
         k[0..4].copy_from_slice(&index.to_le_bytes());
         k[4..8].copy_from_slice(&(key.len() as u32).to_le_bytes());
         k[8..8 + key.len().min(32)].copy_from_slice(&key[..key.len().min(32)]);
@@ -1308,7 +1310,7 @@ impl Cyw43 {
         let flags: u32 = if ea.is_some() { 1 << 1 } else { 0 }; // BRCMF_PRIMARY_KEY
         k[116..120].copy_from_slice(&flags.to_le_bytes());
         if let Some(a) = ea {
-            k[154..160].copy_from_slice(&a);
+            k[156..162].copy_from_slice(&a);
         }
         self.set_var("wsec_key", &k).map_err(|e| format!("wsec_key {}: {}", index, e))
     }
