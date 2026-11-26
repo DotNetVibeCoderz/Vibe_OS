@@ -265,6 +265,7 @@ const SBSDIO_WATERMARK: u32 = 0x10008;
 const SBADDRLOW: u32 = 0x1000A;
 const CHIPCLKCSR: u32 = 0x1000E;
 const SDIOPULLUP: u32 = 0x1000F;
+const SLEEPCSR: u32 = 0x1001F; // bit 0 = KSO (keep SDIO on)
 const FORCE_ALP: u8 = 0x01;
 const FORCE_HT: u8 = 0x02;
 const ALP_AVAIL_REQ: u8 = 0x08;
@@ -535,7 +536,8 @@ impl Cyw43 {
 
     fn reset_core(&mut self, c: Core, prereset: u32, reset: u32, postreset: u32) -> Result<(), &'static str> {
         if self.bp_read32(c.wrap + RESET_CTL)? & 1 == 0 {
-            self.bp_write32(c.wrap + IOCTL, prereset)?;
+            // brcmf_chip_ai_coredisable: prereset with the clock forced on
+            self.bp_write32(c.wrap + IOCTL, prereset | IOCTL_FGC | IOCTL_CLK)?;
             self.bp_read32(c.wrap + IOCTL)?;
             self.bp_write32(c.wrap + RESET_CTL, 1)?;
             delay_us(20);
@@ -558,6 +560,32 @@ impl Cyw43 {
         self.bp_write32(c.wrap + IOCTL, postreset | IOCTL_CLK)?;
         self.bp_read32(c.wrap + IOCTL)?;
         Ok(())
+    }
+
+    /// Bring-up diagnostics: chip id, PMU state, CR4 wrapper, SDIO core
+    /// interrupt status (each read's error text instead of a value).
+    fn diag(&mut self, what: &str, cr4: Core) {
+        let mut s = String::new();
+        let regs: [(&str, u32); 9] = [
+            ("chipid", 0x1800_0000),
+            ("pmuctl", 0x1800_0600),
+            ("pmustat", 0x1800_0608),
+            ("res_state", 0x1800_060C),
+            ("min_res", 0x1800_0618),
+            ("max_res", 0x1800_061C),
+            ("cr4_ioctl", cr4.wrap + IOCTL),
+            ("cr4_rst", cr4.wrap + RESET_CTL),
+            ("sd_int", self.sd_core + SD_INTSTATUS),
+        ];
+        for (name, addr) in regs {
+            match self.bp_read32(addr) {
+                Ok(v) => s.push_str(&format!(" {}={:#x}", name, v)),
+                Err(e) => s.push_str(&format!(" {}=<{}>", name, e)),
+            }
+        }
+        let csr = self.h.cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v as u32).unwrap_or(0xEE);
+        let kso = self.h.cmd52(false, 1, SLEEPCSR, 0).map(|v| v as u32).unwrap_or(0xEE);
+        crate::println!("[wifi] {}: clkcsr={:#x} sleepcsr={:#x}{}", what, csr, kso, s);
     }
 
     /// The CR4's TCM size: the sum of its banks (brcmf_chip_tcm_ramsize).
@@ -688,10 +716,14 @@ impl Cyw43 {
         let t0 = crate::arch::cpu::timestamp();
         let mut image = fw.to_vec();
         c.bp_rw(true, c.rambase, &mut image)?;
-        let mut back = [0u8; 256];
+        // the whole image read back (a corrupted block would crash the CR4)
+        let mut back = alloc::vec![0u8; fw.len()];
         c.bp_rw(false, c.rambase, &mut back)?;
-        if back[..] != fw[..256.min(fw.len())] {
-            return Err("firmware read back from the TCM differs".into());
+        if let Some(at) = back.iter().zip(fw.iter()).position(|(a, b)| a != b) {
+            return Err(format!(
+                "firmware read back from the TCM differs at byte {} ({:#x} vs {:#x})",
+                at, back[at], fw[at]
+            ));
         }
         let ms = (crate::arch::cpu::timestamp() - t0) * 1000 / crate::arch::cpu::counter_hz().max(1);
         // NVRAM at the end of RAM
@@ -703,7 +735,15 @@ impl Cyw43 {
         let rstvec = le32(fw, 0);
         c.bp_write32(0, rstvec)?;
         c.bp_write32(c.sd_core + SD_INTSTATUS, 0xFFFF_FFFF)?;
+        let mut nv_back = alloc::vec![0u8; nv.len()];
+        let nv_ok = c.bp_rw(false, at, &mut nv_back).is_ok() && nv_back == nv;
+        crate::println!("[wifi] NVRAM read back {}, word 0 = {:#x}", if nv_ok { "ok" } else { "DIFFERS" }, c.bp_read32(0).unwrap_or(0));
+        c.diag("before release", cr4);
         c.reset_core(cr4, CR4_CPUHALT, 0, 0)?;
+        delay_us(50_000);
+        c.diag("50 ms after release", cr4);
+        // keep the SDIO core awake (KSO) in case the firmware enabled sleep
+        let _ = c.h.cmd52(true, 1, SLEEPCSR, 1);
 
         // Like brcmf_sdio_download_firmware + brcmf_sdio_firmware_callback:
         // drop the clock request (CLK_SDONLY), then request HT again
@@ -712,6 +752,7 @@ impl Cyw43 {
         delay_us(1_000);
         c.h.cmd52(true, 1, CHIPCLKCSR, HT_AVAIL_REQ)?;
         if !wait(2_000_000, || c.h.cmd52(false, 1, CHIPCLKCSR, 0).map_or(false, |v| v & HT_AVAIL != 0)) {
+            c.diag("2 s after release", cr4);
             let csr = c.h.cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE);
             // the firmware replaces the NVRAM length token at the end of the
             // TCM with its shared-area pointer once it runs
@@ -731,6 +772,7 @@ impl Cyw43 {
         c.bp_write32(c.sd_core + SD_TOSBMAILBOXDATA, SDPCM_PROT_VERSION << 16)?;
         c.h.cmd52(true, 0, CCCR_IOEN, 0x06)?;
         if !wait(3_000_000, || c.h.cmd52(false, 0, CCCR_IORDY, 0).map_or(false, |v| v & 0x04 != 0)) {
+            c.diag("F2 not ready", cr4);
             return Err("firmware did not start (function 2 never became ready)".into());
         }
         c.bp_write32(c.sd_core + SD_HOSTINTMASK, I_HMB_FC_CHANGE | I_HMB_FRAME_IND | I_HMB_HOST_INT | 0x10 | I_CHIPACTIVE)?;
