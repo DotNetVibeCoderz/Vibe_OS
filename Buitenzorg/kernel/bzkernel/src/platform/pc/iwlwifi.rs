@@ -226,6 +226,7 @@ impl Nic {
     }
     pub(super) fn note(&mut self, s: String) {
         crate::println!("[iwl] {}", s);
+        wlog(format!("[iwl] {}", s));
         self.log.push(s);
     }
 
@@ -841,6 +842,9 @@ pub(super) struct Init {
     /// NVM section 3: one u16 of flags per channel.
     pub(super) regulatory: Vec<u8>,
     pub(super) sku: u32,
+    /// Location-aware regulatory enabled in the NVM (iwl_parse_nvm_data,
+    /// IWL_NVM_EXT): None when the SW/REGULATORY sections were too short.
+    pub(super) nvm_lar: Option<bool>,
 }
 
 /// The INIT image: ALIVE, command queue, NVM (MAC address, bands,
@@ -870,6 +874,7 @@ pub(super) fn init_calibrate(dev: &PciDevice, nic: &mut Nic, hw: &Hw, fw: &[u8])
     let mut mac = otp;
     let mut sku = 0u32;
     let mut regulatory = Vec::new();
+    let mut nvm_version: Option<u32> = None;
     let mut sections_ok = 0;
     for (kind, name) in [(10u16, "HW"), (1, "SW"), (11, "MAC_OVERRIDE"), (12, "PHY_SKU"), (3, "REGULATORY"), (4, "CALIBRATION")] {
         match nvm_read(nic, &mut tx, &mut rx, kind) {
@@ -898,6 +903,10 @@ pub(super) fn init_calibrate(dev: &PciDevice, nic: &mut Nic, hw: &Hw, fw: &[u8])
                         sku & 8 != 0
                     ));
                 }
+                if kind == 1 && data.len() >= 4 {
+                    // NVM_VERSION_EXT_NVM: a u32 at word 0 of the SW section
+                    nvm_version = Some(u32::from_le_bytes([data[0], data[1], data[2], data[3]]));
+                }
                 if kind == 3 {
                     regulatory = data;
                 }
@@ -909,6 +918,18 @@ pub(super) fn init_calibrate(dev: &PciDevice, nic: &mut Nic, hw: &Hw, fw: &[u8])
         return Err(String::from("no NVM section could be read (command queue not working; details: dmesg iwl)"));
     }
     nic.note(format!("MAC address {}", mac_str(&mac)));
+    // NVM_LAR_OFFSET(_OLD) in words of the regulatory section, enabled bits 0x7
+    let nvm_lar = nvm_version.and_then(|v| {
+        let off = if v < 0xE39 { 0x4C7 } else { 0x507 } * 2;
+        let w = regulatory.get(off..off + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+        nic.note(format!(
+            "NVM version {:#x}, regulatory {} bytes, LAR word {}",
+            v,
+            regulatory.len(),
+            w.map_or(String::from("missing"), |w| format!("{:#x}", w))
+        ));
+        w.map(|w| w & 0x7 != 0)
+    });
     crate::println!("[kernel] MILESTONE: IWLWIFI NVM OK (MAC {}, {} section(s))", mac_str(&mac), sections_ok);
 
     // ---- INIT calibration: TX antennas, PHY config, wait INIT_COMPLETE ----
@@ -940,7 +961,7 @@ pub(super) fn init_calibrate(dev: &PciDevice, nic: &mut Nic, hw: &Hw, fw: &[u8])
     let ms = (crate::arch::cpu::nanos() - t0) / 1_000_000;
     nic.note(format!("INIT calibration complete in {} ms, {} PHY DB entries", ms, phy_db.len()));
     crate::println!("[kernel] MILESTONE: IWLWIFI CALIB OK ({} PHY DB entries)", phy_db.len());
-    Ok((Init { mac, phy_db, regulatory, sku }, tx))
+    Ok((Init { mac, phy_db, regulatory, sku, nvm_lar }, tx))
 }
 
 pub(super) fn mac_str(m: &[u8; 6]) -> String {
@@ -1296,5 +1317,39 @@ impl Nic {
             d(self, fh_tcsr_config(7)),
         );
         self.note(s);
+    }
+}
+
+/// Every Wi-Fi log line since boot (newest 4000), saved to /disk/WIFILOG.TXT
+/// after each `wifi` command: a laptop has no serial cable, and the file on
+/// the USB stick is read on another PC instead of photographing `dmesg`.
+static WLOG: spin::Mutex<Vec<String>> = spin::Mutex::new(Vec::new());
+
+pub(super) fn wlog(s: String) {
+    let mut g = WLOG.lock();
+    if g.len() >= 4000 {
+        g.drain(..500);
+    }
+    g.push(s);
+}
+
+pub(super) const WIFI_LOG: &str = "/disk/WIFILOG.TXT";
+
+/// Write the Wi-Fi log file (no lock of the driver may be held).
+pub(super) fn save_log() {
+    let text = {
+        let g = WLOG.lock();
+        let mut t = String::with_capacity(g.iter().map(|l| l.len() + 2).sum::<usize>() + 64);
+        t.push_str(&format!("Buitenzorg {} -- Wi-Fi log, {} line(s)
+", crate::shell::VERSION, g.len()));
+        for l in g.iter() {
+            t.push_str(l);
+            t.push_str("
+");
+        }
+        t
+    };
+    if let Err(e) = crate::vfs::write(WIFI_LOG, text.as_bytes()) {
+        crate::println!("[wifi] could not save {}: {}", WIFI_LOG, e);
     }
 }

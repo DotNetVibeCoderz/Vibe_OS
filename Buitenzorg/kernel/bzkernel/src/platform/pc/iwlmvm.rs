@@ -207,8 +207,12 @@ unsafe impl Send for Mvm {}
 static DEV: spin::Mutex<Option<Mvm>> = spin::Mutex::new(None);
 static STATUS: spin::Mutex<String> = spin::Mutex::new(String::new());
 
+/// Set once MCC_UPDATE asserted the firmware: later starts leave it out.
+static NO_MCC: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 fn set_status(s: String) {
     crate::println!("[wifi] {}", s);
+    iwl::wlog(format!("[wifi] {}", s));
     *STATUS.lock() = s;
 }
 
@@ -221,8 +225,25 @@ pub fn present() -> bool {
     device().is_some()
 }
 
-/// INIT run, device stop, runtime image, paging, runtime configuration.
+/// `start`, once more after a PCIe function-level reset when the first
+/// attempt switched a step off (MCC_UPDATE asserting the firmware): one
+/// `wifi` command then gets through without another test round.
 fn start(dev: &PciDevice, nic: &mut Nic) -> Result<Mvm, String> {
+    let before = NO_MCC.load(core::sync::atomic::Ordering::Relaxed);
+    match start_once(dev, nic) {
+        Err(e) if !before && NO_MCC.load(core::sync::atomic::Ordering::Relaxed) => {
+            nic.note(format!("first start failed: {}", e));
+            iwl::stop_device(nic);
+            crate::pci::function_level_reset(dev).map_err(|x| format!("{} (no restart: {})", e, x))?;
+            nic.note(String::from("PCIe function-level reset done; starting again without MCC update"));
+            start_once(dev, nic)
+        }
+        r => r,
+    }
+}
+
+/// INIT run, device stop, runtime image, paging, runtime configuration.
+fn start_once(dev: &PciDevice, nic: &mut Nic) -> Result<Mvm, String> {
     let fw = iwl::open(dev, nic)?;
     let hw = Hw::new()?;
     let (init, mut tx) = match iwl::init_calibrate(dev, nic, &hw, &fw) {
@@ -300,6 +321,10 @@ fn start(dev: &PciDevice, nic: &mut Nic) -> Result<Mvm, String> {
     let r = m.paging(&rt).and_then(|_| m.configure(&init, &fw));
     // the transport's own lines go back to the caller's log
     nic.log.append(&mut m.nic.log);
+    if r.is_err() {
+        // the registers go back too: the caller may reset and start again
+        nic.regs = core::mem::replace(&mut m.nic.regs, core::ptr::null_mut());
+    }
     r?;
     Ok(m)
 }
@@ -325,6 +350,7 @@ fn channel_list(reg: &[u8], sku: u32) -> Vec<u8> {
 impl Mvm {
     fn log(&mut self, s: String) {
         crate::println!("[iwl] {}", s);
+        iwl::wlog(format!("[iwl] {}", s));
     }
 
     fn cmd(&mut self, id: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
@@ -415,7 +441,7 @@ impl Mvm {
         self.phy_ctx(ACTION_ADD, 1)?;
         // device power: always on (no POWER_SAVE_ENA)
         self.cmd(POWER_TABLE_CMD, &[0u8; 4])?;
-        self.init_mcc(fw);
+        self.init_mcc(fw, init.nvm_lar)?;
         self.scan_config()?;
         self.mac_ctx(ACTION_ADD)?;
         self.nic.note(format!(
@@ -489,11 +515,22 @@ impl Mvm {
 
     /// iwl_mvm_init_mcc: with location-aware regulatory (LAR) the firmware
     /// picks the country itself; ask for the current one ("ZZ"). Linux does
-    /// this right before the scan configuration. Not fatal.
-    fn init_mcc(&mut self, fw: &[u8]) {
+    /// this right before the scan configuration. Not fatal. On the 8000
+    /// family (IWL_NVM_EXT) LAR needs the firmware capability *and* the NVM
+    /// bit (iwl_mvm_is_lar_supported); sending MCC_UPDATE to a firmware
+    /// whose NVM has LAR off asserts it (seen on the Latitude 7290).
+    fn init_mcc(&mut self, fw: &[u8], nvm_lar: Option<bool>) -> Result<(), String> {
         if !iwl::tlv_capa(fw, 1) {
-            self.nic.note(String::from("no LAR support: MCC update skipped"));
-            return;
+            self.nic.note(String::from("no LAR support in the firmware: MCC update skipped"));
+            return Ok(());
+        }
+        if NO_MCC.load(core::sync::atomic::Ordering::Relaxed) {
+            self.nic.note(String::from("MCC update left out (it asserted the firmware on an earlier start)"));
+            return Ok(());
+        }
+        if nvm_lar != Some(true) {
+            self.nic.note(format!("LAR {} in the NVM: MCC update skipped, channels from the NVM", if nvm_lar.is_none() { "unknown" } else { "off" }));
+            return Ok(());
         }
         // LAR_MULTI_MCC (29) -> API v2 (28 bytes) and MCC_SOURCE_GET_CURRENT
         let multi = iwl::tlv_capa(fw, 29);
@@ -507,8 +544,13 @@ impl Mvm {
                 let cc = [(mcc >> 8) as u8 as char, (mcc & 0xFF) as u8 as char];
                 self.nic.note(format!("MCC update: status {:#x}, country {}{} ({} bytes)", st, cc[0], cc[1], r.len()));
             }
+            Err(e) if e.contains("firmware error") => {
+                NO_MCC.store(true, core::sync::atomic::Ordering::Relaxed);
+                return Err(format!("MCC update: {} (restarting without it)", e));
+            }
             Err(e) => self.nic.note(format!("MCC update failed: {}", e)),
         }
+        Ok(())
     }
 
     /// SCAN_CFG_CMD (API v1): sized like Linux, the fixed part + the
@@ -1483,6 +1525,18 @@ pub fn saved_ssid() -> String {
 
 /// `wifi` on a PC with an Intel 8260/8265.
 pub fn command(args: &[&str]) -> Vec<String> {
+    // never the password: `wifi connect SSID` only
+    let shown: Vec<&str> = if args.first() == Some(&"connect") { args.iter().take(2).cloned().collect() } else { args.to_vec() };
+    iwl::wlog(format!("[wifi] $ wifi {}", shown.join(" ")));
+    let mut out = command_inner(args);
+    iwl::save_log();
+    if out.iter().any(|l| l.contains("failed") || l.contains("error") || l.starts_with("wifi: ")) {
+        out.push(format!("(log lengkap: {})", iwl::WIFI_LOG));
+    }
+    out
+}
+
+fn command_inner(args: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
     match args.first().copied().unwrap_or("") {
         "" | "status" => {
@@ -1598,4 +1652,5 @@ pub fn autostart() {
     if let Err(e) = connect(&ssid, &psk) {
         set_status(format!("autostart: {}", e));
     }
+    iwl::save_log();
 }
