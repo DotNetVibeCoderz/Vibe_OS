@@ -102,8 +102,8 @@ Under it: shell `netinfo` (key=value: `link`, `mac`, `ip`, `prefix`, `gateway`,
 and passwords may contain spaces. Managed: `Buitenzorg.Net.NetworkConfig`
 (BZAPP.DLL `NetConfig.cs`: `Status`, `Scan`, `Connect`, `Forget`, `Renew`; off the
 device a simulated machine). Joining works only where `wifi connect` works: the
-Raspberry Pi 4 driver (untested on a board); the laptop's Intel 8265 is listed as
-an adapter that cannot join yet. Screenshots `docs/img/network-app.png`,
+Raspberry Pi 4 driver (untested on a board) and the Intel 8260/8265 (verified on
+the Latitude 7290). Screenshots `docs/img/network-app.png`,
 `docs/img/settings-network.png`.
 
 ## Display: zero-copy surfaces, vsync, full screen (`WIN_CTL`, 74)
