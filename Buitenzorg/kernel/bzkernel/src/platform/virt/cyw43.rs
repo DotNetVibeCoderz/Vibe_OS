@@ -342,6 +342,8 @@ pub struct Bss {
     pub channel: u8,
     pub rssi: i16,
     pub secured: bool,
+    /// group cipher suite of its RSN element (4 = CCMP, 2 = TKIP)
+    pub group: u8,
 }
 
 /// What the firmware said about the join.
@@ -376,6 +378,11 @@ pub struct Cyw43 {
     pub events: u64,
     /// control replies that arrived while waiting for another one
     pending_ctl: Vec<Vec<u8>>,
+    /// EAPOL frames (whole Ethernet frames) for the host supplicant
+    eapol: alloc::collections::VecDeque<Vec<u8>>,
+    /// the firmware has no supplicant ("sup_wpa" unsupported): do the
+    /// 4-way handshake here (`wpa.rs`)
+    host_sup: bool,
 }
 
 fn le32(b: &[u8], o: usize) -> u32 {
@@ -672,6 +679,8 @@ impl Cyw43 {
             frames_tx: 0,
             events: 0,
             pending_ctl: Vec::new(),
+            eapol: alloc::collections::VecDeque::new(),
+            host_sup: false,
         };
         // ALP clock
         c.h.cmd52(true, 1, CHIPCLKCSR, FORCE_HW_CLKREQ_OFF | ALP_AVAIL_REQ)?;
@@ -936,8 +945,13 @@ impl Cyw43 {
                     return;
                 }
                 let frame = &body[off..];
-                if u16::from_be_bytes([frame[12], frame[13]]) == 0x886C {
+                let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+                if ethertype == 0x886C {
                     self.event(frame);
+                } else if ethertype == 0x888E && self.host_sup {
+                    if self.eapol.len() < 8 {
+                        self.eapol.push_back(frame.to_vec());
+                    }
                 } else if chan == 2 {
                     self.frames_rx += 1;
                     if self.rx.len() < 64 {
@@ -996,7 +1010,26 @@ impl Cyw43 {
             e.rssi = e.rssi.max(rssi);
             return;
         }
-        self.scan.push(Bss { ssid, bssid, channel: (chanspec & 0xFF) as u8, rssi, secured: cap & 0x10 != 0 });
+        // RSN element among the IEs (brcmf_bss_info_le: ie_offset @116, ie_length @120)
+        let mut group = 4;
+        if b.len() >= 124 {
+            let off = u16::from_le_bytes([b[116], b[117]]) as usize;
+            let len = le32(b, 120) as usize;
+            if let Some(ies) = b.get(off..off.saturating_add(len)) {
+                let mut p = 0;
+                while p + 2 <= ies.len() {
+                    let (id, l) = (ies[p], ies[p + 1] as usize);
+                    if id == 0x30 {
+                        if let Some(r) = ies.get(p + 2..p + 2 + l).and_then(crate::wpa::parse_rsn) {
+                            group = r.group;
+                        }
+                        break;
+                    }
+                    p += 2 + l;
+                }
+            }
+        }
+        self.scan.push(Bss { ssid, bssid, channel: (chanspec & 0xFF) as u8, rssi, secured: cap & 0x10 != 0, group });
     }
 
     // -- ioctls ------------------------------------------------------------------
@@ -1098,6 +1131,7 @@ impl Cyw43 {
             return Err("a WPA2 passphrase has 8..63 characters (or a 64-digit hex PSK)".into());
         }
         self.join = JoinState::default();
+        self.host_sup = false;
         let _ = self.ioctl(WLC_DISASSOC, true, &mut []);
         self.set_u32(WLC_SET_INFRA, 1)?;
         self.set_u32(WLC_SET_AUTH, 0)?;
@@ -1108,7 +1142,15 @@ impl Cyw43 {
         } else {
             self.set_u32(WLC_SET_WSEC, 4)?; // AES
             self.set_u32(WLC_SET_WPA_AUTH, 0x80)?; // WPA2-PSK
-            self.set_var_u32("sup_wpa", 1)?;
+            // The Pi's Cypress firmware (7.45.x) has no in-firmware
+            // supplicant: "sup_wpa" answers BCME_UNSUPPORTED (-23); then
+            // the 4-way handshake runs here, like wpa_supplicant over brcmfmac.
+            self.host_sup = self.set_var_u32("sup_wpa", 1).is_err();
+        }
+        if !pass.is_empty() && self.host_sup {
+            return self.join_host(ssid, pass, ms);
+        }
+        if !pass.is_empty() {
             let mut pmk = [0u8; 68];
             let hex = pass.len() == 64 && pass.bytes().all(|b| b.is_ascii_hexdigit());
             pmk[0..2].copy_from_slice(&(pass.len() as u16).to_le_bytes());
@@ -1155,6 +1197,120 @@ impl Cyw43 {
             }
             delay_us(5_000);
         }
+    }
+
+    /// WPA2-PSK join with the handshake on the host (`wpa::Supplicant`):
+    /// our RSN element through "wpaie", SET_SSID, then EAPOL frames from the
+    /// data channel answered here, the keys installed with "wsec_key".
+    fn join_host(&mut self, ssid: &str, pass: &str, ms: u64) -> Result<(), String> {
+        let pmk: [u8; 32] = if pass.len() == 64 && pass.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let mut k = [0u8; 32];
+            for i in 0..32 {
+                k[i] = u8::from_str_radix(&pass[2 * i..2 * i + 2], 16).unwrap_or(0);
+            }
+            k
+        } else {
+            crate::wpa::psk(ssid, pass)
+        };
+        let group = self.scan.iter().filter(|b| b.ssid == ssid).max_by_key(|b| b.rssi).map_or(4, |b| b.group);
+        if group != 4 {
+            crate::println!("[wifi] {:?} uses group cipher {} (only CCMP group keys are installed)", ssid, group);
+        }
+        let ie = crate::wpa::rsn_ie(group);
+        if let Err(e) = self.set_var("wpaie", &ie) {
+            crate::println!("[wifi] wpaie: {} (the firmware builds its own RSN element)", e);
+        }
+        self.eapol.clear();
+        let mut s = [0u8; 36];
+        s[0..4].copy_from_slice(&(ssid.len() as u32).to_le_bytes());
+        s[4..4 + ssid.len()].copy_from_slice(ssid.as_bytes());
+        self.ioctl(WLC_SET_SSID, true, &mut s)?;
+        crate::println!("[wifi] joining {:?} (WPA2-PSK, host supplicant)", ssid);
+        let hz = crate::arch::cpu::counter_hz().max(1);
+        let t0 = crate::arch::cpu::timestamp();
+        let mut sup: Option<crate::wpa::Supplicant> = None;
+        let mut keyed = false;
+        loop {
+            self.poll();
+            while let Some(f) = self.eapol.pop_front() {
+                let mut aa = [0u8; 6];
+                aa.copy_from_slice(&f[6..12]);
+                let st = sup
+                    .get_or_insert_with(|| crate::wpa::Supplicant::new(pmk, aa, self.mac, group))
+                    .on_eapol(&f[14..]);
+                if let Some(e) = st.error {
+                    if e.contains("MIC") {
+                        return Err("WPA2 handshake failed: wrong password?".into());
+                    }
+                    crate::println!("[wifi] EAPOL: {}", e);
+                }
+                if let Some(reply) = st.reply {
+                    let mut out = Vec::with_capacity(14 + reply.len());
+                    out.extend_from_slice(&aa);
+                    out.extend_from_slice(&self.mac);
+                    out.extend_from_slice(&0x888Eu16.to_be_bytes());
+                    out.extend_from_slice(&reply);
+                    self.send_ethernet(&out).map_err(|e| format!("EAPOL send: {}", e))?;
+                }
+                if st.ptk.is_some() || st.gtk.is_some() {
+                    // let message 4 leave unencrypted before the keys exist
+                    for _ in 0..10 {
+                        self.poll();
+                        delay_us(2_000);
+                    }
+                }
+                if let Some(tk) = st.ptk {
+                    self.set_key(0, &tk, Some(aa))?;
+                }
+                if let Some((id, k)) = st.gtk {
+                    if k.len() == 16 {
+                        self.set_key(id as u32, &k, None)?;
+                    }
+                }
+                if st.done {
+                    keyed = true;
+                    crate::println!("[wifi] 4-way handshake done with {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", aa[0], aa[1], aa[2], aa[3], aa[4], aa[5]);
+                }
+            }
+            let j = self.join;
+            if let Some(st) = j.ssid_set {
+                if st != 0 {
+                    return Err(format!("join failed (SET_SSID status {}{})", st, match st {
+                        1 => ": failed",
+                        2 => ": network not found",
+                        3 => ": timed out",
+                        _ => "",
+                    }));
+                }
+            }
+            if keyed && j.link == Some(true) {
+                return Ok(());
+            }
+            if (crate::arch::cpu::timestamp() - t0) * 1000 / hz > ms {
+                return Err(format!(
+                    "no association within {} s (ssid {:?}, link {:?}, EAPOL {})",
+                    ms / 1000, j.ssid_set, j.link,
+                    if keyed { "done" } else if sup.is_some() { "started" } else { "never seen" }
+                ));
+            }
+            delay_us(2_000);
+        }
+    }
+
+    /// Install an AES-CCMP key: "wsec_key" with Linux's 160-byte
+    /// `brcmf_wsec_key_le` (pairwise = the AP's address + PRIMARY flag).
+    fn set_key(&mut self, index: u32, key: &[u8], ea: Option<[u8; 6]>) -> Result<(), String> {
+        let mut k = [0u8; 160];
+        k[0..4].copy_from_slice(&index.to_le_bytes());
+        k[4..8].copy_from_slice(&(key.len() as u32).to_le_bytes());
+        k[8..8 + key.len().min(32)].copy_from_slice(&key[..key.len().min(32)]);
+        k[112..116].copy_from_slice(&4u32.to_le_bytes()); // CRYPTO_ALGO_AES_CCM
+        let flags: u32 = if ea.is_some() { 1 << 1 } else { 0 }; // BRCMF_PRIMARY_KEY
+        k[116..120].copy_from_slice(&flags.to_le_bytes());
+        if let Some(a) = ea {
+            k[154..160].copy_from_slice(&a);
+        }
+        self.set_var("wsec_key", &k).map_err(|e| format!("wsec_key {}: {}", index, e))
     }
 
     /// Send an Ethernet frame (BCDC v2 header, data channel).
@@ -1310,11 +1466,12 @@ pub fn present() -> bool {
 /// Join, take a DHCP lease and make Wi-Fi the network device.
 pub fn connect(ssid: &str, key: &str) -> Result<String, String> {
     start()?;
-    {
+    let host_sup = {
         let mut g = WIFI.lock();
         let c = g.as_mut().ok_or("Wi-Fi is not up")?;
         c.join(ssid, key, 20_000)?;
-    }
+        c.host_sup
+    };
     let mut dev = WifiNet;
     let lease = crate::dhcp::lease(&mut dev, 10).ok_or_else(|| String::from("joined, but no DHCP answer"))?;
     crate::net::attach(alloc::boxed::Box::new(WifiNet), lease.ip);
@@ -1327,8 +1484,8 @@ pub fn connect(ssid: &str, key: &str) -> Result<String, String> {
     );
     set_status(msg.clone());
     crate::println!(
-        "[kernel] MILESTONE: WIFI OK (CYW43455 over SDIO, firmware supplicant, DHCP {}.{}.{}.{})",
-        ip[0], ip[1], ip[2], ip[3]
+        "[kernel] MILESTONE: WIFI OK (CYW43455 over SDIO, {} supplicant, DHCP {}.{}.{}.{})",
+        if host_sup { "host" } else { "firmware" }, ip[0], ip[1], ip[2], ip[3]
     );
     Ok(msg)
 }

@@ -70,6 +70,7 @@ mod terminal;
 mod theme;
 mod vfs;
 mod dhcp;
+mod wpa;
 mod hwio;
 mod settings;
 mod sntp;
