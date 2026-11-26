@@ -743,6 +743,23 @@ namespace Buitenzorg.Drawing
             }
         }
 
+        /// <summary>Draw a string in a TrueType font (anti-aliased; the system
+        /// rasterizes it, FONT_OP RENDER). `y` is the top of the line. Falls
+        /// back to the 8x8 font when the system has no outline font.</summary>
+        public void DrawString(TrueTypeFont f, string s, Color c, int x, int y)
+        {
+            int w, h;
+            byte[] cov = f.Render(s, out w, out h);
+            if (cov == null) { DrawString(f.Fallback, s, c, x, y); return; }
+            TP(x, y, out int ox, out int oy);
+            for (int yy = 0; yy < h; yy++)
+                for (int xx = 0; xx < w; xx++)
+                {
+                    int v = cov[8 + yy * w + xx];
+                    if (v != 0) BlendCov(ox + xx, oy + yy, c, v + (v >> 7));
+                }
+        }
+
         /// <summary>Draw `len` chars from a buffer (no managed string needed —
         /// useful for dynamic numeric text under zerolib).</summary>
         public void DrawChars(Font f, char[] s, int len, Color c, int x, int y)
@@ -1261,6 +1278,97 @@ namespace Buitenzorg.Drawing
                     bmp.Pixels[y * w + x] = argb;
                 }
             return bmp;
+        }
+    }
+
+    /// <summary>A system TrueType / OpenType face at a pixel size (FONT_OP).
+    /// <c>TrueTypeFont.Ui(16)</c>, <c>Ui(16, true)</c> (bold), <c>Mono(14)</c> or
+    /// <c>Find("JetBrains Mono", 14)</c>; draw with <c>Graphics.DrawString</c>.</summary>
+    public sealed class TrueTypeFont
+    {
+        [DllImport("*")] static extern ulong bz_font_op(ulong a0, ulong a1, ulong a2);
+
+        const ulong MEASURE = 4, METRICS = 3, RENDER = 8, FIND = 2;
+        const ulong ERR = 0xFFFF_FFFF_0000_0000UL;
+        public readonly int Id, Px;
+        public readonly Font Fallback;
+        int _asc = -1, _line;
+
+        TrueTypeFont(int id, int px) { Id = id; Px = px < 4 ? 4 : (px > 255 ? 255 : px); Fallback = Font.Default(); }
+
+        public static TrueTypeFont Ui(int px) => new TrueTypeFont(0xFFF0, px);
+        public static TrueTypeFont Ui(int px, bool bold) => new TrueTypeFont(bold ? 0xFFF1 : 0xFFF0, px);
+        public static TrueTypeFont Mono(int px) => new TrueTypeFont(0xFFFE, px);
+
+        /// <summary>A face by family name, or null when it is not installed.</summary>
+        public static unsafe TrueTypeFont Find(string family, int px, bool bold)
+        {
+            byte* name = stackalloc byte[64];
+            int n = 0;
+            for (int i = 0; i < family.Length && n < 63; i++) name[n++] = (byte)family[i];
+            name[n] = 0;
+            ulong id = bz_font_op(FIND, (ulong)name, bold ? 1UL : 0UL);
+            if (id >= ERR || id == 0) return null;
+            return new TrueTypeFont((int)id, px);
+        }
+
+        ulong Op(ulong op) => op | ((ulong)Id << 8) | ((ulong)Px << 24);
+
+        /// <summary>The system knows this face (else text falls back to 8x8).</summary>
+        public bool Available { get { Load(); return _asc >= 0 && _line > 0; } }
+        public int Ascent { get { Load(); return _asc < 0 ? 7 : _asc; } }
+        public int LineHeight { get { Load(); return _line <= 0 ? 8 : _line; } }
+
+        void Load()
+        {
+            if (_asc != -1) return;
+            ulong m = bz_font_op(Op(METRICS), 0, 0);
+            if (m >= ERR) { _asc = -2; _line = 0; return; }
+            _asc = (int)(m & 0xFFFF);
+            _line = (int)(m >> 32);
+        }
+
+        // UTF-8 of `s` into `buf` (NUL-terminated); returns the length.
+        static unsafe int Utf8(string s, byte* buf, int cap)
+        {
+            int n = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                int ch = s[i];
+                if (ch < 0x80) { if (n + 1 >= cap) break; buf[n++] = (byte)ch; }
+                else if (ch < 0x800) { if (n + 2 >= cap) break; buf[n++] = (byte)(0xC0 | ch >> 6); buf[n++] = (byte)(0x80 | ch & 63); }
+                else { if (n + 3 >= cap) break; buf[n++] = (byte)(0xE0 | ch >> 12); buf[n++] = (byte)(0x80 | (ch >> 6) & 63); buf[n++] = (byte)(0x80 | ch & 63); }
+            }
+            buf[n] = 0;
+            return n;
+        }
+
+        /// <summary>Width of `s` in pixels (kerned).</summary>
+        public unsafe int Measure(string s)
+        {
+            byte* buf = stackalloc byte[1025];
+            int n = Utf8(s, buf, 1025);
+            ulong w = bz_font_op(Op(MEASURE), (ulong)buf, (ulong)n);
+            return w >= ERR ? s.Length * 8 : (int)w;
+        }
+
+        /// <summary>Coverage of `s`: an 8-byte header, then w*h bytes (0..255),
+        /// or null when the system cannot render it.</summary>
+        public unsafe byte[] Render(string s, out int w, out int h)
+        {
+            w = 0; h = 0;
+            if (!Available || s.Length == 0) return null;
+            w = Measure(s) + 2;
+            h = LineHeight;
+            if (w > 4096) w = 4096;
+            byte[] cov = new byte[8 + w * h];
+            cov[0] = (byte)w; cov[1] = (byte)(w >> 8);
+            cov[4] = (byte)h; cov[5] = (byte)(h >> 8);
+            byte* buf = stackalloc byte[1025];
+            Utf8(s, buf, 1025);
+            ulong r;
+            fixed (byte* p = cov) r = bz_font_op(Op(RENDER), (ulong)buf, (ulong)p);
+            return r >= ERR ? null : cov;
         }
     }
 

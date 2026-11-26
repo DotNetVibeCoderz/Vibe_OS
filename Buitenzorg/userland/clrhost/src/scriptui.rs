@@ -627,7 +627,8 @@ impl Host for Ui {
             // vertical blank; fullscreen(on) -> the client width (0 = refused)
             "notify" => {
                 let (t, b) = (format!("{}\0", text_of(a, 0)), format!("{}\0", text_of(a, 1)));
-                let r = sys::syscall(NOTIFY, t.as_ptr() as u64, b.as_ptr() as u64, 0);
+                // notify(title, body [, urgent])
+                let r = sys::syscall(NOTIFY, t.as_ptr() as u64, b.as_ptr() as u64, (int(a, 2) != 0) as u64);
                 Value::Int(if sys::is_err(r) { -1 } else { r as i64 })
             }
             "vsync" => Value::Int(sys::syscall(WIN_CTL, 3, 0, 0) as i64),

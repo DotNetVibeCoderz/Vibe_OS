@@ -1188,6 +1188,25 @@ public sealed class BrowserApp
                 var (ei, _) = Html.Layout(ep, 400, default);
                 c.That(errs.Exists(l => l.Contains("ReferenceError") && l.Contains("undefinedThing")) && ei.Exists(i => i.Text == "lanjut"), "JS: an error is reported and the next script still runs");
                 Html.Free(ep);
+                // localStorage: per site, kept by the host in /disk/APPDATA/MWEB/STORE
+                string Run(string url, string script)
+                {
+                    var sp = Html.Parse("<p id=o>-</p><script>" + script + "</script>");
+                    Html.RunScripts(sp, url, 0, 400);
+                    var (si, _) = Html.Layout(sp, 400, default);
+                    Html.Free(sp);
+                    var o = si.Find(i => i.Text.StartsWith("="));
+                    return o == null ? "" : o.Text;
+                }
+                Run("http://uji.lokal:81/a.htm", "localStorage.setItem('catatan', JSON.stringify([{t:'satu'}])); localStorage.setItem('x', 'y');");
+                string same = Run("http://uji.lokal:81/b.htm", "document.getElementById('o').textContent = '=' + JSON.parse(localStorage.getItem('catatan'))[0].t + ',' + localStorage.count();");
+                string other = Run("http://lain.lokal/", "document.getElementById('o').textContent = '=' + localStorage.getItem('catatan');");
+                bool onDisk = false;
+                foreach (var f in Files.List("/disk/APPDATA/MWEB/STORE"))
+                    if (Files.ReadAllText(f.Path).StartsWith("http://uji.lokal:81\n")) { onDisk = true; Files.Delete(f.Path); }
+                foreach (var f in Files.List("/disk/APPDATA/MWEB/STORE"))
+                    if (Files.ReadAllText(f.Path).StartsWith("http://lain.lokal\n")) Files.Delete(f.Path);
+                c.That(same == "=satu,2" && other == "=null" && onDisk, "localStorage kept per site, on /disk (" + same + " / " + other + ")");
             }
         }
 

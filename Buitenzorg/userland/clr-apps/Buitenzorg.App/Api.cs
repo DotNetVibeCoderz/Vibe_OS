@@ -43,6 +43,8 @@ internal static class Native
     [DllImport("buitenzorg")] internal static extern long SysStat(int field);
     [DllImport("buitenzorg")] internal static extern string ShellRun(string line);
     [DllImport("buitenzorg")] internal static extern int Notify(string title, string body);
+    [DllImport("buitenzorg", EntryPoint = "Notify")] internal static extern int NotifyFlags(string title, string body, int flags);
+    [DllImport("buitenzorg")] internal static extern int ProfZone(string name, long ns);
     [DllImport("buitenzorg")] internal static extern long WinCtl(long opAndWindow, long arg);
 }
 
@@ -60,14 +62,19 @@ public static class Notifications
     public static readonly List<string> Posted = new();
 
     /// <summary>Post a notification; returns its id (-1 when refused).</summary>
-    public static int Show(string title, string body = "")
+    public static int Show(string title, string body = "") => Show(title, body, false);
+
+    /// <summary>Post a notification. While a full-screen program has the
+    /// screen or "do not disturb" is on, a normal one waits in the action
+    /// center and toasts afterwards; <paramref name="urgent"/> shows at once.</summary>
+    public static int Show(string title, string body, bool urgent)
     {
         if (!_offDevice)
         {
-            try { return Native.Notify(title, body); }
+            try { return Native.NotifyFlags(title, body, urgent ? 1 : 0); }
             catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException) { _offDevice = true; }
         }
-        Posted.Add(title + " -- " + body);
+        Posted.Add((urgent ? "! " : "") + title + " -- " + body);
         return ++_simId;
     }
 }

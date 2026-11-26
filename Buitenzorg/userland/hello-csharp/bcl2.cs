@@ -233,6 +233,12 @@ unsafe class Bcl2Demo
             ok &= BzDebug.Assert(sw.ElapsedTicks > 0, "stopwatch advanced");
             ok &= BzDebug.Assert(!sw.IsRunning, "stopwatch stopped");
             ok &= BzDebug.Assert(spin > 0, "spin loop ran");
+            using (BzProfile.Zone("bcl2-spin"))
+            {
+                for (int i = 0; i < 100000; i++) spin += i;
+            }
+            ok &= BzDebug.Assert(BzProfile.Add("bcl2-extra", 1000), "profiler zone accepted");
+            ok &= BzDebug.Assert(!BzProfile.Add("", 1), "empty zone name refused");
 
             BzProcessInfo procs = BzProcess.GetProcesses(32);
             int pc = BzProcess.Count(procs);

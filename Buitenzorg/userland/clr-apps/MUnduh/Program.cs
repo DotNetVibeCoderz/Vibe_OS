@@ -476,6 +476,10 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        // `munduh --fetch URL PATH`: download without a window and exit 0 on
+        // success -- the kernel's package repository uses it for https.
+        int fi = Array.IndexOf(args, "--fetch");
+        if (fi >= 0 && fi + 2 < args.Length) return Fetch(args[fi + 1], args[fi + 2]);
         var app = new Application();
         if (Array.IndexOf(args, "--selftest") >= 0)
         {
@@ -487,5 +491,21 @@ public static class Program
         if (args.Length > 0 && args[0].Contains("://")) a.Add(args[0]);
         app.Run(w);
         return 0;
+    }
+
+    static int Fetch(string url, string path)
+    {
+        try
+        {
+            Files.Delete(path);
+            var r = new HttpClient().Download(url, path, null, null, false);
+            Console.WriteLine("munduh: " + url + " -> " + path + ": " + r.Status + " " + r.Reason + ", " + r.Saved + " bytes" + (r.Tls.Length > 0 ? ", " + r.Tls : ""));
+            return r.Status == 200 && !r.Cancelled ? 0 : 1;
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("munduh: " + url + ": " + e.Message);
+            return 2;
+        }
     }
 }

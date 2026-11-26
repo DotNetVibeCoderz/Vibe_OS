@@ -70,6 +70,9 @@ public sealed class Window : Control
         // the layout fills any size: let maximize / restore resize the window
         // (an older kernel answers NOSYS and the window keeps its size)
         if (_id != 0) { try { Native.WinCtl(6 | ((long)_id << 8), 1); } catch (Exception) { } }
+        // the close button (and a shutdown) send a CLOSE event instead of
+        // ending the program: Closing handlers get to save first
+        if (_id != 0) { try { Native.WinCtl(8 | ((long)_id << 8), 1); } catch (Exception) { } }
         Attach(this);
         Classes.Add("window");
     }
@@ -126,9 +129,27 @@ public sealed class Window : Control
 
     public void Close()
     {
+        if (IsClosed) return;
         Closing?.Invoke();
         IsClosed = true;
     }
+
+    /// <summary>The user asked to close the window (its close button, a
+    /// shutdown or restart): <see cref="CloseRequested"/> handlers may cancel
+    /// by setting it false (an app asking "save changes?"); otherwise the
+    /// window closes after <see cref="Closing"/> ran.</summary>
+    public void RequestClose()
+    {
+        bool allow = true;
+        if (CloseRequested != null) allow = CloseRequested();
+        if (allow) Close();
+    }
+
+    /// <summary>Raised by <see cref="RequestClose"/>; return false to keep the window open.</summary>
+    public event Func<bool>? CloseRequested;
+
+    /// <summary>Tests: what the kernel's CLOSE event does.</summary>
+    public void SimulateCloseRequest() => RequestClose();
 
     // ---- layout + render
     public void UpdateLayout()
@@ -581,6 +602,7 @@ public sealed class Window : Control
                 if (kind == 5) DispatchWheel(x, y, (short)((ev >> 40) & 0xFFFF));
                 else if (kind == 6) Resize(x, y);
                 else if (kind == 7) DispatchRelative(x, y);
+                else if (kind == 8) RequestClose();
                 else DispatchPointer(kind, x, y, left);
             }
             if (RawKeys)

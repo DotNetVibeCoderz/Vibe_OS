@@ -83,6 +83,23 @@ class DrawDemo
         Color tp = bmp.GetPixel(18, 88);                      // top-left of 'B' (row "####.")
         bool textOk = mw == 40 && tp.R > 200 && tp.G > 200 && tp.B > 200;
 
+        // TrueType text (FONT_OP RENDER): anti-aliased coverage blended in.
+        TrueTypeFont tt = TrueTypeFont.Ui(18);
+        Bitmap tb = new Bitmap(120, 30);
+        Graphics tg = new Graphics(tb);
+        tg.Clear(Color.Black);
+        tg.DrawString(tt, "Halo Kebun", Color.White, 2, 2);
+        int inked = 0, partial = 0;
+        for (int i = 0; i < tb.Pixels.Length; i++)
+        {
+            uint r = (tb.Pixels[i] >> 16) & 255;
+            if (r > 0) inked++;
+            if (r > 0 && r < 250) partial++;
+        }
+        bool ttfOk = !tt.Available || (tt.Measure("Halo Kebun") > 40 && inked > 60 && partial > 10);
+        Console.WriteLine(tt.Available ? (ttfOk ? "Draw: TrueType text OK (anti-aliased)" : "Draw: TrueType text gagal") : "Draw: no outline font, 8x8 fallback");
+        textOk &= ttfOk;
+
         // Clip: a big fill limited to a small clip window.
         g.SetClip(150, 100, 18, 14);
         g.FillRectangle(Color.Magenta, 100, 90, 220, 60);

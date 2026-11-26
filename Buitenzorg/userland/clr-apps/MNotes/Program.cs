@@ -180,6 +180,8 @@ public static class NotesApp
             }
         };
         vm.PropertyChanged += (_, n) => { if (n == nameof(NotesViewModel.Current)) vm.SaveDirty(); };
+        // The close button or a shutdown: write what the autosave has not yet.
+        w.Closing += () => { autosave.Stop(); vm.SaveDirty(); };
 
         void Save()
         {
@@ -300,6 +302,13 @@ public static class NotesApp
         c.That(editor.CaretIndex == 0 && editor.FirstVisibleLine == 15, "wheel scrolled the editor to line " + editor.FirstVisibleLine);
         w.RenderFrame();
         c.That(w.LastFrameOps > 20, "frame drew " + w.LastFrameOps + " ops");
+        // the close button / a shutdown (CLOSE event): the unsaved edit is written
+        editor.Text = "simpan saat ditutup";
+        string closePath = vm.Current!.Path;
+        w.SimulateCloseRequest();
+        using (Buitenzorg.Diagnostics.Profiler.Zone("catatan-tutup")) { vm.SaveDirty(); }
+        c.That(Buitenzorg.Diagnostics.Profiler.Add("catatan-uji", 1000) && !Buitenzorg.Diagnostics.Profiler.Add("", 1), "profiler zones accepted");
+        c.That(w.IsClosed && !vm.Current.Dirty && Files.ReadAllText(closePath) == "simpan saat ditutup", "closing saved the unsaved note");
         return c;
     }
 }

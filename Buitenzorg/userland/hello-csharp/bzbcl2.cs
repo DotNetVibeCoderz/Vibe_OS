@@ -747,6 +747,37 @@ namespace Buitenzorg
         public static ulong Timestamp() => bz_clock_mono();
     }
 
+    /// <summary>Profiler zones (PROF_ZONE): time a scope with
+    /// <c>using (BzProfile.Zone("render")) { ... }</c>; the kernel adds the time
+    /// to this program's zone, and shell <c>prof zones</c> lists them.</summary>
+    public static class BzProfile
+    {
+        [DllImport("*")] static extern ulong bz_clock_nanos();
+        [DllImport("*")] static extern unsafe ulong bz_prof_zone(byte* name, ulong ns);
+
+        public static ZoneScope Zone(string name) => new ZoneScope(name, bz_clock_nanos());
+
+        /// <summary>Add `ns` nanoseconds to zone `name`. False when refused.</summary>
+        public static unsafe bool Add(string name, ulong ns)
+        {
+            byte* tmp = stackalloc byte[32];
+            int n = 0;
+            for (int i = 0; i < name.Length && n < 31; i++) tmp[n++] = (byte)name[i];
+            tmp[n] = 0;
+            return bz_prof_zone(tmp, ns) == 0;
+        }
+
+        public static ulong Now() => bz_clock_nanos();
+
+        public struct ZoneScope : System.IDisposable
+        {
+            readonly string _name;
+            readonly ulong _start;
+            public ZoneScope(string name, ulong start) { _name = name; _start = start; }
+            public void Dispose() { Add(_name, bz_clock_nanos() - _start); }
+        }
+    }
+
     /// <summary>One entry from the kernel process table.</summary>
     public sealed class BzProcessInfo
     {

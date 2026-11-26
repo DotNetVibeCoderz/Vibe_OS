@@ -703,6 +703,42 @@ public sealed class CookieJar
     }
 }
 
+/// <summary>The body of an answer opened with <see cref="HttpClient.OpenRead"/>.</summary>
+public sealed class HttpBodyStream
+{
+    readonly INetStream _s;
+    byte[] _left;
+    int _leftAt;
+    public HttpResponse Response { get; }
+    public long Received { get; private set; }
+
+    internal HttpBodyStream(HttpResponse r, INetStream s, byte[] left)
+    {
+        Response = r;
+        _s = s;
+        _left = left;
+    }
+
+    public int TimeoutMs { get => _s.TimeoutMs; set => _s.TimeoutMs = value; }
+
+    /// <summary>Bytes read (0 = the server closed the stream).</summary>
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        int n;
+        if (_leftAt < _left.Length)
+        {
+            n = Math.Min(count, _left.Length - _leftAt);
+            Array.Copy(_left, _leftAt, buffer, offset, n);
+            _leftAt += n;
+        }
+        else n = _s.Read(buffer, offset, count);
+        if (n > 0) Received += n;
+        return n;
+    }
+
+    public void Close() => _s.Close();
+}
+
 public sealed class HttpClient
 {
     public string UserAgent = "Buitenzorg/1.0 (Peramban)";
@@ -877,6 +913,34 @@ public sealed class HttpClient
                 return r;
             }
             finally { s.Close(); }
+        }
+    }
+
+    /// <summary>GET `url` and hand back the body as a stream, read as it
+    /// arrives -- for answers without an end (internet radio) or too big to
+    /// hold. Redirects are followed; the caller closes it. A chunked body is
+    /// passed through as it came (servers of streams do not chunk).</summary>
+    public HttpBodyStream OpenRead(string url, string extraHeaders = "")
+    {
+        var u = Url.Parse(url) ?? throw new NetException("alamat tidak sah: " + url);
+        for (int hop = 0; ; hop++)
+        {
+            var s = Open("GET", u, null, null, extraHeaders, out string tls);
+            HttpResponse r;
+            Bytes rest;
+            try { r = ReadHead(s, out rest); }
+            catch (Exception) { s.Close(); throw; }
+            r.Url = u.ToString();
+            r.Tls = tls;
+            if (r.Status >= 300 && r.Status < 400 && r.Header("Location") is string loc && hop < MaxRedirects)
+            {
+                s.Close();
+                u = u.Resolve(loc) ?? throw new NetException("pengalihan ke alamat tidak sah: " + loc);
+                continue;
+            }
+            var left = new byte[rest.Count];
+            Array.Copy(rest.Data, 0, left, 0, rest.Count);
+            return new HttpBodyStream(r, s, left);
         }
     }
 

@@ -42,14 +42,23 @@ function __bzEvent(type, target) {
     preventDefault: function () { this.defaultPrevented = true; },
     stopPropagation: function () { this.__stop = true; } };
 }
-var localStorage = {
+var sessionStorage = {
   __d: {},
   getItem: function (k) { return Object.prototype.hasOwnProperty.call(this.__d, k) ? this.__d[k] : null; },
   setItem: function (k, v) { this.__d[k] = String(v); },
   removeItem: function (k) { delete this.__d[k]; },
   clear: function () { this.__d = {}; }
 };
-var sessionStorage = localStorage;
+// localStorage is kept by the host per site and survives the browser
+// (/disk/APPDATA/MWEB/STORE): window.__store(op, key, value).
+var localStorage = {
+  getItem: function (k) { return window.__store(0, String(k)); },
+  setItem: function (k, v) { window.__store(1, String(k), String(v)); },
+  removeItem: function (k) { window.__store(2, String(k)); },
+  clear: function () { window.__store(3); },
+  key: function (i) { return window.__store(4, i); },
+  count: function () { return window.__store(5); }
+};
 function Date(a, b, c, d, e, f) {
   if (a === undefined) this.__t = document.__now;
   else if (b === undefined) this.__t = typeof a === "number" ? a : Date.parse(a);
@@ -1246,6 +1255,7 @@ impl js::Host for Dom<'_> {
                     Some(Ok(HostOut::Val(Value::Undef)))
                 }
                 "removeEventListener" => Some(Ok(HostOut::Val(Value::Undef))),
+                "__store" => Some(Ok(HostOut::Val(storage_op(&self.st.url, arg(0).to_num() as i32, a.get(1), a.get(2))))),
                 "alert" | "confirm" | "prompt" => Some(Ok(HostOut::Val(Value::Undef))),
                 "scrollTo" | "scrollBy" | "focus" => Some(Ok(HostOut::Val(Value::Undef))),
                 _ => None,
@@ -1606,3 +1616,151 @@ pub fn next_timer(page: &Page) -> Option<u64> {
     js.st.timers.iter().map(|t| t.due.saturating_sub(js.st.now)).min()
 }
 
+
+// ---- localStorage: per site, kept in /disk/APPDATA/MWEB/STORE/<hash>.TXT ----
+
+/// The site part of an address: `scheme://host[:port]`; local pages = "file".
+pub fn origin_of(url: &str) -> String {
+    match url.find("://") {
+        Some(p) => {
+            let rest = &url[p + 3..];
+            let end = rest.find('/').unwrap_or(rest.len());
+            url[..p + 3 + end].to_ascii_lowercase()
+        }
+        None => String::from("file"),
+    }
+}
+
+struct Store {
+    origin: String,
+    items: Vec<(String, String)>,
+}
+
+static STORES: crate::netapi::Lock<Vec<Store>> = crate::netapi::Lock::new(Vec::new());
+const STORE_DIR: &str = "/disk/APPDATA/MWEB/STORE";
+const STORE_MAX: usize = 512 * 1024; // bytes of keys + values per site
+
+fn store_file(origin: &str) -> String {
+    let mut h: u32 = 0x811C_9DC5;
+    for b in origin.bytes() {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    format!("{}/{:08X}.TXT", STORE_DIR, h)
+}
+
+fn esc(s: &str, out: &mut String) {
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+}
+
+fn unesc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(o) => out.push(o),
+            None => {}
+        }
+    }
+    out
+}
+
+/// The file: an `origin` line, then `key<TAB>value` lines (escaped).
+fn load_store(origin: &str) -> Vec<(String, String)> {
+    let Some(data) = crate::sys::read_file(&store_file(origin)) else { return Vec::new() };
+    let text = String::from_utf8_lossy(&data);
+    let mut lines = text.split('\n');
+    if lines.next().map(|l| l.trim_end_matches('\r')) != Some(origin) {
+        return Vec::new(); // a hash collision: another site's file
+    }
+    let mut items = Vec::new();
+    for l in lines {
+        if let Some(t) = l.find('\t') {
+            items.push((unesc(&l[..t]), unesc(&l[t + 1..])));
+        }
+    }
+    items
+}
+
+fn save_store(st: &Store) {
+    let mut out = String::new();
+    out.push_str(&st.origin);
+    out.push('\n');
+    for (k, v) in &st.items {
+        esc(k, &mut out);
+        out.push('\t');
+        esc(v, &mut out);
+        out.push('\n');
+    }
+    for dir in ["/disk/APPDATA", "/disk/APPDATA/MWEB", STORE_DIR] {
+        let mut c = Vec::from(dir.as_bytes());
+        c.push(0);
+        crate::sys::syscall(54, 0, c.as_ptr() as u64, 0); // FS_OP MKDIR (exists = error, ignored)
+    }
+    crate::sys::write_file(&store_file(&st.origin), out.as_bytes());
+}
+
+/// `window.__store(op, key, value)`: 0 get (null when absent), 1 set,
+/// 2 remove, 3 clear, 4 key(index), 5 count.
+fn storage_op(url: &str, op: i32, k: Option<&Value>, v: Option<&Value>) -> Value {
+    let origin = origin_of(url);
+    let mut stores = STORES.lock();
+    let idx = match stores.iter().position(|s| s.origin == origin) {
+        Some(i) => i,
+        None => {
+            let items = load_store(&origin);
+            stores.push(Store { origin: origin.clone(), items });
+            stores.len() - 1
+        }
+    };
+    let st = &mut stores[idx];
+    let key = k.map(|k| k.to_str()).unwrap_or_default();
+    match op {
+        0 => st.items.iter().find(|(a, _)| *a == key).map(|(_, b)| Value::str(b)).unwrap_or(Value::Null),
+        1 => {
+            let val = v.map(|v| v.to_str()).unwrap_or_default();
+            let used: usize = st.items.iter().filter(|(a, _)| *a != key).map(|(a, b)| a.len() + b.len()).sum();
+            if used + key.len() + val.len() > STORE_MAX {
+                return Value::Bool(false); // over quota: not stored
+            }
+            match st.items.iter_mut().find(|(a, _)| *a == key) {
+                Some(e) => e.1 = val,
+                None => st.items.push((key, val)),
+            }
+            save_store(st);
+            Value::Undef
+        }
+        2 => {
+            let n = st.items.len();
+            st.items.retain(|(a, _)| *a != key);
+            if st.items.len() != n {
+                save_store(st);
+            }
+            Value::Undef
+        }
+        3 => {
+            st.items.clear();
+            save_store(st);
+            Value::Undef
+        }
+        4 => {
+            let i = k.map(|k| k.to_num()).unwrap_or(-1.0);
+            if i >= 0.0 && (i as usize) < st.items.len() { Value::str(&st.items[i as usize].0) } else { Value::Null }
+        }
+        _ => Value::Num(st.items.len() as f64),
+    }
+}

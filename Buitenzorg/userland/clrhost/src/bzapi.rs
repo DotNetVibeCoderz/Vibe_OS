@@ -49,6 +49,7 @@ const AUDIO_WRITE: u64 = 62;
 const IDLE_INHIBIT: u64 = 66;
 const CLIPBOARD: u64 = 67;
 const NOTIFY: u64 = 73;
+const PROF_ZONE: u64 = 78;
 const WIN_CTL: u64 = 74;
 const AUDIO_APP_VOLUME: u64 = 63;
 const USER_OP: u64 = 55;
@@ -873,12 +874,22 @@ fn clipboard_seq(_i: &mut Interpreter, _a: &[Value]) -> ExecResult<Option<Value>
     Ok(Some(Value::I64(sys::syscall(CLIPBOARD, 2, 0, 0) as i64)))
 }
 
-/// `Notify(string title, string body)` -> the notification's id (the app
-/// name is the process's).
+/// `Notify(string title, string body [, int flags])` -> the notification's
+/// id (the app name is the process's; flag 1 = urgent).
 fn notify(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
     let (t, b) = (cstr(&string(i, a, 0)), cstr(&string(i, a, 1)));
-    let r = sys::syscall(NOTIFY, t.as_ptr() as u64, b.as_ptr() as u64, 0);
+    let flags = if a.len() > 2 { int(a, 2) as u64 & 1 } else { 0 };
+    let r = sys::syscall(NOTIFY, t.as_ptr() as u64, b.as_ptr() as u64, flags);
     ret_i32(if sys::is_err(r) { -1 } else { r as i64 })
+}
+
+/// `ProfZone(string name, long ns)` -> 0, or -1 when refused: adds `ns` to
+/// this program's profiler zone (shell `prof zones`).
+fn prof_zone(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
+    let name = cstr(&string(i, a, 0));
+    let ns = int(a, 1).max(0) as u64;
+    let r = sys::syscall(PROF_ZONE, name.as_ptr() as u64, ns, 0);
+    ret_i32(if sys::is_err(r) { -1 } else { 0 })
 }
 
 /// `WinCtl(long op_and_window, long arg)` -> the kernel's answer (full
@@ -892,8 +903,9 @@ fn win_ctl(i: &mut Interpreter, a: &[Value]) -> ExecResult<Option<Value>> {
 
 /// Register the bindings.
 pub fn install(interp: &mut Interpreter) {
-    let natives: [(&str, rustclr_core::interp::NativeFn); 58] = [
+    let natives: [(&str, rustclr_core::interp::NativeFn); 59] = [
         ("Notify", notify),
+        ("ProfZone", prof_zone),
         ("WinCtl", win_ctl),
         ("WinCreate", win_create),
         ("WinDraw", win_draw),

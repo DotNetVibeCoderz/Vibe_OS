@@ -785,6 +785,19 @@ pub unsafe extern "C" fn bz_clock_nanos() -> u64 {
     syscall2(SYS_CLOCK_NANOS, 0, 0)
 }
 
+/// Add `ns` nanoseconds to this program's profiler zone `name` (NUL-
+/// terminated, <= 31 bytes); shell `prof zones` reports them.
+#[no_mangle]
+pub unsafe extern "C" fn bz_prof_zone(name: *const u8, ns: u64) -> u64 {
+    syscall2(SYS_PROF_ZONE, name as u64, ns)
+}
+
+/// TrueType fonts (FONT_OP): `a0` = op | face id << 8 | px << 24.
+#[no_mangle]
+pub unsafe extern "C" fn bz_font_op(a0: u64, a1: u64, a2: u64) -> u64 {
+    syscall3(SYS_FONT_OP, a0, a1, a2)
+}
+
 /// Board info / built-in sensors: `query` (bz-abi `hw_query`), `arg`.
 #[no_mangle]
 pub unsafe extern "C" fn bz_hw_board(query: u64, arg: u64) -> u64 {
@@ -1270,6 +1283,8 @@ extern "C" {
 
 const SYS_FAULT_HANDLER: u64 = 75;
 const SYS_CRASH_REPORT: u64 = 76;
+const SYS_PROF_ZONE: u64 = 78;
+const SYS_FONT_OP: u64 = 71;
 
 /// Ask the kernel to turn a null dereference / an integer division by zero
 /// into a call of the managed throw helper (FAULT_HANDLER): `try` / `catch`
