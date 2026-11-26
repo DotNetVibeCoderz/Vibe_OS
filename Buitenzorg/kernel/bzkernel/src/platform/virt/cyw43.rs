@@ -998,13 +998,19 @@ impl Cyw43 {
             E_SET_SSID => self.join.ssid_set = Some(status),
             E_LINK => {
                 let up = flags & 1 != 0;
+                // a drop only counts once the link was up (the DISASSOC that
+                // starts every join must not look like a lost connection)
+                if !up && self.join.link == Some(true) {
+                    self.join.dropped = true;
+                }
                 self.join.link = Some(up);
-                if !up {
+            }
+            E_PSK_SUP => self.join.keyed = Some(status),
+            E_DEAUTH | E_DEAUTH_IND | E_DISASSOC | E_DISASSOC_IND => {
+                if self.join.link == Some(true) {
                     self.join.dropped = true;
                 }
             }
-            E_PSK_SUP => self.join.keyed = Some(status),
-            E_DEAUTH | E_DEAUTH_IND | E_DISASSOC | E_DISASSOC_IND => self.join.dropped = true,
             E_ESCAN_RESULT => {
                 if status == 0 {
                     self.scan_done = true;
@@ -1201,6 +1207,7 @@ impl Cyw43 {
             }
             let linked = j.link == Some(true);
             if linked && (pass.is_empty() || j.keyed == Some(6)) {
+                self.join.dropped = false;
                 return Ok(());
             }
             if let Some(k) = j.keyed {
@@ -1272,6 +1279,7 @@ impl Cyw43 {
                 }
             }
             if self.sup_done && j.link == Some(true) {
+                self.join.dropped = false;
                 return Ok(());
             }
             if (crate::arch::cpu::timestamp() - t0) * 1000 / hz > ms {
@@ -1549,7 +1557,15 @@ pub fn connect(ssid: &str, key: &str) -> Result<String, String> {
     let host_sup = {
         let mut g = WIFI.lock();
         let c = g.as_mut().ok_or("Wi-Fi is not up")?;
-        c.join(ssid, key, 20_000)?;
+        // one more try when the first times out (seen once on the board:
+        // the handshake had started when 20 s ran out)
+        if let Err(e) = c.join(ssid, key, 20_000) {
+            if !e.starts_with("no association") {
+                return Err(e);
+            }
+            crate::println!("[wifi] {}; trying once more", e);
+            c.join(ssid, key, 20_000)?;
+        }
         c.host_sup
     };
     let mut dev = WifiNet;
