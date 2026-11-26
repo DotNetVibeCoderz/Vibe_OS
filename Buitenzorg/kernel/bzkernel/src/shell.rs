@@ -935,7 +935,7 @@ fn ipconfig() -> Vec<String> {
         format!("      IPv4         {}/{}", fmt_ip(i.ip), prefix),
         format!("      netmask      {}", fmt_ip(i.mask)),
         format!("      gateway      {}", if i.gateway == [0; 4] { String::from("-") } else { fmt_ip(i.gateway) }),
-        String::from("      DNS          - (belum ada resolver)"),
+        format!("      DNS          {}", crate::dns::server().map(fmt_ip).unwrap_or_else(|| String::from("-"))),
         format!("      frame        {} terkirim, {} diterima", i.frames_tx, i.frames_rx),
         format!(
             "      IPv6         {}",
