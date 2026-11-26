@@ -678,7 +678,12 @@ impl Cyw43 {
 
         // HT clock for the download
         c.h.cmd52(true, 1, CHIPCLKCSR, HT_AVAIL_REQ)?;
-        wait(500_000, || c.h.cmd52(false, 1, CHIPCLKCSR, 0).map_or(false, |v| v & HT_AVAIL != 0));
+        let ht_dl = wait(500_000, || c.h.cmd52(false, 1, CHIPCLKCSR, 0).map_or(false, |v| v & HT_AVAIL != 0));
+        crate::println!(
+            "[wifi] download clock: HT {} (CHIPCLKCSR {:#x})",
+            if ht_dl { "up" } else { "NOT up" },
+            c.h.cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE)
+        );
         // firmware, checked by reading the first 256 bytes back
         let t0 = crate::arch::cpu::timestamp();
         let mut image = fw.to_vec();
@@ -700,9 +705,27 @@ impl Cyw43 {
         c.bp_write32(c.sd_core + SD_INTSTATUS, 0xFFFF_FFFF)?;
         c.reset_core(cr4, CR4_CPUHALT, 0, 0)?;
 
-        // HT clock, then F2 (ready = the firmware booted)
+        // Like brcmf_sdio_download_firmware + brcmf_sdio_firmware_callback:
+        // drop the clock request (CLK_SDONLY), then request HT again
+        // (CLK_AVAIL) and wait for it; the CR4 release does not keep it.
+        c.h.cmd52(true, 1, CHIPCLKCSR, 0)?;
+        delay_us(1_000);
+        c.h.cmd52(true, 1, CHIPCLKCSR, HT_AVAIL_REQ)?;
         if !wait(2_000_000, || c.h.cmd52(false, 1, CHIPCLKCSR, 0).map_or(false, |v| v & HT_AVAIL != 0)) {
-            return Err("firmware did not bring the HT clock up".into());
+            let csr = c.h.cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE);
+            // the firmware replaces the NVRAM length token at the end of the
+            // TCM with its shared-area pointer once it runs
+            let last = c.bp_read32(c.rambase + c.ramsize - 4).unwrap_or(0xDEAD_BEEF);
+            let vec0 = c.bp_read32(0).unwrap_or(0xDEAD_BEEF);
+            crate::println!(
+                "[wifi] HT clock not up after the CR4 release: CHIPCLKCSR {:#x}, TCM end word {:#x}, word 0 {:#x} (rstvec {:#x}); trying ALP + F2",
+                csr, last, vec0, rstvec
+            );
+            // fall back: ALP only, then see whether the firmware still readies F2
+            c.h.cmd52(true, 1, CHIPCLKCSR, ALP_AVAIL_REQ)?;
+            if !wait(500_000, || c.h.cmd52(false, 1, CHIPCLKCSR, 0).map_or(false, |v| v & ALP_AVAIL != 0)) {
+                return Err(format!("firmware did not bring the HT clock up (CHIPCLKCSR {:#x})", csr));
+            }
         }
         c.h.cmd52(true, 1, CHIPCLKCSR, FORCE_HT)?;
         c.bp_write32(c.sd_core + SD_TOSBMAILBOXDATA, SDPCM_PROT_VERSION << 16)?;
