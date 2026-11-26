@@ -116,8 +116,82 @@ pub fn stop() -> Vec<String> {
     r
 }
 
+/// Zones a program timed itself (syscall PROF_ZONE): per (pid, name) the
+/// calls, total and maximum nanoseconds. Bounded: `MAX_ZONES` per program,
+/// `MAX_PROGRAMS` programs.
+#[derive(Clone, Copy, Default)]
+struct Zone {
+    calls: u64,
+    total_ns: u64,
+    max_ns: u64,
+}
+
+const MAX_ZONES: usize = 64;
+const MAX_PROGRAMS: usize = 32;
+static ZONES: Mutex<BTreeMap<u64, BTreeMap<String, Zone>>> = Mutex::new(BTreeMap::new());
+/// The zone report of the last program that ended with zones.
+static LAST_ZONES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// PROF_ZONE: one timed run of `name` in program `pid`. False when the
+/// table is full.
+pub fn zone(pid: u64, name: &str, ns: u64) -> bool {
+    let mut all = ZONES.lock();
+    if !all.contains_key(&pid) && all.len() >= MAX_PROGRAMS {
+        return false;
+    }
+    let zones = all.entry(pid).or_default();
+    if !zones.contains_key(name) && zones.len() >= MAX_ZONES {
+        return false;
+    }
+    let z = zones.entry(String::from(name)).or_default();
+    z.calls += 1;
+    z.total_ns = z.total_ns.saturating_add(ns);
+    z.max_ns = z.max_ns.max(ns);
+    true
+}
+
+fn ms(ns: u64) -> String {
+    format!("{}.{:03} ms", ns / 1_000_000, ns / 1000 % 1000)
+}
+
+/// The zones of `pid`, slowest total first.
+pub fn zone_report(pid: u64) -> Vec<String> {
+    let all = ZONES.lock();
+    let Some(zones) = all.get(&pid) else {
+        return alloc::vec![format!("prof zones: pid {} belum mencatat zona", pid)];
+    };
+    let mut rows: Vec<(&String, &Zone)> = zones.iter().collect();
+    rows.sort_by(|a, b| b.1.total_ns.cmp(&a.1.total_ns));
+    let name = crate::process::name_of(pid).unwrap_or_default();
+    let mut out = alloc::vec![format!("zona pid {} {} ({} zona):", pid, name, rows.len())];
+    for (n, z) in rows {
+        out.push(format!(
+            "  {:<24} {:>7}x  total {:>14}  rata {:>12}  maks {:>12}",
+            n,
+            z.calls,
+            ms(z.total_ns),
+            ms(z.total_ns / z.calls.max(1)),
+            ms(z.max_ns)
+        ));
+    }
+    out
+}
+
+/// Programs that recorded zones.
+pub fn zone_programs() -> Vec<u64> {
+    ZONES.lock().keys().copied().collect()
+}
+
 /// The profiled program ended: keep its report (its symbols go next).
 pub fn on_exit(pid: u64) {
+    if pid != 0 && ZONES.lock().contains_key(&pid) {
+        let r = zone_report(pid);
+        for l in &r {
+            crate::println!("[prof] {}", l);
+        }
+        ZONES.lock().remove(&pid);
+        *LAST_ZONES.lock() = Some(r);
+    }
     if pid == 0 || TARGET.load(Ordering::SeqCst) != pid {
         return;
     }
@@ -158,11 +232,27 @@ pub fn command(args: &[&str]) -> Vec<String> {
         },
         ["stop"] => stop(),
         ["last"] => last().unwrap_or_else(|| one(String::from("prof: belum ada profil yang selesai"))),
+        ["zones"] | ["zona"] => {
+            let pids = zone_programs();
+            if pids.is_empty() {
+                return LAST_ZONES
+                    .lock()
+                    .clone()
+                    .unwrap_or_else(|| one(String::from("prof zones: belum ada program yang mencatat zona (syscall PROF_ZONE)")));
+            }
+            pids.into_iter().flat_map(zone_report).collect()
+        }
+        ["zones" | "zona", "last"] => LAST_ZONES.lock().clone().unwrap_or_else(|| one(String::from("prof zones: belum ada"))),
+        ["zones" | "zona", p] => match p.parse::<u64>() {
+            Ok(pid) => zone_report(pid),
+            Err(_) => one(format!("prof zones: pid tidak valid: {}", p)),
+        },
         _ => alloc::vec![
             String::from("prof app NAMA [arg]   jalankan program dan profil (sampel timer per fungsi)"),
             String::from("prof pid N            profil proses yang sedang berjalan"),
             String::from("prof show | stop      laporan sejauh ini / berhenti + laporan"),
             String::from("prof last             laporan terakhir (juga dicetak saat program selesai)"),
+            String::from("prof zones [PID|last] zona yang diukur program sendiri (syscall PROF_ZONE)"),
         ],
     }
 }

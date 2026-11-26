@@ -294,6 +294,15 @@ fn audit(st: &mut State, peer: &str, what: &str) {
     st.audit.push(line);
 }
 
+/// Write the buffered audit lines now (before power-off).
+pub fn flush_now() {
+    if let Some(mut g) = STATE.try_lock() {
+        if let Some(st) = g.as_mut() {
+            flush_audit(st, true);
+        }
+    }
+}
+
 /// Append the buffered audit lines to the file (every few seconds, or now).
 fn flush_audit(st: &mut State, now: bool) {
     if st.audit.is_empty() {

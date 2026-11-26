@@ -53,12 +53,12 @@ const CATEGORIES: [Category; 6] = [
         leaf: gfx::rgb(0x7F, 0xB3, 0xE0),
         // Interactive managed apps (RustCLR + Buitenzorg.UI, every architecture);
         // the native boot-demo programs stay reachable from the terminal (`run calc`).
-        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas"), ("mstudio", "Studio"), ("mweb", "Peramban"), ("masisten", "Asisten AI")],
+        apps: &[("mnotes", "Catatan"), ("mcalc", "Kalkulator"), ("mfiles", "Berkas"), ("mstudio", "Studio"), ("mweb", "Peramban"), ("masisten", "Asisten AI"), ("mobrol", "Obrolan")],
     },
     Category {
         name: "Multimedia",
         leaf: gfx::rgb(0xC7, 0x92, 0xEA),
-        apps: &[("mmusik", "Musik"), ("mvideo", "Video"), ("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol"), ("mrekam", "Perekam Suara")],
+        apps: &[("mmusik", "Musik"), ("mvideo", "Video"), ("mimage", "Gambar"), ("mpiano", "Piano"), ("mpaint", "Paint"), ("mgallery", "Galeri Kontrol"), ("mrekam", "Perekam Suara"), ("mradio", "Radio & Podcast")],
     },
     Category {
         name: "Permainan",
@@ -406,6 +406,12 @@ pub struct Window {
     /// The program redraws at any size (WIN_CTL RESIZABLE): maximize and
     /// restore resize its pixels and send it a RESIZE event.
     pub resizable: bool,
+    /// The close button queues a CLOSE event instead of destroying the
+    /// window (WIN_CTL CLOSE_EVENTS): the program saves, then closes.
+    pub close_events: bool,
+    /// A CLOSE event was sent and the window is still open: a second click
+    /// on the close button destroys it anyway (a program that hangs).
+    pub close_pending: bool,
 }
 
 /// Pack a pointer event (see `bz_abi::pointer_event`).
@@ -844,6 +850,15 @@ pub fn win_ctl(a0: u64, a1: u64) -> u64 {
         } else if wm.pointer_lock == Some(id) {
             wm.pointer_lock = None;
         }
+        return 0;
+    }
+    if opn == op::CLOSE_EVENTS {
+        let mut g = WM.lock();
+        let Some(wm) = g.as_mut() else { return syserr::INVAL };
+        let Some(w) = wm.windows.iter_mut().find(|w| w.id == id && (caller == 0 || w.owner == caller)) else {
+            return syserr::INVAL;
+        };
+        w.close_events = a1 != 0;
         return 0;
     }
     if opn == op::RESIZABLE {
@@ -1622,6 +1637,8 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
         events: alloc::collections::VecDeque::new(),
         caret: None,
         resizable: false,
+        close_events: false,
+        close_pending: false,
     });
     wm.animate(id, (x, y, w, h), true);
     id
@@ -1629,6 +1646,65 @@ pub fn create_window(title: &str, x: i32, y: i32, w: i32, h: i32, lines: &[&str]
 
 /// Owner process of the window that has keyboard focus: the topmost
 /// non-minimized window on the current workspace (0 = kernel/terminal).
+/// Close events (WIN_CTL CLOSE_EVENTS): the first click on the close button
+/// only queues CLOSE for the program, the second one closes the window.
+pub fn close_event_self_test() -> bool {
+    const FAKE: u64 = 0xC105E;
+    let id = create_app_window("uji tutup", 200, 120);
+    if id == 0 {
+        crate::println!("[kernel] MILESTONE: CLOSE EVENTS OK (no window system)");
+        return true;
+    }
+    let set = win_ctl(bz_abi::win_ctl::CLOSE_EVENTS | (id as u64) << 8, 1) == 0;
+    if let Some(wm) = WM.lock().as_mut() {
+        if let Some(w) = wm.windows.iter_mut().find(|w| w.id == id) {
+            w.owner = FAKE;
+            w.events.clear();
+        }
+    }
+    let exists = || WM.lock().as_ref().is_some_and(|wm| wm.windows.iter().any(|w| w.id == id));
+    close(id);
+    let kept = exists();
+    let ev = take_event(id, FAKE).unwrap_or(0);
+    let got_close = ev >> 56 == bz_abi::pointer_event::CLOSE;
+    close(id);
+    let gone = !exists();
+    if let Some(wm) = WM.lock().as_mut() {
+        wm.closed_owners.retain(|&o| o != FAKE);
+    }
+    let ok = set && kept && got_close && gone;
+    if ok {
+        crate::println!("[kernel] MILESTONE: CLOSE EVENTS OK (first click = CLOSE event, second click closes)");
+    } else {
+        crate::println!("[kernel] close events FAILED: set={} kept={} event={:#x} gone={}", set, kept, ev, gone);
+    }
+    ok
+}
+
+/// Shutdown / restart: send CLOSE to every window whose program asked for
+/// close events. Returns the programs that were asked (the caller waits a
+/// little for them to save and exit).
+pub fn request_close_all() -> Vec<u64> {
+    let mut owners = Vec::new();
+    if let Some(wm) = WM.lock().as_mut() {
+        for w in wm.windows.iter_mut() {
+            if w.close_events && w.owner != 0 && crate::process::is_alive(w.owner) {
+                w.close_pending = true;
+                w.push_event(pack_event(bz_abi::pointer_event::CLOSE, 0, 0, 0));
+                if !owners.contains(&w.owner) {
+                    owners.push(w.owner);
+                }
+            }
+        }
+    }
+    owners
+}
+
+/// A window is full screen (a game or a video has the screen).
+pub fn fullscreen_active() -> bool {
+    WM.lock().as_ref().is_some_and(|wm| wm.fullscreen.is_some())
+}
+
 pub fn focus_owner() -> u64 {
     let guard = WM.lock();
     let Some(wm) = guard.as_ref() else { return 0 };
@@ -1694,6 +1770,8 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
             events: alloc::collections::VecDeque::new(),
             caret: None,
             resizable: false,
+            close_events: false,
+            close_pending: false,
         });
         return id;
     }
@@ -1728,6 +1806,8 @@ pub fn create_app_window(title: &str, w: i32, h: i32) -> u32 {
         events: alloc::collections::VecDeque::new(),
         caret: None,
         resizable: false,
+        close_events: false,
+        close_pending: false,
     });
     wm.animate(id, (x, y, w, h), true);
     id
@@ -2485,6 +2565,15 @@ impl Wm {
     fn press_button(&mut self, id: u32, btn: TitleButton) {
         match btn {
             TitleButton::Close => {
+                // a program that opted in saves first: send it CLOSE (a
+                // second click while that is pending closes it anyway)
+                if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                    if w.close_events && !w.close_pending && w.owner != 0 {
+                        w.close_pending = true;
+                        w.push_event(pack_event(bz_abi::pointer_event::CLOSE, 0, 0, 0));
+                        return;
+                    }
+                }
                 let mut rect = None;
                 if let Some(w) = self.windows.iter().find(|w| w.id == id) {
                     if w.owner != 0 {

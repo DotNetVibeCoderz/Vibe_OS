@@ -453,7 +453,45 @@ def mjaring():
     save(img, "mjaring")
 
 
-ALL = [mjaring, mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom, mnes]
+def mradio():
+    """A little radio: a speaker grille, a dial and an antenna."""
+    img = background(0xF2B880, 0xA8582C)
+    ant = shape(lambda d: d.line([(330, 380), (640, 150)], fill=255, width=34))
+    paint(img, ant, 0x3A3A40, shadow=False, gloss=0, rim=False, flat=True)
+    tip = shape(lambda d: d.ellipse([612, 120, 676, 184], fill=255))
+    paint(img, tip, 0xF3C969, shadow=False)
+    body = shape(lambda d: d.rounded_rectangle([140, 360, 884, 820], radius=90, fill=255))
+    paint(img, body, 0xF6EBD6, gloss=0.3)
+    grille = shape(lambda d: d.ellipse([210, 440, 530, 760], fill=255))
+    paint(img, grille, 0x5B4636, shadow=False, gloss=0.1)
+    holes = shape(lambda d: [d.ellipse([x - 16, y - 16, x + 16, y + 16], fill=255)
+                             for x in range(270, 480, 60) for y in range(500, 710, 60)
+                             if (x - 370) ** 2 + (y - 600) ** 2 < 125 ** 2])
+    paint(img, holes, 0x2A211A, shadow=False, gloss=0, rim=False, flat=True)
+    dial = shape(lambda d: d.rounded_rectangle([590, 450, 820, 560], radius=24, fill=255))
+    paint(img, dial, 0x2E5C4E, shadow=False, gloss=0.2)
+    needle = shape(lambda d: d.rectangle([690, 462, 704, 548], fill=255))
+    paint(img, needle, 0xE5735F, shadow=False, gloss=0, rim=False, flat=True)
+    knob = shape(lambda d: d.ellipse([650, 610, 770, 730], fill=255))
+    paint(img, knob, 0xC8352B)
+    save(img, "mradio")
+
+
+def mobrol():
+    """Two speech bubbles."""
+    img = background(0x9BE0B8, 0x2E7A5E)
+    back = shape(lambda d: (d.rounded_rectangle([380, 200, 880, 560], radius=110, fill=255),
+                            d.polygon([(720, 540), (820, 680), (640, 555)], fill=255)))
+    paint(img, back, 0xEAF6F4, gloss=0.25)
+    front = shape(lambda d: (d.rounded_rectangle([140, 420, 640, 780], radius=110, fill=255),
+                             d.polygon([(260, 760), (190, 900), (380, 775)], fill=255)))
+    paint(img, front, 0xF3C969, gloss=0.3)
+    dots = shape(lambda d: [d.ellipse([x - 36, 564, x + 36, 636], fill=255) for x in (270, 390, 510)])
+    paint(img, dots, 0x2E5C4E, shadow=False, gloss=0, rim=False, flat=True)
+    save(img, "mobrol")
+
+
+ALL = [mjaring, mmusik, mvideo, mrekam, mular, mranjau, mbata, mbalok, mkartu, mkonsol, munduh, mbaca, mlabirin, mchip8, mlompat, masisten, doom, mnes, mradio, mobrol]
 
 if __name__ == "__main__":
     want = set(sys.argv[1:])

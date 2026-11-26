@@ -113,7 +113,7 @@ pub fn resolve(index: &[Entry], name: &str) -> Result<Vec<Entry>, String> {
 
 /// `http://A.B.C.D[:PORT][/prefix]` -> (address, port, path prefix).
 pub fn parse_url(url: &str) -> Result<([u8; 4], u16, String), String> {
-    let rest = url.trim().strip_prefix("http://").ok_or("URL repo harus 'http://IP[:PORT]' (belum ada https)")?;
+    let rest = url.trim().strip_prefix("http://").ok_or("URL repo harus 'http://IP[:PORT]' atau 'https://HOST'")?;
     let (hostport, prefix) = match rest.find('/') {
         Some(i) => (&rest[..i], rest[i..].trim_end_matches('/').to_string()),
         None => (rest, String::new()),
@@ -130,8 +130,49 @@ fn now_ms() -> u64 {
     crate::arch::cpu::nanos() / 1_000_000
 }
 
-/// HTTP/1.0 GET; the body of a 200 answer.
+/// A repository URL the device can use: `http://IPv4[:PORT][/prefix]`
+/// (fetched by the kernel) or `https://HOST[:PORT][/prefix]` (fetched over
+/// TLS by the managed helper `munduh --fetch`, which also resolves names).
+pub fn check_url(url: &str) -> Result<(), String> {
+    match url.trim().strip_prefix("https://") {
+        Some(rest) => {
+            let host = rest.split(['/', ':']).next().unwrap_or("");
+            if host.is_empty() || host.contains(' ') {
+                Err(String::from("URL https tidak sah, mis. https://repo.contoh.id/buitenzorg"))
+            } else {
+                Ok(())
+            }
+        }
+        None => parse_url(url).map(|_| ()),
+    }
+}
+
+/// The temporary file `munduh --fetch` writes into.
+const TLS_TMP: &str = "/disk/REPOTLS.TMP";
+
+/// GET over https through the managed TLS client (CLRHOST + Buitenzorg.Net):
+/// spawn `munduh --fetch URL FILE`, wait, read the file.
+fn https_get(url: &str, path: &str) -> Result<Vec<u8>, String> {
+    let full = format!("{}/{}", url.trim().trim_end_matches('/'), path.trim_start_matches('/'));
+    let _ = crate::vfs::remove(TLS_TMP);
+    let pid = crate::app::spawn_with_args("munduh", &format!("--fetch {} {}", full, TLS_TMP))
+        .map_err(|e| format!("https: pembantu TLS (munduh) tidak bisa dijalankan: {}", e))?;
+    let code = crate::app::wait(pid);
+    let data = crate::vfs::read(TLS_TMP);
+    let _ = crate::vfs::remove(TLS_TMP);
+    if code != 0 {
+        let log = crate::applog::text_of(pid).unwrap_or_default();
+        let why = log.lines().rev().find(|l| l.starts_with("munduh:")).unwrap_or("unduhan gagal").trim();
+        return Err(format!("{}: {}", path, why));
+    }
+    data.map_err(|e| format!("{}: {}", path, e))
+}
+
+/// HTTP/1.0 GET (or https through `https_get`); the body of a 200 answer.
 pub fn http_get(url: &str, path: &str) -> Result<Vec<u8>, String> {
+    if url.trim().starts_with("https://") {
+        return https_get(url, path);
+    }
     let (code, status, body) = http_request(url, "GET", path, &[], 10_000)?;
     if code != 200 {
         return Err(format!("{}: {}", path, status));
@@ -302,7 +343,7 @@ pub fn command(args: &[&str]) -> Vec<String> {
             let _ = crate::vfs::remove(INDEX);
             one(String::from("repo: dilepas"))
         }
-        ["repo", url] => match parse_url(url) {
+        ["repo", url] => match check_url(url) {
             Ok(_) => match crate::vfs::write(CONFIG, format!("url {}\n", url).as_bytes()) {
                 Ok(()) => one(format!("repo: {} -- lanjutkan dengan 'bz update'", url)),
                 Err(e) => one(format!("repo: {}: {}", CONFIG, e)),
@@ -389,10 +430,11 @@ pub fn self_test() -> bool {
         parse_index("BZREPO 1\nx\t1.2\tA\t00\t-\tX\nx\t1.10\tB\t00\t-\tX\nx\t1.9\tC\t00\t-\tX\n").is_ok_and(|i| i.len() == 1 && i[0].file == "B"),
         parse_url("http://10.0.2.2:8080/repo").is_ok_and(|(ip, p, pre)| ip == [10, 0, 2, 2] && p == 8080 && pre == "/repo"),
         parse_url("https://x").is_err(),
+        check_url("https://repo.contoh.id/buitenzorg").is_ok() && check_url("ftp://x").is_err() && check_url("https://").is_err(),
     ];
     let ok = checks.iter().all(|c| *c);
     if ok {
-        crate::println!("[kernel] MILESTONE: REPO OK (versions, index, dependency order gamma -> beta -> alpha, cycle refused, URLs)");
+        crate::println!("[kernel] MILESTONE: REPO OK (versions, index, dependency order gamma -> beta -> alpha, cycle refused, http + https URLs)");
     } else {
         crate::println!("[repo] self-test failed: {:?}", checks);
     }

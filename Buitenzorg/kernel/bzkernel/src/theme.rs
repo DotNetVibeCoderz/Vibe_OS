@@ -505,6 +505,79 @@ pub fn load_packages() -> usize {
     n
 }
 
+/// What `/disk/THEMES` looks like now: names, sizes, first clusters and
+/// change times of its `.THM` files (a rewrite gets a new cluster chain, so
+/// an edit within FAT's 2-second clock still shows).
+fn packages_signature() -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |v: u64| {
+        h ^= v;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    };
+    for e in crate::vfs::list_entries(DIR).unwrap_or_default() {
+        if e.is_dir || !e.name.to_ascii_uppercase().ends_with(".THM") {
+            continue;
+        }
+        for b in e.name.bytes() {
+            mix(b as u64);
+        }
+        mix(e.size as u64);
+        mix(e.cluster as u64);
+        mix((e.date as u64) << 16 | e.time as u64);
+    }
+    h
+}
+
+static WATCHED: spin::Mutex<Option<u64>> = spin::Mutex::new(None);
+
+/// Hot reload (the desktop loop calls it every ~2 s): when a theme package
+/// was added, removed or edited, the packages are read again and the
+/// current theme -- if it is one of them -- shows the new values at once.
+/// The first call only records the state. True when something was reloaded.
+pub fn hot_reload() -> bool {
+    let sig = packages_signature();
+    let mut w = WATCHED.lock();
+    let changed = matches!(*w, Some(old) if old != sig);
+    *w = Some(sig);
+    drop(w);
+    if changed {
+        let n = load_packages();
+        crate::println!("[theme] {} changed: {} package(s) reloaded, current theme '{}'", DIR, n, name());
+    }
+    changed
+}
+
+/// A package written, edited and removed on `/disk/THEMES` is seen by
+/// `hot_reload` each time (the edit keeps the file size: the new cluster
+/// chain must give it away). None = failed.
+fn hot_reload_test() -> Option<&'static str> {
+    if crate::vfs::list_entries(DIR).is_err() {
+        return Some("no /disk/THEMES: hot reload not tried");
+    }
+    let path = alloc::format!("{}/UJIPANAS.THM", DIR);
+    let accent_of = || all().iter().find(|t| t.name == "uji-panas").map(|t| t.accent);
+    hot_reload(); // record the folder as it is
+    let wrote = crate::vfs::write(&path, b"name=uji-panas
+base=kebun
+accent=#112233
+").is_ok();
+    let added = wrote && hot_reload() && accent_of() == Some(rgb(0x11, 0x22, 0x33));
+    let rewrote = crate::vfs::write(&path, b"name=uji-panas
+base=kebun
+accent=#445566
+").is_ok();
+    let edited = rewrote && hot_reload() && accent_of() == Some(rgb(0x44, 0x55, 0x66));
+    let _ = crate::vfs::remove(&path);
+    let removed = hot_reload() && accent_of().is_none();
+    let quiet = !hot_reload();
+    if added && edited && removed && quiet {
+        Some("hot reload: add / edit / remove seen")
+    } else {
+        crate::println!("[theme] hot reload test: added {} edited {} removed {} quiet {}", added, edited, removed, quiet);
+        None
+    }
+}
+
 /// Self-test: a package parses (base + overrides), registers, can be
 /// selected, and a broken one is refused.
 pub fn self_test() -> bool {
@@ -517,15 +590,17 @@ pub fn self_test() -> bool {
     let pkg = all().iter().find(|t| is_package(t.name)).map(|t| t.name);
     let switched = pkg.is_none_or(|n| set_by_name(n) && name() == n);
     set_by_name(before);
-    let ok = parsed.is_some() && refused && switched;
+    let hot = hot_reload_test();
+    let ok = parsed.is_some() && refused && switched && hot.is_some();
     if ok {
         crate::println!(
-            "[kernel] MILESTONE: THEME PACKAGES OK ({} package(s) in {}, base + overrides parsed, broken files refused)",
+            "[kernel] MILESTONE: THEME PACKAGES OK ({} package(s) in {}, base + overrides parsed, broken files refused, {})",
             loaded,
-            DIR
+            DIR,
+            hot.unwrap_or("")
         );
     } else {
-        crate::println!("[theme] self-test: parsed {} refused {} switched {}", parsed.is_some(), refused, switched);
+        crate::println!("[theme] self-test: parsed {} refused {} switched {} hot reload {}", parsed.is_some(), refused, switched, hot.is_some());
     }
     ok
 }

@@ -80,6 +80,7 @@ mod applog;
 mod clipboard;
 mod wifi;
 mod perm;
+mod firewall;
 mod screenshot;
 mod appprof;
 mod crash;
@@ -232,6 +233,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     // Pre-install the base app set so `run`/`bz` work out of the box.
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
     bzpkg::load();
+    firewall::load();
 
     daun_demo();
     kanopi_demo();
@@ -294,6 +296,7 @@ pub(crate) fn kernel_main(boot_info: &'static boot::BootInfo) -> ! {
     theme::self_test();
     icons::self_test();
     desktop::hotkey_self_test();
+    wm::close_event_self_test();
     usb::hid::pad_self_test();
     wm::pad_self_test();
     terminal::self_test("helloclr", "Hello from managed C#");
@@ -362,6 +365,7 @@ fn fast_boot() -> ! {
     let _ = ioapic::init();
     pkg::seed(&["paint", "taskmgr", "xox", "widget", "webview", "hello"]);
     bzpkg::load();
+    firewall::load();
     if let Some((w, h)) = framebuffer::dimensions() {
         wm::init(w, h);
         mouse::set_bounds(w, h);
@@ -2065,6 +2069,7 @@ fn dahan_demo() {
         Err(e) => println!("[kernel] folders self-test FAILED: {}", e),
     }
     if vfs::mounts().iter().any(|m| m == "/disk") {
+        firewall::self_test();
         match perm::self_test() {
             Ok(s) => println!("[kernel] MILESTONE: PERMISSIONS OK ({})", s),
             Err(e) => println!("[kernel] permissions self-test FAILED: {}", e),

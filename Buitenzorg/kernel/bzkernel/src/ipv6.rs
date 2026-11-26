@@ -217,6 +217,9 @@ pub fn udp_send(dst: &Ipv6Addr, sport: u16, dport: u16, data: &[u8]) -> Result<(
     if data.len() > 1400 {
         return Err("datagram too large");
     }
+    if !crate::firewall::allow_out(crate::firewall::Proto::Udp, None, dport) {
+        return Err("blocked by the firewall");
+    }
     let mac = crate::net::device_mac().ok_or("no network device")?;
     let dst_mac = resolve(dst, mac).ok_or("no neighbour answered")?;
     let src = source_for(dst, mac, &STATE.lock());
@@ -284,6 +287,9 @@ fn udp_input(src: &Ipv6Addr, dst: &Ipv6Addr, msg: &[u8]) {
         return;
     }
     let (sport, dport) = (u16::from_be_bytes([msg[0], msg[1]]), u16::from_be_bytes([msg[2], msg[3]]));
+    if !crate::firewall::allow_in(crate::firewall::Proto::Udp, None, dport) {
+        return;
+    }
     let mut t = UDP6.lock();
     if let Some(p) = t.iter_mut().find(|p| p.port == dport) {
         if p.queue.len() >= 32 {

@@ -167,6 +167,7 @@ pub fn bkl_free(nr: u64) -> bool {
             | sysno::IDLE_INHIBIT
             | sysno::CLIPBOARD
             | sysno::NOTIFY
+            | sysno::PROF_ZONE
             | sysno::WIN_CTL
             | sysno::FAULT_HANDLER
             // Process and thread lifecycle (2026-11-24): the scheduler lock
@@ -223,7 +224,7 @@ fn read_user_text(ptr: u64, max: u64) -> Option<alloc::string::String> {
 }
 
 /// NOTIFY: a toast + an entry in the action center, under the program's name.
-fn sys_notify(title: u64, body: u64) -> u64 {
+fn sys_notify(title: u64, body: u64, flags: u64) -> u64 {
     let Some(t) = read_user_text(title, 256) else { return syserr::INVAL };
     let b = if body == 0 { alloc::string::String::new() } else {
         match read_user_text(body, 1024) {
@@ -233,7 +234,7 @@ fn sys_notify(title: u64, body: u64) -> u64 {
     };
     let pid = crate::aspace::current_id();
     let app = crate::process::name_of(pid).unwrap_or_else(|| alloc::string::String::from("Sistem"));
-    crate::notify::post(&app, &t, &b) as u64
+    crate::notify::post_with(&app, &t, &b, flags & bz_abi::notify_flags::URGENT != 0) as u64
 }
 
 /// Read a NUL-terminated path from user space, bounded and validated.
@@ -453,7 +454,15 @@ pub fn dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> u64 {
         sysno::FS_READ_AT => sys_fs_read_at(a0, a1, a2),
         sysno::FONT_OP => sys_font_op(a0, a1, a2),
         sysno::COMPUTE_OP => sys_compute_op(a0, a1, a2),
-        sysno::NOTIFY => sys_notify(a0, a1),
+        sysno::NOTIFY => sys_notify(a0, a1, a2),
+        sysno::PROF_ZONE => {
+            let Some(name) = read_user_text(a0, 32) else { return syserr::INVAL };
+            if name.is_empty() {
+                return syserr::INVAL;
+            }
+            let pid = crate::aspace::current_id();
+            if crate::appprof::zone(pid, &name, a1) { 0 } else { syserr::INVAL }
+        }
         sysno::WIN_CTL => crate::wm::win_ctl(a0, a1),
         sysno::FAULT_HANDLER => crate::process::set_fault_handler(crate::aspace::current_id(), a0, a1),
         sysno::IS_INTERACTIVE => crate::interactive::is_active() as u64,
@@ -868,6 +877,26 @@ fn sys_font_op(a0: u64, a1: u64, a2: u64) -> u64 {
             crate::font::remove_file(file.trim()).map_or(syserr::INVAL, |n| n as u64)
         }
         o::GENERATION => crate::font::generation(),
+        o::RENDER => {
+            let Some(f) = face() else { return syserr::INVAL };
+            let Some(text) = read_user_text(a1, 1025) else { return syserr::INVAL };
+            if !user_read(a2, 8) {
+                return syserr::INVAL;
+            }
+            let hdr = copy_user_bytes(a2, 8);
+            let w = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
+            let h = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
+            if w == 0 || h == 0 || w > 4096 || h > 512 || !user_write(a2 + 8, (w * h) as u64) {
+                return syserr::INVAL;
+            }
+            let mut buf = alloc::vec![0u8; w * h];
+            let width = crate::font::render_coverage(f, px.max(4), &text, &mut buf, w, h);
+            let out = (a2 + 8) as *mut u8;
+            for (i, b) in buf.iter().enumerate() {
+                unsafe { out.add(i).write_volatile(*b) };
+            }
+            width.max(0) as u64
+        }
         _ => syserr::INVAL,
     }
 }
@@ -1399,6 +1428,9 @@ fn sys_audio_write(ptr: u64, len: u64, format: u64) -> u64 {
     }
     let me = crate::aspace::current_id();
     if len == 0 {
+        // a player polling its queue keeps the stream moving even where only
+        // the desktop loop would pump it (virtio-snd, before the desktop runs)
+        crate::audio::stream_pump();
         return crate::mixer::queued_ms(me);
     }
     if crate::mixer::decode_format(format as u32).is_none() || len > 1 << 20 || !user_read(ptr, len) {

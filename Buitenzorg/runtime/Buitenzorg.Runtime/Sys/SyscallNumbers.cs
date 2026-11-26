@@ -223,7 +223,7 @@ public static class SyscallNumbers
     public const ulong FontOp = 71;
     /// <summary>GPU compute: a0 = operation (<see cref="ComputeOp"/>) | handle &lt;&lt; 8.</summary>
     public const ulong ComputeOp = 72;
-    /// <summary>Post a notification: a0 = NUL-terminated title, a1 = NUL-terminated body (or 0). Returns its id.</summary>
+    /// <summary>Post a notification: a0 = NUL-terminated title, a1 = NUL-terminated body (or 0), a2 = <see cref="NotifyFlags"/>. Returns its id.</summary>
     public const ulong Notify = 73;
     /// <summary>Window control: a0 = operation (<see cref="WinCtl"/>) | window id &lt;&lt; 8.</summary>
     public const ulong WinCtl = 74;
@@ -236,8 +236,33 @@ public static class SyscallNumbers
     /// <summary>Host name -> IPv6 address (DNS AAAA): a0 = NUL-terminated name, a1 = 16-byte buffer; 0 or INVAL.</summary>
     public const ulong DnsResolve6 = 77;
 
+    /// <summary>One timed run of a profiler zone: a0 = NUL-terminated zone name (&lt;= 31 bytes), a1 = duration in nanoseconds. Returns 0.</summary>
+    public const ulong ProfZone = 78;
+
     /// <summary>Exclusive upper bound of the v1 table.</summary>
-    public const ulong Count = 78;
+    public const ulong Count = 79;
+}
+
+/// <summary>Flags of <see cref="SyscallNumbers.Notify"/> (mirrors <c>bz_abi::notify_flags</c>).</summary>
+public static class NotifyFlags
+{
+    /// <summary>Shown even during a full-screen program or "do not disturb".</summary>
+    public const ulong Urgent = 1;
+}
+
+/// <summary>Operations of <see cref="SyscallNumbers.FontOp"/> (mirrors <c>bz_abi::font_op</c>).</summary>
+public static class FontOp
+{
+    public const ulong Count = 0;
+    public const ulong Info = 1;
+    public const ulong Find = 2;
+    public const ulong Metrics = 3;
+    public const ulong Measure = 4;
+    public const ulong Install = 5;
+    public const ulong Remove = 6;
+    public const ulong Generation = 7;
+    /// <summary>Rasterize a line of text into an 8-bit coverage buffer (width, height in its first 8 bytes).</summary>
+    public const ulong Render = 8;
 }
 
 /// <summary>Operations of <see cref="SyscallNumbers.WinCtl"/> (mirrors <c>bz_abi::win_ctl</c>).</summary>
@@ -251,6 +276,7 @@ public static class WinCtl
     public const ulong SurfaceSize = 5;
     public const ulong Resizable = 6;
     public const ulong PointerLock = 7;
+    public const ulong CloseEvents = 8;
 }
 
 /// <summary>Kinds of packed pointer events from <c>WIN_EVENT</c> (mirrors <c>bz_abi::pointer_event</c>).</summary>
@@ -263,6 +289,7 @@ public static class PointerEvent
     public const ulong Wheel = 5;
     public const ulong Resize = 6;
     public const ulong Relative = 7;
+    public const ulong Close = 8;
 }
 
 /// <summary>Kinds of <see cref="SyscallNumbers.FaultHandler"/> (mirrors <c>bz_abi::fault_kind</c>).</summary>

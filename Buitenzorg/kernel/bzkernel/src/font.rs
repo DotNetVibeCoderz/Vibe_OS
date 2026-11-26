@@ -787,6 +787,34 @@ pub fn measure(id: u16, px: u32, text: &str) -> i32 {
     (pen + 0.5) as i32
 }
 
+/// Rasterize one line of `text` into an 8-bit coverage image of `w` x `h`
+/// (row-major, baseline at the ascent); returns the text's width. For
+/// programs that draw their own pixels (FONT_OP RENDER).
+pub fn render_coverage(id: u16, px: u32, text: &str, out: &mut [u8], w: usize, h: usize) -> i32 {
+    let asc = ascent(id, px);
+    let (glyphs, width) = layout(id, px, text, 0);
+    for (x, g) in glyphs {
+        let (gw, gh) = (g.w as i32, g.h as i32);
+        let (x0, y0) = (x + g.left as i32, asc - g.top as i32);
+        for gy in 0..gh {
+            let y = y0 + gy;
+            if y < 0 || y >= h as i32 {
+                continue;
+            }
+            for gx in 0..gw {
+                let xx = x0 + gx;
+                if xx < 0 || xx >= w as i32 {
+                    continue;
+                }
+                let c = g.cov[(gy * gw + gx) as usize];
+                let o = &mut out[y as usize * w + xx as usize];
+                *o = (*o).max(c);
+            }
+        }
+    }
+    width
+}
+
 /// Ascent in pixels of face `id` at `px` (the baseline below a line's top).
 pub fn ascent(id: u16, px: u32) -> i32 {
     metrics(id, px).map_or(px as i32 * 4 / 5, |m| m.0)
@@ -863,6 +891,15 @@ pub fn self_test() -> bool {
     let back = ui_family() == before;
     if !(off && back && generation() > g0) {
         fails.push("UI font switch");
+    }
+    // FONT_OP RENDER: coverage into a buffer, nothing outside it, the width
+    // the measurement gives
+    let (cw, ch) = (64usize, 24usize);
+    let mut cov = alloc::vec![0u8; cw * ch];
+    let rw = render_coverage(ui, 16, "Hal", &mut cov, cw, ch);
+    let inked = cov.iter().filter(|&&c| c > 128).count();
+    if !((rw - measure(ui, 16, "Hal")).abs() <= 1 && inked > 20 && cov[..cw].iter().all(|&c| c == 0)) {
+        fails.push("coverage render");
     }
     let (entries, bytes, _, _) = cache_stats();
     // (a FACES guard inside the println! arguments would live to the end of

@@ -138,7 +138,7 @@ pub fn command_names() -> Vec<&'static str> {
 const LEGACY_COMMANDS: &[&str] = &[
     "help", "ls", "dir", "echo", "rm", "del", "df", "pwd", "cd", "clear", "cls", "ver", "uname", "about", "mounts",
     "dmesg", "lspci", "lsusb", "wifi", "pi", "gpu", "theme", "ws", "run", "jobs", "fg", "tab", "ps", "crash", "dbg", "gdbserver", "kgdb", "logs", "mixer", "tutup", "tile", "cpu", "kill", "deploy", "ssh", "ipconfig",
-    "netinfo", "netup", "ping", "ping6", "arp", "route", "netstat", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
+    "netinfo", "netup", "ping", "ping6", "arp", "route", "netstat", "firewall", "hostname", "nslookup", "free", "uptime", "top", "layar", "screenshot", "font", "fon", "bg", "saver", "cursor", "anim", "tone",
     "settings", "notify", "icons", "cari", "search", "ask", "vm", "script", "js", "ts", "py", "csx", "prof", "gfx3d", "compute", "llm", "shutdown", "restart", "sleep", "bz",
 ];
 
@@ -1279,6 +1279,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "arp" => (arp(), Effect::None),
         "route" => (route(), Effect::None),
         "netstat" => (netstat(), Effect::None),
+        "firewall" | "fw" => (crate::firewall::command(&args), Effect::None),
         "hostname" => (vec![String::from("buitenzorg")], Effect::None),
         "nslookup" | "dig" | "host" => {
             let lines = match args.first() {
@@ -1324,7 +1325,7 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
         "vm" => vm_cmd(&args),
         "script" | "js" | "ts" | "py" => script_cmd(cmd, &args),
         "csx" | "csharp" => csx_cmd(&args),
-        "prof" | "profile" if matches!(args.first().copied(), Some("app" | "pid" | "show" | "stop" | "last")) => {
+        "prof" | "profile" if matches!(args.first().copied(), Some("app" | "pid" | "show" | "stop" | "last" | "zones" | "zona")) => {
             (crate::appprof::command(&args), Effect::None)
         }
         "prof" | "profile" => prof_cmd(args.first().copied()),
@@ -1390,8 +1391,14 @@ fn run_legacy(line: &str) -> (Vec<String>, Effect) {
             out.push(format!("   {} draw, {} segitiga, {} piksel sejak boot", draws, tris, px));
             (out, Effect::None)
         }
-        "shutdown" | "poweroff" => power::shutdown(),
-        "restart" | "reboot" => power::restart(),
+        "shutdown" | "poweroff" => {
+            crate::desktop::before_power_off();
+            power::shutdown()
+        }
+        "restart" | "reboot" => {
+            crate::desktop::before_power_off();
+            power::restart()
+        }
         "sleep" | "suspend" => {
             power::sleep();
             (vec![String::from("bangun dari sleep")], Effect::Redraw)
@@ -2214,8 +2221,14 @@ fn model_cmd(args: &[&str]) -> (Vec<String>, Effect) {
 
 fn power_cmd(args: &[&str]) -> (Vec<String>, Effect) {
     match args.first().copied() {
-        Some("off") | Some("shutdown") => power::shutdown(),
-        Some("restart") | Some("reboot") => power::restart(),
+        Some("off") | Some("shutdown") => {
+            crate::desktop::before_power_off();
+            power::shutdown()
+        }
+        Some("restart") | Some("reboot") => {
+            crate::desktop::before_power_off();
+            power::restart()
+        }
         Some("sleep") => {
             power::sleep();
             (vec![String::from("bangun dari sleep")], Effect::Redraw)

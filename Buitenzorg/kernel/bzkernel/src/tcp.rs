@@ -291,6 +291,9 @@ fn push(c: &mut Conn, out: &mut Vec<Out>) {
 /// A TCP segment arrived (`seg` = header + payload, `len` = payload length
 /// from the IP header). Called by `net` with no lock held.
 pub fn input(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8]) {
+    if !crate::firewall::allow_tcp_segment(Some(src), seg) {
+        return;
+    }
     let out = {
         let mut t = TCP.lock();
         input_locked(&mut t, Addr::V4(src), Addr::V4(dst), seg)
@@ -301,6 +304,9 @@ pub fn input(src: Ipv4Addr, dst: Ipv4Addr, seg: &[u8]) {
 /// A TCP segment arrived over IPv6 (`seg` = header + payload). Called by
 /// `ipv6::input` with no lock held.
 pub fn input6(src: &[u8; 16], dst: &[u8; 16], seg: &[u8]) {
+    if !crate::firewall::allow_tcp_segment(None, seg) {
+        return;
+    }
     let out = {
         let mut t = TCP.lock();
         input_locked(&mut t, Addr::V6(*src), Addr::V6(*dst), seg)
@@ -482,6 +488,9 @@ pub fn accept(port: u16) -> Option<u64> {
 
 /// Open a connection to `ip:port` (returns at once; see [`state`]).
 pub fn connect(ip: Ipv4Addr, port: u16) -> Result<u64, &'static str> {
+    if !crate::firewall::allow_out(crate::firewall::Proto::Tcp, Some(ip), port) {
+        return Err("blocked by the firewall");
+    }
     let local_ip = crate::net::local_ip().ok_or("no network")?;
     connect_from(Addr::V4(local_ip), Addr::V4(ip), port)
 }
@@ -489,6 +498,9 @@ pub fn connect(ip: Ipv4Addr, port: u16) -> Result<u64, &'static str> {
 /// Open a connection to `[ip]:port` over IPv6. Resolves the next hop first
 /// (waits up to a second; not for use inside `net::poll`).
 pub fn connect6(ip: &[u8; 16], port: u16) -> Result<u64, &'static str> {
+    if !crate::firewall::allow_out(crate::firewall::Proto::Tcp, None, port) {
+        return Err("blocked by the firewall");
+    }
     let src = crate::ipv6::prepare_send(ip)?;
     connect_from(Addr::V6(src), Addr::V6(*ip), port)
 }

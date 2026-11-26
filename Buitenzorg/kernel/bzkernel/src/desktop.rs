@@ -195,9 +195,16 @@ pub fn run() -> ! {
         if now.saturating_sub(last_save) >= 55 {
             last_save = now;
             crate::settings::autosave();
+            // theme packages edited on /disk/THEMES show without `theme reload`
+            if crate::theme::hot_reload() {
+                crate::wm::screen_overwritten();
+                other = true;
+            }
         }
 
-        // notifications: a new one (toast), one that expired, one removed
+        // notifications: a new one (toast), one that expired, one removed;
+        // toasts wait while a full-screen program has the screen
+        crate::notify::set_fullscreen(crate::wm::fullscreen_active());
         let notes = crate::notify::generation();
         if notes != last_notes || crate::notify::toast_expired(now) {
             last_notes = crate::notify::generation();
@@ -351,8 +358,14 @@ pub fn run() -> ! {
                 other = true;
             }
             match wm::take_pending_power() {
-                1 => power::shutdown(),
-                2 => power::restart(),
+                1 => {
+                    before_power_off();
+                    power::shutdown()
+                }
+                2 => {
+                    before_power_off();
+                    power::restart()
+                }
                 3 => power::sleep(),
                 _ => {}
             }
@@ -485,4 +498,47 @@ pub fn hotkey_self_test() -> bool {
         );
     }
     ok
+}
+
+/// Shutdown / restart: programs whose windows asked for close events get a
+/// CLOSE and up to `PROGRAM_SAVE_MS` to save and exit; then the kernel's own
+/// state goes to disk (desktop settings, crash reports, the deploy audit and
+/// the log). Returns (asked, exited in time).
+pub fn before_power_off() -> (usize, usize) {
+    const PROGRAM_SAVE_MS: u64 = 4000;
+    let asked = crate::wm::request_close_all();
+    let start = crate::arch::cpu::nanos();
+    if !asked.is_empty() {
+        crate::println!("[power] asking {} program(s) to save and close", asked.len());
+        crate::wm::present_now();
+        while asked.iter().any(|&p| crate::process::is_alive(p))
+            && crate::arch::cpu::nanos().saturating_sub(start) < PROGRAM_SAVE_MS * 1_000_000
+        {
+            crate::task::yield_now();
+            crate::task::idle_halt();
+        }
+    }
+    let done = asked.iter().filter(|&&p| !crate::process::is_alive(p)).count();
+    if !asked.is_empty() {
+        crate::println!(
+            "[power] {} of {} program(s) closed in {} ms",
+            done,
+            asked.len(),
+            crate::arch::cpu::nanos().saturating_sub(start) / 1_000_000
+        );
+    }
+    flush_kernel_state();
+    (asked.len(), done)
+}
+
+/// Everything the kernel keeps in memory that belongs on disk.
+pub fn flush_kernel_state() {
+    crate::settings::autosave();
+    crate::crash::flush();
+    crate::deploy::flush_now();
+    if crate::vfs::mounts().iter().any(|m| m == "/disk") {
+        let mut log = alloc::vec![0u8; 16 * 1024];
+        let (n, _) = crate::logring::read(0, &mut log);
+        let _ = crate::vfs::write("/disk/BOOTLOG.TXT", &log[..n]);
+    }
 }

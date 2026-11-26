@@ -299,7 +299,8 @@ pub mod sysno {
     /// `a1`, `a2` depend on the operation.
     pub const COMPUTE_OP: u64 = 72;
     /// Post a notification (toast + action center): `a0` = NUL-terminated
-    /// title, `a1` = NUL-terminated body (or 0). Returns its id.
+    /// title, `a1` = NUL-terminated body (or 0), `a2` = [`notify_flags`]
+    /// (0 = normal). Returns its id.
     pub const NOTIFY: u64 = 73;
     /// Window control (see [`win_ctl`]): `a0` = operation | window id << 8;
     /// `a1` depends on the operation.
@@ -320,8 +321,13 @@ pub mod sysno {
     /// taken as is): `a0` = NUL-terminated name, `a1` = 16-byte output buffer.
     /// Returns 0, or INVAL (bad pointer, no such name, no AAAA record).
     pub const DNS_RESOLVE6: u64 = 77;
+    /// Record one timed run of a profiler zone of the calling program:
+    /// `a0` = NUL-terminated zone name (<= 31 bytes), `a1` = its duration in
+    /// nanoseconds. The kernel keeps calls / total / maximum per (program,
+    /// zone); shell `prof zones [PID]` shows them. Returns 0.
+    pub const PROF_ZONE: u64 = 78;
     /// Number of defined syscalls (exclusive upper bound of the v1 table).
-    pub const COUNT: u64 = 78;
+    pub const COUNT: u64 = 79;
 }
 
 /// Operations of [`sysno::WIN_CTL`] (the low 8 bits of `a0`).
@@ -356,6 +362,11 @@ pub mod win_ctl {
     /// pointing device (PS/2, USB or virtio mouse; a tablet moves nothing).
     /// Returns 0.
     pub const POINTER_LOCK: u64 = 7;
+    /// Close requests on (`a1` = 1) or off (0): the close button no longer
+    /// destroys the window but queues [`crate::pointer_event::CLOSE`], and a
+    /// shutdown / restart waits (a few seconds) for the program to save and
+    /// exit. Returns 0.
+    pub const CLOSE_EVENTS: u64 = 8;
 }
 
 /// Kinds of [`sysno::FAULT_HANDLER`].
@@ -426,6 +437,19 @@ pub mod font_op {
     /// A number that changes whenever text looks different (fonts added or
     /// removed, another UI / monospace font): drop cached measurements.
     pub const GENERATION: u64 = 7;
+    /// Rasterize one line of UTF-8 text: `a1` = NUL-terminated text (<= 1024
+    /// bytes), `a2` = an 8-bit coverage buffer whose first 8 bytes hold its
+    /// width and height (two little-endian u32); the `width * height` bytes
+    /// after them receive the text's coverage (0..=255), the baseline at the
+    /// face's ascent. Returns the text's width in pixels.
+    pub const RENDER: u64 = 8;
+}
+
+/// Flags for [`sysno::NOTIFY`] (`a2`).
+pub mod notify_flags {
+    /// Shown even while the screen belongs to a full-screen program or
+    /// "do not disturb" is on (normal notifications wait until it ends).
+    pub const URGENT: u64 = 1;
 }
 
 /// Face-id aliases for [`font_op`] and [`draw_op::DRAW_TEXT_FONT`].
@@ -860,6 +884,12 @@ pub mod pointer_event {
     /// Pointer movement of a window in relative mode (`win_ctl::POINTER_LOCK`):
     /// x / y = the motion since the last event (signed 16-bit), buttons as usual.
     pub const RELATIVE: u64 = 7;
+    /// The user asked to close the window (its close button, or the system
+    /// is shutting down / restarting) and the window opted in with
+    /// [`win_ctl::CLOSE_EVENTS`]: save what needs saving, then destroy the
+    /// window or exit. A program that does not answer within a few seconds of
+    /// a shutdown is ended anyway.
+    pub const CLOSE: u64 = 8;
 }
 
 /// Operations for [`DrawCmd::op`].
@@ -1248,7 +1278,12 @@ mod tests {
         assert_eq!(compute_op::GEMV, 5);
         assert_eq!(compute_kind::INTEL, 3);
         assert_eq!(audio_read_op::QUEUED, 3);
-        assert_eq!(sysno::COUNT, 78);
+        assert_eq!(sysno::PROF_ZONE, 78);
+        assert_eq!(font_op::RENDER, 8);
+        assert_eq!(notify_flags::URGENT, 1);
+        assert_eq!(win_ctl::CLOSE_EVENTS, 8);
+        assert_eq!(pointer_event::CLOSE, 8);
+        assert_eq!(sysno::COUNT, 79);
         assert_eq!(clipboard_op::SEQ, 2);
         assert_eq!(clipboard_op::MAX_BYTES, 65536);
         assert_eq!(tcp_op::ACCEPT, 6);
@@ -1269,7 +1304,7 @@ mod tests {
     #[test]
     fn abi_v1_is_frozen() {
         assert_eq!(ABI_VERSION, 1, "ABI major version changed - that is a breaking change");
-        assert_eq!(sysno::COUNT, 78, "syscall count changed: append only, and update both mirrors");
+        assert_eq!(sysno::COUNT, 79, "syscall count changed: append only, and update both mirrors");
 
         // Sizes are what the C# mirrors and the raw syscall decoders hard-code.
         assert_eq!(core::mem::size_of::<FramebufferInfo>(), 56);

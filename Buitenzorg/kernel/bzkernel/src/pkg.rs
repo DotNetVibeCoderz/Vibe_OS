@@ -49,6 +49,8 @@ pub const REGISTRY: &[Package] = &[
     Package { name: "mmusik", version: "1.0.0", description: "Musik -- WAV/FLAC/MP3/Ogg/MIDI", elf: "MMUSIK.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
     Package { name: "mvideo", version: "1.0.0", description: "Video -- AVI/MKV/WebM/MP4 + subtitle", elf: "MVIDEO.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
     Package { name: "mimage", version: "1.0.0", description: "Gambar -- BMP/PNG/JPEG/GIF + EXIF", elf: "MIMAGE.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
+    Package { name: "mradio", version: "1.0.0", description: "Radio internet + podcast", elf: "MRADIO.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
+    Package { name: "mobrol", version: "1.0.0", description: "Obrolan -- klien chat IRC", elf: "MOBROL.DLL", kind: "desktop", category: "INTERNET", pre: true },
     Package { name: "mrekam", version: "1.0.0", description: "Perekam Suara", elf: "MREKAM.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
     Package { name: "mpiano", version: "1.0.0", description: "Piano (C#)", elf: "MPIANO.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },
     Package { name: "mpaint", version: "1.0.0", description: "Paint (C#)", elf: "MPAINT.DLL", kind: "desktop", category: "MULTIMEDIA", pre: true },

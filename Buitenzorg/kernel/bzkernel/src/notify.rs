@@ -7,10 +7,16 @@
 //! called from the NOTIFY syscall, a shell command or a kernel subsystem
 //! (a USB disk plugged in, a screenshot saved, an app that failed to start).
 //! It must not be called from an interrupt handler or from `_print`.
+//!
+//! Quiet mode: while a full-screen program has the screen (a game, a video)
+//! or "do not disturb" is on, a normal notification only goes to the action
+//! center; its toast is held and shown once the quiet time ends (the newest
+//! one, with how many waited). An URGENT one (`bz_abi::notify_flags`) toasts
+//! at once.
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
 /// Notifications kept for the action center.
@@ -29,6 +35,10 @@ pub struct Note {
     /// Tick it arrived (for the toast).
     pub ticks: u64,
     pub read: bool,
+    /// Shown even in quiet mode.
+    pub urgent: bool,
+    /// Arrived in quiet mode: its toast waits until quiet mode ends.
+    pub held: bool,
 }
 
 struct State {
@@ -41,6 +51,62 @@ struct State {
 static STATE: Mutex<State> = Mutex::new(State { notes: Vec::new(), next_id: 1, dismissed: 0 });
 /// Bumped by every change: the compositor's damage key.
 static GEN: AtomicU64 = AtomicU64::new(0);
+/// A full-screen program has the screen (set by the desktop loop).
+static FULLSCREEN: AtomicBool = AtomicBool::new(false);
+/// "Do not disturb" (shell `notify dnd on|off`).
+static DND: AtomicBool = AtomicBool::new(false);
+
+/// Toasts are held now.
+pub fn quiet() -> bool {
+    FULLSCREEN.load(Ordering::Relaxed) || DND.load(Ordering::Relaxed)
+}
+
+fn quiet_changed(was: bool) {
+    if was && !quiet() {
+        release_held();
+    }
+    GEN.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The desktop loop reports whether a full-screen window is showing.
+pub fn set_fullscreen(on: bool) {
+    let was = quiet();
+    if FULLSCREEN.swap(on, Ordering::Relaxed) != on {
+        quiet_changed(was);
+    }
+}
+
+/// Turn "do not disturb" on or off.
+pub fn set_dnd(on: bool) {
+    let was = quiet();
+    if DND.swap(on, Ordering::Relaxed) != on {
+        quiet_changed(was);
+    }
+}
+
+pub fn dnd() -> bool {
+    DND.load(Ordering::Relaxed)
+}
+
+/// Quiet mode ended: the newest held notification toasts now, its title
+/// saying how many waited; the others stay in the action center.
+fn release_held() {
+    let now = crate::interrupts::ticks();
+    let mut st = STATE.lock();
+    let n = st.notes.iter().filter(|n| n.held).count();
+    let Some(last) = st.notes.iter().rposition(|n| n.held) else { return };
+    for note in st.notes.iter_mut() {
+        note.held = false;
+    }
+    // the newest held one is the toast now: move it to the end, past any
+    // urgent note that toasted during the quiet time
+    let mut note = st.notes.remove(last);
+    note.ticks = now;
+    if n > 1 {
+        note.title = alloc::format!("{} (+{} lainnya)", note.title, n - 1);
+    }
+    st.notes.push(note);
+}
 
 fn clip(s: &str, max: usize) -> String {
     let mut out = String::new();
@@ -55,6 +121,11 @@ fn clip(s: &str, max: usize) -> String {
 
 /// Post a notification; returns its id (shown in the log too).
 pub fn post(app: &str, title: &str, body: &str) -> u32 {
+    post_with(app, title, body, false)
+}
+
+/// Post a notification, `urgent` = toast even in quiet mode.
+pub fn post_with(app: &str, title: &str, body: &str, urgent: bool) -> u32 {
     let (h, m) = {
         let (_, _, _, h, m, _) = crate::clock::now();
         (h, m)
@@ -67,6 +138,8 @@ pub fn post(app: &str, title: &str, body: &str) -> u32 {
         time: (h, m),
         ticks: crate::interrupts::ticks(),
         read: false,
+        urgent,
+        held: !urgent && quiet(),
     };
     let id = {
         let mut st = STATE.lock();
@@ -79,7 +152,14 @@ pub fn post(app: &str, title: &str, body: &str) -> u32 {
         id
     };
     GEN.fetch_add(1, Ordering::Relaxed);
-    crate::println!("[notify] #{} {}: {} -- {}", id, note.app, note.title, note.body);
+    crate::println!(
+        "[notify] #{} {}: {} -- {}{}",
+        id,
+        note.app,
+        note.title,
+        note.body,
+        if note.held { " (held: quiet mode)" } else if urgent { " (urgent)" } else { "" }
+    );
     id
 }
 
@@ -129,15 +209,20 @@ pub fn clear() -> usize {
 /// and not dismissed.
 pub fn toast(now: u64) -> Option<Note> {
     let st = STATE.lock();
-    let n = st.notes.last()?;
+    let n = current(&st)?;
     (now.saturating_sub(n.ticks) < TOAST_TICKS && n.id != st.dismissed).then(|| n.clone())
+}
+
+/// The notification a toast would show: the newest one not held.
+fn current(st: &State) -> Option<&Note> {
+    st.notes.iter().rev().find(|n| !n.held)
 }
 
 /// Hide the current toast (a click on it).
 pub fn dismiss_toast() {
     let mut st = STATE.lock();
-    if let Some(n) = st.notes.last() {
-        st.dismissed = n.id;
+    if let Some(id) = current(&st).map(|n| n.id) {
+        st.dismissed = id;
         GEN.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -153,7 +238,7 @@ pub fn toast_expired(now: u64) -> bool {
     static SHOWN: AtomicU64 = AtomicU64::new(0);
     let cur = {
         let st = STATE.lock();
-        st.notes.last().map(|n| (n.id as u64, n.ticks))
+        current(&st).map(|n| (n.id as u64, n.ticks))
     };
     let Some((id, t)) = cur else { return false };
     if now.saturating_sub(t) < TOAST_TICKS {
@@ -192,12 +277,39 @@ pub fn command(args: &[&str]) -> Vec<String> {
             mark_all_read();
             alloc::vec![String::from("notify: semua sudah dibaca")]
         }
+        Some("dnd") => {
+            match args.get(1).copied() {
+                Some("on") => set_dnd(true),
+                Some("off") => set_dnd(false),
+                _ => {}
+            }
+            alloc::vec![format!(
+                "notify: jangan ganggu {}{}",
+                if dnd() { "aktif" } else { "mati" },
+                if FULLSCREEN.load(Ordering::Relaxed) { "; program layar penuh sedang tampil (toast ditahan)" } else { "" }
+            )]
+        }
         Some(_) => {
-            let (app, rest) = if args[0] == "-a" && args.len() >= 3 { (args[1], &args[2..]) } else { ("Shell", args) };
+            let mut rest = args;
+            let mut app = "Shell";
+            let mut urgent = false;
+            loop {
+                match rest.first().copied() {
+                    Some("-a") if rest.len() >= 3 => {
+                        app = rest[1];
+                        rest = &rest[2..];
+                    }
+                    Some("-u") if rest.len() >= 2 => {
+                        urgent = true;
+                        rest = &rest[1..];
+                    }
+                    _ => break,
+                }
+            }
             let title = rest[0];
             let body = rest[1..].join(" ");
-            let id = post(app, title, &body);
-            alloc::vec![format!("notify: #{} dikirim", id)]
+            let id = post_with(app, title, &body, urgent);
+            alloc::vec![format!("notify: #{} dikirim{}", id, if !urgent && quiet() { " (ditahan: mode senyap)" } else { "" })]
         }
     }
 }
@@ -220,14 +332,30 @@ pub fn self_test() -> bool {
     let cmd_ok = command(&["-a", "Shell", "Dari", "perintah", "notify"]).first().is_some_and(|l| l.contains("dikirim"))
         && command(&["list"]).first().is_some_and(|l| l.contains("Dari"));
     let cleared = clear() >= 2 && list().is_empty();
+    // quiet mode: a normal note is held (no toast), an urgent one shows, the
+    // held one toasts when quiet mode ends -- with how many waited
+    let was_dnd = dnd();
+    set_dnd(true);
+    let t = crate::interrupts::ticks();
+    let h1 = post("Uji", "Ditahan satu", "");
+    let h2 = post("Uji", "Ditahan dua", "");
+    let held_ok = toast(t).is_none() && list().iter().filter(|n| n.held).count() == 2;
+    let u = post_with("Uji", "Mendesak", "", true);
+    let urgent_ok = toast(t).is_some_and(|n| n.id == u);
+    set_dnd(false);
+    let now2 = crate::interrupts::ticks();
+    let released = toast(now2).is_some_and(|n| n.id == h2 && n.title.contains("+1")) && list().iter().all(|n| !n.held) && h1 != h2;
+    set_dnd(was_dnd);
+    clear();
+    let quiet_ok = held_ok && urgent_ok && released;
     let gen_ok = generation() > g0;
-    let ok = toast_ok && unread_ok && read_ok && dismissed_ok && removed && listed && cmd_ok && cleared && gen_ok;
+    let ok = toast_ok && unread_ok && read_ok && dismissed_ok && removed && listed && cmd_ok && cleared && quiet_ok && gen_ok;
     if ok {
-        crate::println!("[kernel] MILESTONE: NOTIFY OK (toast, unread count, action-center read/remove/clear, shell notify)");
+        crate::println!("[kernel] MILESTONE: NOTIFY OK (toast, unread count, action-center read/remove/clear, shell notify, quiet mode + urgent)");
     } else {
         crate::println!(
-            "[notify] self-test: toast {} unread {} read {} dismiss {} remove {} list {} cmd {} clear {} gen {}",
-            toast_ok, unread_ok, read_ok, dismissed_ok, removed, listed, cmd_ok, cleared, gen_ok
+            "[notify] self-test: toast {} unread {} read {} dismiss {} remove {} list {} cmd {} clear {} quiet {}/{}/{} gen {}",
+            toast_ok, unread_ok, read_ok, dismissed_ok, removed, listed, cmd_ok, cleared, held_ok, urgent_ok, released, gen_ok
         );
     }
     ok

@@ -417,6 +417,9 @@ pub fn udp_send(handle: u64, dest: Ipv4Addr, dest_port: u16, payload: &[u8]) -> 
     if payload.len() > UDP_MAX_PAYLOAD {
         return Err("payload too large");
     }
+    if !crate::firewall::allow_out(crate::firewall::Proto::Udp, Some(dest), dest_port) {
+        return Err("blocked by the firewall");
+    }
     let mut guard = STACK.lock();
     let Some(stack) = guard.as_mut() else { return Err("net down") };
     let Some(sock) = stack.sockets.iter().find(|s| s.handle == handle) else {
@@ -482,6 +485,9 @@ fn handle_udp(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, udp: &[u8]) {
         return;
     }
     let payload = &udp[8..ulen];
+    if !crate::firewall::allow_in(crate::firewall::Proto::Udp, Some(src_ip), dst_port) {
+        return;
+    }
 
     let mut guard = STACK.lock();
     let Some(stack) = guard.as_mut() else { return };

@@ -82,6 +82,7 @@ mod applog;
 mod clipboard;
 mod wifi;
 mod perm;
+mod firewall;
 mod screenshot;
 mod appprof;
 mod crash;
@@ -231,6 +232,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
     storage_self_test();
     clock::load();
     bzpkg::load();
+    firewall::load();
     if st {
         match vfs::folder_self_test("/disk") {
             Ok(s) => println!("[kernel] MILESTONE: FOLDERS OK ({})", s),
@@ -240,6 +242,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             Ok(s) => println!("[kernel] MILESTONE: JOURNAL OK ({})", s),
             Err(e) => println!("[kernel] journal self-test FAILED: {}", e),
         }
+        firewall::self_test();
         match perm::self_test() {
             Ok(s) => println!("[kernel] MILESTONE: PERMISSIONS OK ({})", s),
             Err(e) => println!("[kernel] permissions self-test FAILED: {}", e),
@@ -337,6 +340,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
             println!("[kernel] desktop shell self-test failed");
         }
         desktop::hotkey_self_test();
+        wm::close_event_self_test();
         usb::hid::pad_self_test();
         wm::pad_self_test();
         virtio::snd::stream_self_test();
