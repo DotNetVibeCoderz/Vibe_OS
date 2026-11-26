@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Radio &amp; Podcast (managed): /disk/MRADIO.DLL, `run mradio`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MRadio</AssemblyName>
+    <RootNamespace>MRadio</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Buitenzorg.UI\Buitenzorg.UI.csproj" />
+  </ItemGroup>
+</Project>

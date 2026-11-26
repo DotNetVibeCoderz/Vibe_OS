@@ -46,6 +46,8 @@ public static class Folder
         new AppInfo("mvideo", "Video", "Putar video AVI (MJPEG + suara)", IconKind.Play, 0x8FB8E8),
         new AppInfo("mmusik", "Musik", "Putar lagu WAV, volume per aplikasi", IconKind.Play, 0xB99AE8),
         new AppInfo("masisten", "Asisten AI", "Model bahasa lokal + penglihatan komputer", IconKind.Leaf, 0x9BE0B8),
+        new AppInfo("mradio", "Radio & Podcast", "Radio internet dan langganan podcast", IconKind.Play, 0xE8A25F),
+        new AppInfo("mobrol", "Obrolan", "Chat IRC: kanal, pesan pribadi, TLS", IconKind.Leaf, 0x7CC4A4),
         new AppInfo("mrekam", "Perekam Suara", "Rekam dari mikrofon, simpan WAV", IconKind.Play, 0xE5735F),
         new AppInfo("mular", "Ular", "Makan buah, tumbuh panjang, jangan menabrak", IconKind.Leaf, 0x5FB85A),
         new AppInfo("mranjau", "Ranjau", "Buka kebun tanpa menggali ranjau", IconKind.Grid, 0xE0563B),
@@ -209,6 +211,8 @@ public static class Folder
         Report(MVideo.VideoApp.SelfTest()); // AVI: MJPEG frames through Picture, PCM through the mixer
         Report(MKonsol.KonsolApp.SelfTest()); // the standalone terminal: tabs, folders, colours, copy/paste through SHELL_RUN
         Report(MRekam.RekamApp.SelfTest()); // AUDIO_READ: record 0.7 s, save a WAV, play it back
+        Report(MRadio.RadioApp.SelfTest()); // internet radio (MP3 stream through the mixer) + podcast RSS, local server
+        Report(MObrol.ObrolApp.SelfTest()); // IRC over TCP_OP against a local server thread
         Report(MAsisten.AsistenApp.SelfTest()); // Buitenzorg.AI: the local LLM (streamed = whole), Sobel / histogram
         if (all)
         {

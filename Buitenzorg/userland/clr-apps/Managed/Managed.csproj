@@ -47,5 +47,7 @@
     <ProjectReference Include="..\MBata\MBata.csproj" />
     <ProjectReference Include="..\MBalok\MBalok.csproj" />
     <ProjectReference Include="..\MKartu\MKartu.csproj" />
+    <ProjectReference Include="..\MRadio\MRadio.csproj" />
+    <ProjectReference Include="..\MObrol\MObrol.csproj" />
   </ItemGroup>
 </Project>
