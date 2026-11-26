@@ -419,7 +419,16 @@ fn run_line(tab_id: u32, line: &str) -> Effect {
     let spawned = core::mem::take(&mut *SPAWNED.lock());
     let early = core::mem::take(&mut *EARLY.lock());
     if crate::keyboard::SERIAL_TYPED.load(Ordering::Relaxed) {
-        crate::serial::_print(format_args!("$ {}\n", line));
+        // never echo a Wi-Fi password: `wifi connect SSID PASS` -> `... ****`
+        let shown = if line.trim_start().starts_with("wifi connect") {
+            match line.rfind(' ') {
+                Some(i) if line[..i].trim_end() != "wifi connect" => alloc::format!("{} ****", &line[..i]),
+                _ => alloc::string::String::from(line),
+            }
+        } else {
+            alloc::string::String::from(line)
+        };
+        crate::serial::_print(format_args!("$ {}\n", shown));
         for l in output.iter() {
             crate::serial::_print(format_args!("{}\n", l));
         }
