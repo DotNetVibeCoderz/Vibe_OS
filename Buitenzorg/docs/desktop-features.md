@@ -19,6 +19,14 @@ unread ones), then remove one or clear them all. The kernel posts its own too
 | UI scripts | `notify("Unduhan", "selesai")` |
 | Shell | `notify Judul isi...`, `notify list`, `notify read`, `notify rm 3`, `notify clear` |
 
+### Quiet mode
+
+While a program is full screen, or after `notify dnd on`, notifications
+still reach the action center but their toasts wait; when quiet mode ends the
+newest one is shown with how many waited. A program can mark a notification
+urgent (`Notifications.Show(title, body, urgent: true)`, flag
+`notify_flags::URGENT`): it shows at once.
+
 ## Global search
 
 Type in the Start menu's search box (or `cari WORD` in the shell): apps,
@@ -34,6 +42,17 @@ setting opens Pengaturan, a file or folder opens in Berkas
 * Double-click a title bar to maximize or restore the window.
 * Shutdown and restart from the Start menu ask first (Enter confirms, Esc
   cancels).
+
+### Closing and shutting down safely
+
+A program may ask to be told before its window closes (`WIN_CTL
+CLOSE_EVENTS`, op 8; Buitenzorg.UI does it when `Window.CloseRequested` has a
+handler). The first click on the close button then sends it a `CLOSE` event
+(pointer event 8) -- Catatan saves and closes itself -- and a second click
+closes the window anyway. Shutting down or restarting (Start menu, `shutdown`,
+`restart`, `bz power`) asks every such program to close, waits up to 4 s,
+then writes the desktop settings, crash reports, the deploy audit log and
+`/disk/BOOTLOG.TXT` before the power goes.
 
 ## Personalization (Pengaturan > Tampilan)
 
@@ -80,6 +99,12 @@ An icon pack is a BZIC file `/disk/ICONS/NAME.BIN` (the format of
 built-in icons: an app the pack has an icon for uses it, the others keep
 theirs. `icons list`, `icons daun`, `icons bawaan` in the shell; the sample
 pack `DAUN.BIN` (every icon in two leaf greens) is built by bzimage.
+
+### Theme packages reload by themselves
+
+The desktop looks at `/disk/THEMES` every few seconds. Adding, editing or
+removing a `.THM` file there takes effect without `theme reload`; when the
+current theme is the one edited, the new colours show at once.
 
 ## Network: tray icon, Jaringan, Pengaturan > Jaringan
 

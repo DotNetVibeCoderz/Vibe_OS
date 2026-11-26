@@ -643,12 +643,12 @@ Port **ARM64**, lalu **RISC-V** (memanfaatkan HAL yang sudah disiapkan) · optim
 - [x] **VS Code extension** (scaffolding, build & run, manifest editor, preview, IntelliSense/snippets) — *`sdk/vscode-extension`: proyek baru dari template, build & run, deploy, validasi manifest, debug (DAP); preview/IntelliSense khusus belum*
 - [x] **Debugging dari VS Code** (DAP: breakpoint, step, watch, call stack) — *`bz dap`: skrip JS/TS/Python/C# script (rekam-lalu-putar, step mundur) dan program native (breakpoint, step, register)*
 - [x] **Debug bridge** (deploy/log/profile ke VM/perangkat, remote attach) — *bz-link (BZDP lewat UDP/TCP/COM2): deploy, run, logs, prof, `gdbserver`, `kgdb`*
-- [ ] Template: **Minesweeper**
+- [x] Template: **Minesweeper** — *`bz new minesweeper-csharp` (Buitenzorg.UI Grid + aturan `Field` terpisah, self-test 10 cek; 2026-11-26)*
 - [x] Template: **XOX (Tic-Tac-Toe)** — *desktop app C# jalan, menggambar UI via window syscall (milestone v0.8)*
-- [ ] Template: **Utilities**
+- [x] Template: **Utilities** — *`bz new utilities-csharp` (proses + akhiri, info sistem, pemakaian disk per folder; 2026-11-26)*
 - [x] Template: **Console System App**
 - [x] Template: **Calculator** — *Studio `ts-ui-kalkulator`, `csx-ui-penghitung`*
-- [ ] Template: **Notes (Web App)**
+- [x] Template: **Notes (Web App)** — *`bz new notes-web`: HTML + JS di Peramban, CRUD catatan di `localStorage` yang kini persisten per situs (`/disk/APPDATA/MWEB/STORE`); backend C# tidak diperlukan (2026-11-26)*
 - [x] Template: **Widget** — *`sdk/templates/widget-csharp`*
 - [~] **Port CoreCLR/JIT (fitur C# lengkap)** — *fitur C# lengkap lewat RustCLR (interpreter); JIT belum*
 - [x] Desktop app pihak ketiga jalan (window syscall ABI: WIN_CREATE/CMD/PRESENT + KEY_READ) — *milestone v0.8*

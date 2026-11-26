@@ -179,6 +179,59 @@ Host names with only an IPv6 address work too: `TcpConnection.Connect` (and so
 `HttpClient`) falls back to `Dns.Resolve6` (syscall `DNS_RESOLVE6` 77, DNS
 AAAA) when a name has no A record.
 
+## Radio & Podcast
+
+**Radio & Podcast** (`mradio`, Start menu Multimedia) plays internet radio
+stations (MP3 or WAV streams over http/https) through the kernel mixer and
+follows podcasts by their RSS address. Episodes are downloaded to
+`/disk/APPDATA/MRADIO` and stay there for listening offline. The station list
+(`STASIUN.TXT`) and subscriptions (`PODCAST.TXT`) live in the same folder.
+
+## Obrolan (IRC chat)
+
+**Obrolan** (`mobrol`, Start menu Kantor) is a chat client for IRC, the open
+chat protocol: enter a server, port (6697 or 7000 = TLS), nickname and
+channel, then *Sambung*. Commands in the message box: `/join #kanal`,
+`/part`, `/nick nama`, `/msg nama teks`, `/me aksi`, `/quit`; other `/WORD`
+lines are sent as raw IRC commands. A message that names you shows a
+notification. Settings: `/disk/APPDATA/MOBROL/OBROLAN.CFG`.
+
+## Firewall
+
+`firewall` (or `fw`) in the Terminal filters traffic; rules live in
+`/disk/FIREWALL.CFG` and the first matching rule wins.
+
+```
+firewall on                       # off by default
+firewall default in deny          # what happens when no rule matches
+firewall allow in tcp 22          # SSH from anywhere
+firewall deny out tcp 25          # no outgoing mail
+firewall deny out app mweb        # Peramban may not connect anywhere
+firewall allow in udp 7070 from 192.168.1.0/24
+firewall                          # rules + drop counters
+firewall check out tcp 80 1.2.3.4 # what would happen
+```
+
+Incoming rules see new TCP connections (SYN) and UDP datagrams; outgoing rules
+see TCP connects and UDP sends, and can name a program (`app NAME`).
+Loopback and the machine's own address are never filtered. IPv6 traffic
+matches rules that name no address. The per-app permission `network`
+(`bz perm`) still decides whether a program may use the network at all.
+
+## Web storage
+
+Peramban keeps `localStorage` per site (`scheme://host:port`; pages from
+`/disk` share the site "file") in `/disk/APPDATA/MWEB/STORE`, up to 512 KiB a
+site, so it survives closing the browser and restarting. `sessionStorage`
+lasts while the page is open. `bz new notes-web` is a template that uses it.
+
+## HTTPS package repositories
+
+`bz repo https://host/path` works like an http repository: the index and the
+packages are fetched over TLS (certificates checked against the built-in root
+store) by the downloader `munduh --fetch`, then verified by their SHA-256 as
+before.
+
 ## Limits
 
 - No SVG images (logos on many sites show as a gray box).
