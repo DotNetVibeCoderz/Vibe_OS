@@ -16,7 +16,7 @@ return args switch
     [] or ["help"] or ["--help"] or ["-h"] => Help(),
     ["version"] or ["--version"] => Version(),
     ["new", var template, var name] => NewProject(template, name),
-    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, ai-csharp, game-csharp, widget-csharp, js-app, ts-app, python-app, ai-js, game-js, web-app)"),
+    ["new", ..] => Fail("usage: bz new <template> <name>   (templates: console-csharp, desktop-csharp, ai-csharp, game-csharp, widget-csharp, js-app, ts-app, python-app, ai-js, game-js, web-app, notes-web, minesweeper-csharp, utilities-csharp)"),
     ["manifest", "validate", var path] => ValidateManifest(path),
     ["manifest", ..] => Fail("usage: bz manifest validate <path-to-app.manifest>"),
     ["pack", .. var rest] when rest.Length >= 1 => Pack(rest),

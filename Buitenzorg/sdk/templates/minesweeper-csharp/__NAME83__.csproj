@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- __APPNAME__: Minesweeper with Buitenzorg.UI. /disk/__NAME83__.DLL, `run __NAME83__`. Created by `bz new minesweeper-csharp`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 8.3 upper case: this is the file name on the device. -->
+    <AssemblyName>__NAME83__</AssemblyName>
+    <RootNamespace>__NAME83__</RootNamespace>
+    <!-- the Buitenzorg checkout `bz new` ran from; override with -p:BuitenzorgRoot=... -->
+    <BuitenzorgRoot Condition="'$(BuitenzorgRoot)' == ''">__BZROOT__</BuitenzorgRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(BuitenzorgRoot)/userland/clr-apps/Buitenzorg.UI/Buitenzorg.UI.csproj" />
+  </ItemGroup>
+</Project>

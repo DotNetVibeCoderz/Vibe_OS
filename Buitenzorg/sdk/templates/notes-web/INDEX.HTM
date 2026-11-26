@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+<title>__APPNAME__</title>
+<link rel="stylesheet" href="STYLE.CSS">
+</head>
+<body>
+<h1>__APPNAME__</h1>
+<p class="lead">Notes kept in the browser's <code>localStorage</code>: they stay
+on this machine (<code>/disk/APPDATA/MWEB/STORE</code>) after Peramban closes.</p>
+
+<form id="editor" class="card" onsubmit="return save()">
+<p><input id="title" name="title" placeholder="Judul"></p>
+<p><textarea id="body" name="body" rows="4" placeholder="Tulis catatan di sini"></textarea></p>
+<p><button type="submit" id="save">Simpan</button>
+<button type="button" id="clear" onclick="startNew()">Catatan baru</button>
+<span id="state" class="faint"></span></p>
+</form>
+
+<div id="list"></div>
+
+<script>
+// One note = { id, title, body, at }. The whole list is one JSON value under
+// the key "notes" -- one write per change, and it reads back in one go.
+var KEY = "notes";
+var editing = 0; // id of the note in the editor, 0 = a new one
+
+function load() {
+  var raw = localStorage.getItem(KEY);
+  if (raw === null) return [];
+  try { return JSON.parse(raw); } catch (e) { return []; }
+}
+
+function store(notes) {
+  localStorage.setItem(KEY, JSON.stringify(notes));
+}
+
+function escapeHtml(s) {
+  return String(s).split("&").join("&amp;").split("<").join("&lt;").split(">").join("&gt;");
+}
+
+function stamp(t) {
+  var d = new Date(t);
+  var m = d.getMinutes();
+  return d.getDate() + "/" + (d.getMonth() + 1) + " " + d.getHours() + ":" + (m < 10 ? "0" + m : m);
+}
+
+function render() {
+  var notes = load();
+  var html = "";
+  if (notes.length === 0) html = "<p class=\"faint\">Belum ada catatan. Tulis satu di atas.</p>";
+  for (var i = notes.length - 1; i >= 0; i--) {
+    var n = notes[i];
+    html += "<div class=\"note\"><h2>" + escapeHtml(n.title || "(tanpa judul)") + "</h2>" +
+      "<p>" + escapeHtml(n.body) + "</p>" +
+      "<p class=\"faint\">" + stamp(n.at) + " &middot; " +
+      "<a href=\"#\" onclick=\"return edit(" + n.id + ")\">Ubah</a> &middot; " +
+      "<a href=\"#\" onclick=\"return removeNote(" + n.id + ")\">Hapus</a></p></div>";
+  }
+  document.getElementById("list").innerHTML = html;
+  document.getElementById("state").textContent = notes.length + " catatan";
+}
+
+function save() {
+  var title = document.getElementById("title").value;
+  var body = document.getElementById("body").value;
+  if (title === "" && body === "") return false;
+  var notes = load();
+  var found = false;
+  for (var i = 0; i < notes.length; i++) {
+    if (notes[i].id === editing) {
+      notes[i].title = title; notes[i].body = body; notes[i].at = Date.now();
+      found = true;
+    }
+  }
+  if (!found) notes.push({ id: Date.now(), title: title, body: body, at: Date.now() });
+  store(notes);
+  startNew();
+  render();
+  return false; // stay on the page: the form is handled here
+}
+
+function edit(id) {
+  var notes = load();
+  for (var i = 0; i < notes.length; i++) {
+    if (notes[i].id === id) {
+      editing = id;
+      document.getElementById("title").value = notes[i].title;
+      document.getElementById("body").value = notes[i].body;
+      document.getElementById("save").textContent = "Simpan perubahan";
+    }
+  }
+  return false;
+}
+
+function removeNote(id) {
+  var notes = load();
+  var kept = [];
+  for (var i = 0; i < notes.length; i++) if (notes[i].id !== id) kept.push(notes[i]);
+  store(kept);
+  if (editing === id) startNew();
+  render();
+  return false;
+}
+
+function startNew() {
+  editing = 0;
+  document.getElementById("title").value = "";
+  document.getElementById("body").value = "";
+  document.getElementById("save").textContent = "Simpan";
+}
+
+render();
+</script>
+</body>
+</html>

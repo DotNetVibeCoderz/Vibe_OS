@@ -1,0 +1,9 @@
+body { background: #10241a; color: #e8f5ec; margin: 16px; }
+h1 { color: #7cc4a4; font-size: 28px; }
+h2 { color: #f2b544; font-size: 18px; margin: 0; }
+.lead { color: #c4dccd; }
+.faint { color: #8fae9b; }
+.card { background: #173021; border: 1px solid #2f5a42; padding: 12px; margin: 12px 0; }
+.note { background: #142a1d; border: 1px solid #2f5a42; padding: 10px; margin: 8px 0; }
+a { color: #9be07a; }
+code { color: #f2b544; }

@@ -1,0 +1,10 @@
+{
+  "id": "com.example.notes",
+  "name": "Notes",
+  "type": "web",
+  "language": "js",
+  "version": "0.1.0",
+  "entry": "INDEX.HTM",
+  "permissions": [],
+  "theme": "system"
+}
