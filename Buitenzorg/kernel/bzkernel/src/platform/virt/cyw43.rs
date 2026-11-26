@@ -305,6 +305,7 @@ const SDPCM_PROT_VERSION: u32 = 4;
 // BCDC
 const WLC_UP: u32 = 2;
 const WLC_SET_INFRA: u32 = 20;
+const WLC_SET_KEY: u32 = 45;
 const WLC_SET_AUTH: u32 = 22;
 const WLC_SET_SSID: u32 = 26;
 const WLC_DISASSOC: u32 = 52;
@@ -383,6 +384,15 @@ pub struct Cyw43 {
     /// the firmware has no supplicant ("sup_wpa" unsupported): do the
     /// 4-way handshake here (`wpa.rs`)
     host_sup: bool,
+    /// the host supplicant, kept after the join for group rekeys
+    sup: Option<crate::wpa::Supplicant>,
+    sup_pmk: [u8; 32],
+    sup_group: u8,
+    /// pairwise + group keys installed (4-way handshake complete)
+    pub sup_done: bool,
+    sup_error: Option<String>,
+    /// handle_eapol is running (its ioctls poll too)
+    in_eapol: bool,
 }
 
 fn le32(b: &[u8], o: usize) -> u32 {
@@ -681,6 +691,12 @@ impl Cyw43 {
             pending_ctl: Vec::new(),
             eapol: alloc::collections::VecDeque::new(),
             host_sup: false,
+            sup: None,
+            sup_pmk: [0; 32],
+            sup_group: 4,
+            sup_done: false,
+            sup_error: None,
+            in_eapol: false,
         };
         // ALP clock
         c.h.cmd52(true, 1, CHIPCLKCSR, FORCE_HW_CLKREQ_OFF | ALP_AVAIL_REQ)?;
@@ -920,6 +936,9 @@ impl Cyw43 {
             let _ = self.bp_write32(self.sd_core + SD_TOSBMAILBOX, SMB_INT_ACK);
         }
         self.poll_frames();
+        if self.host_sup && !self.in_eapol && !self.eapol.is_empty() {
+            self.handle_eapol();
+        }
     }
 
     /// Read frames whether or not an indication was seen (everything is polled).
@@ -1213,64 +1232,33 @@ impl Cyw43 {
             crate::wpa::psk(ssid, pass)
         };
         let group = self.scan.iter().filter(|b| b.ssid == ssid).max_by_key(|b| b.rssi).map_or(4, |b| b.group);
-        if group != 4 {
-            crate::println!("[wifi] {:?} uses group cipher {} (only CCMP group keys are installed)", ssid, group);
+        if group != 4 && group != 2 {
+            return Err(format!("{:?} uses group cipher {} (only CCMP and TKIP are supported)", ssid, group));
+        }
+        if group == 2 {
+            self.set_u32(WLC_SET_WSEC, 6)?; // TKIP group + AES pairwise
         }
         let ie = crate::wpa::rsn_ie(group);
         if let Err(e) = self.set_var("wpaie", &ie) {
             crate::println!("[wifi] wpaie: {} (the firmware builds its own RSN element)", e);
         }
         self.eapol.clear();
+        self.sup = None;
+        self.sup_pmk = pmk;
+        self.sup_group = group;
+        self.sup_done = false;
+        self.sup_error = None;
         let mut s = [0u8; 36];
         s[0..4].copy_from_slice(&(ssid.len() as u32).to_le_bytes());
         s[4..4 + ssid.len()].copy_from_slice(ssid.as_bytes());
         self.ioctl(WLC_SET_SSID, true, &mut s)?;
-        crate::println!("[wifi] joining {:?} (WPA2-PSK, host supplicant)", ssid);
+        crate::println!("[wifi] joining {:?} (WPA2-PSK, host supplicant, group cipher {})", ssid, group);
         let hz = crate::arch::cpu::counter_hz().max(1);
         let t0 = crate::arch::cpu::timestamp();
-        let mut sup: Option<crate::wpa::Supplicant> = None;
-        let mut keyed = false;
         loop {
-            self.poll();
-            while let Some(f) = self.eapol.pop_front() {
-                let mut aa = [0u8; 6];
-                aa.copy_from_slice(&f[6..12]);
-                let st = sup
-                    .get_or_insert_with(|| crate::wpa::Supplicant::new(pmk, aa, self.mac, group))
-                    .on_eapol(&f[14..]);
-                if let Some(e) = st.error {
-                    if e.contains("MIC") {
-                        return Err("WPA2 handshake failed: wrong password?".into());
-                    }
-                    crate::println!("[wifi] EAPOL: {}", e);
-                }
-                if let Some(reply) = st.reply {
-                    let mut out = Vec::with_capacity(14 + reply.len());
-                    out.extend_from_slice(&aa);
-                    out.extend_from_slice(&self.mac);
-                    out.extend_from_slice(&0x888Eu16.to_be_bytes());
-                    out.extend_from_slice(&reply);
-                    self.send_ethernet(&out).map_err(|e| format!("EAPOL send: {}", e))?;
-                }
-                if st.ptk.is_some() || st.gtk.is_some() {
-                    // let message 4 leave unencrypted before the keys exist
-                    for _ in 0..10 {
-                        self.poll();
-                        delay_us(2_000);
-                    }
-                }
-                if let Some(tk) = st.ptk {
-                    self.set_key(0, &tk, Some(aa))?;
-                }
-                if let Some((id, k)) = st.gtk {
-                    if k.len() == 16 {
-                        self.set_key(id as u32, &k, None)?;
-                    }
-                }
-                if st.done {
-                    keyed = true;
-                    crate::println!("[wifi] 4-way handshake done with {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", aa[0], aa[1], aa[2], aa[3], aa[4], aa[5]);
-                }
+            self.poll(); // EAPOL frames are answered inside (handle_eapol)
+            if let Some(e) = self.sup_error.take() {
+                return Err(e);
             }
             let j = self.join;
             if let Some(st) = j.ssid_set {
@@ -1283,36 +1271,126 @@ impl Cyw43 {
                     }));
                 }
             }
-            if keyed && j.link == Some(true) {
+            if self.sup_done && j.link == Some(true) {
                 return Ok(());
             }
             if (crate::arch::cpu::timestamp() - t0) * 1000 / hz > ms {
                 return Err(format!(
                     "no association within {} s (ssid {:?}, link {:?}, EAPOL {})",
                     ms / 1000, j.ssid_set, j.link,
-                    if keyed { "done" } else if sup.is_some() { "started" } else { "never seen" }
+                    if self.sup_done { "done" } else if self.sup.is_some() { "started" } else { "never seen" }
                 ));
             }
             delay_us(2_000);
         }
     }
 
-    /// Install an AES-CCMP key: "wsec_key" with Linux's `brcmf_wsec_key_le`
-    /// (pairwise = the AP's address + PRIMARY flag). The struct is not
+    /// Answer queued EAPOL frames with the host supplicant: replies go out
+    /// on the data channel, keys are installed after the reply has left.
+    /// Runs during the join and afterwards (group key rekeys).
+    fn handle_eapol(&mut self) {
+        self.in_eapol = true;
+        while let Some(f) = self.eapol.pop_front() {
+            if f.len() < 14 + 4 {
+                continue;
+            }
+            let mut aa = [0u8; 6];
+            aa.copy_from_slice(&f[6..12]);
+            let (pmk, spa, group) = (self.sup_pmk, self.mac, self.sup_group);
+            let st = self
+                .sup
+                .get_or_insert_with(|| crate::wpa::Supplicant::new(pmk, aa, spa, group))
+                .on_eapol(&f[14..]);
+            if let Some(e) = &st.error {
+                crate::println!("[wifi] EAPOL: {}", e);
+                if e.contains("MIC") {
+                    self.sup_error = Some("WPA2 handshake failed: wrong password?".into());
+                    continue;
+                }
+            }
+            if let Some(reply) = &st.reply {
+                let mut out = Vec::with_capacity(14 + reply.len());
+                out.extend_from_slice(&aa);
+                out.extend_from_slice(&self.mac);
+                out.extend_from_slice(&0x888Eu16.to_be_bytes());
+                out.extend_from_slice(reply);
+                if let Err(e) = self.send_ethernet(&out) {
+                    self.sup_error = Some(format!("EAPOL send: {}", e));
+                    continue;
+                }
+            }
+            if st.ptk.is_some() || st.gtk.is_some() {
+                // message 4 / group message 2 must leave unencrypted first
+                // (brcmf_netdev_wait_pend8021x)
+                delay_us(30_000);
+            }
+            if let Some(tk) = st.ptk {
+                if let Err(e) = self.set_key(0, &tk, Some(aa)) {
+                    self.sup_error = Some(e);
+                    continue;
+                }
+                crate::println!("[wifi] pairwise key installed");
+            }
+            if let Some((id, k)) = &st.gtk {
+                if k.len() == 16 || k.len() == 32 {
+                    if let Err(e) = self.set_key(*id as u32, k, None) {
+                        self.sup_error = Some(e);
+                        continue;
+                    }
+                    crate::println!("[wifi] group key {} installed ({})", id, if k.len() == 32 { "TKIP" } else { "CCMP" });
+                } else {
+                    crate::println!("[wifi] group key {} has {} bytes: not installed", id, k.len());
+                }
+            }
+            if st.done {
+                self.sup_done = true;
+                crate::println!(
+                    "[wifi] 4-way handshake done with {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    aa[0], aa[1], aa[2], aa[3], aa[4], aa[5]
+                );
+            }
+        }
+        self.in_eapol = false;
+    }
+
+    /// Install an AES-CCMP key like Linux brcmfmac: the pairwise key
+    /// (brcmf_add_keyext) carries the AP's address and no flags, a group key
+    /// carries no address and BRCMF_PRIMARY_KEY. `brcmf_wsec_key_le` is not
     /// packed: rxiv is {hi u32, lo u16, pad u16}, so it is 164 bytes with
-    /// `ea` at 156 (160 bytes -> BCME_BUFTOOSHORT, seen on the board).
+    /// `ea` at 156 (160 bytes got BCME_BUFTOOSHORT on the board).
+    /// "wsec_key" first, the WLC_SET_KEY ioctl (45) if that is refused.
     fn set_key(&mut self, index: u32, key: &[u8], ea: Option<[u8; 6]>) -> Result<(), String> {
         let mut k = [0u8; 164];
         k[0..4].copy_from_slice(&index.to_le_bytes());
         k[4..8].copy_from_slice(&(key.len() as u32).to_le_bytes());
         k[8..8 + key.len().min(32)].copy_from_slice(&key[..key.len().min(32)]);
-        k[112..116].copy_from_slice(&4u32.to_le_bytes()); // CRYPTO_ALGO_AES_CCM
-        let flags: u32 = if ea.is_some() { 1 << 1 } else { 0 }; // BRCMF_PRIMARY_KEY
+        // a 32-byte key is TKIP (group only): a station swaps the Tx/Rx
+        // MIC keys (brcmf_add_keyext), CRYPTO_ALGO_TKIP 2; else AES_CCM 4
+        let algo: u32 = if key.len() == 32 {
+            let mut tmp = [0u8; 8];
+            tmp.copy_from_slice(&k[8 + 16..8 + 24]);
+            k.copy_within(8 + 24..8 + 32, 8 + 16);
+            k[8 + 24..8 + 32].copy_from_slice(&tmp);
+            2
+        } else {
+            4
+        };
+        k[112..116].copy_from_slice(&algo.to_le_bytes());
+        let flags: u32 = if ea.is_some() { 0 } else { 1 << 1 }; // BRCMF_PRIMARY_KEY
         k[116..120].copy_from_slice(&flags.to_le_bytes());
         if let Some(a) = ea {
             k[156..162].copy_from_slice(&a);
         }
-        self.set_var("wsec_key", &k).map_err(|e| format!("wsec_key {}: {}", index, e))
+        match self.set_var("wsec_key", &k) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                crate::println!("[wifi] wsec_key {}: {}; trying WLC_SET_KEY", index, e);
+                let mut k2 = k;
+                self.ioctl(WLC_SET_KEY, true, &mut k2)
+                    .map(|_| ())
+                    .map_err(|e2| format!("installing key {}: wsec_key {}, WLC_SET_KEY {}", index, e, e2))
+            }
+        }
     }
 
     /// Send an Ethernet frame (BCDC v2 header, data channel).
@@ -1485,11 +1563,63 @@ pub fn connect(ssid: &str, key: &str) -> Result<String, String> {
         ssid, ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]
     );
     set_status(msg.clone());
+    keep(ssid, key);
     crate::println!(
         "[kernel] MILESTONE: WIFI OK (CYW43455 over SDIO, {} supplicant, DHCP {}.{}.{}.{})",
         if host_sup { "host" } else { "firmware" }, ip[0], ip[1], ip[2], ip[3]
     );
     Ok(msg)
+}
+
+/// The network the keeper task rejoins: (SSID, key as `connect` takes it).
+static LAST_JOIN: spin::Mutex<Option<(String, String)>> = spin::Mutex::new(None);
+static KEEPER_STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static KEEPER_WORD: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Remember the joined network and start the keeper once.
+fn keep(ssid: &str, key: &str) {
+    *LAST_JOIN.lock() = Some((String::from(ssid), String::from(key)));
+    if !KEEPER_STARTED.swap(true, Ordering::SeqCst) {
+        crate::task::spawn_unlocked("wifi-keep", keeper);
+    }
+}
+
+/// Every 5 s: if the firmware reported a deauth / disassoc / link down,
+/// join the same network again (after 5, 10, 20 .. 60 s of failures).
+fn keeper() {
+    let mut backoff_s = 5u64;
+    let mut next = 0u64;
+    loop {
+        let seen = KEEPER_WORD.load(Ordering::Acquire);
+        let deadline = crate::arch::cpu::nanos() + 5_000_000_000;
+        crate::task::futex_wait_timeout_if(&KEEPER_WORD as *const core::sync::atomic::AtomicU32 as u64, seen, deadline);
+        let dropped = WIFI.try_lock().map_or(false, |mut g| {
+            g.as_mut().map_or(false, |c| {
+                if !c.join.dropped {
+                    c.poll(); // group rekeys are answered here too
+                }
+                c.join.dropped
+            })
+        });
+        if !dropped {
+            backoff_s = 5;
+            continue;
+        }
+        let now = crate::arch::cpu::nanos();
+        if now < next {
+            continue;
+        }
+        let Some((ssid, key)) = LAST_JOIN.lock().clone() else { continue };
+        set_status(format!("connection to {:?} lost; joining again", ssid));
+        match connect(&ssid, &key) {
+            Ok(_) => backoff_s = 5,
+            Err(e) => {
+                set_status(format!("rejoin {:?} failed: {} (next try in {} s)", ssid, e, backoff_s));
+                next = crate::arch::cpu::nanos() + backoff_s * 1_000_000_000;
+                backoff_s = (backoff_s * 2).min(60);
+            }
+        }
+    }
 }
 
 /// `wifi` shell command.
@@ -1562,6 +1692,7 @@ pub fn command(args: &[&str]) -> Vec<String> {
         }
         "forget" => {
             let _ = crate::vfs::remove(CONFIG);
+            *LAST_JOIN.lock() = None; // the keeper stops rejoining
             out.push(format!("wifi: {} removed", CONFIG));
         }
         _ => out.push(String::from("usage: wifi [status | scan | connect SSID [PASSWORD] | forget]")),

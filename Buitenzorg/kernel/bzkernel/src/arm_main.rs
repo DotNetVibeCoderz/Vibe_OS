@@ -366,6 +366,7 @@ pub(crate) fn kernel_main(info: &'static boot::BootInfo) -> ! {
         }
         desktop::hotkey_self_test();
         platform::virt::cyw43::self_test();
+        wpa::self_test(); // the host supplicant the Pi's Wi-Fi uses
         usb::hid::pad_self_test();
         wm::pad_self_test();
         virtio::snd::stream_self_test();
